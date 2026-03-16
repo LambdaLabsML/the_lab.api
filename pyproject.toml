@@ -1,0 +1,12 @@
+[project]
+name = "the-lab-api"
+version = "0.1.0"
+description = "Experiment management API for AI-driven research loops"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.135.1",
+    "uvicorn[standard]>=0.42.0",
+]
+
+[project.scripts]
+the-lab = "the_lab.cli:main"
