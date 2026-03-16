@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from .git_ops import (
@@ -25,6 +26,20 @@ REPO_DIR = Path(os.environ.get("THE_LAB_REPO", os.getcwd())).resolve()
 store = Store(REPO_DIR)
 app = FastAPI(title="The Lab", version="0.1.0")
 runner = ExperimentRunner(store)
+
+_DASHBOARD_HTML: str | None = None
+
+def _load_dashboard() -> str:
+    global _DASHBOARD_HTML
+    if _DASHBOARD_HTML is None:
+        html_path = Path(__file__).parent / "dashboard.html"
+        _DASHBOARD_HTML = html_path.read_text()
+    return _DASHBOARD_HTML
+
+
+@app.get("/", response_class=HTMLResponse)
+def dashboard():
+    return _load_dashboard()
 
 
 # --- Request schemas ---

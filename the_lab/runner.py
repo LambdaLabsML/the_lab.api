@@ -17,6 +17,18 @@ class ExperimentRunner:
         self._store = store
         self._finished_queue: asyncio.Queue[int] = asyncio.Queue()
         self._tasks: dict[int, asyncio.Task] = {}
+        # Recover orphaned experiments: any "running" experiment at startup
+        # has lost its process (server restarted). Mark as failed so the agent
+        # can restart them.
+        for exp in self._store.list_experiments_by_status("running"):
+            self._store.update_experiment(
+                exp["id"],
+                status="failed",
+                error="server restarted while experiment was running",
+                pid=None,
+                finished_at=datetime.now(timezone.utc).isoformat(),
+            )
+
         # Mark all already-finished experiments as seen on startup,
         # so /wait only returns experiments that finish from now on.
         self._seen: set[int] = set()
@@ -28,8 +40,8 @@ class ExperimentRunner:
         exp = self._store.get_experiment(exp_id)
         if not exp:
             return {"status": "error", "reason": f"experiment {exp_id} not found"}
-        if exp["status"] not in ("pending", "failed"):
-            return {"status": "error", "reason": f"experiment is {exp['status']}, expected pending or failed"}
+        if exp["status"] not in ("pending", "failed", "cancelled"):
+            return {"status": "error", "reason": f"experiment is {exp['status']}, expected pending, failed, or cancelled"}
 
         script_path = self._store.repo_dir / exp["script"]
         if not script_path.exists():

@@ -1,0 +1,600 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The Lab — Dashboard</title>
+<script src="https://unpkg.com/vis-network@9.1.6/standalone/umd/vis-network.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    background: #0d1117;
+    color: #c9d1d9;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  #topbar {
+    background: #161b22;
+    border-bottom: 1px solid #30363d;
+    padding: 10px 20px;
+    display: flex;
+    align-items: center;
+    gap: 24px;
+    flex-shrink: 0;
+    font-size: 13px;
+  }
+  #topbar .title {
+    font-size: 15px;
+    font-weight: 700;
+    color: #58a6ff;
+    margin-right: 12px;
+  }
+  #topbar .stat { color: #8b949e; }
+  #topbar .stat b { color: #c9d1d9; font-weight: 600; }
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .badge-active { background: #0f5323; color: #3fb950; }
+  .badge-concluded { background: #0c2d6b; color: #58a6ff; }
+  .badge-abandoned { background: #5a1e23; color: #f85149; }
+  .badge-running { background: #2d1a00; color: #d29922; }
+  .badge-pending { background: #1c1d1f; color: #8b949e; }
+  .badge-completed { background: #0f5323; color: #3fb950; }
+  .badge-failed { background: #5a1e23; color: #f85149; }
+  .badge-cancelled { background: #1c1d1f; color: #8b949e; }
+
+  #chart-toggle {
+    background: #161b22;
+    border-bottom: 1px solid #30363d;
+    padding: 6px 20px;
+    cursor: pointer;
+    font-size: 12px;
+    color: #8b949e;
+    flex-shrink: 0;
+    user-select: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  #chart-toggle:hover { color: #c9d1d9; }
+  #chart-toggle .arrow { transition: transform 0.2s; display: inline-block; }
+  #chart-toggle .arrow.open { transform: rotate(90deg); }
+  #chart-panel {
+    background: #0d1117;
+    border-bottom: 1px solid #30363d;
+    overflow: hidden;
+    transition: height 0.3s ease;
+    flex-shrink: 0;
+  }
+  #chart-panel.collapsed { height: 0 !important; border: none; }
+  #chart-panel canvas { padding: 12px 20px; }
+  #metric-selector {
+    padding: 8px 20px 0 20px;
+    font-size: 11px;
+    color: #8b949e;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  #metric-selector select {
+    background: #161b22;
+    color: #c9d1d9;
+    border: 1px solid #30363d;
+    padding: 2px 6px;
+    font-family: inherit;
+    font-size: 11px;
+    border-radius: 4px;
+  }
+
+  #main {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+  #graph-container {
+    flex: 1;
+    position: relative;
+  }
+  #graph { width: 100%; height: 100%; }
+  #detail-panel {
+    width: 420px;
+    background: #161b22;
+    border-left: 1px solid #30363d;
+    overflow-y: auto;
+    flex-shrink: 0;
+    display: none;
+    padding: 16px;
+    font-size: 13px;
+  }
+  #detail-panel.open { display: block; }
+  #detail-panel h2 {
+    font-size: 15px;
+    color: #58a6ff;
+    margin-bottom: 12px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  #detail-panel h2 .close-btn {
+    cursor: pointer;
+    color: #8b949e;
+    font-size: 18px;
+    line-height: 1;
+  }
+  #detail-panel h2 .close-btn:hover { color: #c9d1d9; }
+  .detail-section { margin-bottom: 14px; }
+  .detail-section .label {
+    font-size: 11px;
+    text-transform: uppercase;
+    color: #8b949e;
+    margin-bottom: 4px;
+    letter-spacing: 0.5px;
+  }
+  .detail-section .value {
+    color: #c9d1d9;
+    line-height: 1.5;
+    word-break: break-word;
+  }
+  .note-item {
+    padding: 6px 8px;
+    margin-bottom: 4px;
+    border-radius: 4px;
+    border-left: 3px solid #30363d;
+    background: #0d1117;
+    font-size: 12px;
+  }
+  .note-item.insight { border-left-color: #58a6ff; }
+  .note-item.milestone { border-left-color: #d29922; }
+  .note-item.observation { border-left-color: #8b949e; }
+  .note-item.debug { border-left-color: #f85149; }
+  .note-item .note-meta {
+    font-size: 10px;
+    color: #8b949e;
+    margin-bottom: 2px;
+  }
+  .exp-item {
+    padding: 8px;
+    margin-bottom: 6px;
+    border-radius: 4px;
+    background: #0d1117;
+    border: 1px solid #30363d;
+  }
+  .exp-item .exp-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 4px;
+  }
+  .exp-item .exp-id { font-weight: 600; color: #58a6ff; font-size: 12px; }
+  .exp-item .exp-desc { margin-bottom: 4px; line-height: 1.4; }
+  .exp-item .exp-meta { font-size: 11px; color: #8b949e; }
+  .exp-item .exp-metrics { font-size: 11px; color: #d2a8ff; margin-top: 3px; }
+  .exp-item .exp-timestamps { font-size: 10px; color: #484f58; margin-top: 3px; }
+  #hint {
+    position: absolute;
+    bottom: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    color: #484f58;
+    font-size: 12px;
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+  <div id="topbar">
+    <span class="title">The Lab</span>
+    <span class="stat">Active ideas: <b id="stat-ideas">--</b></span>
+    <span class="stat">Running: <b id="stat-running">--</b></span>
+    <span class="stat">Pending: <b id="stat-pending">--</b></span>
+    <span class="stat">Branch: <b id="stat-branch">--</b></span>
+  </div>
+  <div id="chart-toggle" onclick="toggleChart()">
+    <span class="arrow" id="chart-arrow">&#9654;</span> Metrics over time
+  </div>
+  <div id="chart-panel" class="collapsed">
+    <div id="metric-selector">
+      Metric: <select id="metric-select" onchange="updateChart()"></select>
+    </div>
+    <canvas id="metrics-chart" height="180"></canvas>
+  </div>
+  <div id="main">
+    <div id="graph-container">
+      <div id="graph"></div>
+      <div id="hint">Click a node to view idea details</div>
+    </div>
+    <div id="detail-panel">
+      <div id="detail-content"></div>
+    </div>
+  </div>
+
+<script>
+(function() {
+  const STATUS_COLORS = {
+    active:    { bg: '#238636', border: '#3fb950', font: '#ffffff' },
+    concluded: { bg: '#1f6feb', border: '#58a6ff', font: '#ffffff' },
+    abandoned: { bg: '#da3633', border: '#f85149', font: '#ffffff' },
+  };
+
+  // Distinct colors for ideas in the chart
+  const IDEA_PALETTE = [
+    '#58a6ff', '#3fb950', '#d29922', '#f85149', '#d2a8ff',
+    '#79c0ff', '#56d364', '#e3b341', '#ff7b72', '#bc8cff',
+    '#a5d6ff', '#7ee787', '#f0c96b', '#ffa198', '#d8b4fe',
+  ];
+
+  let network = null;
+  let nodesDS = new vis.DataSet();
+  let edgesDS = new vis.DataSet();
+  let selectedIdea = null;
+  let metricsChart = null;
+  let allExperiments = [];  // cached for chart
+  let allIdeas = {};        // id -> idea info
+  let chartOpen = false;
+
+  // --- Graph ---
+
+  function initGraph() {
+    const container = document.getElementById('graph');
+    const options = {
+      nodes: {
+        shape: 'box',
+        margin: { top: 8, bottom: 8, left: 12, right: 12 },
+        font: { face: 'SF Mono, Fira Code, Consolas, monospace', size: 12, color: '#ffffff' },
+        borderWidth: 2,
+        shadow: { enabled: true, color: 'rgba(0,0,0,0.3)', size: 6, x: 0, y: 2 },
+      },
+      edges: {
+        arrows: { to: { enabled: true, scaleFactor: 0.6 } },
+        color: { color: '#30363d', highlight: '#58a6ff', hover: '#484f58' },
+        width: 1.5,
+        smooth: { type: 'cubicBezier', forceDirection: 'vertical', roundness: 0.4 },
+      },
+      layout: {
+        hierarchical: {
+          enabled: true, direction: 'UD', sortMethod: 'directed',
+          levelSeparation: 80, nodeSpacing: 160,
+        }
+      },
+      physics: { enabled: false },
+      interaction: { hover: true, tooltipDelay: 200 },
+    };
+    network = new vis.Network(container, { nodes: nodesDS, edges: edgesDS }, options);
+    network.on('click', function(params) {
+      if (params.nodes.length > 0) loadIdeaDetail(params.nodes[0]);
+    });
+  }
+
+  function truncate(s, max) {
+    if (!s) return '';
+    return s.length > max ? s.substring(0, max) + '...' : s;
+  }
+
+  function updateGraph(data) {
+    const nodeIds = new Set(data.nodes.map(n => n.id));
+    const newNodes = [], updateNodes = [];
+    for (const n of data.nodes) {
+      allIdeas[n.id] = n;
+      const c = STATUS_COLORS[n.status] || STATUS_COLORS.active;
+      const nodeData = {
+        id: n.id,
+        label: '#' + n.id + '\n' + truncate(n.description, 40),
+        color: { background: c.bg, border: c.border, highlight: { background: c.bg, border: '#ffffff' } },
+        font: { color: c.font },
+        title: n.description,
+      };
+      if (nodesDS.get(n.id)) updateNodes.push(nodeData);
+      else newNodes.push(nodeData);
+    }
+    const toRemove = nodesDS.getIds().filter(id => !nodeIds.has(id));
+    if (toRemove.length) nodesDS.remove(toRemove);
+    if (updateNodes.length) nodesDS.update(updateNodes);
+    if (newNodes.length) nodesDS.add(newNodes);
+
+    const existingEdges = {};
+    edgesDS.forEach(e => { existingEdges[e.from + '->' + e.to] = e.id; });
+    const newEdges = [];
+    for (const e of data.edges) {
+      const key = e.from + '->' + e.to;
+      if (!existingEdges[key]) newEdges.push({ id: key, from: e.from, to: e.to });
+      delete existingEdges[key];
+    }
+    const staleEdges = Object.values(existingEdges);
+    if (staleEdges.length) edgesDS.remove(staleEdges);
+    if (newEdges.length) edgesDS.add(newEdges);
+  }
+
+  // --- Backlog ---
+
+  function updateBacklog(data) {
+    document.getElementById('stat-ideas').textContent = data.active_ideas ? data.active_ideas.length : 0;
+    document.getElementById('stat-running').textContent = data.total_running || 0;
+    document.getElementById('stat-pending').textContent = data.total_pending || 0;
+    document.getElementById('stat-branch').textContent = data.current_branch || '--';
+  }
+
+  // --- Chart ---
+
+  window.toggleChart = function() {
+    chartOpen = !chartOpen;
+    const panel = document.getElementById('chart-panel');
+    const arrow = document.getElementById('chart-arrow');
+    if (chartOpen) {
+      panel.classList.remove('collapsed');
+      panel.style.height = '240px';
+      arrow.classList.add('open');
+      loadChartData();
+    } else {
+      panel.classList.add('collapsed');
+      arrow.classList.remove('open');
+    }
+  };
+
+  function loadChartData() {
+    // Fetch all ideas, then all their experiments
+    fetch('/api/v1/ideas')
+      .then(r => r.json())
+      .then(ideas => {
+        const promises = ideas.map(idea =>
+          fetch('/api/v1/ideas/' + idea.id + '/experiments')
+            .then(r => r.json())
+            .then(exps => ({ idea, experiments: exps }))
+        );
+        return Promise.all(promises);
+      })
+      .then(results => {
+        allExperiments = [];
+        for (const { idea, experiments } of results) {
+          for (const exp of experiments) {
+            if (exp.status === 'completed' && exp.metrics) {
+              allExperiments.push({
+                ...exp,
+                idea_description: idea.description,
+                idea_status: idea.status,
+              });
+            }
+          }
+        }
+        // Sort by finished_at
+        allExperiments.sort((a, b) => (a.finished_at || '').localeCompare(b.finished_at || ''));
+        populateMetricSelector();
+        updateChart();
+      })
+      .catch(() => {});
+  }
+
+  function populateMetricSelector() {
+    const metricKeys = new Set();
+    for (const exp of allExperiments) {
+      if (exp.metrics) {
+        for (const k of Object.keys(exp.metrics)) metricKeys.add(k);
+      }
+    }
+    const select = document.getElementById('metric-select');
+    const prev = select.value;
+    select.innerHTML = '';
+    for (const k of [...metricKeys].sort()) {
+      const opt = document.createElement('option');
+      opt.value = k;
+      opt.textContent = k;
+      select.appendChild(opt);
+    }
+    // Try to keep previous selection, or pick first one with "acc" in name
+    if (prev && metricKeys.has(prev)) {
+      select.value = prev;
+    } else {
+      const accKey = [...metricKeys].find(k => k.toLowerCase().includes('acc'));
+      if (accKey) select.value = accKey;
+    }
+  }
+
+  window.updateChart = function() {
+    const metricKey = document.getElementById('metric-select').value;
+    if (!metricKey) return;
+
+    // Group by idea_id
+    const byIdea = {};
+    for (const exp of allExperiments) {
+      if (exp.metrics && exp.metrics[metricKey] !== undefined) {
+        if (!byIdea[exp.idea_id]) byIdea[exp.idea_id] = [];
+        byIdea[exp.idea_id].push(exp);
+      }
+    }
+
+    // Build datasets — one per idea, plotted on a shared x-axis (experiment order)
+    // We use a global experiment index as x so all ideas share the same timeline
+    let globalIndex = 0;
+    const indexMap = {};  // exp.id -> global index
+    for (const exp of allExperiments) {
+      if (exp.metrics && exp.metrics[metricKey] !== undefined) {
+        indexMap[exp.id] = globalIndex++;
+      }
+    }
+
+    const datasets = [];
+    let colorIdx = 0;
+    for (const [ideaId, exps] of Object.entries(byIdea)) {
+      const color = IDEA_PALETTE[colorIdx % IDEA_PALETTE.length];
+      const idea = allIdeas[ideaId] || {};
+      datasets.push({
+        label: '#' + ideaId + ': ' + truncate(idea.description || exps[0].idea_description || '', 30),
+        data: exps.map(e => ({
+          x: indexMap[e.id],
+          y: e.metrics[metricKey],
+          exp: e,
+        })),
+        borderColor: color,
+        backgroundColor: color + '33',
+        pointBackgroundColor: color,
+        pointRadius: 5,
+        pointHoverRadius: 8,
+        tension: 0.3,
+        fill: false,
+      });
+      colorIdx++;
+    }
+
+    const ctx = document.getElementById('metrics-chart').getContext('2d');
+    if (metricsChart) metricsChart.destroy();
+    metricsChart = new Chart(ctx, {
+      type: 'line',
+      data: { datasets },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+          x: {
+            type: 'linear',
+            title: { display: true, text: 'Experiment (chronological)', color: '#8b949e', font: { size: 10 } },
+            ticks: { color: '#484f58', stepSize: 1, font: { size: 10 } },
+            grid: { color: '#21262d' },
+          },
+          y: {
+            title: { display: true, text: metricKey, color: '#8b949e', font: { size: 10 } },
+            ticks: { color: '#484f58', font: { size: 10 } },
+            grid: { color: '#21262d' },
+          },
+        },
+        plugins: {
+          legend: {
+            labels: { color: '#8b949e', font: { family: 'SF Mono, Fira Code, Consolas, monospace', size: 10 } },
+          },
+          tooltip: {
+            backgroundColor: '#161b22',
+            titleColor: '#58a6ff',
+            bodyColor: '#c9d1d9',
+            borderColor: '#30363d',
+            borderWidth: 1,
+            titleFont: { family: 'SF Mono, Fira Code, Consolas, monospace', size: 11 },
+            bodyFont: { family: 'SF Mono, Fira Code, Consolas, monospace', size: 11 },
+            callbacks: {
+              title: function(items) {
+                const d = items[0].raw.exp;
+                return '#' + d.idea_id + ': ' + (allIdeas[d.idea_id] || {}).description || d.idea_description || '';
+              },
+              label: function(item) {
+                const d = item.raw.exp;
+                return [
+                  metricKey + ': ' + item.raw.y,
+                  'exp/' + d.id + ': ' + (d.description || ''),
+                  d.finished_at ? 'at ' + new Date(d.finished_at).toLocaleString() : '',
+                ].filter(Boolean);
+              },
+            },
+          },
+        },
+      },
+    });
+  };
+
+  // --- Detail panel ---
+
+  function badgeFor(status) {
+    return '<span class="badge badge-' + status + '">' + status + '</span>';
+  }
+
+  function escapeHtml(s) {
+    if (!s) return '';
+    const d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+  }
+
+  function formatTime(iso) {
+    if (!iso) return '--';
+    try { return new Date(iso).toLocaleString(); } catch(e) { return iso; }
+  }
+
+  function loadIdeaDetail(ideaId) {
+    selectedIdea = ideaId;
+    fetch('/api/v1/ideas/' + ideaId + '?notes=all')
+      .then(r => r.json())
+      .then(idea => renderDetail(idea))
+      .catch(err => {
+        document.getElementById('detail-content').innerHTML = '<p style="color:#f85149">Error: ' + escapeHtml(String(err)) + '</p>';
+      });
+    document.getElementById('detail-panel').classList.add('open');
+  }
+
+  function renderDetail(idea) {
+    const notes = (idea.notes || []).sort((a, b) => (a.created_at || '').localeCompare(b.created_at || ''));
+    const experiments = idea.experiments || [];
+
+    let html = '<h2>Idea #' + idea.id + ' <span class="close-btn" onclick="closePanel()">&times;</span></h2>';
+    html += '<div class="detail-section"><div class="label">Status</div><div class="value">' + badgeFor(idea.status) + '</div></div>';
+    html += '<div class="detail-section"><div class="label">Description</div><div class="value">' + escapeHtml(idea.description) + '</div></div>';
+    if (idea.conclusion) {
+      html += '<div class="detail-section"><div class="label">Conclusion</div><div class="value">' + escapeHtml(idea.conclusion) + '</div></div>';
+    }
+    html += '<div class="detail-section"><div class="label">Branch</div><div class="value">' + escapeHtml(idea.branch) + '</div></div>';
+    html += '<div class="detail-section"><div class="label">Created</div><div class="value">' + formatTime(idea.created_at) + '</div></div>';
+
+    if (notes.length) {
+      html += '<div class="detail-section"><div class="label">Notes (' + notes.length + ')</div>';
+      for (const n of notes) {
+        html += '<div class="note-item ' + (n.level || 'observation') + '">';
+        html += '<div class="note-meta">' + escapeHtml(n.level) + ' &mdash; ' + formatTime(n.created_at) + '</div>';
+        html += escapeHtml(n.text);
+        html += '</div>';
+      }
+      html += '</div>';
+    }
+
+    if (experiments.length) {
+      html += '<div class="detail-section"><div class="label">Experiments (' + experiments.length + ')</div>';
+      for (const e of experiments) {
+        html += '<div class="exp-item">';
+        html += '<div class="exp-header"><span class="exp-id">exp/' + e.id + '</span>' + badgeFor(e.status) + '</div>';
+        html += '<div class="exp-desc">' + escapeHtml(e.description) + '</div>';
+        if (e.metrics && Object.keys(e.metrics).length) {
+          html += '<div class="exp-metrics">metrics: ' + escapeHtml(JSON.stringify(e.metrics)) + '</div>';
+        }
+        if (e.meta && Object.keys(e.meta).length) {
+          html += '<div class="exp-meta">meta: ' + escapeHtml(JSON.stringify(e.meta)) + '</div>';
+        }
+        html += '<div class="exp-timestamps">';
+        html += 'created: ' + formatTime(e.created_at);
+        if (e.started_at) html += ' | started: ' + formatTime(e.started_at);
+        if (e.finished_at) html += ' | finished: ' + formatTime(e.finished_at);
+        html += '</div></div>';
+      }
+      html += '</div>';
+    }
+
+    document.getElementById('detail-content').innerHTML = html;
+  }
+
+  window.closePanel = function() {
+    document.getElementById('detail-panel').classList.remove('open');
+    selectedIdea = null;
+    if (network) network.unselectAll();
+  };
+
+  // --- Polling ---
+
+  function pollBacklog() {
+    fetch('/api/v1/backlog').then(r => r.json()).then(updateBacklog).catch(() => {});
+  }
+  function pollGraph() {
+    fetch('/api/v1/graph').then(r => r.json()).then(updateGraph).catch(() => {});
+  }
+
+  // Init
+  initGraph();
+  pollBacklog();
+  pollGraph();
+  setInterval(pollBacklog, 5000);
+  setInterval(pollGraph, 10000);
+  setInterval(function() { if (chartOpen) loadChartData(); }, 15000);
+})();
+</script>
+</body>
+</html>
