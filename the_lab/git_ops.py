@@ -9,12 +9,6 @@ class GitError(Exception):
     pass
 
 
-class MergeConflictError(GitError):
-    def __init__(self, conflicts: list[str]):
-        self.conflicts = conflicts
-        super().__init__(f"Merge conflicts in: {', '.join(conflicts)}")
-
-
 def _run(args: list[str], cwd: str | Path | None = None, check: bool = True) -> subprocess.CompletedProcess:
     result = subprocess.run(
         ["git"] + args,
@@ -27,15 +21,15 @@ def _run(args: list[str], cwd: str | Path | None = None, check: bool = True) -> 
     return result
 
 
-def get_repo_root(cwd: str | Path | None = None) -> Path:
-    result = _run(["rev-parse", "--show-toplevel"], cwd=cwd)
-    return Path(result.stdout.strip())
-
-
 def get_default_branch(cwd: str | Path | None = None) -> str:
-    """Get the current HEAD branch name as the base for root ideas."""
+    """Get the current HEAD branch name."""
     result = _run(["rev-parse", "--abbrev-ref", "HEAD"], cwd=cwd)
     return result.stdout.strip()
+
+
+def get_current_branch(cwd: str | Path | None = None) -> str:
+    """Get the current checked-out branch name."""
+    return get_default_branch(cwd=cwd)
 
 
 def branch_exists(branch: str, cwd: str | Path | None = None) -> bool:
@@ -44,8 +38,56 @@ def branch_exists(branch: str, cwd: str | Path | None = None) -> bool:
 
 
 def create_branch_from(new_branch: str, source_branch: str, cwd: str | Path | None = None):
-    """Create a new branch from a source branch."""
+    """Create a new branch from a source branch (does not checkout)."""
     _run(["branch", new_branch, source_branch], cwd=cwd)
+
+
+def has_uncommitted_changes(cwd: str | Path | None = None) -> bool:
+    """Check if there are any uncommitted changes (staged or unstaged)."""
+    result = _run(["status", "--porcelain"], cwd=cwd)
+    # Filter out .the_lab/ entries — those aren't tracked
+    lines = [l for l in result.stdout.strip().split("\n") if l and not l.endswith(".the_lab/") and ".the_lab/" not in l]
+    return len(lines) > 0
+
+
+def auto_commit(cwd: str | Path | None = None, message: str = "auto-commit before checkout") -> bool:
+    """Stage all changes and commit. Returns True if a commit was made."""
+    if not has_uncommitted_changes(cwd):
+        return False
+    _run(["add", "-A"], cwd=cwd)
+    # Check if there's actually anything staged after add
+    result = _run(["diff", "--cached", "--quiet"], cwd=cwd, check=False)
+    if result.returncode == 0:
+        return False
+    _run(["commit", "-m", message], cwd=cwd)
+    return True
+
+
+def checkout(branch: str, cwd: str | Path | None = None):
+    """Checkout a branch."""
+    _run(["checkout", branch], cwd=cwd)
+
+
+def checkout_idea(idea_id: int, cwd: str | Path | None = None) -> dict:
+    """Auto-commit current changes and checkout an idea's branch.
+
+    Returns a dict with info about what happened.
+    """
+    current = get_current_branch(cwd=cwd)
+    target = f"idea/{idea_id}"
+
+    if current == target:
+        return {"status": "already_on_branch", "branch": target}
+
+    committed = auto_commit(cwd=cwd, message=f"auto-commit before switching to {target}")
+    checkout(target, cwd=cwd)
+
+    return {
+        "status": "checked_out",
+        "branch": target,
+        "previous_branch": current,
+        "auto_committed": committed,
+    }
 
 
 def create_branch_from_merge(
@@ -53,67 +95,32 @@ def create_branch_from_merge(
 ) -> list[str] | None:
     """Create a new branch by merging multiple parent branches.
 
+    Auto-commits, checks out first parent, creates branch, merges the rest.
     Returns None on success, or a list of conflicting file paths on failure.
     """
-    repo_root = get_repo_root(cwd)
+    auto_commit(cwd=cwd)
 
-    # Start from the first parent
-    _run(["branch", new_branch, parent_branches[0]], cwd=repo_root)
+    original_branch = get_current_branch(cwd=cwd)
 
-    # Create a temporary worktree to do the merge
-    worktree_path = repo_root / ".worktrees" / new_branch.replace("/", "_")
-    worktree_path.parent.mkdir(parents=True, exist_ok=True)
+    # Checkout first parent and create branch from it
+    checkout(parent_branches[0], cwd=cwd)
+    _run(["checkout", "-b", new_branch], cwd=cwd)
 
-    try:
-        _run(["worktree", "add", str(worktree_path), new_branch], cwd=repo_root)
+    # Merge remaining parents
+    for parent_branch in parent_branches[1:]:
+        result = _run(
+            ["merge", parent_branch, "--no-edit", "-m", f"Merge {parent_branch} into {new_branch}"],
+            cwd=cwd,
+            check=False,
+        )
+        if result.returncode != 0:
+            conflict_result = _run(["diff", "--name-only", "--diff-filter=U"], cwd=cwd, check=False)
+            conflicts = [f for f in conflict_result.stdout.strip().split("\n") if f]
 
-        # Merge remaining parents one by one
-        for parent_branch in parent_branches[1:]:
-            result = _run(
-                ["merge", parent_branch, "--no-edit", "-m", f"Merge {parent_branch} into {new_branch}"],
-                cwd=worktree_path,
-                check=False,
-            )
-            if result.returncode != 0:
-                # Get conflicting files
-                conflict_result = _run(["diff", "--name-only", "--diff-filter=U"], cwd=worktree_path, check=False)
-                conflicts = [f for f in conflict_result.stdout.strip().split("\n") if f]
+            # Abort and clean up
+            _run(["merge", "--abort"], cwd=cwd, check=False)
+            checkout(original_branch, cwd=cwd)
+            _run(["branch", "-D", new_branch], cwd=cwd, check=False)
+            return conflicts
 
-                # Abort the merge and clean up
-                _run(["merge", "--abort"], cwd=worktree_path, check=False)
-                _run(["worktree", "remove", str(worktree_path), "--force"], cwd=repo_root, check=False)
-                _run(["branch", "-D", new_branch], cwd=repo_root, check=False)
-                return conflicts
-
-        return None
-    except Exception:
-        # Clean up on any error
-        _run(["worktree", "remove", str(worktree_path), "--force"], cwd=repo_root, check=False)
-        _run(["branch", "-D", new_branch], cwd=repo_root, check=False)
-        raise
-    finally:
-        # Always remove worktree if it still exists
-        _run(["worktree", "remove", str(worktree_path), "--force"], cwd=repo_root, check=False)
-
-
-def get_worktree_path(idea_id: int, cwd: str | Path | None = None) -> Path:
-    """Get or create a worktree for an idea's branch."""
-    repo_root = get_repo_root(cwd)
-    branch = f"idea/{idea_id}"
-    worktree_path = repo_root / ".worktrees" / f"idea_{idea_id}"
-
-    if not worktree_path.exists():
-        worktree_path.parent.mkdir(parents=True, exist_ok=True)
-        # Prune stale worktree registrations first
-        _run(["worktree", "prune"], cwd=repo_root, check=False)
-        _run(["worktree", "add", str(worktree_path), branch], cwd=repo_root)
-
-    return worktree_path
-
-
-def remove_worktree(idea_id: int, cwd: str | Path | None = None):
-    """Remove a worktree for an idea."""
-    repo_root = get_repo_root(cwd)
-    worktree_path = repo_root / ".worktrees" / f"idea_{idea_id}"
-    if worktree_path.exists():
-        _run(["worktree", "remove", str(worktree_path), "--force"], cwd=repo_root, check=False)
+    return None

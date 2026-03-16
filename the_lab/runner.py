@@ -4,11 +4,11 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import secrets
 import signal
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .git_ops import get_worktree_path
 from .store import Store
 
 
@@ -25,7 +25,6 @@ class ExperimentRunner:
         if exp["status"] not in ("pending", "failed"):
             return {"status": "error", "reason": f"experiment is {exp['status']}, expected pending or failed"}
 
-        # Script lives in .the_lab/, runs with worktree as cwd
         script_path = self._store.repo_dir / exp["script"]
         if not script_path.exists():
             return {
@@ -35,7 +34,6 @@ class ExperimentRunner:
             }
 
         os.chmod(script_path, os.stat(script_path).st_mode | 0o755)
-        worktree = get_worktree_path(exp["idea_id"], cwd=self._store.repo_dir)
 
         base = script_path.with_suffix("")
         log_path = base.with_suffix(".log")
@@ -46,11 +44,21 @@ class ExperimentRunner:
             if p.exists():
                 p.unlink()
 
+        # Set env vars so scripts can verify they were launched by the backend
+        run_token = secrets.token_hex(16)
+        env = {
+            **os.environ,
+            "THE_LAB_TOKEN": run_token,
+            "THE_LAB_EXP_ID": str(exp_id),
+            "THE_LAB_IDEA_ID": str(exp["idea_id"]),
+        }
+
         process = await asyncio.create_subprocess_exec(
             "bash", str(script_path),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
-            cwd=str(worktree),
+            cwd=str(self._store.repo_dir),
+            env=env,
         )
 
         exp = self._store.update_experiment(

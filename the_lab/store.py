@@ -40,10 +40,27 @@ class Store:
         self.repo_dir = repo_dir
         self.lab_dir = repo_dir / ".the_lab" / "experiments"
         self.lab_dir.mkdir(parents=True, exist_ok=True)
+        self._ensure_gitignore()
         self._lock = threading.Lock()
         self._next_idea_id = 1
         self._next_exp_id = 1
         self._recover_counters()
+
+    def _ensure_gitignore(self):
+        """Make sure .the_lab/ is gitignored on ALL branches.
+
+        We add it to .git/info/exclude (repo-level, not branch-level)
+        so it works regardless of which branch is checked out.
+        """
+        exclude_file = self.repo_dir / ".git" / "info" / "exclude"
+        exclude_file.parent.mkdir(parents=True, exist_ok=True)
+        entry = ".the_lab/"
+        if exclude_file.exists():
+            content = exclude_file.read_text()
+            if entry not in content.split("\n"):
+                exclude_file.write_text(content.rstrip("\n") + f"\n{entry}\n")
+        else:
+            exclude_file.write_text(f"{entry}\n")
 
     def _recover_counters(self):
         """Scan existing data to recover the next IDs."""

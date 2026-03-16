@@ -10,10 +10,11 @@ from pydantic import BaseModel
 
 from .git_ops import (
     GitError,
+    checkout_idea,
     create_branch_from,
     create_branch_from_merge,
+    get_current_branch,
     get_default_branch,
-    get_worktree_path,
 )
 from .store import Store
 from .runner import ExperimentRunner
@@ -36,7 +37,7 @@ class NewIdeaRequest(BaseModel):
 class NewExperimentRequest(BaseModel):
     description: str
     meta: dict | None = None
-    script_content: str | None = None  # inline script — server writes it for you
+    script_content: str | None = None
 
 
 class NoteRequest(BaseModel):
@@ -54,6 +55,36 @@ class AbandonRequest(BaseModel):
 
 class ReopenRequest(BaseModel):
     reason: str
+
+
+# --- Script guard ---
+
+SCRIPT_GUARD = """\
+if [ -z "$THE_LAB_TOKEN" ]; then
+  echo "ERROR: This script must be run via the-lab API (POST /experiments/<id>/start)." >&2
+  exit 1
+fi
+"""
+
+
+def _wrap_script(content: str) -> str:
+    """Inject a guard that prevents running outside the backend."""
+    lines = content.split("\n", 1)
+    if lines[0].startswith("#!"):
+        return lines[0] + "\n" + SCRIPT_GUARD + (lines[1] if len(lines) > 1 else "")
+    return "#!/bin/bash\n" + SCRIPT_GUARD + content
+
+
+def _idea_context(idea_id: int) -> dict:
+    """Build a compact context dict for an idea."""
+    idea = store.get_idea(idea_id)
+    if not idea:
+        return {"idea_id": idea_id}
+    return {
+        "idea_id": idea["id"],
+        "idea_description": idea["description"],
+        "branch": idea["branch"],
+    }
 
 
 # --- Ideas ---
@@ -82,9 +113,25 @@ def create_idea(req: NewIdeaRequest):
             if conflicts is not None:
                 return {"status": "conflict", "conflicts": conflicts}
 
-        get_worktree_path(idea_id, cwd=REPO_DIR)
         store.save_idea(idea)
         return idea
+    except GitError as e:
+        raise HTTPException(500, str(e))
+
+
+@app.post("/api/v1/ideas/{idea_id}/checkout")
+def checkout_idea_endpoint(idea_id: int):
+    """Auto-commit any uncommitted changes and checkout this idea's branch."""
+    idea = store.get_idea(idea_id)
+    if not idea:
+        raise HTTPException(404, "idea not found")
+    try:
+        result = checkout_idea(idea_id, cwd=REPO_DIR)
+        return {
+            **result,
+            "idea_id": idea["id"],
+            "idea_description": idea["description"],
+        }
     except GitError as e:
         raise HTTPException(500, str(e))
 
@@ -92,7 +139,6 @@ def create_idea(req: NewIdeaRequest):
 @app.get("/api/v1/ideas")
 def list_ideas(status: str | None = None):
     ideas = store.list_ideas(status=status)
-    # Attach insight + milestone notes to each idea
     for idea in ideas:
         idea["notes"] = store.get_notes(idea["id"], levels=Store.LISTING_LEVELS)
     return ideas
@@ -117,7 +163,6 @@ def get_idea_tree(idea_id: int):
     if not idea:
         raise HTTPException(404, "idea not found")
 
-    # Walk ancestors
     ancestors = []
     visited = set()
     queue = list(idea.get("parent_ids", []))
@@ -132,7 +177,6 @@ def get_idea_tree(idea_id: int):
             ancestors.append(parent)
             queue.extend(parent.get("parent_ids", []))
 
-    # Walk descendants
     descendants = []
     visited = set()
     all_ideas = store.list_ideas()
@@ -160,8 +204,7 @@ def conclude_idea(idea_id: int, req: ConcludeRequest):
         raise HTTPException(404, "idea not found")
     if idea["status"] != "active":
         raise HTTPException(400, f"idea is {idea['status']}, cannot conclude")
-    idea = store.update_idea(idea_id, status="concluded", conclusion=req.conclusion)
-    return idea
+    return store.update_idea(idea_id, status="concluded", conclusion=req.conclusion)
 
 
 @app.post("/api/v1/ideas/{idea_id}/abandon")
@@ -171,8 +214,7 @@ def abandon_idea(idea_id: int, req: AbandonRequest):
         raise HTTPException(404, "idea not found")
     if idea["status"] != "active":
         raise HTTPException(400, f"idea is {idea['status']}, cannot abandon")
-    idea = store.update_idea(idea_id, status="abandoned", conclusion=req.reason)
-    return idea
+    return store.update_idea(idea_id, status="abandoned", conclusion=req.reason)
 
 
 @app.post("/api/v1/ideas/{idea_id}/reopen")
@@ -183,7 +225,6 @@ def reopen_idea(idea_id: int, req: ReopenRequest):
     if idea["status"] not in ("concluded", "abandoned"):
         raise HTTPException(400, f"idea is {idea['status']}, cannot reopen")
 
-    # Preserve old conclusion as an insight note
     old_status = idea["status"]
     old_conclusion = idea.get("conclusion")
     if old_conclusion:
@@ -194,8 +235,7 @@ def reopen_idea(idea_id: int, req: ReopenRequest):
         )
 
     store.add_note(idea_id, f"reopened: {req.reason}", level="milestone")
-    idea = store.update_idea(idea_id, status="active", conclusion=None)
-    return idea
+    return store.update_idea(idea_id, status="active", conclusion=None)
 
 
 @app.post("/api/v1/ideas/{idea_id}/note", status_code=201)
@@ -217,12 +257,11 @@ def create_experiment(idea_id: int, req: NewExperimentRequest):
         raise HTTPException(400, f"idea is {idea['status']}, cannot add experiments")
     exp = store.create_experiment(idea_id, req.description, meta=req.meta)
 
-    # Write inline script content if provided
     if req.script_content is not None:
         script_path = REPO_DIR / exp["script"]
         script_path.parent.mkdir(parents=True, exist_ok=True)
-        script_path.write_text(req.script_content)
-        os.chmod(script_path, 0o755)
+        script_path.write_text(_wrap_script(req.script_content))
+        os.chmod(script_path, 0o644)
 
     return exp
 
@@ -245,12 +284,15 @@ async def start_experiment(exp_id: int):
     result = await runner.start(exp_id)
     if result["status"] == "error":
         raise HTTPException(400, result)
+    # Add idea context + current branch
+    exp = result.get("experiment", {})
+    result["current_branch"] = get_current_branch(cwd=REPO_DIR)
+    result.update(_idea_context(exp.get("idea_id")))
     return result
 
 
 @app.post("/api/v1/experiments/{exp_id}/restart")
 async def restart_experiment(exp_id: int):
-    """Restart a failed experiment (re-runs the same script)."""
     exp = store.get_experiment(exp_id)
     if not exp:
         raise HTTPException(404, "experiment not found")
@@ -259,6 +301,8 @@ async def restart_experiment(exp_id: int):
     result = await runner.start(exp_id)
     if result["status"] == "error":
         raise HTTPException(400, result)
+    result["current_branch"] = get_current_branch(cwd=REPO_DIR)
+    result.update(_idea_context(exp.get("idea_id")))
     return result
 
 
@@ -272,7 +316,6 @@ async def cancel_experiment(exp_id: int):
 
 @app.get("/api/v1/experiments/{exp_id}/log")
 def get_experiment_log(exp_id: int, tail: int | None = None):
-    """Get the log for an experiment. Streams in real-time (file is written live)."""
     log = runner.get_log(exp_id, tail=tail)
     if log is None:
         raise HTTPException(404, "experiment not found")
@@ -283,13 +326,19 @@ def get_experiment_log(exp_id: int, tail: int | None = None):
 
 @app.get("/api/v1/wait")
 async def wait_for_experiment(timeout: float = Query(default=3600, le=86400)):
-    return await runner.wait_any(timeout=timeout)
+    result = await runner.wait_any(timeout=timeout)
+    result["current_branch"] = get_current_branch(cwd=REPO_DIR)
+    exp = result.get("experiment")
+    if exp:
+        result.update(_idea_context(exp.get("idea_id")))
+    return result
 
 
 # --- Overview ---
 
 @app.get("/api/v1/backlog")
 def get_backlog():
+    current = get_current_branch(cwd=REPO_DIR)
     ideas = store.list_ideas(status="active")
     result = []
     total_running = 0
@@ -310,7 +359,12 @@ def get_backlog():
             "completed_experiments": completed,
             "failed_experiments": failed,
         })
-    return {"active_ideas": result, "total_running": total_running, "total_pending": total_pending}
+    return {
+        "current_branch": current,
+        "active_ideas": result,
+        "total_running": total_running,
+        "total_pending": total_pending,
+    }
 
 
 @app.get("/api/v1/graph")
