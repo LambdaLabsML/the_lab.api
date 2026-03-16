@@ -23,6 +23,28 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _enrich_experiment(exp: dict) -> dict:
+    """Add computed fields like runtime_seconds."""
+    started = exp.get("started_at")
+    finished = exp.get("finished_at")
+    if started and finished:
+        try:
+            t0 = datetime.fromisoformat(started)
+            t1 = datetime.fromisoformat(finished)
+            diff = (t1 - t0).total_seconds()
+            exp["runtime_seconds"] = round(diff, 1)
+            # Human-readable
+            if diff < 60:
+                exp["runtime"] = f"{diff:.1f}s"
+            elif diff < 3600:
+                exp["runtime"] = f"{diff/60:.1f}m"
+            else:
+                exp["runtime"] = f"{diff/3600:.1f}h"
+        except (ValueError, TypeError):
+            pass
+    return exp
+
+
 def _read_json(path: Path) -> dict | list:
     if path.exists():
         return json.loads(path.read_text())
@@ -205,7 +227,7 @@ class Store:
                 continue
             exp_path = d / f"{exp_id}.json"
             if exp_path.exists():
-                return _read_json(exp_path)
+                return _enrich_experiment(_read_json(exp_path))
         return None
 
     def update_experiment(self, exp_id: int, **fields) -> dict | None:
@@ -213,6 +235,8 @@ class Store:
         if not exp:
             return None
         exp.update(fields)
+        # Re-enrich so runtime is persisted to disk
+        exp = _enrich_experiment(exp)
         idea_dir = self._idea_dir(exp["idea_id"])
         _write_json(idea_dir / f"{exp_id}.json", exp)
         return exp
@@ -224,7 +248,7 @@ class Store:
         exps = []
         for f in sorted(idea_dir.glob("*.json")):
             if f.stem.isdigit():
-                exps.append(_read_json(f))
+                exps.append(_enrich_experiment(_read_json(f)))
         return sorted(exps, key=lambda e: e.get("created_at", ""))
 
     def list_experiments_by_status(self, status: str) -> list[dict]:
@@ -237,7 +261,7 @@ class Store:
                 continue
             for f in d.glob("*.json"):
                 if f.stem.isdigit():
-                    exp = _read_json(f)
+                    exp = _enrich_experiment(_read_json(f))
                     if exp.get("status") == status:
                         results.append(exp)
         return results

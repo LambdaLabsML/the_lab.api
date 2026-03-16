@@ -17,17 +17,22 @@ class ExperimentRunner:
         self._store = store
         self._finished_queue: asyncio.Queue[int] = asyncio.Queue()
         self._tasks: dict[int, asyncio.Task] = {}
-        # Recover orphaned experiments: any "running" experiment at startup
-        # has lost its process (server restarted). Mark as failed so the agent
-        # can restart them.
+        # Recover orphaned experiments on startup.
+        # If the process is still alive, re-attach to it. Otherwise mark as failed.
+        self._reattach_running = []
         for exp in self._store.list_experiments_by_status("running"):
-            self._store.update_experiment(
-                exp["id"],
-                status="failed",
-                error="server restarted while experiment was running",
-                pid=None,
-                finished_at=datetime.now(timezone.utc).isoformat(),
-            )
+            pid = exp.get("pid")
+            if pid and self._pid_alive(pid):
+                # Process still running — we'll re-attach in an async task
+                self._reattach_running.append(exp)
+            else:
+                self._store.update_experiment(
+                    exp["id"],
+                    status="failed",
+                    error="server restarted while experiment was running (process gone)",
+                    pid=None,
+                    finished_at=datetime.now(timezone.utc).isoformat(),
+                )
 
         # Mark all already-finished experiments as seen on startup,
         # so /wait only returns experiments that finish from now on.
@@ -35,6 +40,63 @@ class ExperimentRunner:
         for status in ("completed", "failed", "cancelled"):
             for exp in self._store.list_experiments_by_status(status):
                 self._seen.add(exp["id"])
+
+    @staticmethod
+    def _pid_alive(pid: int) -> bool:
+        """Check if a process is still running."""
+        try:
+            os.kill(pid, 0)
+            return True
+        except (ProcessLookupError, PermissionError):
+            return False
+
+    async def reattach_running(self):
+        """Re-attach to experiments that survived a server restart.
+        Call this once after the event loop is running."""
+        for exp in self._reattach_running:
+            task = asyncio.create_task(self._monitor_pid(exp))
+            self._tasks[exp["id"]] = task
+        if self._reattach_running:
+            ids = [e["id"] for e in self._reattach_running]
+            print(f"[the-lab] re-attached to {len(ids)} running experiment(s): {ids}")
+        self._reattach_running = []
+
+    async def _monitor_pid(self, exp: dict):
+        """Poll a PID until it exits, then capture results from the log file."""
+        exp_id = exp["id"]
+        pid = exp["pid"]
+        script_path = self._store.repo_dir / exp["script"]
+        base = script_path.with_suffix("")
+        log_path = base.with_suffix(".log")
+        err_path = base.with_suffix(".err")
+
+        # Poll until the process exits
+        while self._pid_alive(pid):
+            await asyncio.sleep(2)
+
+        # Process is done — read the log file (which the original bash process wrote to)
+        now = datetime.now(timezone.utc).isoformat()
+        output = log_path.read_text() if log_path.exists() else ""
+
+        # Try to determine exit status from the output
+        result = self._extract_json(output)
+        if result is not None:
+            metrics = result.get("metrics", {})
+            meta = {**exp.get("meta", {}), **result.get("meta", {})}
+            self._store.update_experiment(
+                exp_id, status="completed", metrics=metrics, meta=meta,
+                pid=None, finished_at=now,
+            )
+        else:
+            self._store.update_experiment(
+                exp_id, status="failed",
+                error="process exited but no valid JSON found in output",
+                pid=None, finished_at=now,
+            )
+            err_path.write_text("process exited but no valid JSON found in output")
+
+        self._tasks.pop(exp_id, None)
+        self._finished_queue.put_nowait(exp_id)
 
     async def start(self, exp_id: int) -> dict:
         exp = self._store.get_experiment(exp_id)
@@ -71,13 +133,17 @@ class ExperimentRunner:
             "THE_LAB_IDEA_ID": str(exp["idea_id"]),
         }
 
+        # Write stdout/stderr directly to the log file so it survives server restarts.
+        # The bash process owns the file handle — if we restart, it keeps writing.
+        log_file = open(log_path, "w")
         process = await asyncio.create_subprocess_exec(
             "bash", str(script_path),
-            stdout=asyncio.subprocess.PIPE,
+            stdout=log_file,
             stderr=asyncio.subprocess.STDOUT,
             cwd=str(self._store.repo_dir),
             env=env,
         )
+        log_file.close()  # the child process has inherited the fd
 
         exp = self._store.update_experiment(
             exp_id,
@@ -89,7 +155,7 @@ class ExperimentRunner:
         )
 
         task = asyncio.create_task(
-            self._monitor(exp_id, process, log_path, err_path)
+            self._monitor(exp_id, process, err_path)
         )
         self._tasks[exp_id] = task
 
@@ -99,28 +165,17 @@ class ExperimentRunner:
         self,
         exp_id: int,
         process: asyncio.subprocess.Process,
-        log_path: Path,
         err_path: Path,
     ):
-        # Stream stdout/stderr to .log in real-time
-        output_lines: list[str] = []
-        with open(log_path, "w") as log_file:
-            while True:
-                line = await process.stdout.readline()
-                if not line:
-                    break
-                decoded = line.decode("utf-8", errors="replace")
-                output_lines.append(decoded)
-                log_file.write(decoded)
-                log_file.flush()
-
         await process.wait()
-        output = "".join(output_lines)
 
         exp = self._store.get_experiment(exp_id)
         if not exp or exp["status"] == "cancelled":
             return
 
+        # Read the log file (written directly by the bash process)
+        log_path = (self._store.repo_dir / exp["script"]).with_suffix(".log")
+        output = log_path.read_text() if log_path.exists() else ""
         now = datetime.now(timezone.utc).isoformat()
 
         if process.returncode == 0:
@@ -129,12 +184,8 @@ class ExperimentRunner:
                 metrics = result.get("metrics", {})
                 meta = {**exp.get("meta", {}), **result.get("meta", {})}
                 self._store.update_experiment(
-                    exp_id,
-                    status="completed",
-                    metrics=metrics,
-                    meta=meta,
-                    pid=None,
-                    finished_at=now,
+                    exp_id, status="completed", metrics=metrics, meta=meta,
+                    pid=None, finished_at=now,
                 )
             else:
                 error = "script exited 0 but no valid JSON found in last stdout line"

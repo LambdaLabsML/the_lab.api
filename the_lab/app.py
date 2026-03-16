@@ -27,6 +27,11 @@ store = Store(REPO_DIR)
 app = FastAPI(title="The Lab", version="0.1.0")
 runner = ExperimentRunner(store)
 
+
+@app.on_event("startup")
+async def startup():
+    await runner.reattach_running()
+
 _DASHBOARD_HTML: str | None = None
 
 def _load_dashboard() -> str:
