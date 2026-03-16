@@ -5,8 +5,13 @@ description = "Experiment management API for AI-driven research loops"
 requires-python = ">=3.10"
 dependencies = [
     "fastapi>=0.135.1",
+    "httpx>=0.28.1",
     "uvicorn[standard]>=0.42.0",
+    "watchfiles>=1.1.1",
 ]
+
+[tool.setuptools.packages.find]
+include = ["the_lab*"]
 
 [project.scripts]
 the-lab = "the_lab.cli:main"
