@@ -15,27 +15,36 @@ from .store import Store
 class ExperimentRunner:
     def __init__(self, store: Store):
         self._store = store
-        self._finish_event: asyncio.Event = asyncio.Event()
+        self._finished_queue: asyncio.Queue[int] = asyncio.Queue()
         self._tasks: dict[int, asyncio.Task] = {}
 
     async def start(self, exp_id: int) -> dict:
         exp = self._store.get_experiment(exp_id)
         if not exp:
             return {"status": "error", "reason": f"experiment {exp_id} not found"}
-        if exp["status"] != "pending":
-            return {"status": "error", "reason": f"experiment is {exp['status']}, expected pending"}
+        if exp["status"] not in ("pending", "failed"):
+            return {"status": "error", "reason": f"experiment is {exp['status']}, expected pending or failed"}
 
-        worktree = get_worktree_path(exp["idea_id"], cwd=self._store.repo_dir)
-        script_path = worktree / exp["script"]
+        # Script lives in .the_lab/, runs with worktree as cwd
+        script_path = self._store.repo_dir / exp["script"]
         if not script_path.exists():
-            return {"status": "error", "reason": f"script not found: {exp['script']}"}
+            return {
+                "status": "error",
+                "reason": f"script not found at {exp['script']}. "
+                          f"Write the script first, or pass script_content when creating the experiment.",
+            }
 
         os.chmod(script_path, os.stat(script_path).st_mode | 0o755)
+        worktree = get_worktree_path(exp["idea_id"], cwd=self._store.repo_dir)
 
         base = script_path.with_suffix("")
         log_path = base.with_suffix(".log")
-        json_path = base.with_suffix(".json")
         err_path = base.with_suffix(".err")
+
+        # Clear previous log/err on restart
+        for p in (log_path, err_path):
+            if p.exists():
+                p.unlink()
 
         process = await asyncio.create_subprocess_exec(
             "bash", str(script_path),
@@ -48,11 +57,13 @@ class ExperimentRunner:
             exp_id,
             status="running",
             pid=process.pid,
+            error=None,
             started_at=datetime.now(timezone.utc).isoformat(),
+            finished_at=None,
         )
 
         task = asyncio.create_task(
-            self._monitor(exp_id, process, log_path, json_path, err_path)
+            self._monitor(exp_id, process, log_path, err_path)
         )
         self._tasks[exp_id] = task
 
@@ -63,12 +74,22 @@ class ExperimentRunner:
         exp_id: int,
         process: asyncio.subprocess.Process,
         log_path: Path,
-        json_path: Path,
         err_path: Path,
     ):
-        stdout_data, _ = await process.communicate()
-        output = stdout_data.decode("utf-8", errors="replace") if stdout_data else ""
-        log_path.write_text(output)
+        # Stream stdout/stderr to .log in real-time
+        output_lines: list[str] = []
+        with open(log_path, "w") as log_file:
+            while True:
+                line = await process.stdout.readline()
+                if not line:
+                    break
+                decoded = line.decode("utf-8", errors="replace")
+                output_lines.append(decoded)
+                log_file.write(decoded)
+                log_file.flush()
+
+        await process.wait()
+        output = "".join(output_lines)
 
         exp = self._store.get_experiment(exp_id)
         if not exp or exp["status"] == "cancelled":
@@ -80,7 +101,6 @@ class ExperimentRunner:
             result = self._extract_json(output)
             if result is not None:
                 metrics = result.get("metrics", {})
-                # Merge script meta into existing meta
                 meta = {**exp.get("meta", {}), **result.get("meta", {})}
                 self._store.update_experiment(
                     exp_id,
@@ -90,8 +110,6 @@ class ExperimentRunner:
                     pid=None,
                     finished_at=now,
                 )
-                # Rewrite the experiment json (store already did), but also the result .json
-                # Note: the .json path is the same as the experiment json, so update_experiment handles it.
             else:
                 error = "script exited 0 but no valid JSON found in last stdout line"
                 self._store.update_experiment(
@@ -106,8 +124,7 @@ class ExperimentRunner:
             err_path.write_text(f"{error}\n\n{output[-2000:]}")
 
         self._tasks.pop(exp_id, None)
-        self._finish_event.set()
-        self._finish_event.clear()
+        self._finished_queue.put_nowait(exp_id)
 
     def _extract_json(self, output: str) -> dict | None:
         lines = output.strip().split("\n")
@@ -146,9 +163,23 @@ class ExperimentRunner:
             finished_at=datetime.now(timezone.utc).isoformat(),
         )
 
+    def get_log(self, exp_id: int, tail: int | None = None) -> str | None:
+        """Read the .log file for an experiment, optionally tail N lines."""
+        exp = self._store.get_experiment(exp_id)
+        if not exp:
+            return None
+        log_path = self._store.repo_dir / exp["script"].replace(".sh", ".log")
+        if not log_path.exists():
+            return ""
+        content = log_path.read_text()
+        if tail is not None:
+            lines = content.split("\n")
+            content = "\n".join(lines[-tail:])
+        return content
+
     async def wait_any(self, timeout: float = 3600) -> dict:
         try:
-            await asyncio.wait_for(self._finish_event.wait(), timeout=timeout)
+            exp_id = await asyncio.wait_for(self._finished_queue.get(), timeout=timeout)
         except asyncio.TimeoutError:
             running = self._store.list_experiments_by_status("running")
             return {
@@ -156,13 +187,10 @@ class ExperimentRunner:
                 "running": [e["id"] for e in running],
             }
 
-        # Find the most recently finished experiment
-        for status in ("completed", "failed"):
-            exps = self._store.list_experiments_by_status(status)
-            if exps:
-                latest = max(exps, key=lambda e: e.get("finished_at", ""))
-                return {
-                    "event": status,
-                    "experiment": latest,
-                }
+        exp = self._store.get_experiment(exp_id)
+        if exp:
+            return {
+                "event": exp["status"],
+                "experiment": exp,
+            }
         return {"event": "timeout", "running": []}

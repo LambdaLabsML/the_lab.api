@@ -47,15 +47,15 @@ This means you can freely modify code as part of your experiments — each idea 
 
 ### File layout
 
-All experiment files live under `./experiments/`, organized by idea and experiment ID (these are tracked on the idea's branch):
+All experiment data lives under `.the_lab/experiments/` at the repo root — a fixed location that is **not** affected by git branch switches or worktree operations. Scripts run with the idea's worktree as their working directory, so they have access to the idea's code.
 
 ```
-./experiments/1/idea.json       # idea metadata: {description, status, conclusion, parent_ids, created_at}
-./experiments/1/notes.json      # [{text, level, created_at}, ...] — append-only log
-./experiments/1/1.sh            # your experiment script (you write this)
-./experiments/1/1.json          # {description, meta, metrics, status, created_at, started_at, finished_at}
-./experiments/1/1.log           # full stdout+stderr log (auto-generated)
-./experiments/1/1.err           # error details if failed (auto-generated)
+.the_lab/experiments/1/idea.json       # idea metadata: {description, status, conclusion, parent_ids, created_at}
+.the_lab/experiments/1/notes.json      # [{text, level, created_at}, ...] — append-only log
+.the_lab/experiments/1/1.sh            # your experiment script
+.the_lab/experiments/1/1.json          # {description, meta, metrics, status, created_at, started_at, finished_at}
+.the_lab/experiments/1/1.log           # full stdout+stderr log (auto-generated, streams in real-time)
+.the_lab/experiments/1/1.err           # error details if failed (auto-generated)
 ```
 
 All timestamps are ISO 8601. You can reconstruct the full timeline of an idea by merging notes and experiments sorted by their timestamps.
@@ -69,28 +69,35 @@ All timestamps are ISO 8601. You can reconstruct the full timeline of an idea by
    → merge conflict: {status: "conflict", conflicts: ["path/to/file.py", ...]}
    ```
 
-2. **Create an experiment** under the idea:
+2. **Create an experiment** under the idea. You can pass the script inline or write it yourself:
    ```
-   POST /ideas/<idea_id>/experiments  {description: "what this run tests", meta: {dataset: "train_v3", split: "val", lr: 1e-4}}
+   # Option A: inline script (preferred — server writes it for you)
+   POST /ideas/<idea_id>/experiments  {
+     description: "what this run tests",
+     meta: {dataset: "train_v3", split: "val", lr: 1e-4},
+     script_content: "#!/bin/bash\npython train.py --lr 1e-4\n..."
+   }
+
+   # Option B: just create the experiment, write the script yourself at the returned path
+   POST /ideas/<idea_id>/experiments  {description: "...", meta: {...}}
    → returns {id: "<exp_id>", script: "./experiments/<idea_id>/<exp_id>.sh", ...}
    ```
-   The server creates the directory and returns the script path. The experiment starts in `pending` status.
 
-3. **Write your experiment script** at the returned `script` path. It must print a JSON object as its last stdout line:
+   The script must print a JSON object as its **last stdout line**:
    ```json
    {"metrics": {"accuracy": 0.84, ...}, "meta?": {"gpu_hours": 1.2, "actual_samples": 4832}}
    ```
    `metrics` is required. `meta` is optional — the server merges it with the experiment's existing meta dict (script values override).
 
-4. **Start it:**
+3. **Start it:**
    ```
    POST /experiments/<exp_id>/start
    → success: {status: "running", pid: 12345, experiment: {...}}
-   → error:   {status: "error", reason: "script not found: ./experiments/1/1.sh"}
+   → error:   {status: "error", reason: "script not found..."}
    ```
-   The server runs the script, captures stdout/stderr into `.log`, extracts the final JSON line into `.json`, and writes errors to `.err`.
+   The server runs the script, streams stdout/stderr into `.log` in real-time, extracts the final JSON line on completion, and writes errors to `.err`.
 
-5. **Wait for any experiment to finish:**
+4. **Wait for any experiment to finish:**
    ```
    GET /wait?timeout=3600
    → completed: {event: "completed", experiment: {id, idea_id, metrics, meta, ...}}
@@ -98,14 +105,14 @@ All timestamps are ISO 8601. You can reconstruct the full timeline of an idea by
    → timeout:   {event: "timeout", running: [list of still-running experiment ids]}
    ```
 
-6. **Take notes on the idea** (at any time — before, during, or after experiments):
+5. **Take notes on the idea** (at any time — before, during, or after experiments):
    ```
    POST /ideas/<id>/note  {text: "accuracy 84% is +2% over baseline", level: "insight"}
    POST /ideas/<id>/note  {text: "OOM at batch_size=64, dropped to 32", level: "debug"}
    ```
    Default level is `observation` if omitted.
 
-7. **Conclude the idea** when done, then branch:
+6. **Conclude the idea** when done, then branch:
    ```
    POST /ideas/<id>/conclude  {conclusion: "what you learned"}
    ```
@@ -122,4 +129,6 @@ All timestamps are ISO 8601. You can reconstruct the full timeline of an idea by
 | `POST /ideas/<id>/reopen` | Reopen a concluded/abandoned idea (with `{reason}`). Old conclusion preserved as an `insight` note. |
 | `GET /backlog` | Overview of all active work. |
 | `GET /graph` | Full idea DAG. |
+| `POST /experiments/<id>/restart` | Re-run a failed/cancelled experiment (same script). |
 | `POST /experiments/<id>/cancel` | Kill a running experiment. |
+| `GET /experiments/<id>/log?tail=50` | Read experiment log (streams in real-time while running). |

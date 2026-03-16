@@ -1,12 +1,15 @@
 """File-based storage for ideas and experiments.
 
-All state lives in ./experiments/{idea_id}/ within the idea's git worktree:
-  idea.json       — idea metadata
-  notes.json      — append-only list of notes
-  {exp_id}.json   — experiment metadata + results
-  {exp_id}.sh     — experiment script
-  {exp_id}.log    — stdout+stderr capture
-  {exp_id}.err    — error details
+All state lives in {repo}/.the_lab/experiments/{idea_id}/ — a fixed location
+at the repo root, outside of any git worktree. This data is not subject to
+branch switches or worktree operations.
+
+  {idea_id}/idea.json       — idea metadata
+  {idea_id}/notes.json      — append-only list of notes
+  {idea_id}/{exp_id}.json   — experiment metadata + results
+  {idea_id}/{exp_id}.sh     — experiment script
+  {idea_id}/{exp_id}.log    — stdout+stderr capture
+  {idea_id}/{exp_id}.err    — error details
 """
 from __future__ import annotations
 
@@ -14,8 +17,6 @@ import json
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-
-from .git_ops import get_worktree_path
 
 
 def _now() -> str:
@@ -33,42 +34,39 @@ def _write_json(path: Path, data):
 
 
 class Store:
-    """File-based store. All paths are resolved through git worktrees."""
+    """File-based store. All data lives in {repo}/.the_lab/experiments/."""
 
     def __init__(self, repo_dir: Path):
         self.repo_dir = repo_dir
+        self.lab_dir = repo_dir / ".the_lab" / "experiments"
+        self.lab_dir.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
-        # In-memory counters (recovered from disk on init)
         self._next_idea_id = 1
         self._next_exp_id = 1
         self._recover_counters()
 
     def _recover_counters(self):
-        """Scan existing worktrees to recover the next IDs."""
-        worktrees_dir = self.repo_dir / ".worktrees"
-        if not worktrees_dir.exists():
-            return
+        """Scan existing data to recover the next IDs."""
         max_idea = 0
         max_exp = 0
-        for d in worktrees_dir.iterdir():
-            if not d.name.startswith("idea_"):
+        if not self.lab_dir.exists():
+            return
+        for d in self.lab_dir.iterdir():
+            if not d.is_dir():
                 continue
             try:
-                idea_id = int(d.name.split("_", 1)[1])
+                idea_id = int(d.name)
                 max_idea = max(max_idea, idea_id)
             except ValueError:
                 continue
-            exp_dir = d / "experiments" / str(idea_id)
-            if exp_dir.exists():
-                for f in exp_dir.glob("*.json"):
-                    if f.stem.isdigit():
-                        max_exp = max(max_exp, int(f.stem))
+            for f in d.glob("*.json"):
+                if f.stem.isdigit():
+                    max_exp = max(max_exp, int(f.stem))
         self._next_idea_id = max_idea + 1
         self._next_exp_id = max_exp + 1
 
     def _idea_dir(self, idea_id: int) -> Path:
-        worktree = get_worktree_path(idea_id, cwd=self.repo_dir)
-        return worktree / "experiments" / str(idea_id)
+        return self.lab_dir / str(idea_id)
 
     # --- Ideas ---
 
@@ -89,7 +87,7 @@ class Store:
         return idea
 
     def save_idea(self, idea: dict):
-        """Write idea.json + initialize notes.json. Call after git branch/worktree is set up."""
+        """Write idea.json + initialize notes.json."""
         idea_dir = self._idea_dir(idea["id"])
         idea_dir.mkdir(parents=True, exist_ok=True)
         _write_json(idea_dir / "idea.json", idea)
@@ -98,8 +96,7 @@ class Store:
             _write_json(notes_path, [])
 
     def get_idea(self, idea_id: int) -> dict | None:
-        idea_dir = self._idea_dir(idea_id)
-        idea_path = idea_dir / "idea.json"
+        idea_path = self._idea_dir(idea_id) / "idea.json"
         if not idea_path.exists():
             return None
         return _read_json(idea_path)
@@ -114,17 +111,16 @@ class Store:
 
     def list_ideas(self, status: str | None = None) -> list[dict]:
         ideas = []
-        worktrees_dir = self.repo_dir / ".worktrees"
-        if not worktrees_dir.exists():
+        if not self.lab_dir.exists():
             return ideas
-        for d in sorted(worktrees_dir.iterdir()):
-            if not d.name.startswith("idea_"):
+        for d in sorted(self.lab_dir.iterdir()):
+            if not d.is_dir():
                 continue
             try:
-                idea_id = int(d.name.split("_", 1)[1])
+                int(d.name)
             except ValueError:
                 continue
-            idea_path = d / "experiments" / str(idea_id) / "idea.json"
+            idea_path = d / "idea.json"
             if idea_path.exists():
                 idea = _read_json(idea_path)
                 if status is None or idea.get("status") == status:
@@ -162,7 +158,7 @@ class Store:
             exp_id = self._next_exp_id
             self._next_exp_id += 1
 
-        script_rel = f"experiments/{idea_id}/{exp_id}.sh"
+        script_rel = f".the_lab/experiments/{idea_id}/{exp_id}.sh"
         exp = {
             "id": exp_id,
             "idea_id": idea_id,
@@ -178,27 +174,19 @@ class Store:
             "finished_at": None,
         }
 
-        # Create the directory
         idea_dir = self._idea_dir(idea_id)
         idea_dir.mkdir(parents=True, exist_ok=True)
-
-        # Save experiment json
         _write_json(idea_dir / f"{exp_id}.json", exp)
         return exp
 
     def get_experiment(self, exp_id: int) -> dict | None:
-        """Find an experiment by ID (scans all ideas)."""
-        worktrees_dir = self.repo_dir / ".worktrees"
-        if not worktrees_dir.exists():
+        """Find an experiment by ID (scans all idea dirs)."""
+        if not self.lab_dir.exists():
             return None
-        for d in worktrees_dir.iterdir():
-            if not d.name.startswith("idea_"):
+        for d in self.lab_dir.iterdir():
+            if not d.is_dir():
                 continue
-            try:
-                idea_id = int(d.name.split("_", 1)[1])
-            except ValueError:
-                continue
-            exp_path = d / "experiments" / str(idea_id) / f"{exp_id}.json"
+            exp_path = d / f"{exp_id}.json"
             if exp_path.exists():
                 return _read_json(exp_path)
         return None
@@ -225,20 +213,12 @@ class Store:
     def list_experiments_by_status(self, status: str) -> list[dict]:
         """List all experiments across all ideas with a given status."""
         results = []
-        worktrees_dir = self.repo_dir / ".worktrees"
-        if not worktrees_dir.exists():
+        if not self.lab_dir.exists():
             return results
-        for d in worktrees_dir.iterdir():
-            if not d.name.startswith("idea_"):
+        for d in self.lab_dir.iterdir():
+            if not d.is_dir():
                 continue
-            try:
-                idea_id = int(d.name.split("_", 1)[1])
-            except ValueError:
-                continue
-            exp_dir = d / "experiments" / str(idea_id)
-            if not exp_dir.exists():
-                continue
-            for f in exp_dir.glob("*.json"):
+            for f in d.glob("*.json"):
                 if f.stem.isdigit():
                     exp = _read_json(f)
                     if exp.get("status") == status:

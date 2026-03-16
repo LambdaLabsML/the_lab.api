@@ -36,6 +36,7 @@ class NewIdeaRequest(BaseModel):
 class NewExperimentRequest(BaseModel):
     description: str
     meta: dict | None = None
+    script_content: str | None = None  # inline script — server writes it for you
 
 
 class NoteRequest(BaseModel):
@@ -214,7 +215,16 @@ def create_experiment(idea_id: int, req: NewExperimentRequest):
         raise HTTPException(404, "idea not found")
     if idea["status"] != "active":
         raise HTTPException(400, f"idea is {idea['status']}, cannot add experiments")
-    return store.create_experiment(idea_id, req.description, meta=req.meta)
+    exp = store.create_experiment(idea_id, req.description, meta=req.meta)
+
+    # Write inline script content if provided
+    if req.script_content is not None:
+        script_path = REPO_DIR / exp["script"]
+        script_path.parent.mkdir(parents=True, exist_ok=True)
+        script_path.write_text(req.script_content)
+        os.chmod(script_path, 0o755)
+
+    return exp
 
 
 @app.get("/api/v1/ideas/{idea_id}/experiments")
@@ -238,12 +248,35 @@ async def start_experiment(exp_id: int):
     return result
 
 
+@app.post("/api/v1/experiments/{exp_id}/restart")
+async def restart_experiment(exp_id: int):
+    """Restart a failed experiment (re-runs the same script)."""
+    exp = store.get_experiment(exp_id)
+    if not exp:
+        raise HTTPException(404, "experiment not found")
+    if exp["status"] not in ("failed", "cancelled"):
+        raise HTTPException(400, f"experiment is {exp['status']}, can only restart failed or cancelled experiments")
+    result = await runner.start(exp_id)
+    if result["status"] == "error":
+        raise HTTPException(400, result)
+    return result
+
+
 @app.post("/api/v1/experiments/{exp_id}/cancel")
 async def cancel_experiment(exp_id: int):
     result = await runner.cancel(exp_id)
     if result is None:
         raise HTTPException(404, "experiment not found")
     return result
+
+
+@app.get("/api/v1/experiments/{exp_id}/log")
+def get_experiment_log(exp_id: int, tail: int | None = None):
+    """Get the log for an experiment. Streams in real-time (file is written live)."""
+    log = runner.get_log(exp_id, tail=tail)
+    if log is None:
+        raise HTTPException(404, "experiment not found")
+    return {"log": log}
 
 
 # --- Wait ---
