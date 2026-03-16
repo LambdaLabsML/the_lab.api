@@ -261,10 +261,22 @@
       layout: {
         hierarchical: {
           enabled: true, direction: 'UD', sortMethod: 'directed',
-          levelSeparation: 80, nodeSpacing: 160,
+          levelSeparation: 120, nodeSpacing: 250,
+          treeSpacing: 200,
         }
       },
-      physics: { enabled: false },
+      physics: {
+        enabled: true,
+        hierarchicalRepulsion: {
+          nodeDistance: 200,
+          centralGravity: 0.0,
+          springLength: 150,
+          springConstant: 0.01,
+          damping: 0.09,
+        },
+        solver: 'hierarchicalRepulsion',
+        stabilization: { iterations: 100 },
+      },
       interaction: { hover: true, tooltipDelay: 200 },
     };
     network = new vis.Network(container, { nodes: nodesDS, edges: edgesDS }, options);
@@ -286,7 +298,8 @@
       const c = STATUS_COLORS[n.status] || STATUS_COLORS.active;
       const nodeData = {
         id: n.id,
-        label: '#' + n.id + '\n' + truncate(n.description, 40),
+        label: '#' + n.id + ': ' + truncate(n.description, 30),
+        widthConstraint: { maximum: 250 },
         color: { background: c.bg, border: c.border, highlight: { background: c.bg, border: '#ffffff' } },
         font: { color: c.font },
         title: n.description,

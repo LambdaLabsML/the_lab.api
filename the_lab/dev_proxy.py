@@ -36,7 +36,7 @@ class DevProxy:
 
     async def start_app(self):
         """Start the actual uvicorn app on the internal port."""
-        env = {**os.environ, "THE_LAB_REPO": self.repo_dir}
+        env = {**os.environ, "THE_LAB_REPO": self.repo_dir, "THE_LAB_DEV": "1"}
         self._process = await asyncio.create_subprocess_exec(
             sys.executable, "-m", "uvicorn", "the_lab.app:app",
             "--host", "127.0.0.1",
@@ -154,10 +154,9 @@ class DevProxy:
     async def watch_and_reload(self):
         """Watch for file changes and trigger reloads."""
         async for changes in awatch(self.watch_dir):
-            # Filter to only .py files
-            py_changes = [c for c in changes if c[1].endswith(".py")]
-            if py_changes:
-                changed = [Path(c[1]).name for c in py_changes]
+            relevant = [c for c in changes if c[1].endswith((".py", ".html"))]
+            if relevant:
+                changed = [Path(c[1]).name for c in relevant]
                 print(f"\033[36m  changed: {', '.join(changed)}\033[0m", flush=True)
                 await self.reload()
 

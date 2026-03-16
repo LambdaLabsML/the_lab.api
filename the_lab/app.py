@@ -33,10 +33,11 @@ async def startup():
     await runner.reattach_running()
 
 _DASHBOARD_HTML: str | None = None
+_DEV_MODE = os.environ.get("THE_LAB_DEV") == "1"
 
 def _load_dashboard() -> str:
     global _DASHBOARD_HTML
-    if _DASHBOARD_HTML is None:
+    if _DEV_MODE or _DASHBOARD_HTML is None:
         html_path = Path(__file__).parent / "dashboard.html"
         _DASHBOARD_HTML = html_path.read_text()
     return _DASHBOARD_HTML
