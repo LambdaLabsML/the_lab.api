@@ -17,6 +17,12 @@ class ExperimentRunner:
         self._store = store
         self._finished_queue: asyncio.Queue[int] = asyncio.Queue()
         self._tasks: dict[int, asyncio.Task] = {}
+        # Mark all already-finished experiments as seen on startup,
+        # so /wait only returns experiments that finish from now on.
+        self._seen: set[int] = set()
+        for status in ("completed", "failed", "cancelled"):
+            for exp in self._store.list_experiments_by_status(status):
+                self._seen.add(exp["id"])
 
     async def start(self, exp_id: int) -> dict:
         exp = self._store.get_experiment(exp_id)
@@ -185,20 +191,43 @@ class ExperimentRunner:
             content = "\n".join(lines[-tail:])
         return content
 
-    async def wait_any(self, timeout: float = 3600) -> dict:
-        try:
-            exp_id = await asyncio.wait_for(self._finished_queue.get(), timeout=timeout)
-        except asyncio.TimeoutError:
-            running = self._store.list_experiments_by_status("running")
-            return {
-                "event": "timeout",
-                "running": [e["id"] for e in running],
-            }
+    def reset_seen(self):
+        """Mark all currently finished experiments as seen, so /wait starts fresh."""
+        self._seen.clear()
+        for status in ("completed", "failed", "cancelled"):
+            for exp in self._store.list_experiments_by_status(status):
+                self._seen.add(exp["id"])
 
-        exp = self._store.get_experiment(exp_id)
-        if exp:
-            return {
-                "event": exp["status"],
-                "experiment": exp,
-            }
-        return {"event": "timeout", "running": []}
+    async def wait_any(self, timeout: float = 3600) -> dict:
+        deadline = asyncio.get_event_loop().time() + timeout
+        while True:
+            remaining = deadline - asyncio.get_event_loop().time()
+            if remaining <= 0:
+                running = self._store.list_experiments_by_status("running")
+                return {
+                    "event": "timeout",
+                    "running": [e["id"] for e in running],
+                }
+            try:
+                exp_id = await asyncio.wait_for(
+                    self._finished_queue.get(), timeout=remaining
+                )
+            except asyncio.TimeoutError:
+                running = self._store.list_experiments_by_status("running")
+                return {
+                    "event": "timeout",
+                    "running": [e["id"] for e in running],
+                }
+
+            # Skip experiments already returned by a previous /wait call
+            if exp_id in self._seen:
+                continue
+
+            self._seen.add(exp_id)
+            exp = self._store.get_experiment(exp_id)
+            if exp:
+                return {
+                    "event": exp["status"],
+                    "experiment": exp,
+                }
+            # Experiment vanished — loop and try again
