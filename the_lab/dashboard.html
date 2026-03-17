@@ -64,7 +64,8 @@
     flex-shrink: 0;
   }
   #chart-panel.collapsed { display: none; }
-  #chart-wrap { position: relative; height: 220px; padding: 0 20px 12px 20px; }
+  #chart-wrap { position: relative; height: 220px; padding: 0 20px 12px 20px; overflow-x: auto; }
+  #chart-inner { position: relative; height: 100%; min-width: 100%; }
   #metric-selector {
     padding: 8px 20px 0 20px;
     font-size: 11px;
@@ -154,7 +155,9 @@
     white-space: nowrap;
     z-index: 1;
   }
-  .subway-station:hover { background: #1c2333; }
+  .subway-station:hover, .subway-station.highlighted { background: #1c2333; }
+  .subway-station.highlighted { box-shadow: 0 0 0 2px #58a6ff; z-index: 3; }
+  .subway-station.dimmed { opacity: 0.3; }
   .subway-station .subway-header { display: flex; align-items: center; gap: 6px; }
   .subway-station .subway-id { font-weight: 700; color: #58a6ff; font-size: 11px; }
   .subway-station .subway-desc { color: #c9d1d9; font-size: 12px; display: inline; margin-left: 6px; }
@@ -223,10 +226,17 @@
   </div>
   <div id="chart-panel">
     <div id="metric-selector">
-      Metric: <select id="metric-select" onchange="updateChart()"></select>
+      Metric: <select id="metric-select" onchange="updateChart(); recolorGraph();"></select>
+      Color: <select id="color-mode" onchange="updateChart(); recolorGraph();">
+        <option value="status+improve" selected>status + metric improvement</option>
+        <option value="lane">by lane</option>
+        <option value="status">by status</option>
+        <option value="improvement">by improvement</option>
+        <option value="idea">by idea sequence</option>
+      </select>
       <label style="margin-left:12px;cursor:pointer"><input type="checkbox" id="improvements-only" onchange="updateChart()"> improvements only</label>
     </div>
-    <div id="chart-wrap"><canvas id="metrics-chart"></canvas></div>
+    <div id="chart-wrap"><div id="chart-inner"><canvas id="metrics-chart"></canvas></div></div>
   </div>
   <div id="view-tabs">
     <div class="view-tab active" data-view="dag" onclick="switchView('dag')">DAG</div>
@@ -272,7 +282,7 @@
   const IDEA_PALETTE = [
     '#58a6ff', '#3fb950', '#d29922', '#f85149', '#d2a8ff',
     '#79c0ff', '#56d364', '#e3b341', '#ff7b72', '#bc8cff',
-    '#a5d6ff', '#7ee787', '#f0c96b', '#ffa198', '#d8b4fe',
+    '#a5d6ff', '#7ee787', '#e078f0', '#ffa198', '#d8b4fe',
   ];
 
   let selectedIdea = null;
@@ -283,6 +293,7 @@
   let chartOpen = true;
   let currentView = 'dag';
   let graphData = null;
+  let currentLayout = null;
 
   // --- View switching ---
 
@@ -425,6 +436,7 @@
     for (const n of data.nodes) allIdeas[n.id] = n;
 
     const layout = buildSubwayLayout(data);
+    currentLayout = layout;
     const container = document.getElementById('graph');
     if (!layout) {
       container.innerHTML = '<div style="padding:40px;color:#484f58;text-align:center">No ideas yet</div>';
@@ -681,16 +693,16 @@
     var totalH = maxY + PAD_Y;
 
     // --- Render ---
+    var colorMode = (document.getElementById('color-mode') || {}).value || 'status+improve';
     var html = '<svg class="subway-svg" id="subway-svg" width="' + totalW + '" height="' + totalH + '"></svg>';
     for (const n of data.nodes) {
       var p = stationPos[n.id];
       if (!p) continue;
       var ds = n.has_running ? 'running' : n.status;
-      var sc = STATUS_BAR_COLORS[ds] || STATUS_BAR_COLORS.active;
-      var lc = IDEA_PALETTE[layout.ideaLane[n.id] % IDEA_PALETTE.length];
+      var nodeColor = _colorForIdea(n.id, colorMode);
       html += '<div class="subway-station" data-id="' + n.id + '" title="' + escapeHtml(n.description) + '" style="'
         + 'left:' + p.x + 'px;top:' + p.y + 'px;width:' + p.w + 'px'
-        + ';border-color:' + sc + ';border-left:4px solid ' + lc + '">'
+        + ';border-color:' + nodeColor + '">'
         + '<div class="subway-header"><span class="subway-id">#' + n.id + '</span>' + badgeFor(ds)
         + '<span class="subway-desc">' + escapeHtml(ideaTitle(n.description)) + '</span></div>'
         + '</div>';
@@ -701,9 +713,86 @@
 
     drawSubwayLines(data, layout, stationPos);
 
+    // --- Hover highlighting ---
+    // Build parent map for ancestor traversal
+    var parentMap = {};
+    for (var idx = 0; idx < data.nodes.length; idx++) {
+      var n = data.nodes[idx];
+      parentMap[n.id] = (n.parent_ids || []).filter(function(p) { return layout.nodeMap[p]; });
+    }
+
+    function getAncestors(ideaId) {
+      var ancestors = {};
+      var queue = [ideaId];
+      while (queue.length) {
+        var cur = queue.shift();
+        if (ancestors[cur]) continue;
+        ancestors[cur] = true;
+        var pids = parentMap[cur] || [];
+        for (var j = 0; j < pids.length; j++) queue.push(pids[j]);
+      }
+      return ancestors;
+    }
+
+    function highlightIdea(ideaId) {
+      var ancestors = ideaId ? getAncestors(ideaId) : null;
+      // Highlight/dim stations
+      container.querySelectorAll('.subway-station').forEach(function(el) {
+        var id = parseInt(el.dataset.id);
+        if (!ancestors) { el.classList.remove('highlighted', 'dimmed'); return; }
+        if (ancestors[id]) { el.classList.add('highlighted'); el.classList.remove('dimmed'); }
+        else { el.classList.add('dimmed'); el.classList.remove('highlighted'); }
+      });
+      // Highlight/dim SVG edges
+      var svg = document.getElementById('subway-svg');
+      if (svg) {
+        svg.querySelectorAll('.svg-edge').forEach(function(el) {
+          var from = parseInt(el.getAttribute('data-from'));
+          var to = parseInt(el.getAttribute('data-to'));
+          if (!ancestors) { el.style.opacity = ''; el.style.strokeWidth = ''; return; }
+          if (ancestors[from] && ancestors[to]) { el.style.opacity = '1'; el.style.strokeWidth = '5'; }
+          else { el.style.opacity = '0.1'; el.style.strokeWidth = ''; }
+        });
+        svg.querySelectorAll('.svg-dot').forEach(function(el) {
+          var id = parseInt(el.getAttribute('data-idea'));
+          if (!ancestors) { el.style.opacity = ''; return; }
+          el.style.opacity = ancestors[id] ? '1' : '0.15';
+        });
+      }
+      // Highlight chart points for this idea
+      highlightChartIdea(ideaId);
+    }
+
+    function highlightChartIdea(ideaId) {
+      if (!metricsChart) return;
+      var ds = metricsChart.data.datasets[0];
+      if (!ds || !ds._expData) return;
+      var radii = [], bw = [];
+      for (var j = 0; j < ds._expData.length; j++) {
+        var match = ideaId && ds._expData[j].idea_id === ideaId;
+        radii.push(match ? 12 : (ds._origRadii ? ds._origRadii[j] : 6));
+        bw.push(match ? 4 : (ds._origBW ? ds._origBW[j] : 1));
+      }
+      if (!ideaId) {
+        // Restore originals
+        ds.pointRadius = ds._origRadii || radii;
+        ds.pointBorderWidth = ds._origBW || bw;
+      } else {
+        if (!ds._origRadii) { ds._origRadii = ds.pointRadius.slice(); ds._origBW = ds.pointBorderWidth.slice(); }
+        ds.pointRadius = radii;
+        ds.pointBorderWidth = bw;
+      }
+      metricsChart.update('none');
+    }
+
     container.querySelectorAll('.subway-station').forEach(function(el) {
       el.addEventListener('click', function() { loadIdeaDetail(parseInt(el.dataset.id)); });
+      el.addEventListener('mouseenter', function() { highlightIdea(parseInt(el.dataset.id)); });
+      el.addEventListener('mouseleave', function() { highlightIdea(null); });
     });
+
+    // Store highlightIdea globally so the chart can call it
+    window._highlightIdea = highlightIdea;
 
     if (currentView === 'timeline') updateTimeline(data);
   }
@@ -731,19 +820,19 @@
     for (let li = 0; li < layout.lanes.length; li++) {
       const lane = layout.lanes[li];
       if (lane.ideas.length < 2) continue;
-      const pts = lane.ideas.map(id => pos[id]).filter(Boolean);
-      if (pts.length < 2) continue;
+      const ids = lane.ideas.slice();
+      const pts = ids.map(id => pos[id]);
       const color = IDEA_PALETTE[li % IDEA_PALETTE.length];
       for (let i = 0; i < pts.length - 1; i++) {
+        if (!pts[i] || !pts[i + 1]) continue;
         const a = pts[i], b = pts[i + 1];
+        const edgeAttr = ' data-from="' + ids[i] + '" data-to="' + ids[i + 1] + '" class="svg-edge"';
         if (Math.abs(a.cy - b.cy) < 2) {
-          // Same y — straight horizontal
           s += '<line x1="' + a.r + '" y1="' + a.cy
             + '" x2="' + b.l + '" y2="' + b.cy
             + '" stroke="' + color + '" stroke-width="4" stroke-opacity="0.7"'
-            + ' stroke-linecap="round"/>';
+            + ' stroke-linecap="round"' + edgeAttr + '/>';
         } else {
-          // Different y — orthogonal: horizontal → corner → vertical → corner → horizontal
           const mx = (a.r + b.l) / 2;
           const dy = b.cy > a.cy ? 1 : -1;
           const vd = Math.abs(b.cy - a.cy);
@@ -755,7 +844,7 @@
             + ' Q' + mx + ',' + b.cy + ' ' + (mx + r) + ',' + b.cy
             + ' L' + b.l + ',' + b.cy
             + '" fill="none" stroke="' + color + '" stroke-width="4" stroke-opacity="0.7"'
-            + ' stroke-linecap="round"/>';
+            + ' stroke-linecap="round"' + edgeAttr + '/>';
         }
       }
     }
@@ -811,16 +900,19 @@
           + ' L' + c.l + ',' + c.cy
           + '" fill="none" stroke="' + br.color
           + '" stroke-width="3" stroke-opacity="0.7"'
-          + ' stroke-linecap="round" stroke-linejoin="round"/>';
+          + ' stroke-linecap="round" stroke-linejoin="round"'
+          + ' data-from="' + br.pid + '" data-to="' + br.cid + '" class="svg-edge"/>';
       }
     }
 
-    // 3. Station dots
+    // 3. Station dots — colored by current mode
+    var dotColorMode = (document.getElementById('color-mode') || {}).value || 'status+improve';
     for (const n of data.nodes) {
       if (!pos[n.id]) continue;
-      const color = IDEA_PALETTE[layout.ideaLane[n.id] % IDEA_PALETTE.length];
+      var dotColor = _colorForIdea(n.id, dotColorMode);
       s += '<circle cx="' + pos[n.id].l + '" cy="' + pos[n.id].cy
-        + '" r="6" fill="' + color + '" stroke="#0d1117" stroke-width="2.5"/>';
+        + '" r="6" fill="' + dotColor + '" stroke="#0d1117" stroke-width="2.5"'
+        + ' data-idea="' + n.id + '" class="svg-dot"/>';
     }
 
     svg.innerHTML = s;
@@ -1014,6 +1106,7 @@
       })
       .then(results => {
         allExperiments = [];
+        _globalBestBefore = {};  // invalidate cache
         const runningExps = [];
         for (const { idea, experiments } of results) {
           for (const exp of experiments) {
@@ -1080,6 +1173,160 @@
 
   let _chartMetricKey = null;
 
+  // Compute the best metric value for each idea's parent ideas
+  function _parentBestMetric(ideaId, metricKey) {
+    var idea = allIdeas[ideaId];
+    if (!idea) return null;
+    var pids = idea.parent_ids || [];
+    var best = null;
+    for (var i = 0; i < pids.length; i++) {
+      for (var j = 0; j < allExperiments.length; j++) {
+        var e = allExperiments[j];
+        if (e.idea_id === pids[i] && e.metrics && e.metrics[metricKey] !== undefined) {
+          var v = e.metrics[metricKey];
+          if (best === null || v > best) best = v;
+        }
+      }
+    }
+    return best;
+  }
+
+  var _STATUS_COLORS = { active: '#3fb950', concluded: '#58a6ff', abandoned: '#f85149', running: '#d29922' };
+
+  // Precompute global best-before-this-experiment for a given metric.
+  // Returns a map: exp.id → best metric value from all earlier experiments.
+  // allExperiments is sorted by finished_at/started_at already.
+  var _globalBestBefore = {};  // metricKey → { expId → bestBefore }
+  function _computeGlobalBestBefore(metricKey) {
+    if (_globalBestBefore[metricKey]) return _globalBestBefore[metricKey];
+    // Sort completed experiments by finish time
+    var sorted = allExperiments
+      .filter(function(e) { return e.metrics && e.metrics[metricKey] !== undefined && !e._running; })
+      .slice()
+      .sort(function(a, b) {
+        return (a.finished_at || a.started_at || '').localeCompare(b.finished_at || b.started_at || '');
+      });
+    var best = null;
+    var map = {};
+    for (var i = 0; i < sorted.length; i++) {
+      map[sorted[i].id] = best;  // best BEFORE this experiment
+      var v = sorted[i].metrics[metricKey];
+      if (best === null || v > best) best = v;
+    }
+    _globalBestBefore[metricKey] = map;
+    return map;
+  }
+
+  // Also compute per-idea: did any experiment in this idea beat the global
+  // best at the time it ran?
+  function _ideaHasGlobalImprovement(ideaId, metricKey) {
+    var bestBefore = _computeGlobalBestBefore(metricKey);
+    for (var j = 0; j < allExperiments.length; j++) {
+      var e = allExperiments[j];
+      if (e.idea_id !== ideaId || !e.metrics || e.metrics[metricKey] === undefined || e._running) continue;
+      var prev = bestBefore[e.id];
+      if (prev === null || e.metrics[metricKey] > prev) return true;
+    }
+    return false;
+  }
+
+  function _colorForExp(exp, metricKey, mode) {
+    if (mode === 'lane') {
+      if (currentLayout && currentLayout.ideaLane[exp.idea_id] !== undefined)
+        return IDEA_PALETTE[currentLayout.ideaLane[exp.idea_id] % IDEA_PALETTE.length];
+      return '#8b949e';
+    }
+    if (mode === 'status') {
+      return _STATUS_COLORS[exp.idea_status || 'active'] || '#8b949e';
+    }
+    if (mode === 'status+improve') {
+      var base = _STATUS_COLORS[exp.idea_status || 'active'] || '#8b949e';
+      if (!exp.metrics || exp.metrics[metricKey] === undefined || exp._running) return base;
+      var bestBefore = _computeGlobalBestBefore(metricKey);
+      var prev = bestBefore[exp.id];
+      if (prev === null || exp.metrics[metricKey] > prev)
+        return '#e078f0';  // gold — new global best at time of running
+      return base;
+    }
+    if (mode === 'improvement') {
+      if (!exp.metrics || exp.metrics[metricKey] === undefined) return '#8b949e';
+      var parentBest = _parentBestMetric(exp.idea_id, metricKey);
+      if (parentBest === null) return '#d29922';
+      return exp.metrics[metricKey] > parentBest ? '#3fb950' : '#f85149';
+    }
+    return null; // 'idea' — handled by ideaColorMap
+  }
+
+  function _ideaBestMetric(ideaId, metricKey) {
+    var best = null;
+    for (var j = 0; j < allExperiments.length; j++) {
+      var e = allExperiments[j];
+      if (e.idea_id === ideaId && e.metrics && e.metrics[metricKey] !== undefined) {
+        if (best === null || e.metrics[metricKey] > best) best = e.metrics[metricKey];
+      }
+    }
+    return best;
+  }
+
+  function _colorForIdea(ideaId, mode) {
+    if (mode === 'lane') {
+      if (currentLayout && currentLayout.ideaLane[ideaId] !== undefined)
+        return IDEA_PALETTE[currentLayout.ideaLane[ideaId] % IDEA_PALETTE.length];
+      return '#8b949e';
+    }
+    if (mode === 'status') {
+      var idea = allIdeas[ideaId];
+      var st = idea ? (idea.has_running ? 'running' : idea.status) : 'active';
+      return STATUS_BAR_COLORS[st] || '#8b949e';
+    }
+    if (mode === 'status+improve') {
+      var idea = allIdeas[ideaId];
+      var st = idea ? (idea.has_running ? 'running' : idea.status) : 'active';
+      var base = STATUS_BAR_COLORS[st] || '#8b949e';
+      var metricKey = (document.getElementById('metric-select') || {}).value || '';
+      if (!metricKey) return base;
+      if (_ideaHasGlobalImprovement(ideaId, metricKey)) return '#e078f0'; // purple — set a new global best
+      return base;
+    }
+    if (mode === 'improvement') {
+      var metricKey = (document.getElementById('metric-select') || {}).value || '';
+      if (!metricKey) return '#8b949e';
+      var myBest = _ideaBestMetric(ideaId, metricKey);
+      if (myBest === null) return '#8b949e';
+      var parentBest = _parentBestMetric(ideaId, metricKey);
+      if (parentBest === null) return '#d29922';
+      return myBest > parentBest ? '#3fb950' : '#f85149';
+    }
+    // 'idea' — palette by ID
+    return IDEA_PALETTE[(ideaId - 1) % IDEA_PALETTE.length];
+  }
+
+  window.recolorGraph = function() {
+    var mode = (document.getElementById('color-mode') || {}).value || 'status+improve';
+    var container = document.getElementById('graph');
+    if (!container || !currentLayout) return;
+    container.querySelectorAll('.subway-station').forEach(function(el) {
+      var id = parseInt(el.dataset.id);
+      var color = _colorForIdea(id, mode);
+      el.style.borderColor = color;
+      // Keep lane accent on left if not in lane mode
+      if (mode === 'lane') {
+        el.style.borderLeftColor = color;
+      } else {
+        el.style.borderLeftWidth = '2px';
+        el.style.borderLeftColor = color;
+      }
+    });
+    // Recolor SVG dots
+    var svg = document.getElementById('subway-svg');
+    if (svg) {
+      svg.querySelectorAll('.svg-dot').forEach(function(el) {
+        var id = parseInt(el.getAttribute('data-idea'));
+        el.setAttribute('fill', _colorForIdea(id, mode));
+      });
+    }
+  };
+
   function _buildChartData(metricKey) {
     let filtered = allExperiments.filter(e => e.metrics && e.metrics[metricKey] !== undefined);
 
@@ -1092,6 +1339,9 @@
       });
     }
 
+    var colorMode = (document.getElementById('color-mode') || {}).value || 'status+improve';
+
+    // Fallback sequential palette for 'idea' mode
     const ideaColorMap = {};
     let colorIdx = 0;
     for (const exp of filtered) {
@@ -1101,10 +1351,15 @@
       }
     }
 
+    function getColor(exp) {
+      var c = _colorForExp(exp, metricKey, colorMode);
+      return c || ideaColorMap[exp.idea_id] || '#8b949e';
+    }
+
     return {
       labels: filtered.map(e => 'exp/' + e.id + (e._running ? ' \u25B6' : '')),
-      pointColors: filtered.map(e => ideaColorMap[e.idea_id]),
-      pointBgColors: filtered.map(e => e._running ? 'transparent' : ideaColorMap[e.idea_id]),
+      pointColors: filtered.map(e => getColor(e)),
+      pointBgColors: filtered.map(e => e._running ? 'transparent' : getColor(e)),
       pointStyles: filtered.map(e => e._running ? 'triangle' : 'circle'),
       pointRadii: filtered.map(e => e._running ? 8 : 6),
       pointBorderWidths: filtered.map(e => e._running ? 2.5 : 1),
@@ -1113,7 +1368,15 @@
     };
   }
 
+  function _sizeChartContainer(numPoints) {
+    var inner = document.getElementById('chart-inner');
+    if (!inner) return;
+    var minW = Math.max(inner.parentElement.clientWidth, numPoints * 50);
+    inner.style.width = minW + 'px';
+  }
+
   function _createChart(metricKey, chartData) {
+    _sizeChartContainer(chartData.labels.length);
     const ctx = document.getElementById('metrics-chart').getContext('2d');
     return new Chart(ctx, {
       type: 'line',
@@ -1138,6 +1401,18 @@
         responsive: true,
         maintainAspectRatio: false,
         animation: { duration: 400 },
+        onClick: function(evt, elements) {
+          if (elements.length > 0) {
+            var idx = elements[0].index;
+            var ds = evt.chart.data.datasets[0];
+            if (ds && ds._expData && ds._expData[idx]) {
+              var ideaId = ds._expData[idx].idea_id;
+              if (window._highlightIdea) window._highlightIdea(ideaId);
+              // Auto-clear after 3 seconds
+              setTimeout(function() { if (window._highlightIdea) window._highlightIdea(null); }, 3000);
+            }
+          }
+        },
         scales: {
           x: {
             display: true,
@@ -1149,6 +1424,17 @@
             ticks: { color: '#484f58', font: { size: 10 } },
             grid: { color: '#21262d' },
           },
+        },
+        onHover: function(evt, elements) {
+          if (elements.length > 0) {
+            var idx = elements[0].index;
+            var ds = evt.chart.data.datasets[0];
+            if (ds && ds._expData && ds._expData[idx]) {
+              if (window._highlightIdea) window._highlightIdea(ds._expData[idx].idea_id);
+            }
+          } else {
+            if (window._highlightIdea) window._highlightIdea(null);
+          }
         },
         plugins: {
           legend: { display: false },
@@ -1188,6 +1474,7 @@
 
     // If chart exists and same metric key, update in-place (no flicker)
     if (metricsChart && _chartMetricKey === metricKey) {
+      _sizeChartContainer(chartData.labels.length);
       const ds = metricsChart.data.datasets[0];
       ds.data = chartData.values;
       ds.pointBackgroundColor = chartData.pointBgColors;
@@ -1197,6 +1484,7 @@
       ds.pointRadius = chartData.pointRadii;
       ds._expData = chartData.expData;
       metricsChart.data.labels = chartData.labels;
+      metricsChart.resize();
       metricsChart.update('none');
       return;
     }
