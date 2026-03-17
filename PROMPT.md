@@ -53,6 +53,7 @@ All experiment data lives under `.the_lab/experiments/` at the repo root — a f
 .the_lab/experiments/1/1.sh            # your experiment script
 .the_lab/experiments/1/1.json          # {description, meta, metrics, status, created_at, started_at, finished_at}
 .the_lab/experiments/1/1.log           # full stdout+stderr log (auto-generated, streams in real-time)
+.the_lab/experiments/1/1.progress      # optional progress JSON written by the script (see $THE_LAB_PROGRESS)
 .the_lab/experiments/1/1.err           # error details if failed (auto-generated)
 ```
 
@@ -93,6 +94,12 @@ All timestamps are ISO 8601. You can reconstruct the full timeline of an idea by
    {"metrics": {"accuracy": 0.84, ...}, "meta?": {"gpu_hours": 1.2, "actual_samples": 4832}}
    ```
    `metrics` is required. `meta` is optional — the server merges it with the experiment's existing meta dict (script values override).
+
+   **Progress reporting** (optional): scripts can write intermediate progress to `$THE_LAB_PROGRESS` (a JSON file path set by the server). Write any JSON you like — epoch number, current loss, ETA, etc.:
+   ```bash
+   echo '{"epoch": 5, "loss": 0.31, "eta_minutes": 12}' > "$THE_LAB_PROGRESS"
+   ```
+   Poll it with `GET /experiments/<exp_id>/progress`.
 
 4. **Start it:**
    ```
@@ -141,4 +148,5 @@ All timestamps are ISO 8601. You can reconstruct the full timeline of an idea by
 | `POST /experiments/<id>/restart` | Re-run a failed/cancelled experiment (same script). |
 | `POST /experiments/<id>/cancel` | Kill a running experiment. |
 | `GET /experiments/compare?ids=9,13,15` | Side-by-side comparison: pivoted `metrics` and `meta` tables, plus full experiment objects. Optional `&metrics=accuracy,loss` to filter metric keys. |
+| `GET /experiments/<id>/progress` | Read script-reported progress JSON (falls back to `{status}` if no progress file). |
 | `GET /experiments/<id>/log?tail=50` | Read experiment log (streams in real-time while running). |

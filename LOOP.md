@@ -29,6 +29,7 @@ POST /ideas/new              {parent_ids, description}      → create idea (+ b
 POST /ideas/<id>/checkout                                   → switch to idea's branch
 POST /ideas/<id>/experiments {description, script_content}   → create + write script
 POST /experiments/<id>/start                                 → run it
+GET  /experiments/<id>/progress                               → check intermediate progress
 GET  /wait?experiment_id=N                                   → block until this experiment finishes
 GET  /wait?idea_id=N                                         → block until any experiment in this idea finishes
 GET  /wait?timeout=N                                         → block until next result (any experiment)

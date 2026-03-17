@@ -1,6 +1,7 @@
 """The Lab — Experiment Management API."""
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import Literal
@@ -414,6 +415,21 @@ def get_experiment_log(exp_id: int, tail: int | None = None):
     if log is None:
         raise HTTPException(404, "experiment not found")
     return {"log": log}
+
+
+@app.get("/api/v1/experiments/{exp_id}/progress")
+def get_experiment_progress(exp_id: int):
+    exp = store.get_experiment(exp_id)
+    if not exp:
+        raise HTTPException(404, "experiment not found")
+    progress_path = REPO_DIR / exp["script"].replace(".sh", ".progress")
+    result = {"status": exp["status"]}
+    if progress_path.exists():
+        try:
+            result["progress"] = json.loads(progress_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            pass
+    return result
 
 
 # --- Wait ---

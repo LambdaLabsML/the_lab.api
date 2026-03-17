@@ -130,8 +130,10 @@ class ExperimentRunner:
         log_path = base.with_suffix(".log")
         err_path = base.with_suffix(".err")
 
-        # Clear previous log/err on restart
-        for p in (log_path, err_path):
+        progress_path = base.with_suffix(".progress")
+
+        # Clear previous log/err/progress on restart
+        for p in (log_path, err_path, progress_path):
             if p.exists():
                 p.unlink()
 
@@ -142,6 +144,7 @@ class ExperimentRunner:
             "THE_LAB_TOKEN": run_token,
             "THE_LAB_EXP_ID": str(exp_id),
             "THE_LAB_IDEA_ID": str(exp["idea_id"]),
+            "THE_LAB_PROGRESS": str(progress_path),
         }
 
         # Write stdout/stderr directly to the log file so it survives server restarts.
