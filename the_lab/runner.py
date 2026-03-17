@@ -9,7 +9,7 @@ import signal
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .git_ops import get_current_branch, get_head_commit
+from .git_ops import auto_commit, get_current_branch, get_head_commit
 from .store import Store
 
 
@@ -115,6 +115,12 @@ class ExperimentRunner:
             }
 
         os.chmod(script_path, os.stat(script_path).st_mode | 0o755)
+
+        # Commit any pending changes so the git hash captures exactly what runs
+        try:
+            auto_commit(cwd=self._store.repo_dir, message=f"auto-commit before experiment {exp_id}")
+        except Exception:
+            pass
 
         # Record git state in experiment meta
         try:
