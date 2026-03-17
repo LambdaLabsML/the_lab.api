@@ -1,6 +1,25 @@
-# The Lab — Autonomous Experiment Management
+<h3 align="center">
+    <br/>
+    <img src="https://github.com/user-attachments/assets/186c8033-25d2-4f98-a18c-e8d5d19c0dcd" width="300" alt="The Lab"/><br/><br/>
+    Autonomous experiment management for AI research agents.<br/>
+    Let agents <a href="#writing-experiment-scripts">run experiments</a>, <a href="#understanding-loopmd">branch ideas</a>, and <a href="#5-watch-it-work">track metrics</a> — hands-free.
+</h3>
 
-A lightweight API + dashboard that lets AI agents run structured research loops: create ideas, branch, run experiments, compare metrics, and iterate — all managed through a REST API with git integration.
+<p align="center">
+    Jump to: <a href="#quick-start">Quick Start</a> | <a href="#writing-experiment-scripts">Experiments</a> | <a href="#environment-variables">Env Vars</a> | <a href="#understanding-loopmd">Agent Loop</a> | <a href="#architecture">Architecture</a>
+</p>
+
+<p align="center">
+The Lab is a lightweight API + dashboard that lets AI agents run structured research loops:
+create ideas, branch, run experiments, compare metrics, and iterate — all managed through
+a REST API with automatic git integration. No database, no setup beyond <code>pip install</code>.
+</p>
+
+<p align="center">
+    <img src="https://github.com/user-attachments/assets/d8971a7e-a157-46bc-a0da-fd6091fea49e" alt="Dashboard screenshot"/>
+</p>
+
+---
 
 ## Quick Start
 
@@ -69,47 +88,64 @@ Then paste `LOOP.md` as the first message.
 ### 5. Watch it work
 
 Open `http://localhost:8000` in your browser. The dashboard shows:
-- **Subway graph**: idea branches, colored by status + metric improvement
-- **Metrics chart**: experiment results over time with multiple color modes
-- **Timeline**: temporal view of when ideas were active
-- **Log**: unified chronological feed of ideas, experiments, and notes
+- **Subway graph** — idea branches as a subway map, colored by status + metric improvement (purple = new global best)
+- **Metrics chart** — experiment results over time, scrollable, with multiple color modes
+- **Timeline** — temporal view of when ideas were active
+- **Log** — unified chronological feed of ideas, experiments, and notes
+
+Hover over a graph node to highlight its ancestor path and corresponding chart points. Click a chart point to highlight the idea in the graph.
+
+---
 
 ## Writing Experiment Scripts
 
-Experiment scripts are bash scripts that the agent writes and the API executes. They must follow two rules:
+Experiment scripts are bash scripts that the agent writes and the API executes. The scripts can call anything — Python, Rust, Node, other bash scripts — the only contract is how results are reported back.
 
-### Rule 1: Print metrics as the last stdout line
+### Final metrics (required)
 
-The last line of stdout must be a JSON object with a `metrics` key:
+The **last line of stdout** must be a JSON object with a `metrics` key. This can come from anywhere — a bash `echo`, a Python `print()`, or any other program:
 
 ```bash
 #!/bin/bash
+# Option A: bash echo
 python train.py --lr 1e-4 --epochs 10
-
-# Last line must be JSON with metrics
-echo '{"metrics": {"accuracy": 0.84, "loss": 0.21, "f1": 0.79}}'
+echo '{"metrics": {"accuracy": 0.84, "loss": 0.21}}'
 ```
 
-`metrics` is required. You can optionally include `meta` to record extra info (the server merges it with the experiment's existing meta):
+```bash
+#!/bin/bash
+# Option B: let the Python script print it directly
+python train.py --lr 1e-4 --epochs 10 --print-metrics
+# where train.py ends with: print(json.dumps({"metrics": {"accuracy": acc}}))
+```
+
+You can optionally include `meta` to record extra info (the server merges it with the experiment's existing meta):
 
 ```json
 {"metrics": {"accuracy": 0.84}, "meta": {"gpu_hours": 1.2, "actual_samples": 4832}}
 ```
 
-### Rule 2 (optional): Report progress
+### Live progress (optional)
 
-For long-running experiments, write intermediate progress to `$THE_LAB_PROGRESS`:
+For long-running experiments, write intermediate progress to `$THE_LAB_PROGRESS`. Any process can write this file — the bash wrapper, the Python training script, or a helper. Just write JSON to the path:
 
+**From bash:**
 ```bash
-#!/bin/bash
-for epoch in $(seq 1 100); do
-    python train.py --epoch $epoch
-    echo "{\"epoch\": $epoch, \"loss\": 0.5, \"pct\": $epoch}" > "$THE_LAB_PROGRESS"
-done
-echo '{"metrics": {"accuracy": 0.91}}'
+echo '{"epoch": 5, "loss": 0.31, "pct": 50}' > "$THE_LAB_PROGRESS"
 ```
 
-The dashboard polls this file and shows live progress in the detail panel, including a progress bar if a percentage field is detected.
+**From Python** (using the env var):
+```python
+import json, os
+progress_path = os.environ.get("THE_LAB_PROGRESS")
+if progress_path:
+    with open(progress_path, "w") as f:
+        json.dump({"epoch": epoch, "loss": loss, "pct": round(100 * epoch / total)}, f)
+```
+
+The dashboard polls this file and shows live progress in the detail panel, including a progress bar if a `pct`, `percent`, or `progress` field is present.
+
+---
 
 ## Environment Variables
 
@@ -132,27 +168,46 @@ mkdir -p "$OUTDIR"
 python train.py --output-dir "$OUTDIR"
 ```
 
-## Understanding LOOP.md
+---
 
-`LOOP.md` is the behavioral prompt for the agent. It defines a four-step cycle:
+## Customizing LOOP.md
 
-1. **Never Stop** — the agent should always be exploring, even when the backlog is empty
-2. **Orient** — read `PROMPT.md`, check the backlog and existing ideas
-3. **Work** — create ideas, checkout branches, write and run experiments, take notes
-4. **Repeat** — wait for results, analyze, decide what to try next
+`LOOP.md` is the behavioral prompt you paste into the agent. It defines a four-step cycle (Orient → Work → Wait → Repeat) with the API endpoints baked in. You need to customize three parts — everything else (the API reference, the repeat logic) stays as-is.
 
-The key API endpoints the agent uses:
+### What to change
 
+**1. Title and role** (top of the file) — describe what the agent is researching:
+
+```markdown
+# Research: Collaborative Agents
+You are an autonomous researcher.
+You design tools that enable useful communication between agents while solving
+math problems. The goal is to improve the accuracy of agent swarms.
 ```
-POST /ideas/new              → create a new research direction (auto-creates git branch)
-POST /ideas/<id>/checkout    → switch to an idea's branch (auto-commits current work)
-POST /ideas/<id>/experiments → create an experiment with an inline script
-POST /experiments/<id>/start → run the experiment (auto-commits first)
-GET  /wait?experiment_id=N   → block until the experiment finishes
-POST /ideas/<id>/note        → record observations, insights, milestones
-POST /ideas/<id>/conclude    → wrap up an idea with a conclusion
-GET  /experiments/compare?ids=1,2,3 → side-by-side metric comparison
+
+**2. Orient section** — tell the agent how to assess the current state of your specific research. What artifacts should it inspect? What signals matter?
+
+```markdown
+Check the most recent experiment, explore saved rollouts to make a conclusion —
+this work is about agent collaboration, so we need to check how agents collaborate.
+Explore the most promising ideas (those with the best improvements over their parents)
+by checking the reasoning traces from their experiments.
 ```
+
+**3. Work section** — add domain-specific guidance about how to approach the work:
+
+```markdown
+Our research system is backed by git. You can create new branches by adding a new
+idea, merge feature branches by providing multiple parent_ids, checkout ideas and
+run experiments in these branches.
+Inspect what has been already tried before concluding which direction to go next.
+```
+
+### What NOT to change
+
+The API endpoint blocks (the `` ``` `` code fences), the "Never Stop" section, and the "Repeat" section should stay as-is — they contain the protocol the agent needs to interact with The Lab.
+
+---
 
 ## Data Storage
 
@@ -170,6 +225,8 @@ All experiment data lives in `.the_lab/experiments/` at the repo root. This dire
     1.err              # error details if failed
 ```
 
+---
+
 ## Architecture
 
 ```
@@ -181,5 +238,5 @@ All experiment data lives in `.the_lab/experiments/` at the repo root. This dire
 ```
 
 - **No database** — everything is JSON files on disk
-- **No worktrees** — standard git branches, auto-commit on checkout/experiment start
+- **No worktrees** — standard git branches, auto-commit on checkout and experiment start
 - **Survives restarts** — running experiments continue as orphaned processes; the server re-attaches on startup
