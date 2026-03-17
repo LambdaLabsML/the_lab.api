@@ -142,16 +142,8 @@
   .exp-item .exp-progress { font-size: 11px; color: #d29922; margin-top: 4px; padding: 4px 6px; background: #1c1d1f; border-radius: 3px; }
   .exp-item .exp-progress .progress-bar { height: 4px; background: #30363d; border-radius: 2px; margin-top: 4px; overflow: hidden; }
   .exp-item .exp-progress .progress-fill { height: 100%; background: #d29922; border-radius: 2px; transition: width 0.3s; }
-  .subway-grid {
-    display: grid;
-    row-gap: 2px;
-    padding: 12px 20px;
-    position: relative;
-    z-index: 1;
-    align-items: center;
-    align-content: start;
-  }
   .subway-station {
+    position: absolute;
     padding: 4px 10px;
     background: #161b22;
     border: 2px solid #30363d;
@@ -160,6 +152,7 @@
     font-size: 12px;
     transition: background 0.15s;
     white-space: nowrap;
+    z-index: 1;
   }
   .subway-station:hover { background: #1c2333; }
   .subway-station .subway-header { display: flex; align-items: center; gap: 6px; }
@@ -349,10 +342,12 @@
     for (const id of Object.keys(childMap))
       childMap[id].sort((a, b) => (getSubAct(b) || '').localeCompare(getSubAct(a) || ''));
 
-    // Assign lanes via DFS
+    // Assign lanes via DFS + build lane tree for packing
     const lanes = [];
     const ideaLane = {};
     const assigned = new Set();
+    const laneChildren = {};  // lane_idx → [{childLane, forkCol}, ...]
+
     function assign(id, lane) {
       if (assigned.has(id)) return;
       assigned.add(id);
@@ -364,21 +359,64 @@
       const ch = childMap[id] || [];
       if (ch.length) {
         assign(ch[0], lane);
-        for (let i = 1; i < ch.length; i++) assign(ch[i], -1);
+        for (let i = 1; i < ch.length; i++) {
+          if (assigned.has(ch[i])) continue;  // merge target already placed
+          const childLane = lanes.length;
+          if (!laneChildren[lane]) laneChildren[lane] = [];
+          laneChildren[lane].push({ childLane: childLane, forkCol: depth[id] });
+          assign(ch[i], -1);
+        }
       }
     }
+
     const hasParent = new Set(data.edges.map(e => e.to));
     const roots = data.nodes.filter(n => !hasParent.has(n.id)).map(n => n.id);
     roots.sort((a, b) => (getSubAct(b) || '').localeCompare(getSubAct(a) || ''));
     for (const r of roots) assign(r, -1);
 
-    // Sort lanes by last activity (most recent first)
-    const laneOrder = lanes.map((_, i) => i);
-    laneOrder.sort((a, b) => (lanes[b].lastActivity || '').localeCompare(lanes[a].lastActivity || ''));
-    const laneRow = {};
-    for (let i = 0; i < laneOrder.length; i++) laneRow[laneOrder[i]] = i;
+    // Compute deepest subtree activity for each lane (includes descendant lanes)
+    const laneSubAct = {};
+    function getLaneSubAct(li) {
+      if (laneSubAct[li]) return laneSubAct[li];
+      let best = lanes[li].lastActivity || '';
+      for (const c of (laneChildren[li] || [])) {
+        const ca = getLaneSubAct(c.childLane);
+        if (ca > best) best = ca;
+      }
+      return (laneSubAct[li] = best);
+    }
+    for (let li = 0; li < lanes.length; li++) getLaneSubAct(li);
 
-    return { nodeMap, childMap, depth, ideaLane, laneRow, laneOrder, lanes,
+    // Place lanes via DFS of lane tree.
+    // At each lane, process forks column-by-column (left → right).
+    // Within each column's forks, most recently active subtree placed first
+    // (closest to parent row).
+    const laneRow = {};
+    let nextRow = 0;
+    function placeLane(li) {
+      laneRow[li] = nextRow++;
+      const children = (laneChildren[li] || []).slice();
+      children.sort(function(a, b) {
+        if (a.forkCol !== b.forkCol) return a.forkCol - b.forkCol;
+        // Same column: most recently active subtree first (closest to parent)
+        return (getLaneSubAct(b.childLane) || '').localeCompare(getLaneSubAct(a.childLane) || '');
+      });
+      for (const c of children) placeLane(c.childLane);
+    }
+
+    // Find root lanes (no lane-parent) and sort by activity
+    const hasLaneParent = new Set();
+    for (const ch of Object.values(laneChildren))
+      for (const c of ch) hasLaneParent.add(c.childLane);
+    const rootLanes = [];
+    for (let li = 0; li < lanes.length; li++)
+      if (!hasLaneParent.has(li)) rootLanes.push(li);
+    rootLanes.sort(function(a, b) {
+      return (getLaneSubAct(b) || '').localeCompare(getLaneSubAct(a) || '');
+    });
+    for (const rl of rootLanes) placeLane(rl);
+
+    return { nodeMap, childMap, depth, ideaLane, laneRow, laneChildren, lanes,
       numLanes: lanes.length, maxDepth: Math.max(0, ...Object.values(depth)) };
   }
 
@@ -394,44 +432,274 @@
       return;
     }
 
-    const numCols = layout.maxDepth + 1;
-
-    // Compute column gap: each cross-lane branch from a parent needs SPACING px
-    // for its vertical routing segment. The gap must fit the widest fan-out.
-    const ROUTING_SPACING = 10;
-    const branchCounts = {};  // parent_id → number of cross-lane children
+    // --- Measure station sizes ---
+    let mHtml = '<div style="position:absolute;visibility:hidden;top:0;left:0">';
     for (const n of data.nodes) {
-      for (const pid of (n.parent_ids || [])) {
-        if (layout.ideaLane[n.id] !== layout.ideaLane[pid]) {
-          branchCounts[pid] = (branchCounts[pid] || 0) + 1;
-        }
-      }
-    }
-    const maxFanOut = Math.max(0, ...Object.values(branchCounts));
-    // Minimum gap 30px, then SPACING per branch line + padding on each side
-    const colGap = Math.max(30, maxFanOut * ROUTING_SPACING + 20);
-
-    let html = '';
-    for (const n of data.nodes) {
-      const row = layout.laneRow[layout.ideaLane[n.id]] + 1;
-      const col = layout.depth[n.id] + 1;
       const ds = n.has_running ? 'running' : n.status;
       const sc = STATUS_BAR_COLORS[ds] || STATUS_BAR_COLORS.active;
       const lc = IDEA_PALETTE[layout.ideaLane[n.id] % IDEA_PALETTE.length];
+      mHtml += '<div class="subway-station" data-id="' + n.id + '" style="'
+        + 'position:static;border-color:' + sc + ';border-left:4px solid ' + lc + '">'
+        + '<div class="subway-header"><span class="subway-id">#' + n.id + '</span>' + badgeFor(ds)
+        + '<span class="subway-desc">' + escapeHtml(ideaTitle(n.description)) + '</span></div>'
+        + '</div>';
+    }
+    mHtml += '</div>';
+    container.innerHTML = mHtml;
+
+    const sizes = {};
+    container.querySelectorAll('.subway-station').forEach(function(el) {
+      const id = parseInt(el.dataset.id);
+      sizes[id] = { w: el.offsetWidth, h: el.offsetHeight };
+    });
+
+    // --- Compute column gap from max fan-out ---
+    const ROUTING_SPACING = 10;
+    const branchCounts = {};
+    for (const n of data.nodes) {
+      for (const pid of (n.parent_ids || [])) {
+        if (layout.ideaLane[n.id] !== layout.ideaLane[pid])
+          branchCounts[pid] = (branchCounts[pid] || 0) + 1;
+      }
+    }
+    const maxFanOut = Math.max(0, ...Object.values(branchCounts));
+    const colGap = Math.max(30, maxFanOut * ROUTING_SPACING + 20);
+
+    // --- Column widths & x-positions ---
+    const colWidth = {};
+    for (const n of data.nodes) {
+      const c = layout.depth[n.id];
+      colWidth[c] = Math.max(colWidth[c] || 0, sizes[n.id].w);
+    }
+    const colX = {};
+    var cx = 16;
+    for (var c = 0; c <= layout.maxDepth; c++) {
+      colX[c] = cx;
+      cx += (colWidth[c] || 0) + colGap;
+    }
+    const totalW = cx + 16;
+
+    // --- Per-column y-packing with pass-through reservations ---
+    const ROW_GAP = 3;
+    const PAD_Y = 12;
+    const PASS_H = 14;  // height reserved for a line passing through without a station
+
+    // Group stations by column, store status on each
+    const colNodes = {};
+    for (var idx = 0; idx < data.nodes.length; idx++) {
+      var n = data.nodes[idx];
+      var col = layout.depth[n.id];
+      if (!colNodes[col]) colNodes[col] = [];
+      colNodes[col].push(n);
+    }
+
+    // Compute per-lane SUBTREE activity (includes all descendant lanes via lane tree).
+    var laneDirectAct = {};
+    for (var idx = 0; idx < data.nodes.length; idx++) {
+      var n = data.nodes[idx];
+      var li = layout.ideaLane[n.id];
+      var act = n.last_finish || n.first_start || n.created_at || '';
+      if (!laneDirectAct[li] || act > laneDirectAct[li]) laneDirectAct[li] = act;
+    }
+    var laneFullAct = {};
+    function computeLaneFullAct(li) {
+      if (laneFullAct[li] !== undefined) return laneFullAct[li];
+      var best = laneDirectAct[li] || '';
+      var ch = layout.laneChildren[li];
+      if (ch) {
+        for (var j = 0; j < ch.length; j++) {
+          var ca = computeLaneFullAct(ch[j].childLane);
+          if (ca > best) best = ca;
+        }
+      }
+      laneFullAct[li] = best;
+      return best;
+    }
+    for (var li = 0; li < layout.lanes.length; li++) computeLaneFullAct(li);
+
+    // Compute per-lane "worst" status (for sorting: concluded=0, active=1, abandoned=2)
+    var STATUS_ORDER = { concluded: 0, active: 1, abandoned: 2 };
+    var laneStatus = {};
+    for (var idx = 0; idx < data.nodes.length; idx++) {
+      var n = data.nodes[idx];
+      var li = layout.ideaLane[n.id];
+      var rank = STATUS_ORDER[n.status] !== undefined ? STATUS_ORDER[n.status] : 1;
+      if (laneStatus[li] === undefined || rank > laneStatus[li]) laneStatus[li] = rank;
+    }
+
+    // Build explicit pass-through set by scanning ALL edges.
+    // For every edge (parent→child), if they span >1 column, reserve space
+    // in intermediate columns for the child's lane.
+    var needsPass = {};
+    // a) Same-lane backbone gaps
+    for (var li = 0; li < layout.lanes.length; li++) {
+      var ideas = layout.lanes[li].ideas;
+      if (ideas.length < 2) continue;
+      var cols = [];
+      for (var j = 0; j < ideas.length; j++) cols.push(layout.depth[ideas[j]]);
+      cols.sort(function(a, b) { return a - b; });
+      for (var j = 0; j < cols.length - 1; j++) {
+        for (var cc = cols[j] + 1; cc < cols[j + 1]; cc++) needsPass[li + ',' + cc] = li;
+      }
+    }
+    // b) Cross-lane edges that skip columns
+    for (var idx = 0; idx < data.edges.length; idx++) {
+      var e = data.edges[idx];
+      var fl = layout.ideaLane[e.from];
+      var tl = layout.ideaLane[e.to];
+      if (fl === undefined || tl === undefined) continue;
+      if (fl === tl) continue;
+      var fc = layout.depth[e.from];
+      var tc = layout.depth[e.to];
+      if (fc === undefined || tc === undefined) continue;
+      for (var cc = fc + 1; cc < tc; cc++) {
+        needsPass[tl + ',' + cc] = e.to;  // store target node ID
+      }
+    }
+
+    // Build slots per column: just stations, sorted by status then activity
+    var colSlots = {};
+    for (var c = 0; c <= layout.maxDepth; c++) {
+      var slots = [];
+      var nodes = colNodes[c] || [];
+      for (var j = 0; j < nodes.length; j++) {
+        var n = nodes[j];
+        var li = layout.ideaLane[n.id];
+        var sr = STATUS_ORDER[n.status] !== undefined ? STATUS_ORDER[n.status] : 1;
+        slots.push({ type: 'station', nodeId: n.id, lane: li, h: sizes[n.id].h,
+                      statusRank: sr, act: laneFullAct[li] || '' });
+      }
+      // Sort: 1) status (concluded=0, active=1, abandoned=2)  2) subtree activity desc
+      slots.sort(function(a, b) {
+        if (a.statusRank !== b.statusRank) return a.statusRank - b.statusRank;
+        if (a.act !== b.act) return b.act > a.act ? 1 : -1;
+        return 0;
+      });
+      colSlots[c] = slots;
+    }
+
+    // === PASS 1: stack stations without pass-throughs ===
+    var stationPos = {};
+    var maxY = 0;
+    for (var c = 0; c <= layout.maxDepth; c++) {
+      var slots = colSlots[c] || [];
+      var y = PAD_Y;
+      for (var i = 0; i < slots.length; i++) {
+        var slot = slots[i];
+        var minY = y;
+        // Children never above parent
+        var pids = (layout.nodeMap[slot.nodeId] || {}).parent_ids || [];
+        for (var j = 0; j < pids.length; j++) {
+          var pp = stationPos[pids[j]];
+          if (pp) minY = Math.max(minY, pp.y);
+        }
+        y = minY;
+        stationPos[slot.nodeId] = { x: colX[c], y: y, w: colWidth[c], h: slot.h };
+        y += slot.h + ROW_GAP;
+      }
+      if (y > maxY) maxY = y;
+    }
+
+    // === PASS 2: push stations down where horizontal line segments cross them ===
+    // The orthogonal routing draws horizontal segments at the DESTINATION's cy.
+    // Only this horizontal portion actually crosses through intermediate columns.
+    // Collect the y-level of each horizontal crossing per column.
+    var crossings = {};  // col → [cy, cy, ...]
+    // a) Same-lane backbone: A(colA) → B(colB) routes horizontally at B.cy
+    for (var li = 0; li < layout.lanes.length; li++) {
+      var ideas = layout.lanes[li].ideas;
+      if (ideas.length < 2) continue;
+      var sorted = ideas.slice().sort(function(a, b) { return layout.depth[a] - layout.depth[b]; });
+      for (var j = 0; j < sorted.length - 1; j++) {
+        var aCol = layout.depth[sorted[j]], bCol = layout.depth[sorted[j + 1]];
+        if (bCol <= aCol + 1) continue;
+        var bP = stationPos[sorted[j + 1]];
+        if (!bP) continue;
+        var bCy = bP.y + bP.h / 2;
+        for (var cc = aCol + 1; cc < bCol; cc++) {
+          if (!crossings[cc]) crossings[cc] = [];
+          crossings[cc].push(bCy);
+        }
+      }
+    }
+    // b) Cross-lane branch: routes horizontally at child.cy
+    for (var idx = 0; idx < data.edges.length; idx++) {
+      var e = data.edges[idx];
+      var fl = layout.ideaLane[e.from], tl = layout.ideaLane[e.to];
+      if (fl === undefined || tl === undefined || fl === tl) continue;
+      var fc = layout.depth[e.from], tc = layout.depth[e.to];
+      if (fc === undefined || tc === undefined || tc <= fc + 1) continue;
+      var cP = stationPos[e.to];
+      if (!cP) continue;
+      var cCy = cP.y + cP.h / 2;
+      for (var cc = fc + 1; cc < tc; cc++) {
+        if (!crossings[cc]) crossings[cc] = [];
+        crossings[cc].push(cCy);
+      }
+    }
+    // For each column with crossings, check overlap with station boxes and push down
+    for (var c = 0; c <= layout.maxDepth; c++) {
+      var crs = crossings[c];
+      if (!crs || !crs.length) continue;
+      crs.sort(function(a, b) { return a - b; });
+      // Deduplicate nearby crossings
+      var unique = [crs[0]];
+      for (var j = 1; j < crs.length; j++) {
+        if (crs[j] - unique[unique.length - 1] > 4) unique.push(crs[j]);
+      }
+      var slots = colSlots[c] || [];
+      for (var ci = 0; ci < unique.length; ci++) {
+        var lineY = unique[ci];
+        var halfH = PASS_H / 2;
+        // Find any station that overlaps lineY ± halfH
+        for (var j = 0; j < slots.length; j++) {
+          var sp = stationPos[slots[j].nodeId];
+          if (!sp) continue;
+          if (lineY + halfH > sp.y && lineY - halfH < sp.y + sp.h) {
+            // Push this station and all below it down
+            var pushTo = lineY + halfH + 2;
+            var shift = pushTo - sp.y;
+            if (shift > 0) {
+              for (var k = j; k < slots.length; k++) {
+                var sp2 = stationPos[slots[k].nodeId];
+                if (!sp2) continue;
+                sp2.y += shift;
+              }
+            }
+            break;  // only push once per crossing
+          }
+        }
+      }
+    }
+    // Recompute maxY after adjustments
+    maxY = 0;
+    for (var nid in stationPos) {
+      var sp = stationPos[nid];
+      var bot = sp.y + sp.h + ROW_GAP;
+      if (bot > maxY) maxY = bot;
+    }
+    var totalH = maxY + PAD_Y;
+
+    // --- Render ---
+    var html = '<svg class="subway-svg" id="subway-svg" width="' + totalW + '" height="' + totalH + '"></svg>';
+    for (const n of data.nodes) {
+      var p = stationPos[n.id];
+      if (!p) continue;
+      var ds = n.has_running ? 'running' : n.status;
+      var sc = STATUS_BAR_COLORS[ds] || STATUS_BAR_COLORS.active;
+      var lc = IDEA_PALETTE[layout.ideaLane[n.id] % IDEA_PALETTE.length];
       html += '<div class="subway-station" data-id="' + n.id + '" title="' + escapeHtml(n.description) + '" style="'
-        + 'grid-row:' + row + ';grid-column:' + col
+        + 'left:' + p.x + 'px;top:' + p.y + 'px;width:' + p.w + 'px'
         + ';border-color:' + sc + ';border-left:4px solid ' + lc + '">'
         + '<div class="subway-header"><span class="subway-id">#' + n.id + '</span>' + badgeFor(ds)
         + '<span class="subway-desc">' + escapeHtml(ideaTitle(n.description)) + '</span></div>'
         + '</div>';
     }
+    container.innerHTML = html;
+    container.style.minWidth = totalW + 'px';
+    container.style.minHeight = totalH + 'px';
 
-    container.innerHTML =
-      '<svg class="subway-svg" id="subway-svg"></svg>'
-      + '<div class="subway-grid" id="subway-grid" style="grid-template-columns:repeat(' + numCols + ',auto);column-gap:' + colGap + 'px">'
-      + html + '</div>';
-
-    requestAnimationFrame(function() { drawSubwayLines(data, layout); });
+    drawSubwayLines(data, layout, stationPos);
 
     container.querySelectorAll('.subway-station').forEach(function(el) {
       el.addEventListener('click', function() { loadIdeaDetail(parseInt(el.dataset.id)); });
@@ -440,33 +708,26 @@
     if (currentView === 'timeline') updateTimeline(data);
   }
 
-  function drawSubwayLines(data, layout) {
-    const grid = document.getElementById('subway-grid');
+  function drawSubwayLines(data, layout, stationPos) {
     const svg = document.getElementById('subway-svg');
-    if (!grid || !svg) return;
-    const gr = grid.getBoundingClientRect();
-    const pr = grid.parentElement.getBoundingClientRect();
-    svg.setAttribute('width', grid.scrollWidth);
-    svg.setAttribute('height', grid.scrollHeight);
-    svg.style.left = (gr.left - pr.left) + 'px';
-    svg.style.top = (gr.top - pr.top) + 'px';
+    if (!svg) return;
 
-    // Measure station positions relative to the grid
+    // Build position map from computed layout
     const pos = {};
-    grid.querySelectorAll('.subway-station').forEach(function(el) {
-      const id = parseInt(el.dataset.id);
-      const r = el.getBoundingClientRect();
-      pos[id] = {
-        cx: r.left - gr.left + r.width / 2,
-        cy: r.top - gr.top + r.height / 2,
-        l: r.left - gr.left,
-        r: r.left - gr.left + r.width,
+    for (const n of data.nodes) {
+      const p = stationPos[n.id];
+      if (!p) continue;
+      pos[n.id] = {
+        cx: p.x + p.w / 2,
+        cy: p.y + p.h / 2,
+        l: p.x,
+        r: p.x + p.w,
       };
-    });
+    }
 
     let s = '';
 
-    // 1. Lane backbone lines — thick, solid horizontal connections
+    // 1. Lane backbone lines — orthogonal routing between consecutive same-lane stations
     for (let li = 0; li < layout.lanes.length; li++) {
       const lane = layout.lanes[li];
       if (lane.ideas.length < 2) continue;
@@ -474,16 +735,32 @@
       if (pts.length < 2) continue;
       const color = IDEA_PALETTE[li % IDEA_PALETTE.length];
       for (let i = 0; i < pts.length - 1; i++) {
-        s += '<line x1="' + pts[i].r + '" y1="' + pts[i].cy
-          + '" x2="' + pts[i+1].l + '" y2="' + pts[i+1].cy
-          + '" stroke="' + color + '" stroke-width="4" stroke-opacity="0.7"'
-          + ' stroke-linecap="round"/>';
+        const a = pts[i], b = pts[i + 1];
+        if (Math.abs(a.cy - b.cy) < 2) {
+          // Same y — straight horizontal
+          s += '<line x1="' + a.r + '" y1="' + a.cy
+            + '" x2="' + b.l + '" y2="' + b.cy
+            + '" stroke="' + color + '" stroke-width="4" stroke-opacity="0.7"'
+            + ' stroke-linecap="round"/>';
+        } else {
+          // Different y — orthogonal: horizontal → corner → vertical → corner → horizontal
+          const mx = (a.r + b.l) / 2;
+          const dy = b.cy > a.cy ? 1 : -1;
+          const vd = Math.abs(b.cy - a.cy);
+          const r = Math.min(6, vd / 2, Math.max(0, mx - a.r) / 2, Math.max(0, b.l - mx) / 2);
+          s += '<path d="M' + a.r + ',' + a.cy
+            + ' L' + (mx - r) + ',' + a.cy
+            + ' Q' + mx + ',' + a.cy + ' ' + mx + ',' + (a.cy + dy * r)
+            + ' L' + mx + ',' + (b.cy - dy * r)
+            + ' Q' + mx + ',' + b.cy + ' ' + (mx + r) + ',' + b.cy
+            + ' L' + b.l + ',' + b.cy
+            + '" fill="none" stroke="' + color + '" stroke-width="4" stroke-opacity="0.7"'
+            + ' stroke-linecap="round"/>';
+        }
       }
     }
 
     // 2. Branch connections — orthogonal routing, non-intersecting
-    //    Route: parent.right → horizontal → 90° turn → vertical → 90° turn → horizontal → child.left
-    //    Group by parent so branches from the same node fan out without crossing.
     const branches = [];
     for (const n of data.nodes) {
       for (const pid of (n.parent_ids || [])) {
@@ -491,48 +768,40 @@
         if (layout.ideaLane[n.id] === layout.ideaLane[pid]) continue;
         branches.push({
           pid: pid, cid: n.id,
-          cRow: layout.laneRow[layout.ideaLane[n.id]],
           color: IDEA_PALETTE[layout.ideaLane[n.id] % IDEA_PALETTE.length],
         });
       }
     }
 
-    // Group by parent, sort each group so furthest branch drops first (closest
-    // junction to parent).  Nearby branches route further out.  This creates a
-    // nested fan-out that never crosses.
     const byParent = {};
     for (const br of branches) {
       if (!byParent[br.pid]) byParent[br.pid] = [];
       byParent[br.pid].push(br);
     }
 
-    const SPACING = 10;  // px between parallel vertical segments
-    const CORNER = 6;    // rounded corner radius
+    const SPACING = 10;
+    const CORNER = 6;
 
     for (const pid of Object.keys(byParent)) {
       const group = byParent[pid];
-      const pRow = layout.laneRow[layout.ideaLane[pid]];
-      // Furthest away (by row distance) → index 0 → closest junction
-      group.sort(function(a, b) { return Math.abs(b.cRow - pRow) - Math.abs(a.cRow - pRow); });
       const p = pos[pid];
       if (!p) continue;
+      // Sort by vertical distance descending — furthest drops first (closest junction)
+      group.sort(function(a, b) {
+        return Math.abs(pos[b.cid].cy - p.cy) - Math.abs(pos[a.cid].cy - p.cy);
+      });
 
       for (let i = 0; i < group.length; i++) {
         const br = group[i];
         const c = pos[br.cid];
         if (!c) continue;
 
-        // Junction x: spread outward from parent, sorted by row to avoid crossing.
-        // Closer rows get junction closer to parent (shorter horizontal run).
         const jx = p.r + SPACING * (i + 1);
         const dy = c.cy > p.cy ? 1 : -1;
-
-        // Clamp corner radius to available space
         const vertDist = Math.abs(c.cy - p.cy);
         const horizAfter = Math.max(0, c.l - jx);
         const r = Math.min(CORNER, vertDist / 2, horizAfter / 2, SPACING * (i + 1) / 2);
 
-        // Orthogonal path with rounded 90° corners
         s += '<path d="'
           + 'M' + p.r + ',' + p.cy
           + ' L' + (jx - r) + ',' + p.cy
@@ -546,7 +815,7 @@
       }
     }
 
-    // 3. Station dots — prominent circles on the left edge
+    // 3. Station dots
     for (const n of data.nodes) {
       if (!pos[n.id]) continue;
       const color = IDEA_PALETTE[layout.ideaLane[n.id] % IDEA_PALETTE.length];
