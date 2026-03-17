@@ -4,7 +4,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>The Lab — Dashboard</title>
-<script src="https://unpkg.com/vis-network@9.1.6/standalone/umd/vis-network.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
 <style>
@@ -100,8 +99,8 @@
   .view-tab.active { color: #58a6ff; border-bottom-color: #58a6ff; }
 
   #main { display: flex; flex: 1; overflow: hidden; }
-  #graph-container { flex: 1; position: relative; }
-  #graph { width: 100%; height: 100%; }
+  #graph-container { flex: 1; position: relative; overflow: auto; }
+  #graph { position: relative; min-height: 100%; }
   #timeline-container { flex: 1; position: relative; display: none; overflow: auto; padding: 16px; }
   #timeline-container.active { display: block; }
   #timeline-wrap { position: relative; min-height: 200px; }
@@ -143,7 +142,30 @@
   .exp-item .exp-progress { font-size: 11px; color: #d29922; margin-top: 4px; padding: 4px 6px; background: #1c1d1f; border-radius: 3px; }
   .exp-item .exp-progress .progress-bar { height: 4px; background: #30363d; border-radius: 2px; margin-top: 4px; overflow: hidden; }
   .exp-item .exp-progress .progress-fill { height: 100%; background: #d29922; border-radius: 2px; transition: width 0.3s; }
-  #hint { position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%); color: #484f58; font-size: 12px; pointer-events: none; }
+  .subway-grid {
+    display: grid;
+    row-gap: 2px;
+    padding: 12px 20px;
+    position: relative;
+    z-index: 1;
+    align-items: center;
+    align-content: start;
+  }
+  .subway-station {
+    padding: 4px 10px;
+    background: #161b22;
+    border: 2px solid #30363d;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 12px;
+    transition: background 0.15s;
+    white-space: nowrap;
+  }
+  .subway-station:hover { background: #1c2333; }
+  .subway-station .subway-header { display: flex; align-items: center; gap: 6px; }
+  .subway-station .subway-id { font-weight: 700; color: #58a6ff; font-size: 11px; }
+  .subway-station .subway-desc { color: #c9d1d9; font-size: 12px; display: inline; margin-left: 6px; }
+  .subway-svg { position: absolute; top: 0; left: 0; pointer-events: none; z-index: 0; }
 
   #log-container { flex: 1; display: none; overflow-y: auto; padding: 0; flex-direction: column; }
   #log-container.active { display: flex; }
@@ -221,7 +243,6 @@
   <div id="main">
     <div id="graph-container">
       <div id="graph"></div>
-      <div id="hint">Click a node to view idea details</div>
     </div>
     <div id="timeline-container">
       <div id="timeline-wrap"><canvas id="timeline-chart"></canvas></div>
@@ -261,9 +282,6 @@
     '#a5d6ff', '#7ee787', '#f0c96b', '#ffa198', '#d8b4fe',
   ];
 
-  let network = null;
-  let nodesDS = new vis.DataSet();
-  let edgesDS = new vis.DataSet();
   let selectedIdea = null;
   let metricsChart = null;
   let timelineChart = null;
@@ -285,82 +303,258 @@
     if (view === 'log') loadLog();
   };
 
-  // --- DAG Graph ---
-
-  function initGraph() {
-    const container = document.getElementById('graph');
-    const options = {
-      nodes: {
-        shape: 'box',
-        margin: { top: 8, bottom: 8, left: 12, right: 12 },
-        font: { face: 'SF Mono, Fira Code, Consolas, monospace', size: 12, color: '#ffffff' },
-        borderWidth: 2,
-        shadow: { enabled: true, color: 'rgba(0,0,0,0.3)', size: 6, x: 0, y: 2 },
-      },
-      edges: {
-        arrows: { to: { enabled: true, scaleFactor: 0.6 } },
-        color: { color: '#30363d', highlight: '#58a6ff', hover: '#484f58' },
-        width: 1.5,
-        smooth: { type: 'cubicBezier', forceDirection: 'vertical', roundness: 0.4 },
-      },
-      layout: {
-        hierarchical: {
-          enabled: true, direction: 'UD', sortMethod: 'directed',
-          levelSeparation: 120, nodeSpacing: 250, treeSpacing: 200,
-        }
-      },
-      physics: {
-        enabled: true,
-        hierarchicalRepulsion: { nodeDistance: 200, centralGravity: 0.0, springLength: 150, springConstant: 0.01, damping: 0.09 },
-        solver: 'hierarchicalRepulsion',
-        stabilization: { iterations: 100 },
-      },
-      interaction: { hover: true, tooltipDelay: 200 },
-    };
-    network = new vis.Network(container, { nodes: nodesDS, edges: edgesDS }, options);
-    network.on('click', function(params) {
-      if (params.nodes.length > 0) loadIdeaDetail(params.nodes[0]);
-    });
-  }
+  // --- Subway DAG ---
 
   function truncate(s, max) { return (!s) ? '' : s.length > max ? s.substring(0, max) + '...' : s; }
 
+  function ideaTitle(s) {
+    // Extract a short title: text before the first ':', or before the first
+    // non-letter/digit/space symbol if there's no colon.
+    if (!s) return '';
+    const colonIdx = s.indexOf(':');
+    if (colonIdx > 0) return s.substring(0, colonIdx).trim();
+    const m = s.match(/^[\w\s]+/);
+    return m ? m[0].trim() : s;
+  }
+
+  function buildSubwayLayout(data) {
+    if (!data.nodes.length) return null;
+    const nodeMap = {};
+    const childMap = {};
+    for (const n of data.nodes) { nodeMap[n.id] = n; childMap[n.id] = []; }
+    for (const e of data.edges) { if (childMap[e.from]) childMap[e.from].push(e.to); }
+
+    // Depth = column position (longest path from root)
+    const depth = {};
+    function getDepth(id) {
+      if (depth[id] !== undefined) return depth[id];
+      const parents = (nodeMap[id].parent_ids || []).filter(p => nodeMap[p]);
+      depth[id] = parents.length ? Math.max(...parents.map(getDepth)) + 1 : 0;
+      return depth[id];
+    }
+    for (const n of data.nodes) getDepth(n.id);
+
+    // Subtree last activity (most-active branch continues parent lane)
+    const subAct = {};
+    function getSubAct(id) {
+      if (subAct[id]) return subAct[id];
+      const n = nodeMap[id];
+      let best = n.last_finish || n.first_start || n.created_at || '';
+      for (const c of childMap[id]) { const ca = getSubAct(c); if (ca > best) best = ca; }
+      return (subAct[id] = best);
+    }
+    for (const n of data.nodes) getSubAct(n.id);
+
+    // Sort children: most-active subtree first (continues parent lane)
+    for (const id of Object.keys(childMap))
+      childMap[id].sort((a, b) => (getSubAct(b) || '').localeCompare(getSubAct(a) || ''));
+
+    // Assign lanes via DFS
+    const lanes = [];
+    const ideaLane = {};
+    const assigned = new Set();
+    function assign(id, lane) {
+      if (assigned.has(id)) return;
+      assigned.add(id);
+      if (lane < 0) { lane = lanes.length; lanes.push({ ideas: [], lastActivity: '' }); }
+      ideaLane[id] = lane;
+      lanes[lane].ideas.push(id);
+      const act = subAct[id] || '';
+      if (act > lanes[lane].lastActivity) lanes[lane].lastActivity = act;
+      const ch = childMap[id] || [];
+      if (ch.length) {
+        assign(ch[0], lane);
+        for (let i = 1; i < ch.length; i++) assign(ch[i], -1);
+      }
+    }
+    const hasParent = new Set(data.edges.map(e => e.to));
+    const roots = data.nodes.filter(n => !hasParent.has(n.id)).map(n => n.id);
+    roots.sort((a, b) => (getSubAct(b) || '').localeCompare(getSubAct(a) || ''));
+    for (const r of roots) assign(r, -1);
+
+    // Sort lanes by last activity (most recent first)
+    const laneOrder = lanes.map((_, i) => i);
+    laneOrder.sort((a, b) => (lanes[b].lastActivity || '').localeCompare(lanes[a].lastActivity || ''));
+    const laneRow = {};
+    for (let i = 0; i < laneOrder.length; i++) laneRow[laneOrder[i]] = i;
+
+    return { nodeMap, childMap, depth, ideaLane, laneRow, laneOrder, lanes,
+      numLanes: lanes.length, maxDepth: Math.max(0, ...Object.values(depth)) };
+  }
+
   function updateGraph(data) {
     graphData = data;
-    const nodeIds = new Set(data.nodes.map(n => n.id));
-    const newNodes = [], updateNodes = [];
-    for (const n of data.nodes) {
-      allIdeas[n.id] = n;
-      const displayStatus = n.has_running ? 'running' : n.status;
-      const c = STATUS_COLORS[displayStatus] || STATUS_COLORS.active;
-      const nodeData = {
-        id: n.id,
-        label: '#' + n.id + ': ' + truncate(n.description, 30),
-        widthConstraint: { maximum: 250 },
-        color: { background: c.bg, border: c.border, highlight: { background: c.bg, border: '#ffffff' } },
-        font: { color: c.font },
-        title: n.description,
-      };
-      if (nodesDS.get(n.id)) updateNodes.push(nodeData); else newNodes.push(nodeData);
-    }
-    const toRemove = nodesDS.getIds().filter(id => !nodeIds.has(id));
-    if (toRemove.length) nodesDS.remove(toRemove);
-    if (updateNodes.length) nodesDS.update(updateNodes);
-    if (newNodes.length) nodesDS.add(newNodes);
+    for (const n of data.nodes) allIdeas[n.id] = n;
 
-    const existingEdges = {};
-    edgesDS.forEach(e => { existingEdges[e.from + '->' + e.to] = e.id; });
-    const newEdges = [];
-    for (const e of data.edges) {
-      const key = e.from + '->' + e.to;
-      if (!existingEdges[key]) newEdges.push({ id: key, from: e.from, to: e.to });
-      delete existingEdges[key];
+    const layout = buildSubwayLayout(data);
+    const container = document.getElementById('graph');
+    if (!layout) {
+      container.innerHTML = '<div style="padding:40px;color:#484f58;text-align:center">No ideas yet</div>';
+      if (currentView === 'timeline') updateTimeline(data);
+      return;
     }
-    const staleEdges = Object.values(existingEdges);
-    if (staleEdges.length) edgesDS.remove(staleEdges);
-    if (newEdges.length) edgesDS.add(newEdges);
+
+    const numCols = layout.maxDepth + 1;
+
+    // Compute column gap: each cross-lane branch from a parent needs SPACING px
+    // for its vertical routing segment. The gap must fit the widest fan-out.
+    const ROUTING_SPACING = 10;
+    const branchCounts = {};  // parent_id → number of cross-lane children
+    for (const n of data.nodes) {
+      for (const pid of (n.parent_ids || [])) {
+        if (layout.ideaLane[n.id] !== layout.ideaLane[pid]) {
+          branchCounts[pid] = (branchCounts[pid] || 0) + 1;
+        }
+      }
+    }
+    const maxFanOut = Math.max(0, ...Object.values(branchCounts));
+    // Minimum gap 30px, then SPACING per branch line + padding on each side
+    const colGap = Math.max(30, maxFanOut * ROUTING_SPACING + 20);
+
+    let html = '';
+    for (const n of data.nodes) {
+      const row = layout.laneRow[layout.ideaLane[n.id]] + 1;
+      const col = layout.depth[n.id] + 1;
+      const ds = n.has_running ? 'running' : n.status;
+      const sc = STATUS_BAR_COLORS[ds] || STATUS_BAR_COLORS.active;
+      const lc = IDEA_PALETTE[layout.ideaLane[n.id] % IDEA_PALETTE.length];
+      html += '<div class="subway-station" data-id="' + n.id + '" title="' + escapeHtml(n.description) + '" style="'
+        + 'grid-row:' + row + ';grid-column:' + col
+        + ';border-color:' + sc + ';border-left:4px solid ' + lc + '">'
+        + '<div class="subway-header"><span class="subway-id">#' + n.id + '</span>' + badgeFor(ds)
+        + '<span class="subway-desc">' + escapeHtml(ideaTitle(n.description)) + '</span></div>'
+        + '</div>';
+    }
+
+    container.innerHTML =
+      '<svg class="subway-svg" id="subway-svg"></svg>'
+      + '<div class="subway-grid" id="subway-grid" style="grid-template-columns:repeat(' + numCols + ',auto);column-gap:' + colGap + 'px">'
+      + html + '</div>';
+
+    requestAnimationFrame(function() { drawSubwayLines(data, layout); });
+
+    container.querySelectorAll('.subway-station').forEach(function(el) {
+      el.addEventListener('click', function() { loadIdeaDetail(parseInt(el.dataset.id)); });
+    });
 
     if (currentView === 'timeline') updateTimeline(data);
+  }
+
+  function drawSubwayLines(data, layout) {
+    const grid = document.getElementById('subway-grid');
+    const svg = document.getElementById('subway-svg');
+    if (!grid || !svg) return;
+    const gr = grid.getBoundingClientRect();
+    const pr = grid.parentElement.getBoundingClientRect();
+    svg.setAttribute('width', grid.scrollWidth);
+    svg.setAttribute('height', grid.scrollHeight);
+    svg.style.left = (gr.left - pr.left) + 'px';
+    svg.style.top = (gr.top - pr.top) + 'px';
+
+    // Measure station positions relative to the grid
+    const pos = {};
+    grid.querySelectorAll('.subway-station').forEach(function(el) {
+      const id = parseInt(el.dataset.id);
+      const r = el.getBoundingClientRect();
+      pos[id] = {
+        cx: r.left - gr.left + r.width / 2,
+        cy: r.top - gr.top + r.height / 2,
+        l: r.left - gr.left,
+        r: r.left - gr.left + r.width,
+      };
+    });
+
+    let s = '';
+
+    // 1. Lane backbone lines — thick, solid horizontal connections
+    for (let li = 0; li < layout.lanes.length; li++) {
+      const lane = layout.lanes[li];
+      if (lane.ideas.length < 2) continue;
+      const pts = lane.ideas.map(id => pos[id]).filter(Boolean);
+      if (pts.length < 2) continue;
+      const color = IDEA_PALETTE[li % IDEA_PALETTE.length];
+      for (let i = 0; i < pts.length - 1; i++) {
+        s += '<line x1="' + pts[i].r + '" y1="' + pts[i].cy
+          + '" x2="' + pts[i+1].l + '" y2="' + pts[i+1].cy
+          + '" stroke="' + color + '" stroke-width="4" stroke-opacity="0.7"'
+          + ' stroke-linecap="round"/>';
+      }
+    }
+
+    // 2. Branch connections — orthogonal routing, non-intersecting
+    //    Route: parent.right → horizontal → 90° turn → vertical → 90° turn → horizontal → child.left
+    //    Group by parent so branches from the same node fan out without crossing.
+    const branches = [];
+    for (const n of data.nodes) {
+      for (const pid of (n.parent_ids || [])) {
+        if (!pos[pid] || !pos[n.id]) continue;
+        if (layout.ideaLane[n.id] === layout.ideaLane[pid]) continue;
+        branches.push({
+          pid: pid, cid: n.id,
+          cRow: layout.laneRow[layout.ideaLane[n.id]],
+          color: IDEA_PALETTE[layout.ideaLane[n.id] % IDEA_PALETTE.length],
+        });
+      }
+    }
+
+    // Group by parent, sort each group so furthest branch drops first (closest
+    // junction to parent).  Nearby branches route further out.  This creates a
+    // nested fan-out that never crosses.
+    const byParent = {};
+    for (const br of branches) {
+      if (!byParent[br.pid]) byParent[br.pid] = [];
+      byParent[br.pid].push(br);
+    }
+
+    const SPACING = 10;  // px between parallel vertical segments
+    const CORNER = 6;    // rounded corner radius
+
+    for (const pid of Object.keys(byParent)) {
+      const group = byParent[pid];
+      const pRow = layout.laneRow[layout.ideaLane[pid]];
+      // Furthest away (by row distance) → index 0 → closest junction
+      group.sort(function(a, b) { return Math.abs(b.cRow - pRow) - Math.abs(a.cRow - pRow); });
+      const p = pos[pid];
+      if (!p) continue;
+
+      for (let i = 0; i < group.length; i++) {
+        const br = group[i];
+        const c = pos[br.cid];
+        if (!c) continue;
+
+        // Junction x: spread outward from parent, sorted by row to avoid crossing.
+        // Closer rows get junction closer to parent (shorter horizontal run).
+        const jx = p.r + SPACING * (i + 1);
+        const dy = c.cy > p.cy ? 1 : -1;
+
+        // Clamp corner radius to available space
+        const vertDist = Math.abs(c.cy - p.cy);
+        const horizAfter = Math.max(0, c.l - jx);
+        const r = Math.min(CORNER, vertDist / 2, horizAfter / 2, SPACING * (i + 1) / 2);
+
+        // Orthogonal path with rounded 90° corners
+        s += '<path d="'
+          + 'M' + p.r + ',' + p.cy
+          + ' L' + (jx - r) + ',' + p.cy
+          + ' Q' + jx + ',' + p.cy + ' ' + jx + ',' + (p.cy + dy * r)
+          + ' L' + jx + ',' + (c.cy - dy * r)
+          + ' Q' + jx + ',' + c.cy + ' ' + (jx + r) + ',' + c.cy
+          + ' L' + c.l + ',' + c.cy
+          + '" fill="none" stroke="' + br.color
+          + '" stroke-width="3" stroke-opacity="0.7"'
+          + ' stroke-linecap="round" stroke-linejoin="round"/>';
+      }
+    }
+
+    // 3. Station dots — prominent circles on the left edge
+    for (const n of data.nodes) {
+      if (!pos[n.id]) continue;
+      const color = IDEA_PALETTE[layout.ideaLane[n.id] % IDEA_PALETTE.length];
+      s += '<circle cx="' + pos[n.id].l + '" cy="' + pos[n.id].cy
+        + '" r="6" fill="' + color + '" stroke="#0d1117" stroke-width="2.5"/>';
+    }
+
+    svg.innerHTML = s;
   }
 
   // --- Timeline ---
@@ -874,7 +1068,6 @@
     stopProgressPolling();
     document.getElementById('detail-panel').classList.remove('open');
     selectedIdea = null;
-    if (network) network.unselectAll();
   };
 
   // --- Log view ---
@@ -986,7 +1179,6 @@
   function pollGraph() { fetch('/api/v1/graph').then(r => r.json()).then(updateGraph).catch(() => {}); }
 
   // Init
-  initGraph();
   pollBacklog();
   pollGraph();
   loadChartData();
