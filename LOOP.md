@@ -16,8 +16,9 @@ Check the backlog and the ideas to plan your next steps.
 
 ```
 GET /backlog          → active ideas, running/pending counts, current branch
-GET /ideas            → all ideas with key notes
+GET /ideas            → all ideas with key notes + experiment summary (counts, latest metrics)
 GET /ideas/<id>       → full idea: experiments, notes, results
+GET /experiments/compare?ids=9,13,15  → side-by-side metrics + meta table
 ```
 
 ## 3. Work

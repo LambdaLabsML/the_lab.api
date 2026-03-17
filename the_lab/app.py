@@ -174,6 +174,18 @@ def list_ideas(status: str | None = None):
     ideas = store.list_ideas(status=status)
     for idea in ideas:
         idea["notes"] = store.get_notes(idea["id"], levels=Store.LISTING_LEVELS)
+        # Compact experiment summary with latest completed metrics
+        exps = store.list_experiments(idea["id"])
+        completed = [e for e in exps if e["status"] == "completed" and e.get("metrics")]
+        latest = max(completed, key=lambda e: e.get("finished_at", "")) if completed else None
+        idea["experiment_summary"] = {
+            "total": len(exps),
+            "completed": len(completed),
+            "failed": sum(1 for e in exps if e["status"] == "failed"),
+            "running": sum(1 for e in exps if e["status"] == "running"),
+            "latest_metrics": latest["metrics"] if latest else None,
+            "latest_experiment_id": latest["id"] if latest else None,
+        }
     return ideas
 
 
@@ -302,6 +314,55 @@ def create_experiment(idea_id: int, req: NewExperimentRequest):
 @app.get("/api/v1/ideas/{idea_id}/experiments")
 def list_experiments(idea_id: int):
     return store.list_experiments(idea_id)
+
+
+@app.get("/api/v1/experiments/compare")
+def compare_experiments(
+    ids: str = Query(..., description="Comma-separated experiment IDs"),
+    metrics: str | None = Query(default=None, description="Comma-separated metric keys to include (default: all)"),
+):
+    """Side-by-side comparison of experiments: metrics, meta, and descriptions."""
+    try:
+        exp_ids = [int(x.strip()) for x in ids.split(",") if x.strip()]
+    except ValueError:
+        raise HTTPException(400, "ids must be comma-separated integers")
+    if not exp_ids:
+        raise HTTPException(400, "no experiment IDs provided")
+
+    filter_metrics = None
+    if metrics is not None:
+        filter_metrics = [k.strip() for k in metrics.split(",") if k.strip()]
+
+    experiments = []
+    for eid in exp_ids:
+        exp = store.get_experiment(eid)
+        if not exp:
+            raise HTTPException(404, f"experiment {eid} not found")
+        experiments.append(exp)
+
+    # Pivot metrics into a table: metric_key → [value per experiment]
+    all_metric_keys = sorted({k for e in experiments for k in (e.get("metrics") or {})})
+    metric_keys = [k for k in filter_metrics if k in all_metric_keys] if filter_metrics else all_metric_keys
+    metrics_table = {
+        key: [(e.get("metrics") or {}).get(key) for e in experiments]
+        for key in metric_keys
+    }
+
+    # Same for meta
+    meta_keys = sorted({k for e in experiments for k in (e.get("meta") or {})})
+    meta_table = {
+        key: [(e.get("meta") or {}).get(key) for e in experiments]
+        for key in meta_keys
+    }
+
+    return {
+        "experiment_ids": exp_ids,
+        "experiments": experiments,
+        "metric_keys": metric_keys,
+        "metrics": metrics_table,
+        "meta_keys": meta_keys,
+        "meta": meta_table,
+    }
 
 
 @app.get("/api/v1/experiments/{exp_id}")

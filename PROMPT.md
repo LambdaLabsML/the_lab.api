@@ -129,7 +129,7 @@ All timestamps are ISO 8601. You can reconstruct the full timeline of an idea by
 
 | Endpoint | What |
 |----------|------|
-| `GET /ideas` | List all ideas (filter: `?status=active`). Shows `insight` + `milestone` notes. |
+| `GET /ideas` | List all ideas (filter: `?status=active`). Includes `insight`/`milestone` notes + `experiment_summary` with counts and `latest_metrics`. |
 | `GET /ideas/<id>` | Get idea with experiments and notes (`insight` + `milestone` + `observation`). |
 | `GET /ideas/<id>?notes=all` | Same but includes `debug` notes too. |
 | `GET /ideas/<id>/tree` | See ancestors and descendants with `insight` + `milestone` notes. |
@@ -140,4 +140,5 @@ All timestamps are ISO 8601. You can reconstruct the full timeline of an idea by
 | `GET /graph` | Full idea DAG. |
 | `POST /experiments/<id>/restart` | Re-run a failed/cancelled experiment (same script). |
 | `POST /experiments/<id>/cancel` | Kill a running experiment. |
+| `GET /experiments/compare?ids=9,13,15` | Side-by-side comparison: pivoted `metrics` and `meta` tables, plus full experiment objects. Optional `&metrics=accuracy,loss` to filter metric keys. |
 | `GET /experiments/<id>/log?tail=50` | Read experiment log (streams in real-time while running). |
