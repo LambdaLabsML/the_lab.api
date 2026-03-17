@@ -140,6 +140,9 @@
   .exp-item .exp-meta { font-size: 11px; color: #8b949e; }
   .exp-item .exp-metrics { font-size: 11px; color: #d2a8ff; margin-top: 3px; }
   .exp-item .exp-timestamps { font-size: 10px; color: #484f58; margin-top: 3px; }
+  .exp-item .exp-progress { font-size: 11px; color: #d29922; margin-top: 4px; padding: 4px 6px; background: #1c1d1f; border-radius: 3px; }
+  .exp-item .exp-progress .progress-bar { height: 4px; background: #30363d; border-radius: 2px; margin-top: 4px; overflow: hidden; }
+  .exp-item .exp-progress .progress-fill { height: 100%; background: #d29922; border-radius: 2px; transition: width 0.3s; }
   #hint { position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%); color: #484f58; font-size: 12px; pointer-events: none; }
 
   #log-container { flex: 1; display: none; overflow-y: auto; padding: 0; flex-direction: column; }
@@ -548,14 +551,44 @@
       })
       .then(results => {
         allExperiments = [];
+        const runningExps = [];
         for (const { idea, experiments } of results) {
           for (const exp of experiments) {
             if (exp.status === 'completed' && exp.metrics) {
               allExperiments.push({ ...exp, idea_description: idea.description, idea_status: idea.status });
+            } else if (exp.status === 'running') {
+              runningExps.push({ exp, idea });
             }
           }
         }
-        allExperiments.sort((a, b) => (a.finished_at || '').localeCompare(b.finished_at || ''));
+        // Fetch progress for running experiments
+        const progressPromises = runningExps.map(({ exp, idea }) =>
+          fetch('/api/v1/experiments/' + exp.id + '/progress')
+            .then(r => r.json())
+            .then(data => {
+              if (data.progress && Object.keys(data.progress).length) {
+                allExperiments.push({
+                  ...exp,
+                  metrics: data.progress,
+                  _running: true,
+                  idea_description: idea.description,
+                  idea_status: idea.status,
+                });
+              }
+            })
+            .catch(() => {})
+        );
+        return Promise.all(progressPromises);
+      })
+      .then(() => {
+        // Completed sorted by finish time, running at the end sorted by start time
+        allExperiments.sort((a, b) => {
+          if (a._running && !b._running) return 1;
+          if (!a._running && b._running) return -1;
+          const ta = a.finished_at || a.started_at || '';
+          const tb = b.finished_at || b.started_at || '';
+          return ta.localeCompare(tb);
+        });
         populateMetricSelector();
         updateChart();
       })
@@ -582,10 +615,9 @@
     }
   }
 
-  window.updateChart = function() {
-    const metricKey = document.getElementById('metric-select').value;
-    if (!metricKey) return;
+  let _chartMetricKey = null;
 
+  function _buildChartData(metricKey) {
     let filtered = allExperiments.filter(e => e.metrics && e.metrics[metricKey] !== undefined);
 
     if (document.getElementById('improvements-only').checked) {
@@ -606,29 +638,43 @@
       }
     }
 
-    const pointColors = filtered.map(e => ideaColorMap[e.idea_id]);
-    const labels = filtered.map(e => 'exp/' + e.id);
-    const datasets = [{
-      label: metricKey,
-      data: filtered.map(e => e.metrics[metricKey]),
-      borderColor: '#8b949e44',
-      pointBackgroundColor: pointColors,
-      pointBorderColor: pointColors,
-      pointRadius: 6,
-      pointHoverRadius: 10,
-      tension: 0,
-      fill: false,
-    }];
-    datasets[0]._expData = filtered;
+    return {
+      labels: filtered.map(e => 'exp/' + e.id + (e._running ? ' \u25B6' : '')),
+      pointColors: filtered.map(e => ideaColorMap[e.idea_id]),
+      pointBgColors: filtered.map(e => e._running ? 'transparent' : ideaColorMap[e.idea_id]),
+      pointStyles: filtered.map(e => e._running ? 'triangle' : 'circle'),
+      pointRadii: filtered.map(e => e._running ? 8 : 6),
+      pointBorderWidths: filtered.map(e => e._running ? 2.5 : 1),
+      values: filtered.map(e => e.metrics[metricKey]),
+      expData: filtered,
+    };
+  }
 
+  function _createChart(metricKey, chartData) {
     const ctx = document.getElementById('metrics-chart').getContext('2d');
-    if (metricsChart) metricsChart.destroy();
-    metricsChart = new Chart(ctx, {
+    return new Chart(ctx, {
       type: 'line',
-      data: { labels, datasets },
+      data: {
+        labels: chartData.labels,
+        datasets: [{
+          label: metricKey,
+          data: chartData.values,
+          borderColor: '#8b949e44',
+          pointBackgroundColor: chartData.pointBgColors,
+          pointBorderColor: chartData.pointColors,
+          pointBorderWidth: chartData.pointBorderWidths,
+          pointStyle: chartData.pointStyles,
+          pointRadius: chartData.pointRadii,
+          pointHoverRadius: 10,
+          tension: 0,
+          fill: false,
+          _expData: chartData.expData,
+        }],
+      },
       options: {
         responsive: true,
         maintainAspectRatio: false,
+        animation: { duration: 400 },
         scales: {
           x: {
             display: true,
@@ -654,10 +700,12 @@
                 return 'idea #' + d.idea_id + ': ' + ((allIdeas[d.idea_id] || {}).description || d.idea_description || '');
               },
               label: function(item) {
+                const mk = item.dataset.label;
                 const d = item.dataset._expData[item.dataIndex];
                 return [
-                  metricKey + ': ' + item.raw,
+                  mk + ': ' + item.raw,
                   'exp/' + d.id + ': ' + (d.description || ''),
+                  d._running ? '\u25B6 running (from progress)' : '',
                   d.runtime ? 'runtime: ' + d.runtime : '',
                   d.finished_at ? 'at ' + new Date(d.finished_at).toLocaleString() : '',
                 ].filter(Boolean);
@@ -667,6 +715,33 @@
         },
       },
     });
+  }
+
+  window.updateChart = function() {
+    const metricKey = document.getElementById('metric-select').value;
+    if (!metricKey) return;
+
+    const chartData = _buildChartData(metricKey);
+
+    // If chart exists and same metric key, update in-place (no flicker)
+    if (metricsChart && _chartMetricKey === metricKey) {
+      const ds = metricsChart.data.datasets[0];
+      ds.data = chartData.values;
+      ds.pointBackgroundColor = chartData.pointBgColors;
+      ds.pointBorderColor = chartData.pointColors;
+      ds.pointBorderWidth = chartData.pointBorderWidths;
+      ds.pointStyle = chartData.pointStyles;
+      ds.pointRadius = chartData.pointRadii;
+      ds._expData = chartData.expData;
+      metricsChart.data.labels = chartData.labels;
+      metricsChart.update('none');
+      return;
+    }
+
+    // Different metric or first render — (re)create chart
+    if (metricsChart) metricsChart.destroy();
+    _chartMetricKey = metricKey;
+    metricsChart = _createChart(metricKey, chartData);
   };
 
   // --- Detail panel ---
@@ -724,6 +799,9 @@
         html += '<div class="exp-item">';
         html += '<div class="exp-header"><span class="exp-id">exp/' + e.id + '</span>' + badgeFor(e.status) + '</div>';
         html += '<div class="exp-desc">' + escapeHtml(e.description) + '</div>';
+        if (e.status === 'running') {
+          html += '<div class="exp-progress" id="progress-' + e.id + '">loading progress...</div>';
+        }
         if (e.metrics && Object.keys(e.metrics).length) {
           html += '<div class="exp-metrics">metrics: ' + escapeHtml(JSON.stringify(e.metrics)) + '</div>';
         }
@@ -741,9 +819,59 @@
     }
 
     document.getElementById('detail-content').innerHTML = html;
+
+    // Fetch progress for running experiments
+    const runningIds = experiments.filter(e => e.status === 'running').map(e => e.id);
+    runningIds.forEach(fetchProgress);
+    startProgressPolling(runningIds);
+  }
+
+  function fetchProgress(expId) {
+    const el = document.getElementById('progress-' + expId);
+    if (!el) return;
+    fetch('/api/v1/experiments/' + expId + '/progress')
+      .then(r => r.json())
+      .then(data => {
+        if (!document.getElementById('progress-' + expId)) return;
+        if (!data.progress) {
+          el.textContent = 'running (no progress reported yet)';
+          return;
+        }
+        const p = data.progress;
+        let parts = [];
+        for (const [k, v] of Object.entries(p)) {
+          parts.push(escapeHtml(k) + ': <b>' + escapeHtml(String(v)) + '</b>');
+        }
+        let html = parts.join(' &middot; ');
+        // Show a progress bar if there's a percentage-like field
+        const pct = p.percent ?? p.pct ?? p.progress ?? (p.epoch && p.total_epochs ? Math.round(100 * p.epoch / p.total_epochs) : null);
+        if (pct !== null && pct !== undefined && typeof pct === 'number') {
+          html += '<div class="progress-bar"><div class="progress-fill" style="width:' + Math.min(100, Math.max(0, pct)) + '%"></div></div>';
+        }
+        el.innerHTML = html;
+      })
+      .catch(() => {
+        if (el) el.textContent = 'running';
+      });
+  }
+
+  let _progressInterval = null;
+  function startProgressPolling(expIds) {
+    stopProgressPolling();
+    if (!expIds.length) return;
+    _progressInterval = setInterval(function() {
+      // Stop if panel closed or no running experiments visible
+      const anyVisible = expIds.some(id => document.getElementById('progress-' + id));
+      if (!anyVisible) { stopProgressPolling(); return; }
+      expIds.forEach(fetchProgress);
+    }, 3000);
+  }
+  function stopProgressPolling() {
+    if (_progressInterval) { clearInterval(_progressInterval); _progressInterval = null; }
   }
 
   window.closePanel = function() {
+    stopProgressPolling();
     document.getElementById('detail-panel').classList.remove('open');
     selectedIdea = null;
     if (network) network.unselectAll();
