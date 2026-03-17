@@ -358,8 +358,16 @@ def get_experiment_log(exp_id: int, tail: int | None = None):
 # --- Wait ---
 
 @app.get("/api/v1/wait")
-async def wait_for_experiment(timeout: float = Query(default=3600, le=86400)):
-    result = await runner.wait_any(timeout=timeout)
+async def wait_for_experiment(
+    timeout: float = Query(default=3600, le=86400),
+    experiment_id: int | None = Query(default=None),
+    idea_id: int | None = Query(default=None),
+):
+    result = await runner.wait_any(
+        timeout=timeout,
+        experiment_id=experiment_id,
+        idea_id=idea_id,
+    )
     result["current_branch"] = get_current_branch(cwd=REPO_DIR)
     exp = result.get("experiment")
     if exp:

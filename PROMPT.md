@@ -102,9 +102,11 @@ All timestamps are ISO 8601. You can reconstruct the full timeline of an idea by
    ```
    The server runs the script in the repo directory (on the currently checked-out branch), streams stdout/stderr into `.log` in real-time, extracts the final JSON line on completion, and writes errors to `.err`.
 
-5. **Wait for any experiment to finish:**
+5. **Wait for an experiment to finish:**
    ```
-   GET /wait?timeout=3600
+   GET /wait?experiment_id=7            ← wait for a specific experiment (recommended)
+   GET /wait?idea_id=3                  ← wait for any experiment in this idea
+   GET /wait?timeout=3600               ← wait for any experiment (default timeout 3600s)
    → completed: {event: "completed", current_branch: "idea/1", idea_description: "...", experiment: {id, idea_id, metrics, meta, ...}}
    → failed:    {event: "failed", current_branch: "idea/1", idea_description: "...", experiment: {id, idea_id, error, ...}}
    → timeout:   {event: "timeout", current_branch: "idea/1", running: [list of still-running experiment ids]}

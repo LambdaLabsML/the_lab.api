@@ -108,26 +108,39 @@ class DevProxy:
             if name != "host":
                 headers[name] = value.decode()
 
-        # Forward to backend
-        try:
-            async with httpx.AsyncClient() as client:
-                resp = await client.request(
-                    method, url, headers=headers, content=body,
-                    timeout=httpx.Timeout(connect=5, read=86400, write=5, pool=5),
-                )
-        except httpx.ConnectError:
-            # Backend down — send 503
-            await send({"type": "http.response.start", "status": 503, "headers": [
-                [b"content-type", b"application/json"],
-            ]})
-            await send({"type": "http.response.body", "body": b'{"error": "backend reloading"}'})
-            return
+        # Retry safe methods if the backend dies mid-request (e.g. during reload).
+        # When the backend is killed, in-flight long-poll requests like /wait get a
+        # ReadError.  We wait for the reload to finish, then retry against the new
+        # backend.
+        max_retries = 2 if method in ("GET", "HEAD", "OPTIONS") else 0
 
-        # Send response back
-        resp_headers = [[k.encode(), v.encode()] for k, v in resp.headers.items()
-                        if k.lower() not in ("transfer-encoding",)]
-        await send({"type": "http.response.start", "status": resp.status_code, "headers": resp_headers})
-        await send({"type": "http.response.body", "body": resp.content})
+        for attempt in range(1 + max_retries):
+            try:
+                async with httpx.AsyncClient() as client:
+                    resp = await client.request(
+                        method, url, headers=headers, content=body,
+                        timeout=httpx.Timeout(connect=5, read=86400, write=5, pool=5),
+                    )
+                # Success — send response back
+                resp_headers = [[k.encode(), v.encode()] for k, v in resp.headers.items()
+                                if k.lower() not in ("transfer-encoding",)]
+                await send({"type": "http.response.start", "status": resp.status_code, "headers": resp_headers})
+                await send({"type": "http.response.body", "body": resp.content})
+                return
+            except httpx.RequestError:
+                if attempt < max_retries:
+                    # _reloading is cleared before stop_app(), so this blocks
+                    # until the new backend is up and healthy.
+                    await self._reloading.wait()
+                    await asyncio.sleep(0.5)
+                    continue
+                break
+
+        # All retries exhausted — backend is down
+        await send({"type": "http.response.start", "status": 503, "headers": [
+            [b"content-type", b"application/json"],
+        ]})
+        await send({"type": "http.response.body", "body": b'{"error": "backend unavailable after retry"}'})
 
     def asgi_app(self):
         """Return an ASGI app that proxies to the real server."""

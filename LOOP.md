@@ -9,7 +9,6 @@ revisit assumptions. An empty backlog means you need to think harder
 about what to try next, not that the work is done. The only reason to
 stop is if the user tells you to.
 
-
 ## 2. Orient
 
 Read `PROMPT.md` for the research goal, background, and setup.
@@ -22,13 +21,16 @@ GET /ideas/<id>       → full idea: experiments, notes, results
 ```
 
 ## 3. Work
+TODO: Merging
 
 ```
 POST /ideas/new              {parent_ids, description}      → create idea (+ branch)
 POST /ideas/<id>/checkout                                   → switch to idea's branch
 POST /ideas/<id>/experiments {description, script_content}   → create + write script
 POST /experiments/<id>/start                                 → run it
-GET  /wait?timeout=N                                        → block until next result
+GET  /wait?experiment_id=N                                   → block until this experiment finishes
+GET  /wait?idea_id=N                                         → block until any experiment in this idea finishes
+GET  /wait?timeout=N                                         → block until next result (any experiment)
 POST /ideas/<id>/note        {text, level}                   → record finding
 POST /ideas/<id>/conclude    {conclusion}                    → wrap up, then branch
 ```

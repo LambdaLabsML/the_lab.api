@@ -272,23 +272,43 @@ class ExperimentRunner:
             for exp in self._store.list_experiments_by_status(status):
                 self._seen.add(exp["id"])
 
-    async def wait_any(self, timeout: float = 3600) -> dict:
+    async def wait_any(
+        self,
+        timeout: float = 3600,
+        experiment_id: int | None = None,
+        idea_id: int | None = None,
+    ) -> dict:
+        """Block until an experiment finishes.
+
+        Optional filters:
+          experiment_id — only return when this specific experiment finishes
+          idea_id       — only return experiments belonging to this idea
+        """
         deadline = asyncio.get_event_loop().time() + timeout
         while True:
             # Check store for any finished experiments we haven't returned yet.
             # This catches results across server restarts and race conditions.
             for status in ("completed", "failed"):
                 for exp in self._store.list_experiments_by_status(status):
-                    if exp["id"] not in self._seen:
-                        self._seen.add(exp["id"])
-                        return {
-                            "event": exp["status"],
-                            "experiment": exp,
-                        }
+                    if exp["id"] in self._seen:
+                        continue
+                    if experiment_id is not None and exp["id"] != experiment_id:
+                        continue
+                    if idea_id is not None and exp.get("idea_id") != idea_id:
+                        continue
+                    self._seen.add(exp["id"])
+                    return {
+                        "event": exp["status"],
+                        "experiment": exp,
+                    }
 
             remaining = deadline - asyncio.get_event_loop().time()
             if remaining <= 0:
                 running = self._store.list_experiments_by_status("running")
+                if experiment_id is not None:
+                    running = [e for e in running if e["id"] == experiment_id]
+                if idea_id is not None:
+                    running = [e for e in running if e.get("idea_id") == idea_id]
                 return {
                     "event": "timeout",
                     "running": [e["id"] for e in running],
@@ -297,21 +317,11 @@ class ExperimentRunner:
             # Wait for queue notification OR poll every 5s (whichever comes first)
             poll_timeout = min(remaining, 5.0)
             try:
-                exp_id = await asyncio.wait_for(
+                await asyncio.wait_for(
                     self._finished_queue.get(), timeout=poll_timeout
                 )
             except asyncio.TimeoutError:
-                # No queue event — loop back and re-check store
-                continue
-
-            if exp_id in self._seen:
-                continue
-
-            self._seen.add(exp_id)
-            exp = self._store.get_experiment(exp_id)
-            if exp:
-                return {
-                    "event": exp["status"],
-                    "experiment": exp,
-                }
-            # Experiment vanished — loop and try again
+                pass
+            # In both cases (queue event or poll timeout), loop back and
+            # re-check the store. The queue is used purely as a wake-up
+            # signal; filtering happens in the store scan above.
