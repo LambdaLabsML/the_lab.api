@@ -38,7 +38,7 @@ All IDs are sequential integers (1, 2, 3, ...).
 Each idea is a git branch. The server manages branching automatically — you switch between ideas with checkout:
 
 - **`POST /ideas/new`** creates a new git branch (`idea/<id>`) from the parent idea's branch (or from `main`/`HEAD` for root ideas). Does **not** check it out.
-- **`POST /ideas/<id>/checkout`** auto-commits any uncommitted changes on the current branch, then checks out the idea's branch. This is how you switch between ideas.
+- **`POST /ideas/<id>/checkout`** saves all work on the current branch (auto-commit tracked changes, then stash anything remaining if checkout would conflict), then checks out the idea's branch. The response includes `auto_committed` and `stashed` flags so you know what happened. This is how you switch between ideas.
 - **`POST /ideas/new` with multiple parents** merges the parent branches. If there are merge conflicts, the creation fails and returns the conflicts for you to resolve.
 
 This means you can freely modify code as part of your experiments — each idea has its own branch. Always checkout an idea before running experiments on it.
@@ -67,11 +67,12 @@ All timestamps are ISO 8601. You can reconstruct the full timeline of an idea by
    → merge conflict: {status: "conflict", conflicts: ["path/to/file.py", ...]}
    ```
 
-2. **Checkout the idea** (auto-commits current changes, switches branch):
+2. **Checkout the idea** (saves current work, switches branch):
    ```
    POST /ideas/3/checkout
    → {status: "checked_out", branch: "idea/3", idea_description: "...", previous_branch: "idea/1", auto_committed: true}
    ```
+   The server first tries to commit all changes. If checkout still conflicts (untracked files differ across branches, commit hook failure, etc.), it stashes remaining changes and retries. When `stashed: true`, the stash is preserved on the previous branch.
 
 3. **Create an experiment** under the idea. You can pass the script inline or write it yourself:
    ```
@@ -108,6 +109,7 @@ All timestamps are ISO 8601. You can reconstruct the full timeline of an idea by
    → failed:    {event: "failed", current_branch: "idea/1", idea_description: "...", experiment: {id, idea_id, error, ...}}
    → timeout:   {event: "timeout", current_branch: "idea/1", running: [list of still-running experiment ids]}
    ```
+   **Tip:** always pass `experiment_id` to avoid getting stale results from unrelated experiments.
 
 6. **Take notes on the idea** (at any time — before, during, or after experiments):
    ```
@@ -129,7 +131,7 @@ All timestamps are ISO 8601. You can reconstruct the full timeline of an idea by
 | `GET /ideas/<id>` | Get idea with experiments and notes (`insight` + `milestone` + `observation`). |
 | `GET /ideas/<id>?notes=all` | Same but includes `debug` notes too. |
 | `GET /ideas/<id>/tree` | See ancestors and descendants with `insight` + `milestone` notes. |
-| `POST /ideas/<id>/checkout` | Auto-commit + switch to this idea's branch. |
+| `POST /ideas/<id>/checkout` | Save work (commit + stash if needed) and switch to this idea's branch. |
 | `POST /ideas/<id>/abandon` | Abandon an idea (with `{reason}`). |
 | `POST /ideas/<id>/reopen` | Reopen a concluded/abandoned idea (with `{reason}`). Old conclusion preserved as an `insight` note. |
 | `GET /backlog` | Overview of all active work + current branch. |

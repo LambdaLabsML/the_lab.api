@@ -77,6 +77,12 @@ def checkout(branch: str, cwd: str | Path | None = None):
 def checkout_idea(idea_id: int, cwd: str | Path | None = None) -> dict:
     """Auto-commit current changes and checkout an idea's branch.
 
+    Strategy:
+      1. Try to commit all changes (tracked + untracked via ``git add -A``).
+      2. Attempt checkout.
+      3. If checkout fails (untracked files conflict with target, commit hook
+         rejected the commit, etc.), stash everything remaining and retry.
+
     Returns a dict with info about what happened.
     """
     current = get_current_branch(cwd=cwd)
@@ -85,15 +91,67 @@ def checkout_idea(idea_id: int, cwd: str | Path | None = None) -> dict:
     if current == target:
         return {"status": "already_on_branch", "branch": target}
 
-    committed = auto_commit(cwd=cwd, message=f"auto-commit before switching to {target}")
-    checkout(target, cwd=cwd)
+    # 1. Commit all possible changes on the current branch.
+    committed = False
+    try:
+        committed = auto_commit(cwd=cwd, message=f"auto-commit before switching to {target}")
+    except GitError:
+        pass  # If commit fails (hook, no user config, etc.) we stash below.
+
+    # 2. Try clean checkout.
+    try:
+        checkout(target, cwd=cwd)
+        return {
+            "status": "checked_out",
+            "branch": target,
+            "previous_branch": current,
+            "auto_committed": committed,
+        }
+    except GitError:
+        pass
+
+    # 3. Checkout failed — stash remaining changes (untracked, ignored-but-
+    #    conflicting files, uncommitted edits the commit couldn't capture) and
+    #    retry.  --include-untracked covers new files that git add -A missed
+    #    (e.g. files ignored on this branch but tracked on the target).
+    stash_result = _run(
+        ["stash", "push", "--include-untracked", "-m",
+         f"auto-stash before switching to {target}"],
+        cwd=cwd, check=False,
+    )
+    stashed = (
+        stash_result.returncode == 0
+        and "No local changes" not in stash_result.stdout
+    )
+
+    checkout(target, cwd=cwd)  # Propagate if this still fails.
 
     return {
         "status": "checked_out",
         "branch": target,
         "previous_branch": current,
         "auto_committed": committed,
+        "stashed": stashed,
     }
+
+
+def _ensure_clean_checkout(branch: str, cwd: str | Path | None = None):
+    """Commit + stash to guarantee a clean checkout to *branch*."""
+    try:
+        auto_commit(cwd=cwd, message=f"auto-commit before switching to {branch}")
+    except GitError:
+        pass
+    try:
+        checkout(branch, cwd=cwd)
+        return
+    except GitError:
+        pass
+    _run(
+        ["stash", "push", "--include-untracked", "-m",
+         f"auto-stash before switching to {branch}"],
+        cwd=cwd, check=False,
+    )
+    checkout(branch, cwd=cwd)
 
 
 def create_branch_from_merge(
@@ -104,12 +162,10 @@ def create_branch_from_merge(
     Auto-commits, checks out first parent, creates branch, merges the rest.
     Returns None on success, or a list of conflicting file paths on failure.
     """
-    auto_commit(cwd=cwd)
-
     original_branch = get_current_branch(cwd=cwd)
 
-    # Checkout first parent and create branch from it
-    checkout(parent_branches[0], cwd=cwd)
+    # Checkout first parent (commit/stash current changes first)
+    _ensure_clean_checkout(parent_branches[0], cwd=cwd)
     _run(["checkout", "-b", new_branch], cwd=cwd)
 
     # Merge remaining parents
