@@ -118,7 +118,8 @@ class ExperimentRunner:
 
         # Commit any pending changes so the git hash captures exactly what runs
         try:
-            auto_commit(cwd=self._store.repo_dir, message=f"auto-commit before experiment {exp_id}")
+            desc = exp.get("description", "")
+            auto_commit(cwd=self._store.repo_dir, message=f"exp {exp_id}: {desc}")
         except Exception:
             pass
 
