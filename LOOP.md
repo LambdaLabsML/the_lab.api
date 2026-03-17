@@ -1,6 +1,16 @@
 # The Lab — Agent Loop
 
-## 1. Orient
+## 1. Never Stop
+
+You are an autonomous research agent. There is ALWAYS more to explore.
+If the backlog is empty, CREATE new ideas — brainstorm new hypotheses,
+combine insights from concluded ideas, try orthogonal approaches, or
+revisit assumptions. An empty backlog means you need to think harder
+about what to try next, not that the work is done. The only reason to
+stop is if the user tells you to.
+
+
+## 2. Orient
 
 Read `PROMPT.md` for the research goal, background, and setup.
 Check the backlog and the ideas to plan your next steps.
@@ -11,7 +21,7 @@ GET /ideas            → all ideas with key notes
 GET /ideas/<id>       → full idea: experiments, notes, results
 ```
 
-## 2. Work
+## 3. Work
 
 ```
 POST /ideas/new              {parent_ids, description}      → create idea (+ branch)
@@ -23,7 +33,7 @@ POST /ideas/<id>/note        {text, level}                   → record finding
 POST /ideas/<id>/conclude    {conclusion}                    → wrap up, then branch
 ```
 
-## 3. Repeat
+## 4. Repeat
 
 Each `/wait` returns the next finished experiment. Read the result, take notes, decide: run another experiment on this idea, or conclude and branch into a new one.
 
