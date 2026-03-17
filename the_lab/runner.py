@@ -9,6 +9,7 @@ import signal
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .git_ops import get_current_branch, get_head_commit
 from .store import Store
 
 
@@ -114,6 +115,16 @@ class ExperimentRunner:
             }
 
         os.chmod(script_path, os.stat(script_path).st_mode | 0o755)
+
+        # Record git state in experiment meta
+        try:
+            branch = get_current_branch(cwd=self._store.repo_dir)
+            commit = get_head_commit(cwd=self._store.repo_dir)
+            meta = {**exp.get("meta", {}), "git_branch": branch, "git_commit": commit}
+            self._store.update_experiment(exp_id, meta=meta)
+            exp["meta"] = meta
+        except Exception:
+            pass
 
         base = script_path.with_suffix("")
         log_path = base.with_suffix(".log")
@@ -264,6 +275,17 @@ class ExperimentRunner:
     async def wait_any(self, timeout: float = 3600) -> dict:
         deadline = asyncio.get_event_loop().time() + timeout
         while True:
+            # Check store for any finished experiments we haven't returned yet.
+            # This catches results across server restarts and race conditions.
+            for status in ("completed", "failed"):
+                for exp in self._store.list_experiments_by_status(status):
+                    if exp["id"] not in self._seen:
+                        self._seen.add(exp["id"])
+                        return {
+                            "event": exp["status"],
+                            "experiment": exp,
+                        }
+
             remaining = deadline - asyncio.get_event_loop().time()
             if remaining <= 0:
                 running = self._store.list_experiments_by_status("running")
@@ -271,18 +293,17 @@ class ExperimentRunner:
                     "event": "timeout",
                     "running": [e["id"] for e in running],
                 }
+
+            # Wait for queue notification OR poll every 5s (whichever comes first)
+            poll_timeout = min(remaining, 5.0)
             try:
                 exp_id = await asyncio.wait_for(
-                    self._finished_queue.get(), timeout=remaining
+                    self._finished_queue.get(), timeout=poll_timeout
                 )
             except asyncio.TimeoutError:
-                running = self._store.list_experiments_by_status("running")
-                return {
-                    "event": "timeout",
-                    "running": [e["id"] for e in running],
-                }
+                # No queue event — loop back and re-check store
+                continue
 
-            # Skip experiments already returned by a previous /wait call
             if exp_id in self._seen:
                 continue
 

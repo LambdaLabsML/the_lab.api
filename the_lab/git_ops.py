@@ -32,6 +32,12 @@ def get_current_branch(cwd: str | Path | None = None) -> str:
     return get_default_branch(cwd=cwd)
 
 
+def get_head_commit(cwd: str | Path | None = None) -> str:
+    """Get the short hash of HEAD."""
+    result = _run(["rev-parse", "--short", "HEAD"], cwd=cwd)
+    return result.stdout.strip()
+
+
 def branch_exists(branch: str, cwd: str | Path | None = None) -> bool:
     result = _run(["rev-parse", "--verify", branch], cwd=cwd, check=False)
     return result.returncode == 0

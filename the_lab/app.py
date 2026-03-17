@@ -112,24 +112,36 @@ def _idea_context(idea_id: int) -> dict:
 
 @app.post("/api/v1/ideas/new", status_code=201)
 def create_idea(req: NewIdeaRequest):
-    for pid in req.parent_ids:
+    # If no parents given, infer from current branch (idea/N → parent is N)
+    parent_ids = req.parent_ids
+    if not parent_ids:
+        current = get_current_branch(cwd=REPO_DIR)
+        if current.startswith("idea/"):
+            try:
+                current_idea_id = int(current.split("/")[1])
+                if store.get_idea(current_idea_id):
+                    parent_ids = [current_idea_id]
+            except (ValueError, IndexError):
+                pass
+
+    for pid in parent_ids:
         if not store.get_idea(pid):
             raise HTTPException(404, f"parent idea {pid} not found")
 
-    idea = store.create_idea(req.description, req.parent_ids, branch="")
+    idea = store.create_idea(req.description, parent_ids, branch="")
     idea_id = idea["id"]
     branch_name = f"idea/{idea_id}"
     idea["branch"] = branch_name
 
     try:
-        if len(req.parent_ids) == 0:
+        if len(parent_ids) == 0:
             base = get_default_branch(cwd=REPO_DIR)
             create_branch_from(branch_name, base, cwd=REPO_DIR)
-        elif len(req.parent_ids) == 1:
-            parent = store.get_idea(req.parent_ids[0])
+        elif len(parent_ids) == 1:
+            parent = store.get_idea(parent_ids[0])
             create_branch_from(branch_name, parent["branch"], cwd=REPO_DIR)
         else:
-            parent_branches = [store.get_idea(pid)["branch"] for pid in req.parent_ids]
+            parent_branches = [store.get_idea(pid)["branch"] for pid in parent_ids]
             conflicts = create_branch_from_merge(branch_name, parent_branches, cwd=REPO_DIR)
             if conflicts is not None:
                 return {"status": "conflict", "conflicts": conflicts}
@@ -391,7 +403,23 @@ def get_backlog():
 @app.get("/api/v1/graph")
 def get_graph():
     ideas = store.list_ideas()
-    nodes = [{"id": i["id"], "description": i["description"], "status": i["status"]} for i in ideas]
+    nodes = []
+    for i in ideas:
+        exps = store.list_experiments(i["id"])
+        has_running = any(e["status"] == "running" for e in exps)
+        # Time range: earliest start → latest finish (for timeline view)
+        starts = [e["started_at"] for e in exps if e.get("started_at")]
+        finishes = [e["finished_at"] for e in exps if e.get("finished_at")]
+        nodes.append({
+            "id": i["id"],
+            "description": i["description"],
+            "status": i["status"],
+            "has_running": has_running,
+            "created_at": i.get("created_at"),
+            "first_start": min(starts) if starts else i.get("created_at"),
+            "last_finish": max(finishes) if finishes else None,
+            "parent_ids": i.get("parent_ids", []),
+        })
     edges = []
     for idea in ideas:
         for pid in idea.get("parent_ids", []):

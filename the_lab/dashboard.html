@@ -6,6 +6,7 @@
 <title>The Lab — Dashboard</title>
 <script src="https://unpkg.com/vis-network@9.1.6/standalone/umd/vis-network.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
@@ -26,22 +27,12 @@
     gap: 24px;
     flex-shrink: 0;
     font-size: 13px;
+    flex-wrap: wrap;
   }
-  #topbar .title {
-    font-size: 15px;
-    font-weight: 700;
-    color: #58a6ff;
-    margin-right: 12px;
-  }
+  #topbar .title { font-size: 15px; font-weight: 700; color: #58a6ff; margin-right: 12px; }
   #topbar .stat { color: #8b949e; }
   #topbar .stat b { color: #c9d1d9; font-weight: 600; }
-  .badge {
-    display: inline-block;
-    padding: 2px 8px;
-    border-radius: 10px;
-    font-size: 11px;
-    font-weight: 600;
-  }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
   .badge-active { background: #0f5323; color: #3fb950; }
   .badge-concluded { background: #0c2d6b; color: #58a6ff; }
   .badge-abandoned { background: #5a1e23; color: #f85149; }
@@ -71,11 +62,10 @@
     background: #0d1117;
     border-bottom: 1px solid #30363d;
     overflow: hidden;
-    transition: height 0.3s ease;
     flex-shrink: 0;
   }
-  #chart-panel.collapsed { height: 0 !important; border: none; }
-  #chart-panel canvas { padding: 12px 20px; }
+  #chart-panel.collapsed { display: none; }
+  #chart-wrap { position: relative; height: 220px; padding: 0 20px 12px 20px; }
   #metric-selector {
     padding: 8px 20px 0 20px;
     font-size: 11px;
@@ -83,29 +73,42 @@
     display: flex;
     align-items: center;
     gap: 8px;
+    flex-wrap: wrap;
   }
   #metric-selector select {
-    background: #161b22;
-    color: #c9d1d9;
-    border: 1px solid #30363d;
-    padding: 2px 6px;
-    font-family: inherit;
-    font-size: 11px;
-    border-radius: 4px;
+    background: #161b22; color: #c9d1d9; border: 1px solid #30363d;
+    padding: 2px 6px; font-family: inherit; font-size: 11px; border-radius: 4px;
   }
 
-  #main {
+  #view-tabs {
+    background: #161b22;
+    border-bottom: 1px solid #30363d;
+    padding: 0 20px;
     display: flex;
-    flex: 1;
-    overflow: hidden;
+    gap: 0;
+    flex-shrink: 0;
   }
-  #graph-container {
-    flex: 1;
-    position: relative;
+  .view-tab {
+    padding: 8px 16px;
+    font-size: 12px;
+    color: #8b949e;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    user-select: none;
   }
+  .view-tab:hover { color: #c9d1d9; }
+  .view-tab.active { color: #58a6ff; border-bottom-color: #58a6ff; }
+
+  #main { display: flex; flex: 1; overflow: hidden; }
+  #graph-container { flex: 1; position: relative; }
   #graph { width: 100%; height: 100%; }
+  #timeline-container { flex: 1; position: relative; display: none; overflow: auto; padding: 16px; }
+  #timeline-container.active { display: block; }
+  #timeline-wrap { position: relative; min-height: 200px; }
+
   #detail-panel {
     width: 420px;
+    max-width: 100vw;
     background: #161b22;
     border-left: 1px solid #30363d;
     overflow-y: auto;
@@ -116,76 +119,76 @@
   }
   #detail-panel.open { display: block; }
   #detail-panel h2 {
-    font-size: 15px;
-    color: #58a6ff;
-    margin-bottom: 12px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
+    font-size: 15px; color: #58a6ff; margin-bottom: 12px;
+    display: flex; justify-content: space-between; align-items: center;
   }
-  #detail-panel h2 .close-btn {
-    cursor: pointer;
-    color: #8b949e;
-    font-size: 18px;
-    line-height: 1;
-  }
+  #detail-panel h2 .close-btn { cursor: pointer; color: #8b949e; font-size: 18px; line-height: 1; }
   #detail-panel h2 .close-btn:hover { color: #c9d1d9; }
   .detail-section { margin-bottom: 14px; }
-  .detail-section .label {
-    font-size: 11px;
-    text-transform: uppercase;
-    color: #8b949e;
-    margin-bottom: 4px;
-    letter-spacing: 0.5px;
-  }
-  .detail-section .value {
-    color: #c9d1d9;
-    line-height: 1.5;
-    word-break: break-word;
-  }
-  .note-item {
-    padding: 6px 8px;
-    margin-bottom: 4px;
-    border-radius: 4px;
-    border-left: 3px solid #30363d;
-    background: #0d1117;
-    font-size: 12px;
-  }
+  .detail-section .label { font-size: 11px; text-transform: uppercase; color: #8b949e; margin-bottom: 4px; letter-spacing: 0.5px; }
+  .detail-section .value { color: #c9d1d9; line-height: 1.5; word-break: break-word; }
+  .note-item { padding: 6px 8px; margin-bottom: 4px; border-radius: 4px; border-left: 3px solid #30363d; background: #0d1117; font-size: 12px; }
   .note-item.insight { border-left-color: #58a6ff; }
   .note-item.milestone { border-left-color: #d29922; }
   .note-item.observation { border-left-color: #8b949e; }
   .note-item.debug { border-left-color: #f85149; }
-  .note-item .note-meta {
-    font-size: 10px;
-    color: #8b949e;
-    margin-bottom: 2px;
-  }
-  .exp-item {
-    padding: 8px;
-    margin-bottom: 6px;
-    border-radius: 4px;
-    background: #0d1117;
-    border: 1px solid #30363d;
-  }
-  .exp-item .exp-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 4px;
-  }
+  .note-item .note-meta { font-size: 10px; color: #8b949e; margin-bottom: 2px; }
+  .exp-item { padding: 8px; margin-bottom: 6px; border-radius: 4px; background: #0d1117; border: 1px solid #30363d; }
+  .exp-item .exp-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
   .exp-item .exp-id { font-weight: 600; color: #58a6ff; font-size: 12px; }
   .exp-item .exp-desc { margin-bottom: 4px; line-height: 1.4; }
   .exp-item .exp-meta { font-size: 11px; color: #8b949e; }
   .exp-item .exp-metrics { font-size: 11px; color: #d2a8ff; margin-top: 3px; }
   .exp-item .exp-timestamps { font-size: 10px; color: #484f58; margin-top: 3px; }
-  #hint {
-    position: absolute;
-    bottom: 16px;
-    left: 50%;
-    transform: translateX(-50%);
-    color: #484f58;
-    font-size: 12px;
-    pointer-events: none;
+  #hint { position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%); color: #484f58; font-size: 12px; pointer-events: none; }
+
+  #log-container { flex: 1; display: none; overflow-y: auto; padding: 0; flex-direction: column; }
+  #log-container.active { display: flex; }
+  #log-filters {
+    padding: 8px 16px; background: #161b22; border-bottom: 1px solid #30363d;
+    display: flex; gap: 12px; flex-wrap: wrap; align-items: center; font-size: 11px; flex-shrink: 0;
+  }
+  #log-filters label { cursor: pointer; display: flex; align-items: center; gap: 4px; }
+  #log-filters .filter-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  #log-entries { flex: 1; overflow-y: auto; padding: 8px 16px; }
+  .log-entry {
+    padding: 8px 10px; margin-bottom: 4px; border-radius: 4px;
+    border-left: 3px solid #30363d; background: #161b22; font-size: 12px;
+  }
+  .log-entry .log-time { font-size: 10px; color: #484f58; margin-right: 8px; }
+  .log-entry .log-type { font-size: 10px; font-weight: 600; margin-right: 6px; }
+  .log-entry .log-idea { font-size: 10px; color: #8b949e; }
+  .log-entry .log-header { margin-bottom: 3px; display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+  .log-entry .log-body { color: #c9d1d9; line-height: 1.4; }
+  .log-entry .log-metrics { font-size: 11px; color: #d2a8ff; margin-top: 3px; }
+  .log-entry.type-idea { border-left-color: #58a6ff; }
+  .log-entry.type-idea .log-type { color: #58a6ff; }
+  .log-entry.type-experiment { border-left-color: #3fb950; }
+  .log-entry.type-experiment .log-type { color: #3fb950; }
+  .log-entry.type-experiment.status-failed { border-left-color: #f85149; }
+  .log-entry.type-experiment.status-failed .log-type { color: #f85149; }
+  .log-entry.type-experiment.status-running { border-left-color: #d29922; }
+  .log-entry.type-experiment.status-running .log-type { color: #d29922; }
+  .log-entry.type-note-insight { border-left-color: #58a6ff; }
+  .log-entry.type-note-insight .log-type { color: #58a6ff; }
+  .log-entry.type-note-milestone { border-left-color: #d29922; }
+  .log-entry.type-note-milestone .log-type { color: #d29922; }
+  .log-entry.type-note-observation { border-left-color: #8b949e; }
+  .log-entry.type-note-observation .log-type { color: #8b949e; }
+  .log-entry.type-note-debug { border-left-color: #f85149; }
+  .log-entry.type-note-debug .log-type { color: #f85149; }
+
+  /* Mobile: detail panel as overlay */
+  @media (max-width: 800px) {
+    #detail-panel {
+      position: fixed;
+      top: 0; right: 0; bottom: 0;
+      width: 100vw;
+      z-index: 100;
+      border-left: none;
+    }
+    #topbar { gap: 12px; padding: 8px 12px; font-size: 12px; }
+    #topbar .title { font-size: 13px; margin-right: 4px; }
   }
 </style>
 </head>
@@ -198,18 +201,38 @@
     <span class="stat">Branch: <b id="stat-branch">--</b></span>
   </div>
   <div id="chart-toggle" onclick="toggleChart()">
-    <span class="arrow" id="chart-arrow">&#9654;</span> Metrics over time
+    <span class="arrow open" id="chart-arrow">&#9654;</span> Metrics over time
   </div>
-  <div id="chart-panel" class="collapsed">
+  <div id="chart-panel">
     <div id="metric-selector">
       Metric: <select id="metric-select" onchange="updateChart()"></select>
+      <label style="margin-left:12px;cursor:pointer"><input type="checkbox" id="improvements-only" onchange="updateChart()"> improvements only</label>
     </div>
-    <canvas id="metrics-chart" height="180"></canvas>
+    <div id="chart-wrap"><canvas id="metrics-chart"></canvas></div>
+  </div>
+  <div id="view-tabs">
+    <div class="view-tab active" data-view="dag" onclick="switchView('dag')">DAG</div>
+    <div class="view-tab" data-view="timeline" onclick="switchView('timeline')">Timeline</div>
+    <div class="view-tab" data-view="log" onclick="switchView('log')">Log</div>
   </div>
   <div id="main">
     <div id="graph-container">
       <div id="graph"></div>
       <div id="hint">Click a node to view idea details</div>
+    </div>
+    <div id="timeline-container">
+      <div id="timeline-wrap"><canvas id="timeline-chart"></canvas></div>
+    </div>
+    <div id="log-container">
+      <div id="log-filters">
+        <label><input type="checkbox" data-filter="idea" checked><span class="filter-dot" style="background:#58a6ff"></span> Ideas</label>
+        <label><input type="checkbox" data-filter="experiment" checked><span class="filter-dot" style="background:#3fb950"></span> Experiments</label>
+        <label><input type="checkbox" data-filter="note-insight" checked><span class="filter-dot" style="background:#58a6ff"></span> Insight</label>
+        <label><input type="checkbox" data-filter="note-milestone" checked><span class="filter-dot" style="background:#d29922"></span> Milestone</label>
+        <label><input type="checkbox" data-filter="note-observation" checked><span class="filter-dot" style="background:#8b949e"></span> Observation</label>
+        <label><input type="checkbox" data-filter="note-debug"><span class="filter-dot" style="background:#f85149"></span> Debug</label>
+      </div>
+      <div id="log-entries"></div>
     </div>
     <div id="detail-panel">
       <div id="detail-content"></div>
@@ -220,11 +243,15 @@
 (function() {
   const STATUS_COLORS = {
     active:    { bg: '#238636', border: '#3fb950', font: '#ffffff' },
+    running:   { bg: '#6e4b00', border: '#d29922', font: '#ffffff' },
     concluded: { bg: '#1f6feb', border: '#58a6ff', font: '#ffffff' },
     abandoned: { bg: '#da3633', border: '#f85149', font: '#ffffff' },
   };
 
-  // Distinct colors for ideas in the chart
+  const STATUS_BAR_COLORS = {
+    active: '#3fb950', running: '#d29922', concluded: '#58a6ff', abandoned: '#f85149',
+  };
+
   const IDEA_PALETTE = [
     '#58a6ff', '#3fb950', '#d29922', '#f85149', '#d2a8ff',
     '#79c0ff', '#56d364', '#e3b341', '#ff7b72', '#bc8cff',
@@ -236,11 +263,26 @@
   let edgesDS = new vis.DataSet();
   let selectedIdea = null;
   let metricsChart = null;
-  let allExperiments = [];  // cached for chart
-  let allIdeas = {};        // id -> idea info
-  let chartOpen = false;
+  let timelineChart = null;
+  let allExperiments = [];
+  let allIdeas = {};
+  let chartOpen = true;
+  let currentView = 'dag';
+  let graphData = null;
 
-  // --- Graph ---
+  // --- View switching ---
+
+  window.switchView = function(view) {
+    currentView = view;
+    document.querySelectorAll('.view-tab').forEach(t => t.classList.toggle('active', t.dataset.view === view));
+    document.getElementById('graph-container').style.display = view === 'dag' ? '' : 'none';
+    document.getElementById('timeline-container').classList.toggle('active', view === 'timeline');
+    document.getElementById('log-container').classList.toggle('active', view === 'log');
+    if (view === 'timeline' && graphData) updateTimeline(graphData);
+    if (view === 'log') loadLog();
+  };
+
+  // --- DAG Graph ---
 
   function initGraph() {
     const container = document.getElementById('graph');
@@ -261,19 +303,12 @@
       layout: {
         hierarchical: {
           enabled: true, direction: 'UD', sortMethod: 'directed',
-          levelSeparation: 120, nodeSpacing: 250,
-          treeSpacing: 200,
+          levelSeparation: 120, nodeSpacing: 250, treeSpacing: 200,
         }
       },
       physics: {
         enabled: true,
-        hierarchicalRepulsion: {
-          nodeDistance: 200,
-          centralGravity: 0.0,
-          springLength: 150,
-          springConstant: 0.01,
-          damping: 0.09,
-        },
+        hierarchicalRepulsion: { nodeDistance: 200, centralGravity: 0.0, springLength: 150, springConstant: 0.01, damping: 0.09 },
         solver: 'hierarchicalRepulsion',
         stabilization: { iterations: 100 },
       },
@@ -285,17 +320,16 @@
     });
   }
 
-  function truncate(s, max) {
-    if (!s) return '';
-    return s.length > max ? s.substring(0, max) + '...' : s;
-  }
+  function truncate(s, max) { return (!s) ? '' : s.length > max ? s.substring(0, max) + '...' : s; }
 
   function updateGraph(data) {
+    graphData = data;
     const nodeIds = new Set(data.nodes.map(n => n.id));
     const newNodes = [], updateNodes = [];
     for (const n of data.nodes) {
       allIdeas[n.id] = n;
-      const c = STATUS_COLORS[n.status] || STATUS_COLORS.active;
+      const displayStatus = n.has_running ? 'running' : n.status;
+      const c = STATUS_COLORS[displayStatus] || STATUS_COLORS.active;
       const nodeData = {
         id: n.id,
         label: '#' + n.id + ': ' + truncate(n.description, 30),
@@ -304,8 +338,7 @@
         font: { color: c.font },
         title: n.description,
       };
-      if (nodesDS.get(n.id)) updateNodes.push(nodeData);
-      else newNodes.push(nodeData);
+      if (nodesDS.get(n.id)) updateNodes.push(nodeData); else newNodes.push(nodeData);
     }
     const toRemove = nodesDS.getIds().filter(id => !nodeIds.has(id));
     if (toRemove.length) nodesDS.remove(toRemove);
@@ -323,7 +356,159 @@
     const staleEdges = Object.values(existingEdges);
     if (staleEdges.length) edgesDS.remove(staleEdges);
     if (newEdges.length) edgesDS.add(newEdges);
+
+    if (currentView === 'timeline') updateTimeline(data);
   }
+
+  // --- Timeline ---
+
+  let _timelineNodes = [];
+
+  function updateTimeline(data) {
+    const nodes = data.nodes.filter(n => n.first_start);
+    if (!nodes.length) return;
+    nodes.sort((a, b) => (a.first_start || '').localeCompare(b.first_start || ''));
+    _timelineNodes = nodes;
+
+    const canvas = document.getElementById('timeline-chart');
+    const wrapEl = document.getElementById('timeline-wrap');
+    const rowH = 36, labelW = 220, padTop = 30, padRight = 20, padBottom = 40;
+    const h = padTop + nodes.length * rowH + padBottom;
+    wrapEl.style.height = h + 'px';
+    canvas.width = wrapEl.clientWidth || 800;
+    canvas.height = h;
+
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Time range
+    const allStarts = nodes.map(n => new Date(n.first_start).getTime());
+    const allEnds = nodes.map(n => {
+      if (n.last_finish) return new Date(n.last_finish).getTime();
+      if (n.has_running) return Date.now();
+      return new Date(n.first_start).getTime() + 60000;
+    });
+    const tMin = Math.min(...allStarts) - 60000;
+    const tMax = Math.max(...allEnds) + 60000;
+    const chartW = canvas.width - labelW - padRight;
+
+    function tToX(t) { return labelW + (t - tMin) / (tMax - tMin) * chartW; }
+
+    // Draw time axis
+    ctx.strokeStyle = '#30363d';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(labelW, h - padBottom);
+    ctx.lineTo(canvas.width - padRight, h - padBottom);
+    ctx.stroke();
+
+    // Time ticks
+    const range = tMax - tMin;
+    let tickInterval;
+    if (range < 600000) tickInterval = 60000;        // < 10m: every 1m
+    else if (range < 3600000) tickInterval = 300000;  // < 1h: every 5m
+    else if (range < 86400000) tickInterval = 3600000; // < 1d: every 1h
+    else tickInterval = 86400000;                      // every day
+
+    const firstTick = Math.ceil(tMin / tickInterval) * tickInterval;
+    ctx.fillStyle = '#8b949e';
+    ctx.font = '10px SF Mono, Fira Code, Consolas, monospace';
+    ctx.textAlign = 'center';
+    for (let t = firstTick; t <= tMax; t += tickInterval) {
+      const x = tToX(t);
+      ctx.strokeStyle = '#21262d';
+      ctx.beginPath();
+      ctx.moveTo(x, padTop);
+      ctx.lineTo(x, h - padBottom);
+      ctx.stroke();
+
+      const d = new Date(t);
+      let label;
+      if (tickInterval >= 86400000) label = d.toLocaleDateString(undefined, {month:'short', day:'numeric'});
+      else label = d.toLocaleTimeString(undefined, {hour:'2-digit', minute:'2-digit'});
+      ctx.fillText(label, x, h - padBottom + 16);
+    }
+
+    // Draw dependency arrows first (behind bars)
+    for (const n of nodes) {
+      for (const pid of (n.parent_ids || [])) {
+        const fromIdx = nodes.findIndex(p => p.id === pid);
+        const toIdx = nodes.indexOf(n);
+        if (fromIdx < 0) continue;
+        const fromNode = nodes[fromIdx];
+        const fromEnd = tToX(fromNode.last_finish ? new Date(fromNode.last_finish).getTime() : Date.now());
+        const fromY = padTop + fromIdx * rowH + rowH / 2;
+        const toStart = tToX(new Date(n.first_start).getTime());
+        const toY = padTop + toIdx * rowH + rowH / 2;
+
+        ctx.save();
+        ctx.strokeStyle = '#484f58';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.moveTo(fromEnd, fromY);
+        ctx.lineTo(toStart, toY);
+        ctx.stroke();
+        const angle = Math.atan2(toY - fromY, toStart - fromEnd);
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.moveTo(toStart, toY);
+        ctx.lineTo(toStart - 6 * Math.cos(angle - 0.4), toY - 6 * Math.sin(angle - 0.4));
+        ctx.moveTo(toStart, toY);
+        ctx.lineTo(toStart - 6 * Math.cos(angle + 0.4), toY - 6 * Math.sin(angle + 0.4));
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+
+    // Draw bars and labels
+    for (let i = 0; i < nodes.length; i++) {
+      const n = nodes[i];
+      const y = padTop + i * rowH;
+      const barH = rowH * 0.6;
+      const barY = y + (rowH - barH) / 2;
+      const start = new Date(n.first_start).getTime();
+      const end = n.last_finish ? new Date(n.last_finish).getTime() : (n.has_running ? Date.now() : start + 60000);
+      const x1 = tToX(start);
+      const x2 = tToX(end);
+      const barW = Math.max(x2 - x1, 4);
+
+      const status = n.has_running ? 'running' : n.status;
+      const color = STATUS_BAR_COLORS[status] || STATUS_BAR_COLORS.active;
+
+      // Bar
+      ctx.fillStyle = color + 'aa';
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.roundRect(x1, barY, barW, barH, 3);
+      ctx.fill();
+      ctx.stroke();
+
+      // Label
+      ctx.fillStyle = '#c9d1d9';
+      ctx.font = '11px SF Mono, Fira Code, Consolas, monospace';
+      ctx.textAlign = 'right';
+      ctx.fillText('#' + n.id + ': ' + truncate(n.description, 25), labelW - 8, y + rowH / 2 + 4);
+    }
+
+    // Store node positions for click detection
+    canvas._nodes = nodes;
+    canvas._rowH = rowH;
+    canvas._padTop = padTop;
+  }
+
+  // Click handler for timeline canvas
+  document.getElementById('timeline-chart').addEventListener('click', function(e) {
+    const rect = this.getBoundingClientRect();
+    const y = e.clientY - rect.top;
+    const nodes = this._nodes;
+    if (!nodes) return;
+    const idx = Math.floor((y - this._padTop) / this._rowH);
+    if (idx >= 0 && idx < nodes.length) {
+      loadIdeaDetail(nodes[idx].id);
+    }
+  });
 
   // --- Backlog ---
 
@@ -334,7 +519,7 @@
     document.getElementById('stat-branch').textContent = data.current_branch || '--';
   }
 
-  // --- Chart ---
+  // --- Metrics Chart ---
 
   window.toggleChart = function() {
     chartOpen = !chartOpen;
@@ -342,7 +527,6 @@
     const arrow = document.getElementById('chart-arrow');
     if (chartOpen) {
       panel.classList.remove('collapsed');
-      panel.style.height = '240px';
       arrow.classList.add('open');
       loadChartData();
     } else {
@@ -352,7 +536,6 @@
   };
 
   function loadChartData() {
-    // Fetch all ideas, then all their experiments
     fetch('/api/v1/ideas')
       .then(r => r.json())
       .then(ideas => {
@@ -368,15 +551,10 @@
         for (const { idea, experiments } of results) {
           for (const exp of experiments) {
             if (exp.status === 'completed' && exp.metrics) {
-              allExperiments.push({
-                ...exp,
-                idea_description: idea.description,
-                idea_status: idea.status,
-              });
+              allExperiments.push({ ...exp, idea_description: idea.description, idea_status: idea.status });
             }
           }
         }
-        // Sort by finished_at
         allExperiments.sort((a, b) => (a.finished_at || '').localeCompare(b.finished_at || ''));
         populateMetricSelector();
         updateChart();
@@ -387,25 +565,20 @@
   function populateMetricSelector() {
     const metricKeys = new Set();
     for (const exp of allExperiments) {
-      if (exp.metrics) {
-        for (const k of Object.keys(exp.metrics)) metricKeys.add(k);
-      }
+      if (exp.metrics) { for (const k of Object.keys(exp.metrics)) metricKeys.add(k); }
     }
     const select = document.getElementById('metric-select');
     const prev = select.value;
     select.innerHTML = '';
     for (const k of [...metricKeys].sort()) {
       const opt = document.createElement('option');
-      opt.value = k;
-      opt.textContent = k;
-      select.appendChild(opt);
+      opt.value = k; opt.textContent = k; select.appendChild(opt);
     }
-    // Try to keep previous selection, or pick first one with "acc" in name
-    if (prev && metricKeys.has(prev)) {
-      select.value = prev;
-    } else {
-      const accKey = [...metricKeys].find(k => k.toLowerCase().includes('acc'));
-      if (accKey) select.value = accKey;
+    if (prev && metricKeys.has(prev)) { select.value = prev; }
+    else {
+      const preferred = ['accuracy_per_mtoken', 'agent_accuracy', 'accuracy'];
+      const match = preferred.find(k => metricKeys.has(k));
+      if (match) select.value = match;
     }
   }
 
@@ -413,61 +586,53 @@
     const metricKey = document.getElementById('metric-select').value;
     if (!metricKey) return;
 
-    // Group by idea_id
-    const byIdea = {};
-    for (const exp of allExperiments) {
-      if (exp.metrics && exp.metrics[metricKey] !== undefined) {
-        if (!byIdea[exp.idea_id]) byIdea[exp.idea_id] = [];
-        byIdea[exp.idea_id].push(exp);
-      }
-    }
+    let filtered = allExperiments.filter(e => e.metrics && e.metrics[metricKey] !== undefined);
 
-    // Build datasets — one per idea, plotted on a shared x-axis (experiment order)
-    // We use a global experiment index as x so all ideas share the same timeline
-    let globalIndex = 0;
-    const indexMap = {};  // exp.id -> global index
-    for (const exp of allExperiments) {
-      if (exp.metrics && exp.metrics[metricKey] !== undefined) {
-        indexMap[exp.id] = globalIndex++;
-      }
-    }
-
-    const datasets = [];
-    let colorIdx = 0;
-    for (const [ideaId, exps] of Object.entries(byIdea)) {
-      const color = IDEA_PALETTE[colorIdx % IDEA_PALETTE.length];
-      const idea = allIdeas[ideaId] || {};
-      datasets.push({
-        label: '#' + ideaId + ': ' + truncate(idea.description || exps[0].idea_description || '', 30),
-        data: exps.map(e => ({
-          x: indexMap[e.id],
-          y: e.metrics[metricKey],
-          exp: e,
-        })),
-        borderColor: color,
-        backgroundColor: color + '33',
-        pointBackgroundColor: color,
-        pointRadius: 5,
-        pointHoverRadius: 8,
-        tension: 0.3,
-        fill: false,
+    if (document.getElementById('improvements-only').checked) {
+      let best = -Infinity;
+      filtered = filtered.filter(e => {
+        const v = e.metrics[metricKey];
+        if (v > best) { best = v; return true; }
+        return false;
       });
-      colorIdx++;
     }
+
+    const ideaColorMap = {};
+    let colorIdx = 0;
+    for (const exp of filtered) {
+      if (!(exp.idea_id in ideaColorMap)) {
+        ideaColorMap[exp.idea_id] = IDEA_PALETTE[colorIdx % IDEA_PALETTE.length];
+        colorIdx++;
+      }
+    }
+
+    const pointColors = filtered.map(e => ideaColorMap[e.idea_id]);
+    const labels = filtered.map(e => 'exp/' + e.id);
+    const datasets = [{
+      label: metricKey,
+      data: filtered.map(e => e.metrics[metricKey]),
+      borderColor: '#8b949e44',
+      pointBackgroundColor: pointColors,
+      pointBorderColor: pointColors,
+      pointRadius: 6,
+      pointHoverRadius: 10,
+      tension: 0,
+      fill: false,
+    }];
+    datasets[0]._expData = filtered;
 
     const ctx = document.getElementById('metrics-chart').getContext('2d');
     if (metricsChart) metricsChart.destroy();
     metricsChart = new Chart(ctx, {
       type: 'line',
-      data: { datasets },
+      data: { labels, datasets },
       options: {
         responsive: true,
         maintainAspectRatio: false,
         scales: {
           x: {
-            type: 'linear',
-            title: { display: true, text: 'Experiment (chronological)', color: '#8b949e', font: { size: 10 } },
-            ticks: { color: '#484f58', stepSize: 1, font: { size: 10 } },
+            display: true,
+            ticks: { color: '#8b949e', font: { size: 10, family: 'SF Mono, Fira Code, Consolas, monospace' }, autoSkip: false },
             grid: { color: '#21262d' },
           },
           y: {
@@ -477,27 +642,23 @@
           },
         },
         plugins: {
-          legend: {
-            labels: { color: '#8b949e', font: { family: 'SF Mono, Fira Code, Consolas, monospace', size: 10 } },
-          },
+          legend: { display: false },
           tooltip: {
-            backgroundColor: '#161b22',
-            titleColor: '#58a6ff',
-            bodyColor: '#c9d1d9',
-            borderColor: '#30363d',
-            borderWidth: 1,
+            backgroundColor: '#161b22', titleColor: '#58a6ff', bodyColor: '#c9d1d9',
+            borderColor: '#30363d', borderWidth: 1,
             titleFont: { family: 'SF Mono, Fira Code, Consolas, monospace', size: 11 },
             bodyFont: { family: 'SF Mono, Fira Code, Consolas, monospace', size: 11 },
             callbacks: {
               title: function(items) {
-                const d = items[0].raw.exp;
-                return '#' + d.idea_id + ': ' + (allIdeas[d.idea_id] || {}).description || d.idea_description || '';
+                const d = items[0].dataset._expData[items[0].dataIndex];
+                return 'idea #' + d.idea_id + ': ' + ((allIdeas[d.idea_id] || {}).description || d.idea_description || '');
               },
               label: function(item) {
-                const d = item.raw.exp;
+                const d = item.dataset._expData[item.dataIndex];
                 return [
-                  metricKey + ': ' + item.raw.y,
+                  metricKey + ': ' + item.raw,
                   'exp/' + d.id + ': ' + (d.description || ''),
+                  d.runtime ? 'runtime: ' + d.runtime : '',
                   d.finished_at ? 'at ' + new Date(d.finished_at).toLocaleString() : '',
                 ].filter(Boolean);
               },
@@ -510,15 +671,11 @@
 
   // --- Detail panel ---
 
-  function badgeFor(status) {
-    return '<span class="badge badge-' + status + '">' + status + '</span>';
-  }
+  function badgeFor(status) { return '<span class="badge badge-' + status + '">' + status + '</span>'; }
 
   function escapeHtml(s) {
     if (!s) return '';
-    const d = document.createElement('div');
-    d.textContent = s;
-    return d.innerHTML;
+    const d = document.createElement('div'); d.textContent = s; return d.innerHTML;
   }
 
   function formatTime(iso) {
@@ -577,6 +734,7 @@
         html += 'created: ' + formatTime(e.created_at);
         if (e.started_at) html += ' | started: ' + formatTime(e.started_at);
         if (e.finished_at) html += ' | finished: ' + formatTime(e.finished_at);
+        if (e.runtime) html += ' | runtime: ' + e.runtime;
         html += '</div></div>';
       }
       html += '</div>';
@@ -591,22 +749,123 @@
     if (network) network.unselectAll();
   };
 
+  // --- Log view ---
+
+  let logEntries = [];
+
+  function loadLog() {
+    fetch('/api/v1/ideas')
+      .then(r => r.json())
+      .then(ideas => {
+        const promises = ideas.map(idea =>
+          fetch('/api/v1/ideas/' + idea.id + '?notes=all')
+            .then(r => r.json())
+            .then(full => ({ idea: full, experiments: full.experiments || [], notes: full.notes || [] }))
+        );
+        return Promise.all(promises);
+      })
+      .then(results => {
+        logEntries = [];
+        for (const { idea, experiments, notes } of results) {
+          // Idea created
+          logEntries.push({
+            type: 'idea',
+            time: idea.created_at,
+            ideaId: idea.id,
+            title: 'Idea #' + idea.id + ' created',
+            body: idea.description,
+            status: idea.status,
+            extra: idea.conclusion ? 'Conclusion: ' + idea.conclusion : '',
+          });
+
+          // Experiments
+          for (const e of experiments) {
+            const t = e.finished_at || e.started_at || e.created_at;
+            logEntries.push({
+              type: 'experiment',
+              time: t,
+              ideaId: idea.id,
+              title: 'exp/' + e.id + (e.status === 'completed' ? ' completed' : e.status === 'failed' ? ' failed' : e.status === 'running' ? ' running' : ' ' + e.status),
+              body: e.description,
+              status: e.status,
+              metrics: e.metrics,
+              runtime: e.runtime,
+            });
+          }
+
+          // Notes
+          for (const n of notes) {
+            logEntries.push({
+              type: 'note-' + (n.level || 'observation'),
+              time: n.created_at,
+              ideaId: idea.id,
+              title: (n.level || 'observation'),
+              body: n.text,
+            });
+          }
+        }
+
+        logEntries.sort((a, b) => (b.time || '').localeCompare(a.time || ''));
+        renderLog();
+      })
+      .catch(() => {});
+  }
+
+  function renderLog() {
+    // Get active filters
+    const filters = {};
+    document.querySelectorAll('#log-filters input[data-filter]').forEach(cb => {
+      filters[cb.dataset.filter] = cb.checked;
+    });
+
+    const container = document.getElementById('log-entries');
+    let html = '';
+    for (const entry of logEntries) {
+      if (!filters[entry.type] && filters[entry.type] !== undefined) continue;
+      // For experiment types, check the 'experiment' filter
+      if (entry.type === 'experiment' && !filters['experiment']) continue;
+
+      const statusClass = entry.status ? ' status-' + entry.status : '';
+      html += '<div class="log-entry type-' + entry.type + statusClass + '">';
+      html += '<div class="log-header">';
+      html += '<span class="log-time">' + formatTime(entry.time) + '</span>';
+      html += '<span class="log-type">' + escapeHtml(entry.title) + '</span>';
+      html += '<span class="log-idea">idea #' + entry.ideaId + '</span>';
+      html += '</div>';
+      html += '<div class="log-body">' + escapeHtml(entry.body) + '</div>';
+      if (entry.metrics && Object.keys(entry.metrics).length) {
+        html += '<div class="log-metrics">metrics: ' + escapeHtml(JSON.stringify(entry.metrics)) + '</div>';
+      }
+      if (entry.runtime) {
+        html += '<div class="log-metrics">runtime: ' + entry.runtime + '</div>';
+      }
+      if (entry.extra) {
+        html += '<div class="log-body" style="color:#58a6ff;margin-top:3px">' + escapeHtml(entry.extra) + '</div>';
+      }
+      html += '</div>';
+    }
+    container.innerHTML = html || '<div style="padding:20px;color:#484f58">No log entries yet.</div>';
+  }
+
+  // Filter checkboxes trigger re-render
+  document.querySelectorAll('#log-filters input[data-filter]').forEach(cb => {
+    cb.addEventListener('change', renderLog);
+  });
+
   // --- Polling ---
 
-  function pollBacklog() {
-    fetch('/api/v1/backlog').then(r => r.json()).then(updateBacklog).catch(() => {});
-  }
-  function pollGraph() {
-    fetch('/api/v1/graph').then(r => r.json()).then(updateGraph).catch(() => {});
-  }
+  function pollBacklog() { fetch('/api/v1/backlog').then(r => r.json()).then(updateBacklog).catch(() => {}); }
+  function pollGraph() { fetch('/api/v1/graph').then(r => r.json()).then(updateGraph).catch(() => {}); }
 
   // Init
   initGraph();
   pollBacklog();
   pollGraph();
+  loadChartData();
   setInterval(pollBacklog, 5000);
   setInterval(pollGraph, 10000);
   setInterval(function() { if (chartOpen) loadChartData(); }, 15000);
+  setInterval(function() { if (currentView === 'log') loadLog(); }, 10000);
 })();
 </script>
 </body>
