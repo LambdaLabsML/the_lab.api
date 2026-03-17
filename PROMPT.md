@@ -107,7 +107,7 @@ All timestamps are ISO 8601. You can reconstruct the full timeline of an idea by
    → success: {status: "running", current_branch: "idea/1", idea_description: "...", pid: 12345, experiment: {...}}
    → error:   {status: "error", reason: "script not found..."}
    ```
-   The server auto-commits any uncommitted changes before launching (so `git_commit` in the experiment meta reflects exactly the code being tested), then runs the script in the repo directory on the currently checked-out branch. Stdout/stderr stream into `.log` in real-time; the final JSON line is extracted on completion; errors go to `.err`.
+   The server auto-commits any uncommitted changes, then creates an **isolated git worktree** from the idea's branch so the experiment runs on the correct code — even if you checkout a different branch while it's running. Multiple experiments can run concurrently on different branches without interfering. Stdout/stderr stream into `.log` in real-time; the final JSON line is extracted on completion; errors go to `.err`. Worktrees are cleaned up automatically when experiments finish.
 
 5. **Wait for an experiment to finish:**
    ```

@@ -48,6 +48,27 @@ def create_branch_from(new_branch: str, source_branch: str, cwd: str | Path | No
     _run(["branch", new_branch, source_branch], cwd=cwd)
 
 
+def resolve_branch_commit(branch: str, cwd: str | Path | None = None) -> str:
+    """Get the full commit hash that a branch points to."""
+    result = _run(["rev-parse", branch], cwd=cwd)
+    return result.stdout.strip()
+
+
+def create_worktree(path: str | Path, commit: str, cwd: str | Path | None = None):
+    """Create a detached worktree at *path* checked out to *commit*."""
+    _run(["worktree", "add", "--detach", str(path), commit], cwd=cwd)
+
+
+def remove_worktree(path: str | Path, cwd: str | Path | None = None):
+    """Remove a worktree. Ignores errors (already removed, etc.)."""
+    _run(["worktree", "remove", "--force", str(path)], cwd=cwd, check=False)
+
+
+def prune_worktrees(cwd: str | Path | None = None):
+    """Clean up stale worktree bookkeeping."""
+    _run(["worktree", "prune"], cwd=cwd, check=False)
+
+
 def has_uncommitted_changes(cwd: str | Path | None = None) -> bool:
     """Check if there are any uncommitted changes (staged or unstaged)."""
     result = _run(["status", "--porcelain"], cwd=cwd)

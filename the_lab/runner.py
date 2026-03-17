@@ -9,7 +9,15 @@ import signal
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .git_ops import auto_commit, get_current_branch, get_head_commit
+from .git_ops import (
+    auto_commit,
+    create_worktree,
+    get_current_branch,
+    get_head_commit,
+    prune_worktrees,
+    remove_worktree,
+    resolve_branch_commit,
+)
 from .store import Store
 
 
@@ -18,15 +26,26 @@ class ExperimentRunner:
         self._store = store
         self._finished_queue: asyncio.Queue[int] = asyncio.Queue()
         self._tasks: dict[int, asyncio.Task] = {}
+        self._git_lock = None  # initialized as asyncio.Lock in reattach_running
+        self._worktree_dir = store.repo_dir / ".the_lab" / "worktrees"
+        self._worktree_dir.mkdir(parents=True, exist_ok=True)
+
         # Recover orphaned experiments on startup.
         # If the process is still alive, re-attach to it. Otherwise mark as failed.
         self._reattach_running = []
+        running_worktrees = set()
         for exp in self._store.list_experiments_by_status("running"):
             pid = exp.get("pid")
             if pid and self._pid_alive(pid):
-                # Process still running — we'll re-attach in an async task
                 self._reattach_running.append(exp)
+                wt = (exp.get("meta") or {}).get("worktree")
+                if wt:
+                    running_worktrees.add(wt)
             else:
+                # Clean up its worktree
+                wt = (exp.get("meta") or {}).get("worktree")
+                if wt and Path(wt).exists():
+                    remove_worktree(wt, cwd=store.repo_dir)
                 self._store.update_experiment(
                     exp["id"],
                     status="failed",
@@ -34,6 +53,13 @@ class ExperimentRunner:
                     pid=None,
                     finished_at=datetime.now(timezone.utc).isoformat(),
                 )
+
+        # Clean up stale worktrees (from previous crashes)
+        if self._worktree_dir.exists():
+            for d in self._worktree_dir.iterdir():
+                if d.is_dir() and str(d) not in running_worktrees:
+                    remove_worktree(d, cwd=store.repo_dir)
+        prune_worktrees(cwd=store.repo_dir)
 
         # Mark all already-finished experiments as seen on startup,
         # so /wait only returns experiments that finish from now on.
@@ -51,9 +77,37 @@ class ExperimentRunner:
         except (ProcessLookupError, PermissionError):
             return False
 
+    def _symlink_venvs(self, worktree_path: Path):
+        """Symlink .venv directories from the main repo into the worktree.
+
+        Worktrees only contain git-tracked files, but experiments often need
+        virtual environments (in .gitignore). Walk the main repo for .venv
+        dirs and create matching symlinks in the worktree.
+        """
+        repo = self._store.repo_dir
+        for venv_dir in repo.rglob(".venv"):
+            if not venv_dir.is_dir():
+                continue
+            # Skip .venvs inside .the_lab/ or other worktrees
+            try:
+                rel = venv_dir.relative_to(repo)
+            except ValueError:
+                continue
+            if ".the_lab" in rel.parts:
+                continue
+            # Skip nested .venvs (e.g. .venv/.venv)
+            if sum(1 for p in rel.parts if p == ".venv") > 1:
+                continue
+            target = worktree_path / rel
+            if target.exists() or target.is_symlink():
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.symlink_to(venv_dir)
+
     async def reattach_running(self):
         """Re-attach to experiments that survived a server restart.
         Call this once after the event loop is running."""
+        self._git_lock = asyncio.Lock()
         for exp in self._reattach_running:
             task = asyncio.create_task(self._monitor_pid(exp))
             self._tasks[exp["id"]] = task
@@ -96,6 +150,14 @@ class ExperimentRunner:
             )
             err_path.write_text("process exited but no valid JSON found in output")
 
+        # Clean up worktree
+        wt = (exp.get("meta") or {}).get("worktree")
+        if wt and Path(wt).exists():
+            try:
+                remove_worktree(wt, cwd=self._store.repo_dir)
+            except Exception:
+                pass
+
         self._tasks.pop(exp_id, None)
         self._finished_queue.put_nowait(exp_id)
 
@@ -123,11 +185,45 @@ class ExperimentRunner:
         except Exception:
             pass
 
-        # Record git state in experiment meta
+        # Resolve the idea's branch to a commit, then create a worktree so
+        # this experiment runs in isolation (concurrent experiments don't
+        # interfere with each other or the main checkout).
+        idea = self._store.get_idea(exp["idea_id"])
+        branch = idea["branch"] if idea else get_current_branch(cwd=self._store.repo_dir)
+        worktree_path = None
+        run_cwd = str(self._store.repo_dir)  # fallback
+
         try:
-            branch = get_current_branch(cwd=self._store.repo_dir)
-            commit = get_head_commit(cwd=self._store.repo_dir)
-            meta = {**exp.get("meta", {}), "git_branch": branch, "git_commit": commit}
+            commit = resolve_branch_commit(branch, cwd=self._store.repo_dir)
+            worktree_path = self._worktree_dir / str(exp_id)
+            if worktree_path.exists():
+                remove_worktree(worktree_path, cwd=self._store.repo_dir)
+            if self._git_lock:
+                await self._git_lock.acquire()
+            try:
+                create_worktree(worktree_path, commit, cwd=self._store.repo_dir)
+            finally:
+                if self._git_lock:
+                    self._git_lock.release()
+            # Symlink .venv directories from the main repo into the worktree.
+            # Worktrees only contain git-tracked files, but experiments often
+            # need virtual environments which are in .gitignore.
+            self._symlink_venvs(worktree_path)
+            run_cwd = str(worktree_path)
+        except Exception:
+            worktree_path = None  # fall back to main repo
+
+        # Record git state + worktree in experiment meta
+        try:
+            cur_branch = get_current_branch(cwd=self._store.repo_dir)
+            cur_commit = get_head_commit(cwd=self._store.repo_dir)
+            meta = {
+                **exp.get("meta", {}),
+                "git_branch": branch,
+                "git_commit": cur_commit,
+            }
+            if worktree_path:
+                meta["worktree"] = str(worktree_path)
             self._store.update_experiment(exp_id, meta=meta)
             exp["meta"] = meta
         except Exception:
@@ -136,7 +232,6 @@ class ExperimentRunner:
         base = script_path.with_suffix("")
         log_path = base.with_suffix(".log")
         err_path = base.with_suffix(".err")
-
         progress_path = base.with_suffix(".progress")
 
         # Clear previous log/err/progress on restart
@@ -155,13 +250,12 @@ class ExperimentRunner:
         }
 
         # Write stdout/stderr directly to the log file so it survives server restarts.
-        # The bash process owns the file handle — if we restart, it keeps writing.
         log_file = open(log_path, "w")
         process = await asyncio.create_subprocess_exec(
             "bash", str(script_path),
             stdout=log_file,
             stderr=asyncio.subprocess.STDOUT,
-            cwd=str(self._store.repo_dir),
+            cwd=run_cwd,
             env=env,
         )
         log_file.close()  # the child process has inherited the fd
@@ -221,6 +315,14 @@ class ExperimentRunner:
             )
             err_path.write_text(f"{error}\n\n{output[-2000:]}")
 
+        # Clean up worktree
+        wt = (exp.get("meta") or {}).get("worktree")
+        if wt and Path(wt).exists():
+            try:
+                remove_worktree(wt, cwd=self._store.repo_dir)
+            except Exception:
+                pass
+
         self._tasks.pop(exp_id, None)
         self._finished_queue.put_nowait(exp_id)
 
@@ -252,6 +354,14 @@ class ExperimentRunner:
             try:
                 os.kill(exp["pid"], signal.SIGKILL)
             except ProcessLookupError:
+                pass
+
+        # Clean up worktree
+        wt = (exp.get("meta") or {}).get("worktree")
+        if wt and Path(wt).exists():
+            try:
+                remove_worktree(wt, cwd=self._store.repo_dir)
+            except Exception:
                 pass
 
         return self._store.update_experiment(
