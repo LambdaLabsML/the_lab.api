@@ -27,26 +27,25 @@
   -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
 }
 
-/* Compact dot node (used in "improvements only" mode) */
+/* Compact pill node (used in "improvements only" mode) */
 .subway-dot {
   position: absolute;
-  border-radius: 50%;
+  border-radius: 6px;
   cursor: pointer;
   z-index: 1;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: transform 0.15s, box-shadow 0.15s;
+  transition: background 0.15s;
   border: 2px solid rgba(0,0,0,0.3);
 }
 .subway-dot:hover, .subway-dot.highlighted {
-  transform: scale(1.3);
   box-shadow: 0 0 0 2px #58a6ff;
   z-index: 3;
 }
 .subway-dot.dimmed { opacity: 0.25; }
 .subway-dot .subway-dot-id {
-  font-size: 7px;
+  font-size: 9px;
   font-weight: 700;
   color: rgba(255,255,255,0.9);
   text-shadow: 0 0 2px rgba(0,0,0,0.8);

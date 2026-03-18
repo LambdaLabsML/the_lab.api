@@ -25,7 +25,8 @@ const _stationSizeCache: Record<string, { w: number; h: number }> = {};
 
 const DEFAULT_MAX_COL_WIDTH = 250;
 const MIN_COL_WIDTH = 80;
-const COMPACT_DOT_SIZE = 20; // diameter of compact circle nodes
+const COMPACT_H = 22;  // height of compact pill nodes
+const COMPACT_W = 42;  // width of compact pill nodes (fits #NNN)
 
 // Per-column width overrides, persisted to localStorage
 const colWidthOverrides = useSetting<Record<string, number>>("dagColWidths", {});
@@ -70,7 +71,7 @@ export function DagView() {
     const heights: Record<number, number> = {};
     for (const n of data.nodes) {
       if (compactMode && !isImportant[n.id]) {
-        heights[n.id] = COMPACT_DOT_SIZE;
+        heights[n.id] = COMPACT_H;
         continue;
       }
       const key = n.id + ":" + ideaTitle(n.description);
@@ -140,7 +141,7 @@ export function DagView() {
         // In compact mode, columns with only dots can be narrower
         const nodesInCol = data.nodes.filter((n) => layout.depth[n.id] === c);
         const hasFullStation = nodesInCol.some((n) => !compactMode || isImportant[n.id]);
-        colWidth[c] = hasFullStation ? DEFAULT_MAX_COL_WIDTH : COMPACT_DOT_SIZE + 16;
+        colWidth[c] = hasFullStation ? DEFAULT_MAX_COL_WIDTH : COMPACT_W;
       }
     }
     const colX: Record<number, number> = {};
@@ -277,7 +278,9 @@ export function DagView() {
           if (pp) minY = Math.max(minY, pp.y);
         }
         y = minY;
-        stationPos[slot.nodeId] = { x: colX[c], y: y, w: colWidth[c], h: slot.h };
+        const isCompact = compactMode && !isImportant[slot.nodeId];
+        const nodeW = isCompact ? COMPACT_W : colWidth[c];
+        stationPos[slot.nodeId] = { x: colX[c], y: y, w: nodeW, h: slot.h };
         y += slot.h + ROW_GAP;
       }
       if (y > maxY) maxY = y;
@@ -389,14 +392,14 @@ export function DagView() {
       const nodeColor = colorForIdea(n.id, mode);
 
       if (compactMode && !isImportant[n.id]) {
-        // Compact dot node
+        // Compact pill node — positioned at column start like full stations
         html +=
           '<div class="subway-dot" data-id="' + n.id +
           '" title="#' + n.id + ': ' + escapeHtml(n.description) +
-          '" style="left:' + (p.x + p.w / 2 - COMPACT_DOT_SIZE / 2) +
-          'px;top:' + (p.y) +
-          'px;width:' + COMPACT_DOT_SIZE +
-          'px;height:' + COMPACT_DOT_SIZE +
+          '" style="left:' + p.x +
+          'px;top:' + p.y +
+          'px;width:' + COMPACT_W +
+          'px;height:' + COMPACT_H +
           'px;background:' + nodeColor +
           '"><span class="subway-dot-id">#' + n.id + '</span></div>';
       } else {
