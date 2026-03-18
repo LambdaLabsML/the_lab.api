@@ -727,3 +727,40 @@ def get_graph():
         for pid in idea.get("parent_ids", []):
             edges.append({"from": pid, "to": idea["id"]})
     return {"nodes": nodes, "edges": edges}
+
+
+@app.get("/api/v1/chart-data")
+def get_chart_data():
+    """All data the dashboard chart needs in a single request.
+
+    Replaces the N+1 pattern of GET /ideas + GET /ideas/{id}/experiments per idea.
+    """
+    ideas = store.list_ideas()
+    completed_exps = []
+    running_progress = []
+    for idea in ideas:
+        exps = store.list_experiments(idea["id"])
+        for exp in exps:
+            if exp.get("status") == "completed" and exp.get("metrics"):
+                completed_exps.append({
+                    **exp,
+                    "idea_description": idea["description"],
+                    "idea_status": idea["status"],
+                })
+            elif exp.get("status") == "running":
+                progress_path = REPO_DIR / exp["script"].replace(".sh", ".progress")
+                progress = None
+                if progress_path.exists():
+                    try:
+                        progress = json.loads(progress_path.read_text())
+                    except (json.JSONDecodeError, OSError):
+                        pass
+                if progress and len(progress) > 0:
+                    running_progress.append({
+                        **exp,
+                        "metrics": progress,
+                        "_running": True,
+                        "idea_description": idea["description"],
+                        "idea_status": idea["status"],
+                    })
+    return {"experiments": completed_exps, "running": running_progress}

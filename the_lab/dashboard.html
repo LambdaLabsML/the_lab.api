@@ -526,6 +526,7 @@
   let _trainingCharts = {};
   let _apiLoaded = false;
   let _apiSpec = null;
+  let _stationSizeCache = {};
 
   // --- View switching ---
 
@@ -685,26 +686,41 @@
     }
 
     // --- Measure station sizes ---
-    let mHtml = '<div style="position:absolute;visibility:hidden;top:0;left:0">';
-    for (const n of data.nodes) {
-      const ds = n.has_running ? 'running' : n.status;
-      const sc = STATUS_BAR_COLORS[ds] || STATUS_BAR_COLORS.active;
-      const lc = IDEA_PALETTE[layout.ideaLane[n.id] % IDEA_PALETTE.length];
-      mHtml += '<div class="subway-station" data-id="' + n.id + '" style="'
-        + 'position:static;border-color:' + sc + ';border-left:4px solid ' + lc
-        + (n.status === 'suggested' ? ';border-style:dashed' : '') + '">'
-        + '<div class="subway-header"><span class="subway-id">#' + n.id + '</span>' + badgeFor(ds)
-        + '<span class="subway-desc">' + escapeHtml(ideaTitle(n.description)) + '</span></div>'
-        + '</div>';
-    }
-    mHtml += '</div>';
-    container.innerHTML = mHtml;
-
+    // Only measure nodes we haven't seen before (or if layout changed).
+    // Reuse cached sizes for known nodes to avoid a full DOM reflow.
     const sizes = {};
-    container.querySelectorAll('.subway-station').forEach(function(el) {
-      const id = parseInt(el.dataset.id);
-      sizes[id] = { w: el.offsetWidth, h: el.offsetHeight };
-    });
+    const needsMeasure = [];
+    for (const n of data.nodes) {
+      var key = n.id + ':' + ideaTitle(n.description);
+      if (_stationSizeCache[key]) {
+        sizes[n.id] = _stationSizeCache[key];
+      } else {
+        needsMeasure.push(n);
+      }
+    }
+    if (needsMeasure.length > 0) {
+      let mHtml = '<div style="position:absolute;visibility:hidden;top:0;left:0">';
+      for (const n of needsMeasure) {
+        const ds = n.has_running ? 'running' : n.status;
+        const sc = STATUS_BAR_COLORS[ds] || STATUS_BAR_COLORS.active;
+        const lc = IDEA_PALETTE[layout.ideaLane[n.id] % IDEA_PALETTE.length];
+        mHtml += '<div class="subway-station" data-id="' + n.id + '" style="'
+          + 'position:static;border-color:' + sc + ';border-left:4px solid ' + lc
+          + (n.status === 'suggested' ? ';border-style:dashed' : '') + '">'
+          + '<div class="subway-header"><span class="subway-id">#' + n.id + '</span>' + badgeFor(ds)
+          + '<span class="subway-desc">' + escapeHtml(ideaTitle(n.description)) + '</span></div>'
+          + '</div>';
+      }
+      mHtml += '</div>';
+      container.innerHTML = mHtml;
+      container.querySelectorAll('.subway-station').forEach(function(el) {
+        const id = parseInt(el.dataset.id);
+        const s = { w: el.offsetWidth, h: el.offsetHeight };
+        sizes[id] = s;
+        var node = data.nodes.find(function(n) { return n.id === id; });
+        if (node) _stationSizeCache[id + ':' + ideaTitle(node.description)] = s;
+      });
+    }
 
     // --- Compute column gap from max fan-out ---
     const ROUTING_SPACING = 10;
@@ -1335,49 +1351,11 @@
   };
 
   function loadChartData() {
-    fetch('/api/v1/ideas')
+    fetch('/api/v1/chart-data')
       .then(r => r.json())
-      .then(ideas => {
-        const promises = ideas.map(idea =>
-          fetch('/api/v1/ideas/' + idea.id + '/experiments')
-            .then(r => r.json())
-            .then(exps => ({ idea, experiments: exps }))
-        );
-        return Promise.all(promises);
-      })
-      .then(results => {
-        allExperiments = [];
+      .then(data => {
+        allExperiments = data.experiments.concat(data.running);
         _globalBestBefore = {};  // invalidate cache
-        const runningExps = [];
-        for (const { idea, experiments } of results) {
-          for (const exp of experiments) {
-            if (exp.status === 'completed' && exp.metrics) {
-              allExperiments.push({ ...exp, idea_description: idea.description, idea_status: idea.status });
-            } else if (exp.status === 'running') {
-              runningExps.push({ exp, idea });
-            }
-          }
-        }
-        // Fetch progress for running experiments
-        const progressPromises = runningExps.map(({ exp, idea }) =>
-          fetch('/api/v1/experiments/' + exp.id + '/progress')
-            .then(r => r.json())
-            .then(data => {
-              if (data.progress && Object.keys(data.progress).length) {
-                allExperiments.push({
-                  ...exp,
-                  metrics: data.progress,
-                  _running: true,
-                  idea_description: idea.description,
-                  idea_status: idea.status,
-                });
-              }
-            })
-            .catch(() => {})
-        );
-        return Promise.all(progressPromises);
-      })
-      .then(() => {
         // Completed sorted by finish time, running at the end sorted by start time
         allExperiments.sort((a, b) => {
           if (a._running && !b._running) return 1;
