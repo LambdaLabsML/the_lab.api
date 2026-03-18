@@ -587,11 +587,12 @@ export function DagView() {
   // JSX — the container div hosts imperatively managed DOM content.
   // =========================================================================
   return (
-    <div
-      id="graph"
-      ref={containerRef}
-      class="subway-graph"
-      style={{ position: "relative", overflow: "auto" }}
-    />
+    <div id="graph-container">
+      <div
+        id="graph"
+        ref={containerRef}
+        style={{ position: "relative", minHeight: "100%" }}
+      />
+    </div>
   );
 }
