@@ -99,9 +99,9 @@ Hover over a graph node to highlight its ancestor path and corresponding chart p
 
 Experiment scripts are bash scripts that the agent writes and the API executes. The scripts can call anything — Python, Rust, Node, other bash scripts — the only contract is how results are reported back.
 
-### Final metrics (required)
+### Final metrics (optional)
 
-The **last line of stdout** must be a JSON object with a `metrics` key. This can come from anywhere — a bash `echo`, a Python `print()`, or any other program:
+For research experiments, the **last line of stdout** should be a JSON object with a `metrics` key. This can come from anywhere — a bash `echo`, a Python `print()`, or any other program. For setup tasks (data download, env install), metrics can be omitted entirely — the experiment is marked completed if exit code is 0:
 
 ```bash
 #!/bin/bash
@@ -143,6 +143,40 @@ if progress_path:
 
 The dashboard polls this file and shows live progress in the detail panel, including a progress bar if a `pct`, `percent`, or `progress` field is present.
 
+### Time-series metrics (optional)
+
+For training experiments, append per-step metrics to `$THE_LAB_METRICS` for training curve tracking. This is an append-only JSONL file — each line is one data point:
+
+**From Python:**
+```python
+import json, os
+metrics_path = os.environ.get("THE_LAB_METRICS")
+if metrics_path:
+    with open(metrics_path, "a") as f:
+        f.write(json.dumps({"step": step, "train_loss": loss, "lr": lr}) + "\n")
+```
+
+The dashboard shows training curves in the experiment detail panel. Compare curves across experiments with `GET /experiments/compare-curves?ids=7,12&key=train_loss`.
+
+### Experiment preamble
+
+If `.the_lab/preamble.sh` exists, it is automatically sourced at the start of every experiment script (after the guard, before user content). Use it for common setup:
+
+```bash
+# .the_lab/preamble.sh
+source venv/bin/activate
+export PYTHONPATH=.
+export CUDA_VISIBLE_DEVICES=0
+```
+
+### Experiment tags
+
+Experiments can have optional `tags` (list of strings) for categorization:
+
+```
+POST /ideas/1/experiments  {description: "...", tags: ["ablation", "synthetic"]}
+```
+
 ---
 
 ## Environment Variables
@@ -155,6 +189,7 @@ Every experiment script receives these environment variables:
 | `THE_LAB_EXP_ID` | This experiment's ID (e.g. `"23"`) |
 | `THE_LAB_IDEA_ID` | The parent idea's ID (e.g. `"5"`) |
 | `THE_LAB_PROGRESS` | Path to write progress JSON (e.g. `.the_lab/experiments/5/23.progress`) |
+| `THE_LAB_METRICS` | Path to append time-series JSONL (e.g. `.the_lab/experiments/5/23.metrics.jsonl`) |
 
 Scripts also inherit the full server environment, and run in the repository root directory on the currently checked-out git branch.
 
@@ -207,20 +242,74 @@ The API endpoint blocks (the `` ``` `` code fences), the "Never Stop" section, a
 
 ---
 
-## Data Storage
+## Human Idea Submission
 
-All experiment data lives in `.the_lab/experiments/` at the repo root. This directory is git-ignored (via `.git/info/exclude`) so it persists across branch switches:
+Humans can inject ideas into the agent's research loop via the dashboard or the API. Ideas from humans start as `suggested` — the agent decides whether to adopt or reject them.
+
+### Via the dashboard
+
+Open `http://localhost:8000` and use the "Suggest idea" panel to submit a description, optional parent idea, priority (normal/high), and resource links (papers, repos, datasets).
+
+### Via the API
+
+```bash
+curl -X POST http://localhost:8000/api/v1/ideas/suggest \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "description": "Try complex-valued state from Mamba-3 paper",
+    "priority": "high",
+    "resources": [
+      {"url": "https://arxiv.org/abs/2503.xxxxx", "label": "Mamba-3 paper, Section 3.2"}
+    ]
+  }'
+```
+
+The agent checks for suggestions during its Orient phase and either adopts them (`POST /ideas/<id>/adopt`) or abandons with a note explaining why.
+
+---
+
+## Research Digest
+
+The digest endpoint provides a compact summary of all research for agent context efficiency:
 
 ```
-.the_lab/experiments/
-  1/
-    idea.json          # idea metadata
-    notes.json         # running journal
-    1.json             # experiment metadata + results
-    1.sh               # experiment script
-    1.log              # stdout+stderr (streams in real-time)
-    1.progress         # optional progress JSON
-    1.err              # error details if failed
+GET /api/v1/digest
+```
+
+Returns: total ideas/experiments, global best metrics (with source idea/experiment), concluded ideas with conclusions and key insights, abandoned ideas with reasons. Designed to fit in a manageable context window even after 50+ ideas.
+
+---
+
+## Experiment Timeout
+
+Prevent runaway experiments by specifying a timeout (in seconds) when starting:
+
+```
+POST /experiments/<id>/start  {"timeout": 1200}
+```
+
+If the experiment exceeds the timeout, it is killed (SIGTERM → SIGKILL) and marked as failed.
+
+---
+
+## Data Storage
+
+All experiment data lives in `.the_lab/` at the repo root. This directory is git-ignored (via `.git/info/exclude`) so it persists across branch switches:
+
+```
+.the_lab/
+  preamble.sh             # optional: sourced at the start of every experiment script
+  artifacts/              # shared datasets, checkpoints (not branch-specific)
+  experiments/
+    1/
+      idea.json           # idea metadata (description, status, source, priority, resources)
+      notes.json          # running journal (text, level, resources)
+      1.json              # experiment metadata + results (description, meta, metrics, tags)
+      1.sh                # experiment script
+      1.log               # stdout+stderr (streams in real-time)
+      1.progress          # optional progress JSON
+      1.metrics.jsonl     # optional per-step time-series metrics
+      1.err               # error details if failed
 ```
 
 ---
