@@ -338,3 +338,16 @@ class Store:
             except json.JSONDecodeError:
                 continue
         return points
+
+    def list_all_experiments(self) -> list[dict]:
+        """List all experiments across all ideas."""
+        results = []
+        if not self.lab_dir.exists():
+            return results
+        for d in self.lab_dir.iterdir():
+            if not d.is_dir():
+                continue
+            for f in d.glob("*.json"):
+                if f.stem.isdigit():
+                    results.append(_enrich_experiment(_read_json(f)))
+        return results
