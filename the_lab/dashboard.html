@@ -393,6 +393,14 @@
     font-size: 10px; font-weight: 600; background: #0c2d6b;
     color: #388bfd; margin-right: 4px; margin-top: 2px;
   }
+  .tag-toggle {
+    display: inline-block; padding: 2px 8px; border-radius: 10px;
+    font-size: 10px; font-weight: 600; background: #161b22;
+    border: 1px solid #30363d; color: #8b949e; cursor: pointer;
+    user-select: none; transition: all 0.15s;
+  }
+  .tag-toggle:hover { border-color: #8b949e; color: #c9d1d9; }
+  .tag-toggle.active { background: #0c2d6b; border-color: #388bfd; color: #388bfd; }
 </style>
 </head>
 <body>
@@ -417,9 +425,7 @@
         <option value="idea">by idea sequence</option>
       </select>
       <label style="margin-left:12px;cursor:pointer"><input type="checkbox" id="improvements-only" onchange="updateChart()"> improvements only</label>
-      Tags: <select id="tag-filter" onchange="updateChart(); recolorGraph();" style="min-width:80px">
-        <option value="">all</option>
-      </select>
+      <span id="tag-filters" style="display:inline-flex;gap:4px;align-items:center;margin-left:12px;flex-wrap:wrap">Tags:</span>
     </div>
     <div id="chart-wrap"><div id="chart-inner"><canvas id="metrics-chart"></canvas></div></div>
   </div>
@@ -530,6 +536,7 @@
   let _apiLoaded = false;
   let _apiSpec = null;
   let _stationSizeCache = {};
+  let _activeTagFilters = new Set();
 
   // --- View switching ---
 
@@ -1389,14 +1396,18 @@
     }
     if (prev && metricKeys.has(prev)) { select.value = prev; }
 
-    const tagSelect = document.getElementById('tag-filter');
-    const prevTag = tagSelect.value;
-    tagSelect.innerHTML = '<option value="">all</option>';
-    for (const t of [...tagSet].sort()) {
-      const opt = document.createElement('option');
-      opt.value = t; opt.textContent = t; tagSelect.appendChild(opt);
+    const tagContainer = document.getElementById('tag-filters');
+    var tagHtml = 'Tags:';
+    if (tagSet.size === 0) {
+      tagHtml += ' <span style="color:#484f58;font-size:11px">none</span>';
+    } else {
+      for (const t of [...tagSet].sort()) {
+        var isActive = _activeTagFilters.has(t);
+        tagHtml += ' <span class="tag-toggle' + (isActive ? ' active' : '') + '" data-tag="'
+          + escapeHtml(t) + '" onclick="toggleTagFilter(this)">' + escapeHtml(t) + '</span>';
+      }
     }
-    if (prevTag && tagSet.has(prevTag)) { tagSelect.value = prevTag; }
+    tagContainer.innerHTML = tagHtml;
     else {
       const preferred = ['accuracy_per_mtoken', 'agent_accuracy', 'accuracy'];
       const match = preferred.find(k => metricKeys.has(k));
@@ -1534,6 +1545,19 @@
     return IDEA_PALETTE[(ideaId - 1) % IDEA_PALETTE.length];
   }
 
+  window.toggleTagFilter = function(el) {
+    var tag = el.dataset.tag;
+    if (_activeTagFilters.has(tag)) {
+      _activeTagFilters.delete(tag);
+      el.classList.remove('active');
+    } else {
+      _activeTagFilters.add(tag);
+      el.classList.add('active');
+    }
+    updateChart();
+    recolorGraph();
+  };
+
   window.recolorGraph = function() {
     var mode = (document.getElementById('color-mode') || {}).value || 'status+improve';
     var container = document.getElementById('graph');
@@ -1563,9 +1587,8 @@
   function _buildChartData(metricKey) {
     let filtered = allExperiments.filter(e => e.metrics && e.metrics[metricKey] !== undefined);
 
-    var tagFilter = (document.getElementById('tag-filter') || {}).value || '';
-    if (tagFilter) {
-      filtered = filtered.filter(e => e.tags && e.tags.indexOf(tagFilter) !== -1);
+    if (_activeTagFilters.size > 0) {
+      filtered = filtered.filter(e => e.tags && e.tags.some(t => _activeTagFilters.has(t)));
     }
 
     if (document.getElementById('improvements-only').checked) {
