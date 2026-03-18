@@ -68,23 +68,45 @@ function buildFilterParams(): string {
   return qs ? "?" + qs : "";
 }
 
-/** Update the URL when any filter changes (without triggering navigation). */
-let _urlUpdateScheduled = false;
-function scheduleUrlUpdate() {
-  if (_urlUpdateScheduled) return;
-  _urlUpdateScheduled = true;
-  requestAnimationFrame(() => {
-    _urlUpdateScheduled = false;
-    const viewPaths: Record<string, string> = {
-      dag: "/graph", timeline: "/timeline", log: "/log", api: "/api",
-    };
-    const path = viewPaths[currentView.value] || "/graph";
-    const qs = buildFilterParams();
-    const url = path + qs;
-    if (url !== window.location.pathname + window.location.search) {
-      history.replaceState(null, "", url);
-    }
-  });
+/** Update the URL when any filter changes (without triggering navigation).
+ *  Reads all signal values inside the effect so Preact tracks them. */
+function syncUrlFromSignals() {
+  // Read ALL signals here so the effect re-runs when any changes.
+  // (Preact signals only track reads inside the effect callback itself.)
+  const _view = currentView.value;
+  const _metric = selectedMetric.value;
+  const _color = colorMode.value;
+  const _imp = improvementsOnly.value;
+  const _tags = activeTagFilters.value;
+  const _tagMode = tagFilterMode.value;
+  const _rev = reverseTime.value;
+  const _abn = showAbandoned.value;
+  const _con = showConcluded.value;
+  const _run = showRunning.value;
+  const _idea = selectedIdea.value;
+
+  const viewPaths: Record<string, string> = {
+    dag: "/graph", timeline: "/timeline", log: "/log", api: "/api",
+  };
+  const path = viewPaths[_view] || "/graph";
+
+  const p = new URLSearchParams();
+  if (_metric) p.set("metric", _metric);
+  if (_color !== "status+improve") p.set("color", _color);
+  if (_imp) p.set("improvements", "1");
+  if (_tags.length > 0) p.set("tags", _tags.join(","));
+  if (_tagMode !== "and") p.set("tagMode", _tagMode);
+  if (!_rev) p.set("reverse", "0");
+  if (!_abn) p.set("abandoned", "0");
+  if (!_con) p.set("concluded", "0");
+  if (!_run) p.set("running", "0");
+  if (_idea !== null) p.set("idea", String(_idea));
+  const qs = p.toString();
+  const url = path + (qs ? "?" + qs : "");
+
+  if (url !== window.location.pathname + window.location.search) {
+    history.replaceState(null, "", url);
+  }
 }
 
 export function App() {
@@ -94,7 +116,7 @@ export function App() {
     startPolling();
 
     // Sync URL whenever any filter signal changes
-    const dispose = effect(scheduleUrlUpdate);
+    const dispose = effect(syncUrlFromSignals);
 
     return () => {
       window.removeEventListener("popstate", readFiltersFromUrl);
