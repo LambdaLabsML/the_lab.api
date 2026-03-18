@@ -12,6 +12,7 @@ import {
 import { allExperiments, allIdeas, currentLayout, highlightedIdea } from "../../state/signals";
 import {
   selectedMetric,
+  selectedIdea,
   colorMode,
   improvementsOnly,
   activeTagFilters,
@@ -168,7 +169,17 @@ function createChart(
           const ds = this.data.datasets[0] as any;
           if (ds?._expData?.[idx]) {
             const ideaId = ds._expData[idx].idea_id;
+            // Open the idea detail panel
+            selectedIdea.value = ideaId;
+            history.pushState(null, "", "/ideas/" + ideaId);
+            // Highlight and scroll to the idea in the graph
             highlightedIdea.value = ideaId;
+            const station = document.querySelector(
+              `.subway-station[data-id="${ideaId}"], .subway-dot[data-id="${ideaId}"]`
+            );
+            if (station) {
+              station.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
+            }
             setTimeout(() => {
               highlightedIdea.value = null;
             }, 3000);
@@ -217,6 +228,7 @@ function createChart(
           bodyColor: "#c9d1d9",
           borderColor: "#30363d",
           borderWidth: 1,
+          maxWidth: 350,
           titleFont: {
             family: "SF Mono, Fira Code, Consolas, monospace",
             size: 11,
@@ -231,19 +243,20 @@ function createChart(
                 items[0].dataIndex
               ];
               const idea = allIdeas.value[d.idea_id];
-              return (
-                "idea #" +
-                d.idea_id +
-                ": " +
-                (idea?.description || d.idea_description || "")
-              );
+              const desc = idea?.description || d.idea_description || "";
+              // Truncate long descriptions
+              const short = desc.length > 60 ? desc.slice(0, 57) + "..." : desc;
+              return "idea #" + d.idea_id + ": " + short;
+            },
+            afterTitle(items) {
+              // Show the y-axis value prominently
+              const mk = items[0].dataset.label!;
+              return mk + " = " + items[0].formattedValue;
             },
             label(item) {
-              const mk = item.dataset.label!;
               const d = (item.dataset as any)._expData[item.dataIndex];
               return [
-                mk + ": " + item.raw,
-                "exp/" + d.id + ": " + (d.description || ""),
+                "exp/" + d.id + ": " + (d.description || "").slice(0, 50),
                 d._running ? "\u25B6 running (from progress)" : "",
                 d.runtime ? "runtime: " + d.runtime : "",
                 d.finished_at

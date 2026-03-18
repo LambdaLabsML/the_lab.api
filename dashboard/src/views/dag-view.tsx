@@ -75,23 +75,26 @@ export function DagView() {
       return;
     }
 
-    // --- Measure station sizes ---
-    // In compact mode, non-important nodes are small dots (no measurement needed).
-    const sizes: Record<number, { w: number; h: number }> = {};
-    const needsMeasure: IdeaNode[] = [];
+    // --- Measure station heights ---
+    // Heights are measured once and cached. Widths are controlled by colWidth
+    // (capped at DEFAULT_MAX_COL_WIDTH or user override), so we only need heights.
+    const STATION_HEIGHT = 28; // fallback if measurement fails
+    const heights: Record<number, number> = {};
     for (const n of data.nodes) {
       if (compactMode && !isImportant[n.id]) {
-        sizes[n.id] = { w: COMPACT_DOT_SIZE, h: COMPACT_DOT_SIZE };
+        heights[n.id] = COMPACT_DOT_SIZE;
         continue;
       }
       const key = n.id + ":" + ideaTitle(n.description);
       if (_stationSizeCache[key]) {
-        sizes[n.id] = _stationSizeCache[key];
-      } else {
-        needsMeasure.push(n);
+        heights[n.id] = _stationSizeCache[key].h;
       }
     }
 
+    // Measure any nodes not in the cache
+    const needsMeasure = data.nodes.filter(
+      (n) => heights[n.id] === undefined
+    );
     if (needsMeasure.length > 0) {
       let mHtml = '<div style="position:absolute;visibility:hidden;top:0;left:0">';
       for (const n of needsMeasure) {
@@ -99,33 +102,32 @@ export function DagView() {
         const sc = STATUS_BAR_COLORS[ds] || STATUS_BAR_COLORS.active;
         const lc = IDEA_PALETTE[layout.ideaLane[n.id] % IDEA_PALETTE.length];
         mHtml +=
-          '<div class="subway-station" data-id="' +
-          n.id +
-          '" style="' +
-          "position:static;border-color:" +
-          sc +
-          ";border-left:4px solid " +
-          lc +
+          '<div class="subway-station" data-id="' + n.id +
+          '" style="position:static;border-color:' + sc +
+          ';border-left:4px solid ' + lc +
           (n.status === "suggested" ? ";border-style:dashed" : "") +
-          '">' +
-          '<div class="subway-header"><span class="subway-id">#' +
-          n.id +
-          "</span>" +
-          badgeHtml(ds) +
+          '"><div class="subway-header"><span class="subway-id">#' +
+          n.id + "</span>" + badgeHtml(ds) +
           '<span class="subway-desc">' +
           escapeHtml(ideaTitle(n.description)) +
-          "</span></div>" +
-          "</div>";
+          "</span></div></div>";
       }
       mHtml += "</div>";
       container.innerHTML = mHtml;
       container.querySelectorAll(".subway-station").forEach((el) => {
         const id = parseInt((el as HTMLElement).dataset.id!);
-        const s = { w: (el as HTMLElement).offsetWidth, h: (el as HTMLElement).offsetHeight };
-        sizes[id] = s;
-        const node = data.nodes.find((n) => n.id === id);
-        if (node) _stationSizeCache[id + ":" + ideaTitle(node.description)] = s;
+        const h = (el as HTMLElement).offsetHeight || STATION_HEIGHT;
+        heights[id] = h;
+        const node = data.nodes.find((nn) => nn.id === id);
+        if (node) _stationSizeCache[id + ":" + ideaTitle(node.description)] = {
+          w: 0, h  // w unused, kept for cache shape
+        };
       });
+    }
+
+    // Ensure every node has a height
+    for (const n of data.nodes) {
+      if (heights[n.id] === undefined) heights[n.id] = STATION_HEIGHT;
     }
 
     // --- Compute column gap from max fan-out ---
@@ -143,16 +145,14 @@ export function DagView() {
     // --- Column widths & x-positions ---
     const overrides = colWidthOverrides.value;
     const colWidth: Record<number, number> = {};
-    for (const n of data.nodes) {
-      const c = layout.depth[n.id];
-      colWidth[c] = Math.max(colWidth[c] || 0, sizes[n.id].w);
-    }
-    // Apply max-width cap and user overrides
     for (let c = 0; c <= layout.maxDepth; c++) {
       if (overrides[c] !== undefined) {
         colWidth[c] = Math.max(MIN_COL_WIDTH, overrides[c]);
       } else {
-        colWidth[c] = Math.min(colWidth[c] || DEFAULT_MAX_COL_WIDTH, DEFAULT_MAX_COL_WIDTH);
+        // In compact mode, columns with only dots can be narrower
+        const nodesInCol = data.nodes.filter((n) => layout.depth[n.id] === c);
+        const hasFullStation = nodesInCol.some((n) => !compactMode || isImportant[n.id]);
+        colWidth[c] = hasFullStation ? DEFAULT_MAX_COL_WIDTH : COMPACT_DOT_SIZE + 16;
       }
     }
     const colX: Record<number, number> = {};
@@ -259,7 +259,7 @@ export function DagView() {
           type: "station",
           nodeId: n.id,
           lane: li,
-          h: sizes[n.id].h,
+          h: heights[n.id],
           statusRank: sr,
           act: laneFullAct[li] || "",
         });
