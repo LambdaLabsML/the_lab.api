@@ -401,6 +401,11 @@
   }
   .tag-toggle:hover { border-color: #8b949e; color: #c9d1d9; }
   .tag-toggle.active { background: #0c2d6b; border-color: #388bfd; color: #388bfd; }
+  .tag-rename-input {
+    background: #0d1117; color: #c9d1d9; border: 1px solid #388bfd;
+    border-radius: 10px; padding: 2px 8px; font-family: inherit;
+    font-size: 10px; font-weight: 600; width: 90px; outline: none;
+  }
 </style>
 </head>
 <body>
@@ -1410,7 +1415,8 @@
       for (const t of [...tagSet].sort()) {
         var isActive = _activeTagFilters.has(t);
         tagHtml += ' <span class="tag-toggle' + (isActive ? ' active' : '') + '" data-tag="'
-          + escapeHtml(t) + '" onclick="toggleTagFilter(this)">' + escapeHtml(t) + '</span>';
+          + escapeHtml(t) + '" onclick="toggleTagFilter(this)" oncontextmenu="renameTagPrompt(event, this)">'
+          + escapeHtml(t) + '</span>';
       }
     }
     tagContainer.innerHTML = tagHtml;
@@ -1557,6 +1563,48 @@
     }
     updateChart();
     recolorGraph();
+  };
+
+  window.renameTagPrompt = function(evt, el) {
+    evt.preventDefault();
+    var oldTag = el.dataset.tag;
+    var input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'tag-rename-input';
+    input.value = oldTag;
+    el.textContent = '';
+    el.appendChild(input);
+    input.focus();
+    input.select();
+
+    function finish() {
+      var newTag = input.value.trim();
+      if (!newTag || newTag === oldTag) {
+        el.textContent = oldTag;
+        return;
+      }
+      el.textContent = '...';
+      fetch('/api/v1/experiments/tags/rename', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ old: oldTag, new: newTag }),
+      })
+        .then(r => r.json())
+        .then(data => {
+          if (_activeTagFilters.has(oldTag)) {
+            _activeTagFilters.delete(oldTag);
+            _activeTagFilters.add(newTag);
+          }
+          loadChartData();
+        })
+        .catch(() => { el.textContent = oldTag; });
+    }
+
+    input.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+      if (e.key === 'Escape') { el.textContent = oldTag; }
+    });
+    input.addEventListener('blur', finish);
   };
 
   window.recolorGraph = function() {
