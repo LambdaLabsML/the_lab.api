@@ -432,6 +432,89 @@ def get_experiment_progress(exp_id: int):
     return result
 
 
+# --- Digest ---
+
+@app.get("/api/v1/digest")
+def get_digest():
+    all_ideas = store.list_ideas()
+    all_exps = store.list_all_experiments()
+
+    # Global best metrics
+    best_metrics: dict[str, dict] = {}
+    for exp in all_exps:
+        if exp.get("status") != "completed" or not exp.get("metrics"):
+            continue
+        for key, value in exp["metrics"].items():
+            if not isinstance(value, (int, float)):
+                continue
+            if key not in best_metrics or value > best_metrics[key]["value"]:
+                best_metrics[key] = {
+                    "value": value,
+                    "idea_id": exp.get("idea_id"),
+                    "experiment_id": exp.get("id"),
+                }
+
+    # Concluded ideas with conclusions and best metrics
+    concluded = []
+    for idea in all_ideas:
+        if idea.get("status") != "concluded":
+            continue
+        idea_exps = [e for e in all_exps if e.get("idea_id") == idea["id"]]
+        idea_best = {}
+        for exp in idea_exps:
+            if exp.get("status") != "completed" or not exp.get("metrics"):
+                continue
+            for k, v in exp["metrics"].items():
+                if isinstance(v, (int, float)) and (k not in idea_best or v > idea_best[k]):
+                    idea_best[k] = v
+        insights = [
+            n["text"] for n in store.get_notes(idea["id"], levels={"insight"})
+        ]
+        concluded.append({
+            "id": idea["id"],
+            "description": idea["description"],
+            "conclusion": idea.get("conclusion"),
+            "key_insights": insights,
+            "best_metrics": idea_best or None,
+            "experiment_count": len(idea_exps),
+        })
+
+    # Abandoned ideas (compact)
+    abandoned = [
+        {"id": i["id"], "description": i["description"], "reason": i.get("conclusion")}
+        for i in all_ideas if i.get("status") == "abandoned"
+    ]
+
+    # All insight-level notes across all ideas
+    key_insights = []
+    for idea in all_ideas:
+        for note in store.get_notes(idea["id"], levels={"insight"}):
+            key_insights.append({
+                "text": note["text"],
+                "idea_id": idea["id"],
+                "created_at": note.get("created_at"),
+            })
+    key_insights.sort(key=lambda n: n.get("created_at", ""), reverse=True)
+
+    status_counts = {}
+    for idea in all_ideas:
+        s = idea.get("status", "unknown")
+        status_counts[s] = status_counts.get(s, 0) + 1
+
+    return {
+        "total_ideas": len(all_ideas),
+        "total_experiments": len(all_exps),
+        "active_ideas": status_counts.get("active", 0),
+        "suggested_ideas": status_counts.get("suggested", 0),
+        "concluded_count": status_counts.get("concluded", 0),
+        "abandoned_count": status_counts.get("abandoned", 0),
+        "best_metrics": best_metrics,
+        "concluded_ideas": concluded,
+        "abandoned_ideas": abandoned,
+        "key_insights": key_insights[:50],
+    }
+
+
 # --- Wait ---
 
 @app.get("/api/v1/wait")
