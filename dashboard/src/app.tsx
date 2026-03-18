@@ -30,6 +30,7 @@ function syncViewFromUrl() {
   const viewMap: Record<string, string> = {
     "/": "dag",
     "/dag": "dag",
+    "/graph": "dag",
     "/timeline": "timeline",
     "/log": "log",
     "/api": "api",

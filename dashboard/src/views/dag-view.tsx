@@ -11,8 +11,9 @@ import { useRef } from "preact/hooks";
 import { useLayoutEffect, useEffect } from "preact/hooks";
 import type { IdeaNode, StationPos, SubwayLayout } from "../lib/types";
 import { graphData, currentLayout, highlightedIdea, allIdeas, allExperiments } from "../state/signals";
-import { colorMode, selectedIdea, selectedMetric } from "../state/settings";
+import { colorMode, selectedIdea, selectedMetric, improvementsOnly } from "../state/settings";
 import { useSetting } from "../state/settings";
+import { _ideaHasGlobalImprovement } from "../lib/colors";
 import { drawSubwayLines } from "../lib/subway-lines";
 import { IDEA_PALETTE, STATUS_BAR_COLORS, STATUS_ORDER, _colorForIdea } from "../lib/colors";
 import { escapeHtml, ideaTitle, badgeHtml } from "../lib/format";
@@ -25,6 +26,7 @@ const _stationSizeCache: Record<string, { w: number; h: number }> = {};
 
 const DEFAULT_MAX_COL_WIDTH = 250;
 const MIN_COL_WIDTH = 80;
+const COMPACT_DOT_SIZE = 20; // diameter of compact circle nodes
 
 // Per-column width overrides, persisted to localStorage
 const colWidthOverrides = useSetting<Record<string, number>>("dagColWidths", {});
@@ -51,6 +53,15 @@ export function DagView() {
   const metric = selectedMetric.value;
   const ideas = allIdeas.value;
   const experiments = allExperiments.value;
+  const compactMode = improvementsOnly.value;
+
+  // In compact mode, only ideas with global improvements get full boxes
+  const isImportant: Record<number, boolean> = {};
+  if (compactMode && metric && data) {
+    for (const n of data.nodes) {
+      isImportant[n.id] = _ideaHasGlobalImprovement(n.id, metric, experiments);
+    }
+  }
 
   // =========================================================================
   // MEASUREMENT PHASE — runs synchronously before paint so DOM measurements
@@ -65,9 +76,14 @@ export function DagView() {
     }
 
     // --- Measure station sizes ---
+    // In compact mode, non-important nodes are small dots (no measurement needed).
     const sizes: Record<number, { w: number; h: number }> = {};
     const needsMeasure: IdeaNode[] = [];
     for (const n of data.nodes) {
+      if (compactMode && !isImportant[n.id]) {
+        sizes[n.id] = { w: COMPACT_DOT_SIZE, h: COMPACT_DOT_SIZE };
+        continue;
+      }
       const key = n.id + ":" + ideaTitle(n.description);
       if (_stationSizeCache[key]) {
         sizes[n.id] = _stationSizeCache[key];
@@ -403,30 +419,35 @@ export function DagView() {
       if (!p) continue;
       const ds = n.has_running ? "running" : n.status;
       const nodeColor = colorForIdea(n.id, mode);
-      html +=
-        '<div class="subway-station" data-id="' +
-        n.id +
-        '" title="' +
-        escapeHtml(n.description) +
-        '" style="' +
-        "left:" +
-        p.x +
-        "px;top:" +
-        p.y +
-        "px;width:" +
-        p.w +
-        "px" +
-        ";border-color:" +
-        nodeColor +
-        '">' +
-        '<div class="subway-header"><span class="subway-id">#' +
-        n.id +
-        "</span>" +
-        badgeHtml(ds) +
-        '<span class="subway-desc">' +
-        escapeHtml(ideaTitle(n.description)) +
-        "</span></div>" +
-        "</div>";
+
+      if (compactMode && !isImportant[n.id]) {
+        // Compact dot node
+        html +=
+          '<div class="subway-dot" data-id="' + n.id +
+          '" title="#' + n.id + ': ' + escapeHtml(n.description) +
+          '" style="left:' + (p.x + p.w / 2 - COMPACT_DOT_SIZE / 2) +
+          'px;top:' + (p.y) +
+          'px;width:' + COMPACT_DOT_SIZE +
+          'px;height:' + COMPACT_DOT_SIZE +
+          'px;background:' + nodeColor +
+          '"><span class="subway-dot-id">#' + n.id + '</span></div>';
+      } else {
+        // Full station node
+        html +=
+          '<div class="subway-station" data-id="' +
+          n.id +
+          '" title="' +
+          escapeHtml(n.description) +
+          '" style="' +
+          "left:" + p.x + "px;top:" + p.y + "px;width:" + p.w + "px" +
+          ";border-color:" + nodeColor +
+          '">' +
+          '<div class="subway-header"><span class="subway-id">#' +
+          n.id + "</span>" + badgeHtml(ds) +
+          '<span class="subway-desc">' +
+          escapeHtml(ideaTitle(n.description)) +
+          "</span></div></div>";
+      }
     }
 
     // Add column resize handles
@@ -545,8 +566,8 @@ export function DagView() {
       }
     }
 
-    // --- Attach hover and click handlers ---
-    container.querySelectorAll(".subway-station").forEach((el) => {
+    // --- Attach hover and click handlers to stations AND dots ---
+    container.querySelectorAll(".subway-station, .subway-dot").forEach((el) => {
       el.addEventListener("click", () => {
         const id = parseInt((el as HTMLElement).dataset.id!);
         selectedIdea.value = id;
@@ -563,7 +584,7 @@ export function DagView() {
 
     // Apply current highlight state (in case it was set before render)
     applyHighlight(highlightedIdea.value);
-  }, [data, layout, mode, metric, ideas, experiments]);
+  }, [data, layout, mode, metric, ideas, experiments, compactMode]);
 
   // =========================================================================
   // HIGHLIGHT EFFECT — reacts to highlightedIdea changes without full re-render
@@ -592,8 +613,8 @@ export function DagView() {
 
     const ancestors = highlighted ? getAncestors(highlighted) : null;
 
-    // Highlight/dim stations
-    container.querySelectorAll(".subway-station").forEach((el) => {
+    // Highlight/dim stations and dots
+    container.querySelectorAll(".subway-station, .subway-dot").forEach((el) => {
       const id = parseInt((el as HTMLElement).dataset.id!);
       if (!ancestors) {
         el.classList.remove("highlighted", "dimmed");

@@ -1,7 +1,7 @@
 import { currentView } from "../state/settings";
 
 const TABS = [
-  { key: "dag", label: "DAG", path: "/dag" },
+  { key: "dag", label: "Graph", path: "/graph" },
   { key: "timeline", label: "Timeline", path: "/timeline" },
   { key: "log", label: "Log", path: "/log" },
   { key: "api", label: "API", path: "/api" },
