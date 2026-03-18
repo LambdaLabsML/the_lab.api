@@ -357,6 +357,31 @@ def list_tags():
     return {"tags": [{"tag": t, "count": c} for t, c in sorted(tag_counts.items())]}
 
 
+class RenameTagRequest(BaseModel):
+    old: str
+    new: str
+
+
+@app.post("/api/v1/experiments/tags/rename")
+def rename_tag(req: RenameTagRequest):
+    """Rename a tag across all experiments."""
+    updated = 0
+    for exp in store.list_all_experiments():
+        tags = exp.get("tags") or []
+        if req.old in tags:
+            new_tags = [req.new if t == req.old else t for t in tags]
+            # Deduplicate in case new already existed
+            seen = set()
+            deduped = []
+            for t in new_tags:
+                if t not in seen:
+                    seen.add(t)
+                    deduped.append(t)
+            store.update_experiment(exp["id"], tags=deduped)
+            updated += 1
+    return {"old": req.old, "new": req.new, "updated": updated}
+
+
 @app.get("/api/v1/experiments/compare")
 def compare_experiments(
     ids: str = Query(..., description="Comma-separated experiment IDs"),
