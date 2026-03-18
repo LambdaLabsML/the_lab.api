@@ -41,3 +41,61 @@
   background: #161b22; color: #c9d1d9; border: 1px solid #30363d;
   padding: 2px 6px; font-family: inherit; font-size: 11px; border-radius: 4px;
 }
+
+.improvements-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 6px;
+  padding: 5px 11px;
+  border: 1px solid #2f6feb55;
+  border-radius: 999px;
+  background:
+    linear-gradient(135deg, #151b23 0%, #0f1824 55%, #111827 100%);
+  color: #c9d1d9;
+  cursor: pointer;
+  box-shadow: inset 0 1px 0 #ffffff10;
+  transition:
+    transform 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease,
+    background 0.15s ease;
+}
+
+.improvements-toggle:hover {
+  transform: translateY(-1px);
+  border-color: #58a6ff88;
+  box-shadow: inset 0 1px 0 #ffffff18, 0 8px 18px #0b122033;
+}
+
+.improvements-toggle.active {
+  border-color: #f2cc60;
+  background:
+    linear-gradient(135deg, #241d0f 0%, #302513 50%, #18253d 100%);
+  box-shadow: inset 0 1px 0 #fff1ba22, 0 0 0 1px #f2cc6028, 0 10px 24px #f2cc601c;
+}
+
+.improvements-toggle-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: #58a6ff22;
+  color: #79c0ff;
+  font-size: 9px;
+  line-height: 1;
+}
+
+.improvements-toggle.active .improvements-toggle-icon {
+  background: #f2cc6022;
+  color: #f2cc60;
+}
+
+.improvements-toggle-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #f0f6fc;
+}

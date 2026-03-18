@@ -7,6 +7,58 @@ import type { Experiment, IdeaNode, SubwayLayout } from './types';
 export type { ChartDataResult } from './types';
 import { IDEA_PALETTE, _colorForExp } from './colors';
 
+export function filterMetricExperiments(
+  metricKey: string,
+  allExperiments: Experiment[],
+  activeTagFilters: string[],
+  tagFilterMode: "or" | "and",
+): Experiment[] {
+  let filtered = allExperiments.filter(
+    (e) => e.metrics && e.metrics[metricKey] !== undefined,
+  );
+
+  if (activeTagFilters.length === 0) return filtered;
+
+  const tagSet = new Set(activeTagFilters);
+  filtered = filtered.filter((e) => {
+    const expTags = e.tags || [];
+    if (expTags.length === 0) return false;
+    return tagFilterMode === "and"
+      ? activeTagFilters.every((t) => expTags.includes(t))
+      : expTags.some((t) => tagSet.has(t));
+  });
+
+  return filtered;
+}
+
+export function filterVisibleChartExperiments(
+  metricKey: string,
+  allExperiments: Experiment[],
+  activeTagFilters: string[],
+  tagFilterMode: "or" | "and",
+  improvementsOnly: boolean,
+): Experiment[] {
+  const filtered = filterMetricExperiments(
+    metricKey,
+    allExperiments,
+    activeTagFilters,
+    tagFilterMode,
+  );
+
+  if (!improvementsOnly) return filtered;
+
+  let best = -Infinity;
+  return filtered.filter((e) => {
+    if (e._running) return true;
+    const v = e.metrics![metricKey];
+    if (v > best) {
+      best = v;
+      return true;
+    }
+    return false;
+  });
+}
+
 /**
  * Build the data arrays needed to render the Chart.js metrics chart.
  *
@@ -30,34 +82,19 @@ export function buildChartData(
   currentLayout: SubwayLayout | null,
   reversed: boolean = false,
 ): ChartDataResult {
-  let filtered = allExperiments.filter(
-    (e) => e.metrics && e.metrics[metricKey] !== undefined,
+  const metricFiltered = filterMetricExperiments(
+    metricKey,
+    allExperiments,
+    activeTagFilters,
+    tagFilterMode,
   );
-
-  if (activeTagFilters.length > 0) {
-    const tagSet = new Set(activeTagFilters);
-    if (tagFilterMode === "and") {
-      filtered = filtered.filter(
-        (e) => e.tags && activeTagFilters.every((t) => e.tags!.includes(t)),
-      );
-    } else {
-      filtered = filtered.filter(
-        (e) => e.tags && e.tags.some((t) => tagSet.has(t)),
-      );
-    }
-  }
-
-  if (improvementsOnly) {
-    let best = -Infinity;
-    filtered = filtered.filter((e) => {
-      const v = e.metrics![metricKey];
-      if (v > best) {
-        best = v;
-        return true;
-      }
-      return false;
-    });
-  }
+  let filtered = filterVisibleChartExperiments(
+    metricKey,
+    allExperiments,
+    activeTagFilters,
+    tagFilterMode,
+    improvementsOnly,
+  );
 
   // Fallback sequential palette for 'idea' mode
   const ideaColorMap: Record<number, string> = {};
@@ -70,7 +107,7 @@ export function buildChartData(
   }
 
   function getColor(exp: Experiment): string {
-    const c = _colorForExp(exp, metricKey, colorMode, currentLayout, allIdeas, allExperiments);
+    const c = _colorForExp(exp, metricKey, colorMode, currentLayout, allIdeas, metricFiltered);
     return c || ideaColorMap[exp.idea_id] || '#8b949e';
   }
 

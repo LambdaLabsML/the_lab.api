@@ -49,7 +49,8 @@ const _STATUS_COLORS: Record<string, string> = {
 
 // ---------------------------------------------------------------------------
 // Module-level cache for _computeGlobalBestBefore.
-// Call `resetGlobalBestBeforeCache()` whenever the experiment list changes.
+// Keyed by metric + experiment signature so filtered subsets do not collide.
+// Call `resetGlobalBestBeforeCache()` whenever experiment data changes.
 // ---------------------------------------------------------------------------
 let _globalBestBefore: Record<string, Record<number, number | null>> = {};
 
@@ -115,14 +116,17 @@ export function _computeGlobalBestBefore(
   metricKey: string,
   allExperiments: Experiment[],
 ): Record<number, number | null> {
-  if (_globalBestBefore[metricKey]) return _globalBestBefore[metricKey];
-
   const sorted = allExperiments
     .filter((e) => e.metrics && e.metrics[metricKey] !== undefined && !e._running)
     .slice()
     .sort((a, b) =>
       (a.finished_at || a.started_at || '').localeCompare(b.finished_at || b.started_at || ''),
     );
+
+  const cacheKey = metricKey + "::" + sorted
+    .map((e) => `${e.id}:${e.finished_at || e.started_at || ''}:${e.metrics![metricKey]}`)
+    .join("|");
+  if (_globalBestBefore[cacheKey]) return _globalBestBefore[cacheKey];
 
   let best: number | null = null;
   const map: Record<number, number | null> = {};
@@ -131,7 +135,7 @@ export function _computeGlobalBestBefore(
     const v = sorted[i].metrics![metricKey];
     if (best === null || v > best) best = v;
   }
-  _globalBestBefore[metricKey] = map;
+  _globalBestBefore[cacheKey] = map;
   return map;
 }
 

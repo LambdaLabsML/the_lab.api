@@ -65,18 +65,20 @@ export function ChartPanel() {
             <option value="improvement">by improvement</option>
             <option value="idea">by idea sequence</option>
           </select>
-          <label style={{ marginLeft: "12px", cursor: "pointer" }}>
-            <input
-              type="checkbox"
-              checked={improvementsOnly.value}
-              onChange={(e) => {
-                improvementsOnly.value = (
-                  e.target as HTMLInputElement
-                ).checked;
-              }}
-            />{" "}
-            improvements only
-          </label>
+          <button
+            type="button"
+            class={`improvements-toggle${improvementsOnly.value ? " active" : ""}`}
+            aria-pressed={improvementsOnly.value}
+            title="Collapse to metric-setting ideas while keeping live runs visible."
+            onClick={() => {
+              improvementsOnly.value = !improvementsOnly.value;
+            }}
+          >
+            <span class="improvements-toggle-icon" aria-hidden="true">
+              ▲
+            </span>
+            <span class="improvements-toggle-label">Improvements Only</span>
+          </button>
           <TagFilter />
         </div>
         <MetricsChart />
