@@ -309,6 +309,8 @@
     font-size: 12px; width: 100%; margin-bottom: 6px;
   }
   .attach-form .attach-actions { display: flex; gap: 8px; }
+
+  .training-chart-wrap { margin-top: 6px; height: 150px; position: relative; }
 </style>
 </head>
 <body>
@@ -423,6 +425,7 @@
   let graphData = null;
   let currentLayout = null;
   let suggestOpen = false;
+  let _trainingCharts = {};
 
   // --- View switching ---
 

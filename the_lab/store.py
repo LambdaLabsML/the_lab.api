@@ -319,3 +319,22 @@ class Store:
                 similar.append({"id": idea["id"], "description": idea["description"],
                                 "status": idea["status"], "overlap": round(overlap, 2)})
         return similar
+
+    def get_timeseries(self, exp_id: int) -> list[dict] | None:
+        """Read the .metrics.jsonl file for an experiment."""
+        exp = self.get_experiment(exp_id)
+        if not exp:
+            return None
+        ts_path = (self.repo_dir / exp["script"]).with_suffix(".metrics.jsonl")
+        if not ts_path.exists():
+            return []
+        points = []
+        for line in ts_path.read_text().strip().split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                points.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+        return points
