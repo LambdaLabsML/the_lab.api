@@ -211,6 +211,104 @@
     #topbar { gap: 12px; padding: 8px 12px; font-size: 12px; }
     #topbar .title { font-size: 13px; margin-right: 4px; }
   }
+
+  .badge-suggested { background: #2d1a00; color: #d29922; }
+
+  #suggest-toggle {
+    background: #161b22;
+    border-bottom: 1px solid #30363d;
+    padding: 6px 20px;
+    cursor: pointer;
+    font-size: 12px;
+    color: #8b949e;
+    flex-shrink: 0;
+    user-select: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  #suggest-toggle:hover { color: #c9d1d9; }
+  #suggest-toggle .arrow { transition: transform 0.2s; display: inline-block; }
+  #suggest-toggle .arrow.open { transform: rotate(90deg); }
+  #suggest-panel {
+    background: #0d1117;
+    border-bottom: 1px solid #30363d;
+    overflow: hidden;
+    flex-shrink: 0;
+    padding: 16px 20px;
+  }
+  #suggest-panel.collapsed { display: none; }
+  #suggest-panel .suggest-form { max-width: 600px; }
+  #suggest-panel textarea,
+  #suggest-panel input[type="text"],
+  #suggest-panel input[type="url"],
+  #suggest-panel select {
+    background: #161b22; color: #c9d1d9; border: 1px solid #30363d;
+    border-radius: 4px; padding: 6px 10px; font-family: inherit;
+    font-size: 12px; width: 100%;
+  }
+  #suggest-panel textarea { min-height: 60px; resize: vertical; }
+  #suggest-panel .form-group { margin-bottom: 10px; }
+  #suggest-panel .form-label {
+    display: block; font-size: 11px; color: #8b949e;
+    text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;
+  }
+  #suggest-panel .priority-group { display: flex; gap: 16px; align-items: center; }
+  #suggest-panel .priority-group label {
+    display: flex; align-items: center; gap: 4px;
+    font-size: 12px; color: #c9d1d9; cursor: pointer;
+  }
+  .link-row { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
+  .link-row input { flex: 1; }
+  .remove-link-btn {
+    background: none; border: none; color: #f85149; cursor: pointer;
+    font-size: 16px; padding: 0 4px; line-height: 1;
+  }
+  .remove-link-btn:hover { color: #ff7b72; }
+  .suggest-btn {
+    background: #238636; color: #ffffff; border: none; border-radius: 4px;
+    padding: 6px 16px; font-family: inherit; font-size: 12px;
+    cursor: pointer; font-weight: 600;
+  }
+  .suggest-btn:hover { background: #2ea043; }
+  .suggest-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .add-link-btn {
+    background: none; border: 1px solid #30363d; color: #8b949e;
+    border-radius: 4px; padding: 3px 10px; font-family: inherit;
+    font-size: 11px; cursor: pointer;
+  }
+  .add-link-btn:hover { color: #c9d1d9; border-color: #8b949e; }
+  .suggest-msg {
+    font-size: 12px; margin-top: 8px; padding: 6px 10px;
+    border-radius: 4px; display: none;
+  }
+  .suggest-msg.success { display: block; background: #0f5323; color: #3fb950; }
+  .suggest-msg.error { display: block; background: #5a1e23; color: #f85149; }
+
+  .resource-chip {
+    display: inline-block; padding: 2px 8px; border-radius: 10px;
+    font-size: 10px; font-weight: 500; background: #161b22;
+    border: 1px solid #30363d; color: #58a6ff; text-decoration: none;
+    margin-right: 4px; margin-top: 3px;
+  }
+  .resource-chip:hover { background: #1c2333; border-color: #58a6ff; }
+
+  .attach-link-btn {
+    background: none; border: 1px solid #30363d; color: #8b949e;
+    border-radius: 4px; padding: 3px 10px; font-family: inherit;
+    font-size: 11px; cursor: pointer; margin-top: 8px;
+  }
+  .attach-link-btn:hover { color: #c9d1d9; border-color: #8b949e; }
+  .attach-form {
+    margin-top: 8px; padding: 10px; background: #0d1117;
+    border: 1px solid #30363d; border-radius: 4px;
+  }
+  .attach-form input {
+    background: #161b22; color: #c9d1d9; border: 1px solid #30363d;
+    border-radius: 4px; padding: 4px 8px; font-family: inherit;
+    font-size: 12px; width: 100%; margin-bottom: 6px;
+  }
+  .attach-form .attach-actions { display: flex; gap: 8px; }
 </style>
 </head>
 <body>
@@ -237,6 +335,35 @@
       <label style="margin-left:12px;cursor:pointer"><input type="checkbox" id="improvements-only" onchange="updateChart()"> improvements only</label>
     </div>
     <div id="chart-wrap"><div id="chart-inner"><canvas id="metrics-chart"></canvas></div></div>
+  </div>
+  <div id="suggest-toggle" onclick="toggleSuggest()">
+    <span class="arrow" id="suggest-arrow">&#9654;</span> Suggest idea
+  </div>
+  <div id="suggest-panel" class="collapsed">
+    <div class="suggest-form">
+      <div class="form-group">
+        <span class="form-label">Description</span>
+        <textarea id="suggest-desc" placeholder="Describe your idea..."></textarea>
+      </div>
+      <div class="form-group">
+        <span class="form-label">Parent idea (optional)</span>
+        <select id="suggest-parent"><option value="">None</option></select>
+      </div>
+      <div class="form-group">
+        <span class="form-label">Priority</span>
+        <div class="priority-group">
+          <label><input type="radio" name="suggest-priority" value="normal" checked> Normal</label>
+          <label><input type="radio" name="suggest-priority" value="high"> High</label>
+        </div>
+      </div>
+      <div class="form-group">
+        <span class="form-label">Links</span>
+        <div id="suggest-links"></div>
+        <button type="button" class="add-link-btn" onclick="addLinkRow()">+ Add link</button>
+      </div>
+      <button class="suggest-btn" onclick="submitIdea()">Submit idea</button>
+      <div class="suggest-msg" id="suggest-msg"></div>
+    </div>
   </div>
   <div id="view-tabs">
     <div class="view-tab active" data-view="dag" onclick="switchView('dag')">DAG</div>
@@ -273,10 +400,11 @@
     running:   { bg: '#6e4b00', border: '#d29922', font: '#ffffff' },
     concluded: { bg: '#1f6feb', border: '#58a6ff', font: '#ffffff' },
     abandoned: { bg: '#da3633', border: '#f85149', font: '#ffffff' },
+    suggested: { bg: '#2d1a00', border: '#d29922', font: '#ffffff' },
   };
 
   const STATUS_BAR_COLORS = {
-    active: '#3fb950', running: '#d29922', concluded: '#58a6ff', abandoned: '#f85149',
+    active: '#3fb950', running: '#d29922', concluded: '#58a6ff', abandoned: '#f85149', suggested: '#d29922',
   };
 
   const IDEA_PALETTE = [
@@ -294,6 +422,7 @@
   let currentView = 'dag';
   let graphData = null;
   let currentLayout = null;
+  let suggestOpen = false;
 
   // --- View switching ---
 
@@ -451,7 +580,8 @@
       const sc = STATUS_BAR_COLORS[ds] || STATUS_BAR_COLORS.active;
       const lc = IDEA_PALETTE[layout.ideaLane[n.id] % IDEA_PALETTE.length];
       mHtml += '<div class="subway-station" data-id="' + n.id + '" style="'
-        + 'position:static;border-color:' + sc + ';border-left:4px solid ' + lc + '">'
+        + 'position:static;border-color:' + sc + ';border-left:4px solid ' + lc
+        + (n.status === 'suggested' ? ';border-style:dashed' : '') + '">'
         + '<div class="subway-header"><span class="subway-id">#' + n.id + '</span>' + badgeFor(ds)
         + '<span class="subway-desc">' + escapeHtml(ideaTitle(n.description)) + '</span></div>'
         + '</div>';
@@ -530,7 +660,7 @@
     for (var li = 0; li < layout.lanes.length; li++) computeLaneFullAct(li);
 
     // Compute per-lane "worst" status (for sorting: concluded=0, active=1, abandoned=2)
-    var STATUS_ORDER = { concluded: 0, active: 1, abandoned: 2 };
+    var STATUS_ORDER = { concluded: 0, active: 1, abandoned: 2, suggested: 3 };
     var laneStatus = {};
     for (var idx = 0; idx < data.nodes.length; idx++) {
       var n = data.nodes[idx];
