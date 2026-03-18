@@ -124,18 +124,23 @@ All timestamps are ISO 8601. You can reconstruct the full timeline of an idea by
    ```
    The server auto-commits any uncommitted changes before launching (so `git_commit` in the experiment meta reflects exactly the code being tested), then runs the script in the repo directory on the currently checked-out branch. Stdout/stderr stream into `.log` in real-time; the final JSON line is extracted on completion; errors go to `.err`. Optional `timeout` (seconds) kills the experiment if it exceeds the budget.
 
-5. **Wait for an experiment to finish:**
+5. **Monitor progress** (optional, while the experiment runs):
    ```
-   GET /wait?experiment_id=7            ← wait for a specific experiment (recommended)
-   GET /wait?idea_id=3                  ← wait for any experiment in this idea
-   GET /wait?timeout=3600               ← wait for any experiment (default timeout 3600s)
+   GET /experiments/<exp_id>/progress   → script-reported progress (epoch, loss, ETA, etc.)
+   GET /experiments/<exp_id>/log?tail=50 → live stdout/stderr tail
+   GET /experiments/<exp_id>/timeseries  → per-step training metrics (if the script logs to $THE_LAB_METRICS)
+   ```
+
+6. **Wait for the experiment to finish:**
+   ```
+   GET /wait?experiment_id=<exp_id>&timeout=3600
    → completed: {event: "completed", current_branch: "idea/1", idea_description: "...", experiment: {id, idea_id, metrics, meta, ...}}
    → failed:    {event: "failed", current_branch: "idea/1", idea_description: "...", experiment: {id, idea_id, error, ...}}
    → timeout:   {event: "timeout", current_branch: "idea/1", running: [list of still-running experiment ids]}
    ```
-   **Tip:** always pass `experiment_id` to avoid getting stale results from unrelated experiments.
+   Always pass `experiment_id` to avoid getting stale results from unrelated experiments. You can also wait by idea (`?idea_id=3`) or for any experiment (omit both filters).
 
-6. **Take notes on the idea** (at any time — before, during, or after experiments):
+7. **Take notes on the idea** (at any time — before, during, or after experiments):
    ```
    POST /ideas/<id>/note  {text: "accuracy 84% is +2% over baseline", level: "insight"}
    POST /ideas/<id>/note  {text: "OOM at batch_size=64, dropped to 32", level: "debug"}
@@ -143,7 +148,7 @@ All timestamps are ISO 8601. You can reconstruct the full timeline of an idea by
    ```
    Default level is `observation` if omitted.
 
-7. **Conclude the idea** when done, then branch into a new one:
+8. **Conclude the idea** when done, then branch into a new one:
    ```
    POST /ideas/<id>/conclude  {conclusion: "what you learned"}
    ```
@@ -160,29 +165,50 @@ POST /ideas/<id>/abandon       → reject with reason
 
 ### Research digest
 
-Get a compact summary of all research so far (designed for agent context efficiency):
+**Start every session by checking the digest** — it gives you a compact summary of everything that's been tried and learned so far, without having to read through every idea individually:
 ```
 GET /digest  → {total_ideas, best_metrics, concluded_ideas (with conclusions + insights), key_insights, ...}
 ```
 
-### Other useful endpoints
+### Other endpoints
+
+#### Orientation — understand the current state
 
 | Endpoint | What |
 |----------|------|
-| `GET /ideas` | List all ideas (filter: `?status=active`, `?source=human`). Includes `insight`/`milestone` notes + `experiment_summary` with counts and `latest_metrics`. |
-| `GET /ideas/<id>` | Get idea with experiments and notes (`insight` + `milestone` + `observation`). |
-| `GET /ideas/<id>?notes=all` | Same but includes `debug` notes too. |
-| `GET /ideas/<id>/tree` | See ancestors and descendants with `insight` + `milestone` notes. |
+| `GET /digest` | **Start here.** Compact research summary: concluded ideas with conclusions + insights, global best metrics, abandoned ideas with reasons. |
+| `GET /backlog` | Active work overview: running/pending counts per idea, suggested ideas, current branch. |
+| `GET /ideas` | All ideas with `insight`/`milestone` notes + `experiment_summary`. Filter: `?status=active`, `?source=human`. |
+| `GET /ideas/<id>` | Full idea detail: experiments, notes (`insight` + `milestone` + `observation`). Add `?notes=all` for `debug` too. |
+| `GET /ideas/<id>/tree` | Ancestors and descendants with key notes. |
+| `GET /graph` | Full idea DAG (for the dashboard). |
+
+#### Idea management
+
+| Endpoint | What |
+|----------|------|
 | `POST /ideas/<id>/checkout` | Save work (commit + stash if needed) and switch to this idea's branch. |
-| `POST /ideas/<id>/abandon` | Abandon an idea (with `{reason}`). |
+| `POST /ideas/<id>/abandon` | Abandon an idea (with `{reason}`). Works on `active` and `suggested` ideas. |
 | `POST /ideas/<id>/reopen` | Reopen a concluded/abandoned idea (with `{reason}`). Old conclusion preserved as an `insight` note. |
-| `GET /backlog` | Overview of all active work + suggested ideas + current branch. |
-| `GET /graph` | Full idea DAG. |
-| `GET /digest` | Compact research summary: concluded ideas, key insights, best metrics. |
+
+#### Monitoring — track running experiments
+
+| Endpoint | What |
+|----------|------|
+| `GET /experiments/<id>/progress` | Script-reported progress JSON (epoch, loss, ETA). Falls back to `{status}` if no progress file. |
+| `GET /experiments/<id>/log?tail=50` | Live stdout/stderr (streams in real-time while running). |
+| `GET /experiments/<id>/timeseries` | Per-step training metrics. Optional `?keys=loss,lr` to filter, `?last=100` for recent only. |
+
+#### Comparison — analyze results across experiments
+
+| Endpoint | What |
+|----------|------|
+| `GET /experiments/compare?ids=9,13,15` | Side-by-side: pivoted `metrics` and `meta` tables, plus full experiment objects. Optional `&metrics=accuracy,loss`. |
+| `GET /experiments/compare-curves?ids=9,13&key=train_loss` | Overlay training curves across experiments. |
+
+#### Experiment lifecycle
+
+| Endpoint | What |
+|----------|------|
 | `POST /experiments/<id>/restart` | Re-run a failed/cancelled experiment (same script). |
 | `POST /experiments/<id>/cancel` | Kill a running experiment. |
-| `GET /experiments/compare?ids=9,13,15` | Side-by-side comparison: pivoted `metrics` and `meta` tables, plus full experiment objects. Optional `&metrics=accuracy,loss` to filter metric keys. |
-| `GET /experiments/<id>/progress` | Read script-reported progress JSON (falls back to `{status}` if no progress file). |
-| `GET /experiments/<id>/timeseries` | Per-step training metrics. Optional `?keys=loss,lr` to filter, `?last=100` for recent only. |
-| `GET /experiments/compare-curves?ids=9,13&key=train_loss` | Overlay training curves across experiments. |
-| `GET /experiments/<id>/log?tail=50` | Read experiment log (streams in real-time while running). |
