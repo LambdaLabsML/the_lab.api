@@ -1087,7 +1087,7 @@ def get_digest(
         status_counts[s] = status_counts.get(s, 0) + 1
 
     return {
-        "tag": tag,
+        "tags": tag_list or None,
         "total_ideas": len(all_ideas),
         "total_experiments": len(all_exps),
         "active_ideas": status_counts.get("active", 0),
