@@ -1980,10 +1980,10 @@
   pollBacklog();
   pollGraph();
   loadChartData();
-  setInterval(pollBacklog, 5000);
-  setInterval(pollGraph, 10000);
-  setInterval(function() { if (chartOpen) loadChartData(); }, 15000);
-  setInterval(function() { if (currentView === 'log') loadLog(); }, 10000);
+  setInterval(pollBacklog, 10000);
+  setInterval(pollGraph, 15000);
+  setInterval(function() { if (chartOpen) loadChartData(); }, 30000);
+  setInterval(function() { if (currentView === 'log') loadLog(); }, 15000);
 
   // --- API Explorer ---
 

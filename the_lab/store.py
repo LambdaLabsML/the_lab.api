@@ -10,6 +10,10 @@ branch switches or worktree operations.
   {idea_id}/{exp_id}.sh     — experiment script
   {idea_id}/{exp_id}.log    — stdout+stderr capture
   {idea_id}/{exp_id}.err    — error details
+
+Performance: all reads are served from in-memory caches populated on startup.
+Writes go to disk first, then update the cache. This makes list/get operations
+O(1) instead of O(I×E) filesystem scans.
 """
 from __future__ import annotations
 
@@ -56,7 +60,14 @@ def _write_json(path: Path, data):
 
 
 class Store:
-    """File-based store. All data lives in {repo}/.the_lab/experiments/."""
+    """File-based store with in-memory caches.
+
+    Caches:
+      _ideas:        {idea_id: dict}     — all idea metadata
+      _experiments:  {exp_id: dict}      — all experiment metadata (enriched)
+      _exp_by_idea:  {idea_id: set[exp_id]} — reverse index for per-idea lookups
+      _notes:        {idea_id: list[dict]} — notes per idea
+    """
 
     def __init__(self, repo_dir: Path):
         self.repo_dir = repo_dir
@@ -66,14 +77,17 @@ class Store:
         self._lock = threading.Lock()
         self._next_idea_id = 1
         self._next_exp_id = 1
-        self._recover_counters()
+
+        # In-memory caches
+        self._ideas: dict[int, dict] = {}
+        self._experiments: dict[int, dict] = {}
+        self._exp_by_idea: dict[int, set[int]] = {}
+        self._notes: dict[int, list[dict]] = {}
+
+        self._load_all()
 
     def _ensure_gitignore(self):
-        """Make sure .the_lab/ is gitignored on ALL branches.
-
-        We add it to .git/info/exclude (repo-level, not branch-level)
-        so it works regardless of which branch is checked out.
-        """
+        """Make sure .the_lab/ is gitignored on ALL branches."""
         exclude_file = self.repo_dir / ".git" / "info" / "exclude"
         exclude_file.parent.mkdir(parents=True, exist_ok=True)
         entry = ".the_lab/"
@@ -88,23 +102,42 @@ class Store:
         artifacts_dir = self.repo_dir / ".the_lab" / "artifacts"
         artifacts_dir.mkdir(parents=True, exist_ok=True)
 
-    def _recover_counters(self):
-        """Scan existing data to recover the next IDs."""
-        max_idea = 0
-        max_exp = 0
+    def _load_all(self):
+        """Scan filesystem once on startup to populate all caches."""
         if not self.lab_dir.exists():
             return
+        max_idea = 0
+        max_exp = 0
         for d in self.lab_dir.iterdir():
             if not d.is_dir():
                 continue
             try:
                 idea_id = int(d.name)
-                max_idea = max(max_idea, idea_id)
             except ValueError:
                 continue
+            max_idea = max(max_idea, idea_id)
+
+            # Load idea
+            idea_path = d / "idea.json"
+            if idea_path.exists():
+                self._ideas[idea_id] = json.loads(idea_path.read_text())
+
+            # Load notes
+            notes_path = d / "notes.json"
+            if notes_path.exists():
+                self._notes[idea_id] = json.loads(notes_path.read_text())
+
+            # Load experiments
+            exp_ids: set[int] = set()
             for f in d.glob("*.json"):
                 if f.stem.isdigit():
-                    max_exp = max(max_exp, int(f.stem))
+                    exp_id = int(f.stem)
+                    max_exp = max(max_exp, exp_id)
+                    exp = _enrich_experiment(json.loads(f.read_text()))
+                    self._experiments[exp_id] = exp
+                    exp_ids.add(exp_id)
+            self._exp_by_idea[idea_id] = exp_ids
+
         self._next_idea_id = max_idea + 1
         self._next_exp_id = max_exp + 1
 
@@ -143,18 +176,23 @@ class Store:
 
     def save_idea(self, idea: dict):
         """Write idea.json + initialize notes.json."""
-        idea_dir = self._idea_dir(idea["id"])
+        idea_id = idea["id"]
+        idea_dir = self._idea_dir(idea_id)
         idea_dir.mkdir(parents=True, exist_ok=True)
         _write_json(idea_dir / "idea.json", idea)
         notes_path = idea_dir / "notes.json"
         if not notes_path.exists():
             _write_json(notes_path, [])
+        # Update cache
+        with self._lock:
+            self._ideas[idea_id] = idea
+            if idea_id not in self._notes:
+                self._notes[idea_id] = []
+            if idea_id not in self._exp_by_idea:
+                self._exp_by_idea[idea_id] = set()
 
     def get_idea(self, idea_id: int) -> dict | None:
-        idea_path = self._idea_dir(idea_id) / "idea.json"
-        if not idea_path.exists():
-            return None
-        return _read_json(idea_path)
+        return self._ideas.get(idea_id)
 
     def update_idea(self, idea_id: int, **fields) -> dict | None:
         idea = self.get_idea(idea_id)
@@ -162,27 +200,16 @@ class Store:
             return None
         idea.update(fields)
         _write_json(self._idea_dir(idea_id) / "idea.json", idea)
+        with self._lock:
+            self._ideas[idea_id] = idea
         return idea
 
     def list_ideas(self, status: str | None = None, source: str | None = None) -> list[dict]:
-        ideas = []
-        if not self.lab_dir.exists():
-            return ideas
-        for d in sorted(self.lab_dir.iterdir()):
-            if not d.is_dir():
-                continue
-            try:
-                int(d.name)
-            except ValueError:
-                continue
-            idea_path = d / "idea.json"
-            if idea_path.exists():
-                idea = _read_json(idea_path)
-                if status is not None and idea.get("status") != status:
-                    continue
-                if source is not None and idea.get("source") != source:
-                    continue
-                ideas.append(idea)
+        ideas = sorted(self._ideas.values(), key=lambda i: i.get("id", 0))
+        if status is not None:
+            ideas = [i for i in ideas if i.get("status") == status]
+        if source is not None:
+            ideas = [i for i in ideas if i.get("source") == source]
         return ideas
 
     # --- Notes ---
@@ -205,14 +232,14 @@ class Store:
             note["resources"] = resources
         notes_path = self._idea_dir(idea_id) / "notes.json"
         with self._lock:
-            notes = _read_json(notes_path) if notes_path.exists() else []
+            notes = self._notes.get(idea_id, [])
             notes.append(note)
+            self._notes[idea_id] = notes
             _write_json(notes_path, notes)
         return note
 
     def get_notes(self, idea_id: int, levels: set[str] | None = None) -> list[dict]:
-        notes_path = self._idea_dir(idea_id) / "notes.json"
-        notes = _read_json(notes_path) if notes_path.exists() else []
+        notes = self._notes.get(idea_id, [])
         if levels is not None:
             notes = [n for n in notes if n.get("level", "observation") in levels]
         return notes
@@ -250,55 +277,42 @@ class Store:
         idea_dir = self._idea_dir(idea_id)
         idea_dir.mkdir(parents=True, exist_ok=True)
         _write_json(idea_dir / f"{exp_id}.json", exp)
+        # Update cache
+        with self._lock:
+            self._experiments[exp_id] = exp
+            self._exp_by_idea.setdefault(idea_id, set()).add(exp_id)
         return exp
 
     def get_experiment(self, exp_id: int) -> dict | None:
-        """Find an experiment by ID (scans all idea dirs)."""
-        if not self.lab_dir.exists():
+        exp = self._experiments.get(exp_id)
+        if exp is None:
             return None
-        for d in self.lab_dir.iterdir():
-            if not d.is_dir():
-                continue
-            exp_path = d / f"{exp_id}.json"
-            if exp_path.exists():
-                return _enrich_experiment(_read_json(exp_path))
-        return None
+        return _enrich_experiment(exp)
 
     def update_experiment(self, exp_id: int, **fields) -> dict | None:
-        exp = self.get_experiment(exp_id)
+        exp = self._experiments.get(exp_id)
         if not exp:
             return None
         exp.update(fields)
-        # Re-enrich so runtime is persisted to disk
         exp = _enrich_experiment(exp)
         idea_dir = self._idea_dir(exp["idea_id"])
         _write_json(idea_dir / f"{exp_id}.json", exp)
+        with self._lock:
+            self._experiments[exp_id] = exp
         return exp
 
     def list_experiments(self, idea_id: int) -> list[dict]:
-        idea_dir = self._idea_dir(idea_id)
-        if not idea_dir.exists():
-            return []
-        exps = []
-        for f in sorted(idea_dir.glob("*.json")):
-            if f.stem.isdigit():
-                exps.append(_enrich_experiment(_read_json(f)))
+        exp_ids = self._exp_by_idea.get(idea_id, set())
+        exps = [_enrich_experiment(self._experiments[eid]) for eid in exp_ids if eid in self._experiments]
         return sorted(exps, key=lambda e: e.get("created_at", ""))
 
     def list_experiments_by_status(self, status: str) -> list[dict]:
         """List all experiments across all ideas with a given status."""
-        results = []
-        if not self.lab_dir.exists():
-            return results
-        for d in self.lab_dir.iterdir():
-            if not d.is_dir():
-                continue
-            for f in d.glob("*.json"):
-                if f.stem.isdigit():
-                    exp = _enrich_experiment(_read_json(f))
-                    if exp.get("status") == status:
-                        results.append(exp)
-        return results
+        return [
+            _enrich_experiment(exp)
+            for exp in self._experiments.values()
+            if exp.get("status") == status
+        ]
 
     def find_similar_ideas(self, description: str, threshold: float = 0.4) -> list[dict]:
         """Find existing ideas with overlapping keywords (simple word-overlap)."""
@@ -321,7 +335,7 @@ class Store:
             return []
 
         similar = []
-        for idea in self.list_ideas():
+        for idea in self._ideas.values():
             idea_words = significant_words(idea.get("description", ""))
             if not idea_words:
                 continue
@@ -333,7 +347,7 @@ class Store:
 
     def get_timeseries(self, exp_id: int) -> list[dict] | None:
         """Read the .metrics.jsonl file for an experiment."""
-        exp = self.get_experiment(exp_id)
+        exp = self._experiments.get(exp_id)
         if not exp:
             return None
         ts_path = (self.repo_dir / exp["script"]).with_suffix(".metrics.jsonl")
@@ -352,13 +366,4 @@ class Store:
 
     def list_all_experiments(self) -> list[dict]:
         """List all experiments across all ideas."""
-        results = []
-        if not self.lab_dir.exists():
-            return results
-        for d in self.lab_dir.iterdir():
-            if not d.is_dir():
-                continue
-            for f in d.glob("*.json"):
-                if f.stem.isdigit():
-                    results.append(_enrich_experiment(_read_json(f)))
-        return results
+        return [_enrich_experiment(exp) for exp in self._experiments.values()]
