@@ -16,6 +16,41 @@ def _find_dashboard_dir() -> Path | None:
     return None
 
 
+def _find_node() -> str | None:
+    """Find a Node.js binary >= 18, checking nvm paths first."""
+    nvm_dir = os.environ.get("NVM_DIR", str(Path.home() / ".nvm"))
+    versions_dir = Path(nvm_dir) / "versions" / "node"
+    if versions_dir.exists():
+        # Sort descending so we pick the newest version
+        for d in sorted(versions_dir.iterdir(), reverse=True):
+            node_bin = d / "bin" / "node"
+            if node_bin.exists():
+                try:
+                    v = subprocess.run(
+                        [str(node_bin), "--version"],
+                        capture_output=True, text=True, timeout=5,
+                    )
+                    major = int(v.stdout.strip().lstrip("v").split(".")[0])
+                    if major >= 18:
+                        return str(node_bin)
+                except Exception:
+                    continue
+    # Fall back to system node
+    system_node = shutil.which("node")
+    if system_node:
+        try:
+            v = subprocess.run(
+                [system_node, "--version"],
+                capture_output=True, text=True, timeout=5,
+            )
+            major = int(v.stdout.strip().lstrip("v").split(".")[0])
+            if major >= 18:
+                return system_node
+        except Exception:
+            pass
+    return None
+
+
 def _start_vite(dashboard_dir: Path, api_port: int) -> subprocess.Popen | None:
     """Start the Vite dev server if node_modules exists."""
     if not (dashboard_dir / "node_modules").exists():
@@ -25,18 +60,18 @@ def _start_vite(dashboard_dir: Path, api_port: int) -> subprocess.Popen | None:
         print("  Falling back to API-only mode (no HMR)\n")
         return None
 
-    # Use the local node_modules/.bin/vite directly to avoid
-    # npx/nvm path issues with system Node being too old.
-    vite_bin = dashboard_dir / "node_modules" / ".bin" / "vite"
-    if not vite_bin.exists():
-        npx = shutil.which("npx")
-        if not npx:
-            print("\033[33m  npx not found — Vite HMR disabled\033[0m\n")
-            return None
-        cmd = [npx, "vite", "--clearScreen", "false"]
-    else:
-        cmd = [str(vite_bin), "--clearScreen", "false"]
+    vite_js = dashboard_dir / "node_modules" / "vite" / "bin" / "vite.js"
+    if not vite_js.exists():
+        print("\033[33m  vite not found in node_modules — Vite HMR disabled\033[0m\n")
+        return None
 
+    node = _find_node()
+    if not node:
+        print("\033[33m  Node.js >= 18 not found — Vite HMR disabled\033[0m")
+        print("  Install via nvm: nvm install 24\n")
+        return None
+
+    cmd = [node, str(vite_js), "--clearScreen", "false"]
     env = {**os.environ, "VITE_API_PORT": str(api_port)}
     proc = subprocess.Popen(
         cmd,
