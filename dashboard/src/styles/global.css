@@ -2,22 +2,24 @@
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
+html, body {
+  height: 100%;
+  overflow: hidden;
+}
+
 body {
   font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
   background: #0d1117;
   color: #c9d1d9;
-  height: 100vh;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
 }
 
 #app {
   display: flex;
   flex-direction: column;
-  flex: 1;
+  height: 100%;
   overflow: hidden;
-  min-height: 0;
 }
 
 /* Badges */

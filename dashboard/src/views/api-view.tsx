@@ -185,7 +185,7 @@ export function ApiView() {
             <span id="api-detail-url">{selected.path}</span>
             <span class="close-btn" onClick={() => setSelected(null)}>&times;</span>
           </div>
-          <div id="api-params" class={selected.op.parameters?.length || selected.op.requestBody ? "has-params" : ""}>
+          <div id="api-params" class="has-params">
             {(selected.op.parameters || []).map((param: any) => (
               <div key={param.name}>
                 <label>
