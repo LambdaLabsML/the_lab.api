@@ -714,6 +714,16 @@ async def restart_experiment(exp_id: int):
 
 @app.post("/api/v1/experiments/{exp_id}/cancel")
 async def cancel_experiment(exp_id: int):
+    """Kill a running experiment.
+
+    Sends SIGTERM to the experiment process, giving it a chance to clean up.
+    If the process does not exit promptly, SIGKILL is sent to force
+    termination. The experiment status is set to ``cancelled``.
+
+    Example:
+        POST /api/v1/experiments/4/cancel
+        -> {"id": 4, "status": "cancelled", ...}
+    """
     result = await runner.cancel(exp_id)
     if result is None:
         raise HTTPException(404, "experiment not found")
@@ -722,6 +732,17 @@ async def cancel_experiment(exp_id: int):
 
 @app.get("/api/v1/experiments/{exp_id}/log")
 def get_experiment_log(exp_id: int, tail: int | None = None):
+    """Read the stdout/stderr log for an experiment.
+
+    Returns the combined output log captured during experiment execution. Use
+    ``?tail=50`` to retrieve only the last 50 lines, which is useful for
+    checking recent progress on long-running experiments without downloading
+    the entire log.
+
+    Example:
+        GET /api/v1/experiments/4/log?tail=50
+        -> {"log": "Epoch 49/50 - loss: 0.31 - acc: 0.92\\nEpoch 50/50 - loss: 0.30 ..."}
+    """
     log = runner.get_log(exp_id, tail=tail)
     if log is None:
         raise HTTPException(404, "experiment not found")
@@ -730,6 +751,17 @@ def get_experiment_log(exp_id: int, tail: int | None = None):
 
 @app.get("/api/v1/experiments/{exp_id}/progress")
 def get_experiment_progress(exp_id: int):
+    """Read script-reported progress for an experiment.
+
+    Returns the experiment's current status and, if the script has written a
+    progress file (``<script_name>.progress``), includes the parsed JSON
+    progress data. Scripts report progress by writing JSON to this file during
+    execution.
+
+    Example:
+        GET /api/v1/experiments/4/progress
+        -> {"status": "running", "progress": {"epoch": 25, "total_epochs": 50, "loss": 0.34}}
+    """
     exp = store.get_experiment(exp_id)
     if not exp:
         raise HTTPException(404, "experiment not found")
@@ -747,6 +779,19 @@ def get_experiment_progress(exp_id: int):
 
 @app.post("/api/v1/ideas/suggest", status_code=201)
 def suggest_idea(req: SuggestIdeaRequest):
+    """Submit an idea suggestion from a human for the agent to consider.
+
+    Creates an idea in ``suggested`` status with ``source=human``. The idea
+    does not get a git branch until the agent adopts it. Use ``priority`` to
+    flag urgent suggestions as ``high``, and attach ``resources`` (URL + label
+    pairs) to provide context such as papers, datasets, or related issues.
+
+    Example:
+        POST /api/v1/ideas/suggest {"description": "Try cosine annealing schedule",
+                                     "parent_ids": [1], "priority": "high",
+                                     "resources": [{"url": "https://arxiv.org/abs/...", "label": "paper"}]}
+        -> {"id": 5, "status": "suggested", "source": "human", "priority": "high", ...}
+    """
     for pid in req.parent_ids:
         if not store.get_idea(pid):
             raise HTTPException(404, f"parent idea {pid} not found")
@@ -766,6 +811,18 @@ def suggest_idea(req: SuggestIdeaRequest):
 
 @app.post("/api/v1/ideas/{idea_id}/adopt")
 def adopt_idea(idea_id: int, req: AdoptRequest | None = None):
+    """Adopt a suggested idea, creating its git branch and activating it.
+
+    Transitions a ``suggested`` idea to ``active`` status and creates its
+    ``idea/<id>`` branch (from the parent branch or main). Only ideas in
+    ``suggested`` status can be adopted. An optional ``agent_note`` is saved
+    as an observation note on the idea. For multi-parent ideas, branches are
+    merged; if conflicts arise, the response contains a ``conflicts`` list.
+
+    Example:
+        POST /api/v1/ideas/5/adopt {"agent_note": "Looks promising, starting now"}
+        -> {"id": 5, "status": "active", "branch": "idea/5", ...}
+    """
     idea = store.get_idea(idea_id)
     if not idea:
         raise HTTPException(404, "idea not found")
@@ -804,6 +861,19 @@ def get_experiment_timeseries(
     keys: str | None = Query(default=None, description="Comma-separated metric keys to include"),
     last: int | None = Query(default=None, description="Return only the last N data points"),
 ):
+    """Get per-step metrics logged by the experiment script.
+
+    Returns the timeseries data that the script wrote to the
+    ``$THE_LAB_METRICS`` file during execution. Each data point contains a
+    ``step``, ``wall_time``, and one or more metric values. Use ``?keys=loss,lr``
+    to include only specific metric keys (``step`` and ``wall_time`` are always
+    included). Use ``?last=100`` to return only the most recent 100 data points.
+
+    Example:
+        GET /api/v1/experiments/4/timeseries?keys=loss,lr&last=100
+        -> {"points": [{"step": 900, "wall_time": 1234.5, "loss": 0.31, "lr": 0.0003}, ...],
+            "count": 100}
+    """
     points = store.get_timeseries(exp_id)
     if points is None:
         raise HTTPException(404, "experiment not found")
@@ -822,6 +892,19 @@ def compare_curves(
     ids: str = Query(..., description="Comma-separated experiment IDs"),
     key: str = Query(..., description="Metric key to compare"),
 ):
+    """Overlay training curves from multiple experiments for a single metric.
+
+    Extracts the timeseries for the given metric key from each experiment and
+    returns them as separate curves, ready for plotting on the same chart.
+    Pass ``?ids=1,2&key=train_loss`` to compare the ``train_loss`` curves of
+    experiments 1 and 2.
+
+    Example:
+        GET /api/v1/experiments/compare-curves?ids=4,5&key=train_loss
+        -> {"key": "train_loss", "experiments": [
+                {"id": 4, "points": [{"step": 0, "train_loss": 2.3}, ...]},
+                {"id": 5, "points": [{"step": 0, "train_loss": 2.1}, ...]}]}
+    """
     try:
         exp_ids = [int(x.strip()) for x in ids.split(",") if x.strip()]
     except ValueError:
@@ -840,6 +923,21 @@ def compare_curves(
 
 @app.get("/api/v1/digest")
 def get_digest():
+    """Get a compact summary of all research activity.
+
+    Returns a high-level digest including: global best metrics across all
+    completed experiments (with the experiment and idea that produced each),
+    concluded ideas with their conclusions, key insights, and best per-idea
+    metrics, abandoned ideas with their reasons, and a collection of the most
+    recent insight-level notes. Designed to give a quick overview of what has
+    been tried, what worked, and what was learned.
+
+    Example:
+        GET /api/v1/digest
+        -> {"total_ideas": 8, "total_experiments": 15, "active_ideas": 2,
+            "best_metrics": {"acc": {"value": 0.95, "idea_id": 3, "experiment_id": 7}},
+            "concluded_ideas": [...], "abandoned_ideas": [...], "key_insights": [...]}
+    """
     all_ideas = store.list_ideas()
     all_exps = store.list_all_experiments()
 
@@ -927,6 +1025,20 @@ async def wait_for_experiment(
     experiment_id: int | None = Query(default=None),
     idea_id: int | None = Query(default=None),
 ):
+    """Long-poll until an experiment finishes.
+
+    Blocks until a matching experiment completes, fails, or is cancelled, then
+    returns the result. Use ``?experiment_id=4`` to wait for a specific
+    experiment, ``?idea_id=1`` to wait for any experiment under that idea, or
+    neither to wait for any experiment globally. The ``?timeout`` parameter
+    (default 3600s, max 86400s) controls how long to wait before returning a
+    timeout response.
+
+    Example:
+        GET /api/v1/wait?experiment_id=4&timeout=300
+        -> {"status": "completed", "experiment": {"id": 4, "metrics": {...}, ...},
+            "current_branch": "idea/1", "idea_id": 1, ...}
+    """
     result = await runner.wait_any(
         timeout=timeout,
         experiment_id=experiment_id,
@@ -943,6 +1055,19 @@ async def wait_for_experiment(
 
 @app.get("/api/v1/backlog")
 def get_backlog():
+    """Get an overview of active work and the suggestion backlog.
+
+    Returns the current git branch, all active ideas with per-idea experiment
+    counts (running, pending, completed, failed), and all suggested ideas
+    waiting for adoption. Use this endpoint to understand what is in flight,
+    what needs attention, and what the human has suggested.
+
+    Example:
+        GET /api/v1/backlog
+        -> {"current_branch": "idea/3", "total_running": 1, "total_pending": 2,
+            "active_ideas": [{"id": 3, "description": "...", "running_experiments": 1, ...}],
+            "suggested_ideas": [{"id": 5, "description": "...", "priority": "high", ...}]}
+    """
     current = get_current_branch(cwd=REPO_DIR)
     ideas = store.list_ideas(status="active")
     result = []
@@ -982,6 +1107,20 @@ def get_backlog():
 
 @app.get("/api/v1/graph")
 def get_graph():
+    """Get the full idea DAG for the dashboard visualization.
+
+    Returns all ideas as nodes and their parent-child relationships as edges,
+    forming a directed acyclic graph. Each node includes the idea's status,
+    source, priority, whether it has running experiments, and time range
+    information (first experiment start to last experiment finish). This
+    powers the dashboard's graph and timeline views.
+
+    Example:
+        GET /api/v1/graph
+        -> {"nodes": [{"id": 1, "description": "...", "status": "active",
+                        "parent_ids": [], "has_running": true, ...}],
+            "edges": [{"from": 1, "to": 3}]}
+    """
     ideas = store.list_ideas()
     nodes = []
     for i in ideas:
@@ -1011,9 +1150,19 @@ def get_graph():
 
 @app.get("/api/v1/chart-data")
 def get_chart_data():
-    """All data the dashboard chart needs in a single request.
+    """Get all data for the dashboard metrics chart in one request.
 
-    Replaces the N+1 pattern of GET /ideas + GET /ideas/{id}/experiments per idea.
+    Returns completed experiments (with their final metrics) and running
+    experiments (with their latest progress data) in a single response,
+    avoiding the N+1 pattern of fetching ideas then experiments per idea.
+    Each experiment is enriched with its parent idea's description and status.
+    Running experiments include a ``_running: true`` flag and their most
+    recent progress metrics.
+
+    Example:
+        GET /api/v1/chart-data
+        -> {"experiments": [{"id": 4, "metrics": {"acc": 0.91}, "idea_description": "...", ...}],
+            "running": [{"id": 6, "metrics": {...}, "_running": true, "idea_description": "...", ...}]}
     """
     ideas = store.list_ideas()
     completed_exps = []
