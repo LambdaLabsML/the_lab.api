@@ -1769,6 +1769,11 @@
         html += '<div class="exp-item">';
         html += '<div class="exp-header"><span class="exp-id">exp/' + e.id + '</span>' + badgeFor(e.status) + '</div>';
         html += '<div class="exp-desc">' + escapeHtml(e.description) + '</div>';
+        if (e.tags && e.tags.length) {
+          html += '<div>';
+          for (var ti = 0; ti < e.tags.length; ti++) html += '<span class="tag-pill">' + escapeHtml(e.tags[ti]) + '</span>';
+          html += '</div>';
+        }
         if (e.status === 'running') {
           html += '<div class="exp-progress" id="progress-' + e.id + '">loading progress...</div>';
         }
