@@ -1394,7 +1394,13 @@
       const opt = document.createElement('option');
       opt.value = k; opt.textContent = k; select.appendChild(opt);
     }
-    if (prev && metricKeys.has(prev)) { select.value = prev; }
+    if (prev && metricKeys.has(prev)) {
+      select.value = prev;
+    } else {
+      const preferred = ['accuracy_per_mtoken', 'agent_accuracy', 'accuracy'];
+      const match = preferred.find(k => metricKeys.has(k));
+      if (match) select.value = match;
+    }
 
     const tagContainer = document.getElementById('tag-filters');
     var tagHtml = 'Tags:';
@@ -1408,11 +1414,6 @@
       }
     }
     tagContainer.innerHTML = tagHtml;
-    else {
-      const preferred = ['accuracy_per_mtoken', 'agent_accuracy', 'accuracy'];
-      const match = preferred.find(k => metricKeys.has(k));
-      if (match) select.value = match;
-    }
   }
 
   let _chartMetricKey = null;
