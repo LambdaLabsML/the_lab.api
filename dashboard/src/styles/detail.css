@@ -54,6 +54,38 @@
 .exp-item .exp-progress .progress-bar { height: 4px; background: #30363d; border-radius: 2px; margin-top: 4px; overflow: hidden; }
 .exp-item .exp-progress .progress-fill { height: 100%; background: #d29922; border-radius: 2px; transition: width 0.3s; }
 
+/* Expand button (log, diff) */
+.detail-expand-btn {
+  background: none; border: 1px solid #30363d; color: #8b949e;
+  border-radius: 4px; padding: 2px 8px; font-family: inherit;
+  font-size: 10px; cursor: pointer; margin-top: 6px;
+}
+.detail-expand-btn:hover { color: #c9d1d9; border-color: #8b949e; }
+
+/* Experiment log */
+.exp-log { margin-top: 6px; }
+.exp-log-content {
+  background: #0d1117; border: 1px solid #21262d; border-radius: 4px;
+  padding: 8px; font-size: 10px; color: #8b949e; line-height: 1.5;
+  max-height: 300px; overflow: auto; white-space: pre-wrap; word-break: break-all;
+}
+
+/* Branch diff */
+.diff-stat {
+  background: #0d1117; border: 1px solid #21262d; border-radius: 4px;
+  padding: 6px 8px; font-size: 10px; color: #c9d1d9; line-height: 1.5;
+  white-space: pre-wrap; margin-bottom: 6px;
+}
+.diff-content {
+  background: #0d1117; border: 1px solid #21262d; border-radius: 4px;
+  padding: 6px 8px; font-size: 10px; line-height: 1.5;
+  max-height: 400px; overflow: auto; white-space: pre-wrap; word-break: break-all;
+}
+.diff-add { color: #3fb950; }
+.diff-del { color: #f85149; }
+.diff-hunk { color: #58a6ff; }
+.diff-file { color: #d29922; font-weight: 600; }
+
 /* Mobile: detail panel as overlay */
 @media (max-width: 800px) {
   #detail-panel {

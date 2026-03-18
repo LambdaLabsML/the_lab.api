@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from "preact/hooks";
 import { selectedIdea } from "../state/settings";
-import { getIdea, getExperimentProgress } from "../state/api";
-import { formatTime, badgeHtml } from "../lib/format";
+import { getIdea, getExperimentProgress, getExperimentLog, getIdeaDiff } from "../state/api";
+import { formatTime, badgeHtml, escapeHtml } from "../lib/format";
 import type { IdeaDetail, Experiment, Note } from "../lib/types";
 
 export function DetailPanel() {
@@ -9,7 +9,7 @@ export function DetailPanel() {
   const [idea, setIdea] = useState<IdeaDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const pollRef = useRef<number | null>(null);
-  const fetchRef = useRef(0); // avoid stale responses from slow requests
+  const fetchRef = useRef(0);
 
   useEffect(() => {
     if (ideaId === null) {
@@ -21,26 +21,18 @@ export function DetailPanel() {
     setLoading(true);
     getIdea(ideaId, true)
       .then((data) => {
-        if (fetchRef.current === seq) {
-          setIdea(data);
-          setLoading(false);
-        }
+        if (fetchRef.current === seq) { setIdea(data); setLoading(false); }
       })
       .catch(() => {
-        if (fetchRef.current === seq) {
-          setIdea(null);
-          setLoading(false);
-        }
+        if (fetchRef.current === seq) { setIdea(null); setLoading(false); }
       });
   }, [ideaId]);
 
-  // Progress polling for running experiments
+  // Progress polling
   useEffect(() => {
     if (pollRef.current) clearInterval(pollRef.current);
     if (!idea) return;
-    const running = (idea.experiments || []).filter(
-      (e) => e.status === "running"
-    );
+    const running = (idea.experiments || []).filter((e) => e.status === "running");
     if (running.length === 0) return;
 
     function pollProgress() {
@@ -49,9 +41,7 @@ export function DetailPanel() {
           const el = document.getElementById(`progress-${exp.id}`);
           if (!el || !data.progress) return;
           const p = data.progress;
-          let html = Object.entries(p)
-            .map(([k, v]) => `${k}: ${v}`)
-            .join(", ");
+          let html = Object.entries(p).map(([k, v]) => `${k}: ${v}`).join(", ");
           const pct = (p as any).pct ?? (p as any).percent ?? (p as any).progress;
           if (typeof pct === "number") {
             html += `<div class="progress-bar"><div class="progress-fill" style="width:${Math.min(100, pct)}%"></div></div>`;
@@ -63,16 +53,14 @@ export function DetailPanel() {
 
     pollProgress();
     pollRef.current = window.setInterval(pollProgress, 3000);
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-    };
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [idea]);
 
   if (ideaId === null) return null;
 
   function close() {
     selectedIdea.value = null;
-    history.pushState(null, "", "/" + (window.location.pathname.split("/")[1] || "dag"));
+    history.pushState(null, "", "/" + (window.location.pathname.split("/")[1] || "graph"));
   }
 
   const notes: Note[] = idea?.notes || [];
@@ -85,19 +73,13 @@ export function DetailPanel() {
         <h2>
           <span>
             Idea #{ideaId}{" "}
-            {idea && (
-              <span dangerouslySetInnerHTML={{ __html: badgeHtml(idea.status) }} />
-            )}
+            {idea && <span dangerouslySetInnerHTML={{ __html: badgeHtml(idea.status) }} />}
           </span>
-          <span class="close-btn" onClick={close}>
-            &times;
-          </span>
+          <span class="close-btn" onClick={close}>&times;</span>
         </h2>
 
         {loading && !idea && (
-          <div style={{ padding: "20px 0", color: "#8b949e", fontSize: "12px" }}>
-            Loading...
-          </div>
+          <div style={{ padding: "20px 0", color: "#8b949e", fontSize: "12px" }}>Loading...</div>
         )}
 
         {idea && (
@@ -121,14 +103,14 @@ export function DetailPanel() {
               </div>
             )}
 
+            {idea.branch && <DiffSection ideaId={idea.id} parentIds={idea.parent_ids} />}
+
             {notes.length > 0 && (
               <div class="detail-section">
                 <div class="label">Notes ({notes.length})</div>
                 {notes.map((note, i) => (
                   <div key={i} class={`note-item ${note.level}`}>
-                    <div class="note-meta">
-                      {note.level} &middot; {formatTime(note.created_at)}
-                    </div>
+                    <div class="note-meta">{note.level} &middot; {formatTime(note.created_at)}</div>
                     {note.text}
                   </div>
                 ))}
@@ -150,7 +132,97 @@ export function DetailPanel() {
   );
 }
 
+// --- Diff Section ---
+
+function DiffSection({ ideaId, parentIds }: { ideaId: number; parentIds?: number[] }) {
+  const [open, setOpen] = useState(false);
+  const [useMain, setUseMain] = useState(false);
+  const [diff, setDiff] = useState<{ stat: string; diff: string } | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  function load(base?: string) {
+    setLoading(true);
+    setDiff(null);
+    getIdeaDiff(ideaId, base)
+      .then(setDiff)
+      .catch(() => setDiff(null))
+      .finally(() => setLoading(false));
+  }
+
+  useEffect(() => {
+    if (open) load(useMain ? "main" : undefined);
+  }, [open, useMain]);
+
+  if (!open) {
+    return (
+      <div class="detail-section">
+        <button class="detail-expand-btn" onClick={() => setOpen(true)}>
+          Show branch diff
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div class="detail-section">
+      <div class="label" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <span>Branch diff</span>
+        <label style={{ fontSize: "10px", fontWeight: "normal", textTransform: "none", cursor: "pointer" }}>
+          <input
+            type="checkbox"
+            checked={useMain}
+            onChange={(e) => setUseMain((e.target as HTMLInputElement).checked)}
+          />{" "}
+          vs main
+        </label>
+      </div>
+      {loading && <div style={{ color: "#8b949e", fontSize: "11px" }}>Loading diff...</div>}
+      {diff && (
+        <>
+          <pre class="diff-stat">{diff.stat || "No changes"}</pre>
+          {diff.diff && (
+            <pre class="diff-content" dangerouslySetInnerHTML={{ __html: colorizeDiff(diff.diff) }} />
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function colorizeDiff(diff: string): string {
+  return diff
+    .split("\n")
+    .map((line) => {
+      const esc = escapeHtml(line);
+      if (line.startsWith("+++") || line.startsWith("---")) return `<span class="diff-file">${esc}</span>`;
+      if (line.startsWith("@@")) return `<span class="diff-hunk">${esc}</span>`;
+      if (line.startsWith("+")) return `<span class="diff-add">${esc}</span>`;
+      if (line.startsWith("-")) return `<span class="diff-del">${esc}</span>`;
+      return esc;
+    })
+    .join("\n");
+}
+
+// --- Experiment Item with Log ---
+
 function ExperimentItem({ exp }: { exp: Experiment }) {
+  const [logOpen, setLogOpen] = useState(false);
+  const [log, setLog] = useState<string | null>(null);
+  const [logLoading, setLogLoading] = useState(false);
+
+  function toggleLog() {
+    if (logOpen) {
+      setLogOpen(false);
+      return;
+    }
+    setLogOpen(true);
+    setLogLoading(true);
+    getExperimentLog(exp.id)
+      .then((data) => setLog(data.log))
+      .catch(() => setLog("Failed to load log"))
+      .finally(() => setLogLoading(false));
+  }
+
   return (
     <div class="exp-item">
       <div class="exp-header">
@@ -161,21 +233,15 @@ function ExperimentItem({ exp }: { exp: Experiment }) {
       {exp.tags && exp.tags.length > 0 && (
         <div>
           {exp.tags.map((t) => (
-            <span key={t} class="tag-pill">
-              {t}
-            </span>
+            <span key={t} class="tag-pill">{t}</span>
           ))}
         </div>
       )}
       {exp.status === "running" && (
-        <div class="exp-progress" id={`progress-${exp.id}`}>
-          loading progress...
-        </div>
+        <div class="exp-progress" id={`progress-${exp.id}`}>loading progress...</div>
       )}
       {exp.metrics && Object.keys(exp.metrics).length > 0 && (
-        <div class="exp-metrics">
-          metrics: {JSON.stringify(exp.metrics)}
-        </div>
+        <div class="exp-metrics">metrics: {JSON.stringify(exp.metrics)}</div>
       )}
       {exp.meta && Object.keys(exp.meta).length > 0 && (
         <div class="exp-meta">meta: {JSON.stringify(exp.meta)}</div>
@@ -186,6 +252,15 @@ function ExperimentItem({ exp }: { exp: Experiment }) {
         {exp.finished_at && <> | finished: {formatTime(exp.finished_at)}</>}
         {exp.runtime && <> | runtime: {exp.runtime}</>}
       </div>
+      <button class="detail-expand-btn" onClick={toggleLog}>
+        {logOpen ? "Hide log" : "Show log"}
+      </button>
+      {logOpen && (
+        <div class="exp-log">
+          {logLoading && <div style={{ color: "#8b949e", fontSize: "11px" }}>Loading...</div>}
+          {log !== null && <pre class="exp-log-content">{log || "(empty)"}</pre>}
+        </div>
+      )}
     </div>
   );
 }

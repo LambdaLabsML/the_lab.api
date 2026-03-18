@@ -88,6 +88,24 @@ export async function getIdeaExperiments(
   return fetchJson<Experiment[]>(`/api/v1/ideas/${ideaId}/experiments`);
 }
 
+/** GET /api/v1/experiments/:expId/log */
+export async function getExperimentLog(
+  expId: number,
+  tail?: number,
+): Promise<{ log: string }> {
+  const qs = tail ? `?tail=${tail}` : "";
+  return fetchJson<{ log: string }>(`/api/v1/experiments/${expId}/log${qs}`);
+}
+
+/** GET /api/v1/ideas/:ideaId/diff */
+export async function getIdeaDiff(
+  ideaId: number,
+  base?: string,
+): Promise<{ stat: string; diff: string; base: string; branch: string; merge_base: string }> {
+  const qs = base ? `?base=${encodeURIComponent(base)}` : "";
+  return fetchJson(`/api/v1/ideas/${ideaId}/diff${qs}`);
+}
+
 /** GET /api/v1/experiments/:expId/progress */
 export async function getExperimentProgress(
   expId: number,

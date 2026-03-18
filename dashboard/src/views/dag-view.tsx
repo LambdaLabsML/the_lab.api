@@ -10,9 +10,9 @@
 import { useRef, useEffect } from "preact/hooks";
 import type { IdeaNode, StationPos, SubwayLayout } from "../lib/types";
 import { graphData, currentLayout, highlightedIdea, allIdeas, allExperiments } from "../state/signals";
-import { colorMode, selectedIdea, selectedMetric, improvementsOnly } from "../state/settings";
+import { colorMode, selectedIdea, selectedMetric, improvementsOnly, activeTagFilters, tagFilterMode } from "../state/settings";
 import { useSetting } from "../state/settings";
-import { _ideaHasGlobalImprovement } from "../lib/colors";
+import { _ideaHasGlobalImprovement, resetGlobalBestBeforeCache } from "../lib/colors";
 import { drawSubwayLines } from "../lib/subway-lines";
 import { IDEA_PALETTE, STATUS_BAR_COLORS, STATUS_ORDER, _colorForIdea } from "../lib/colors";
 import { escapeHtml, ideaTitle, badgeHtml } from "../lib/format";
@@ -43,11 +43,25 @@ export function DagView() {
   const experiments = allExperiments.value;
   const compactMode = improvementsOnly.value;
 
-  // In compact mode, only ideas with global improvements get full boxes
+  // In compact mode, only ideas with global improvements get full boxes.
+  // When tag filters are active, only consider filtered experiments for milestone detection.
+  const tags = activeTagFilters.value;
+  const tagMode = tagFilterMode.value;
   const isImportant: Record<number, boolean> = {};
   if (compactMode && metric && data) {
+    resetGlobalBestBeforeCache(); // reset so filtered experiments are used
+    let filteredExps = experiments;
+    if (tags.length > 0) {
+      const tagSet = new Set(tags);
+      filteredExps = experiments.filter((e) => {
+        if (!e.tags || e.tags.length === 0) return false;
+        return tagMode === "and"
+          ? tags.every((t) => e.tags!.includes(t))
+          : e.tags.some((t) => tagSet.has(t));
+      });
+    }
     for (const n of data.nodes) {
-      isImportant[n.id] = _ideaHasGlobalImprovement(n.id, metric, experiments);
+      isImportant[n.id] = _ideaHasGlobalImprovement(n.id, metric, filteredExps);
     }
   }
 
@@ -555,7 +569,7 @@ export function DagView() {
 
     // Apply current highlight state (in case it was set before render)
     applyHighlight(highlightedIdea.value);
-  }, [data, layout, mode, metric, ideas, experiments, compactMode]);
+  }, [data, layout, mode, metric, ideas, experiments, compactMode, tags, tagMode]);
 
   // =========================================================================
   // HIGHLIGHT EFFECT — reacts to highlightedIdea changes without full re-render

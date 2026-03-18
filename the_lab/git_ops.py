@@ -72,6 +72,31 @@ def resolve_branch_commit(branch: str, cwd: str | Path | None = None) -> str:
     return result.stdout.strip()
 
 
+def branch_diff(branch: str, base: str, cwd: str | Path | None = None) -> dict:
+    """Get the diff between a branch and a base branch.
+
+    Returns {stat, diff} where stat is the --stat summary and diff is the
+    full patch.  If either branch doesn't exist, returns an error dict.
+    """
+    # Verify both branches exist
+    if not branch_exists(branch, cwd=cwd) or not branch_exists(base, cwd=cwd):
+        return {"error": f"branch '{branch}' or '{base}' not found"}
+
+    merge_base = _run(["merge-base", base, branch], cwd=cwd, check=False)
+    base_ref = merge_base.stdout.strip() if merge_base.returncode == 0 else base
+
+    stat = _run(["diff", "--stat", base_ref, branch], cwd=cwd, check=False)
+    diff = _run(["diff", base_ref, branch], cwd=cwd, check=False)
+
+    return {
+        "base": base,
+        "branch": branch,
+        "merge_base": base_ref[:12],
+        "stat": stat.stdout,
+        "diff": diff.stdout,
+    }
+
+
 def create_worktree(path: str | Path, commit: str, cwd: str | Path | None = None):
     """Create a detached worktree at *path* checked out to *commit*."""
     _run(["worktree", "add", "--detach", str(path), commit], cwd=cwd)

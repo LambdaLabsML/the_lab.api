@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 from .git_ops import (
     GitError,
+    branch_diff,
     checkout_idea,
     create_branch_from,
     create_branch_from_merge,
@@ -280,6 +281,30 @@ def get_idea_tree(idea_id: int):
     idea["experiments"] = store.list_experiments(idea_id)
     idea["notes"] = store.get_notes(idea_id, levels=Store.DETAIL_LEVELS)
     return {"idea": idea, "ancestors": ancestors, "descendants": descendants}
+
+
+@app.get("/api/v1/ideas/{idea_id}/diff")
+def get_idea_diff(
+    idea_id: int,
+    base: str | None = Query(default=None, description="Base branch (default: first parent's branch, or main)"),
+):
+    """Get the git diff between this idea's branch and a base branch."""
+    idea = store.get_idea(idea_id)
+    if not idea:
+        raise HTTPException(404, "idea not found")
+    idea_branch = idea.get("branch", "")
+    if not idea_branch:
+        raise HTTPException(400, "idea has no branch")
+
+    if base is None:
+        parent_ids = idea.get("parent_ids", [])
+        if parent_ids:
+            parent = store.get_idea(parent_ids[0])
+            base = parent["branch"] if parent and parent.get("branch") else "main"
+        else:
+            base = "main"
+
+    return branch_diff(idea_branch, base, cwd=REPO_DIR)
 
 
 @app.post("/api/v1/ideas/{idea_id}/conclude")
