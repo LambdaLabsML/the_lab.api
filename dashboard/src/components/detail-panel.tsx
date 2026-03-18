@@ -1,20 +1,37 @@
 import { useEffect, useState, useRef } from "preact/hooks";
 import { selectedIdea } from "../state/settings";
 import { getIdea, getExperimentProgress } from "../state/api";
-import { formatTime, badgeHtml, escapeHtml } from "../lib/format";
+import { formatTime, badgeHtml } from "../lib/format";
 import type { IdeaDetail, Experiment, Note } from "../lib/types";
 
 export function DetailPanel() {
   const ideaId = selectedIdea.value;
   const [idea, setIdea] = useState<IdeaDetail | null>(null);
+  const [loading, setLoading] = useState(false);
   const pollRef = useRef<number | null>(null);
+  const fetchRef = useRef(0); // avoid stale responses from slow requests
 
   useEffect(() => {
     if (ideaId === null) {
       setIdea(null);
+      setLoading(false);
       return;
     }
-    getIdea(ideaId, true).then(setIdea).catch(() => setIdea(null));
+    const seq = ++fetchRef.current;
+    setLoading(true);
+    getIdea(ideaId, true)
+      .then((data) => {
+        if (fetchRef.current === seq) {
+          setIdea(data);
+          setLoading(false);
+        }
+      })
+      .catch(() => {
+        if (fetchRef.current === seq) {
+          setIdea(null);
+          setLoading(false);
+        }
+      });
   }, [ideaId]);
 
   // Progress polling for running experiments
@@ -35,8 +52,7 @@ export function DetailPanel() {
           let html = Object.entries(p)
             .map(([k, v]) => `${k}: ${v}`)
             .join(", ");
-          const pct =
-            p.pct ?? p.percent ?? p.progress;
+          const pct = (p as any).pct ?? (p as any).percent ?? (p as any).progress;
           if (typeof pct === "number") {
             html += `<div class="progress-bar"><div class="progress-fill" style="width:${Math.min(100, pct)}%"></div></div>`;
           }
@@ -52,69 +68,82 @@ export function DetailPanel() {
     };
   }, [idea]);
 
-  if (!idea) return null;
+  if (ideaId === null) return null;
 
   function close() {
     selectedIdea.value = null;
     history.pushState(null, "", "/" + (window.location.pathname.split("/")[1] || "dag"));
   }
 
-  const notes: Note[] = idea.notes || [];
-  const experiments: Experiment[] = idea.experiments || [];
+  const notes: Note[] = idea?.notes || [];
+  const experiments: Experiment[] = idea?.experiments || [];
 
   return (
     <div id="detail-panel" class="open">
+      {loading && <div class="detail-loading-bar" />}
       <div id="detail-content">
         <h2>
           <span>
-            Idea #{idea.id}{" "}
-            <span dangerouslySetInnerHTML={{ __html: badgeHtml(idea.status) }} />
+            Idea #{ideaId}{" "}
+            {idea && (
+              <span dangerouslySetInnerHTML={{ __html: badgeHtml(idea.status) }} />
+            )}
           </span>
           <span class="close-btn" onClick={close}>
             &times;
           </span>
         </h2>
 
-        <div class="detail-section">
-          <div class="label">Description</div>
-          <div class="value">{idea.description}</div>
-        </div>
-
-        {idea.branch && (
-          <div class="detail-section">
-            <div class="label">Branch</div>
-            <div class="value">{idea.branch}</div>
+        {loading && !idea && (
+          <div style={{ padding: "20px 0", color: "#8b949e", fontSize: "12px" }}>
+            Loading...
           </div>
         )}
 
-        {idea.conclusion && (
-          <div class="detail-section">
-            <div class="label">Conclusion</div>
-            <div class="value">{idea.conclusion}</div>
-          </div>
-        )}
+        {idea && (
+          <>
+            <div class="detail-section">
+              <div class="label">Description</div>
+              <div class="value">{idea.description}</div>
+            </div>
 
-        {notes.length > 0 && (
-          <div class="detail-section">
-            <div class="label">Notes ({notes.length})</div>
-            {notes.map((note, i) => (
-              <div key={i} class={`note-item ${note.level}`}>
-                <div class="note-meta">
-                  {note.level} &middot; {formatTime(note.created_at)}
-                </div>
-                {note.text}
+            {idea.branch && (
+              <div class="detail-section">
+                <div class="label">Branch</div>
+                <div class="value">{idea.branch}</div>
               </div>
-            ))}
-          </div>
-        )}
+            )}
 
-        {experiments.length > 0 && (
-          <div class="detail-section">
-            <div class="label">Experiments ({experiments.length})</div>
-            {experiments.map((exp) => (
-              <ExperimentItem key={exp.id} exp={exp} />
-            ))}
-          </div>
+            {idea.conclusion && (
+              <div class="detail-section">
+                <div class="label">Conclusion</div>
+                <div class="value">{idea.conclusion}</div>
+              </div>
+            )}
+
+            {notes.length > 0 && (
+              <div class="detail-section">
+                <div class="label">Notes ({notes.length})</div>
+                {notes.map((note, i) => (
+                  <div key={i} class={`note-item ${note.level}`}>
+                    <div class="note-meta">
+                      {note.level} &middot; {formatTime(note.created_at)}
+                    </div>
+                    {note.text}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {experiments.length > 0 && (
+              <div class="detail-section">
+                <div class="label">Experiments ({experiments.length})</div>
+                {experiments.map((exp) => (
+                  <ExperimentItem key={exp.id} exp={exp} />
+                ))}
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>

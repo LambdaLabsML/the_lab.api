@@ -1,5 +1,16 @@
 /* detail.css — Detail panel styles */
 
+.detail-loading-bar {
+  height: 2px;
+  background: linear-gradient(90deg, transparent, #58a6ff, transparent);
+  background-size: 200% 100%;
+  animation: detail-loading-slide 1s linear infinite;
+}
+@keyframes detail-loading-slide {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+
 #detail-panel {
   width: 420px;
   max-width: 100vw;
