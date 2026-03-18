@@ -211,6 +211,8 @@
     #topbar { gap: 12px; padding: 8px 12px; font-size: 12px; }
     #topbar .title { font-size: 13px; margin-right: 4px; }
   }
+
+  .training-chart-wrap { margin-top: 6px; height: 150px; position: relative; }
 </style>
 </head>
 <body>
@@ -294,6 +296,7 @@
   let currentView = 'dag';
   let graphData = null;
   let currentLayout = null;
+  let _trainingCharts = {};
 
   // --- View switching ---
 

@@ -432,6 +432,46 @@ def get_experiment_progress(exp_id: int):
     return result
 
 
+# --- Timeseries ---
+
+@app.get("/api/v1/experiments/{exp_id}/timeseries")
+def get_experiment_timeseries(
+    exp_id: int,
+    keys: str | None = Query(default=None, description="Comma-separated metric keys to include"),
+    last: int | None = Query(default=None, description="Return only the last N data points"),
+):
+    points = store.get_timeseries(exp_id)
+    if points is None:
+        raise HTTPException(404, "experiment not found")
+    if keys:
+        filter_keys = {k.strip() for k in keys.split(",")}
+        filter_keys.add("step")
+        filter_keys.add("wall_time")
+        points = [{k: v for k, v in p.items() if k in filter_keys} for p in points]
+    if last is not None and last > 0:
+        points = points[-last:]
+    return {"points": points, "count": len(points)}
+
+
+@app.get("/api/v1/experiments/compare-curves")
+def compare_curves(
+    ids: str = Query(..., description="Comma-separated experiment IDs"),
+    key: str = Query(..., description="Metric key to compare"),
+):
+    try:
+        exp_ids = [int(x.strip()) for x in ids.split(",") if x.strip()]
+    except ValueError:
+        raise HTTPException(400, "ids must be comma-separated integers")
+    result = []
+    for eid in exp_ids:
+        points = store.get_timeseries(eid)
+        if points is None:
+            raise HTTPException(404, f"experiment {eid} not found")
+        curve = [{"step": p.get("step"), key: p.get(key)} for p in points if key in p]
+        result.append({"id": eid, "points": curve})
+    return {"key": key, "experiments": result}
+
+
 # --- Wait ---
 
 @app.get("/api/v1/wait")

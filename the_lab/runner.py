@@ -233,13 +233,12 @@ class ExperimentRunner:
         log_path = base.with_suffix(".log")
         err_path = base.with_suffix(".err")
         progress_path = base.with_suffix(".progress")
+        metrics_path = base.with_suffix(".metrics.jsonl")
 
-        # Clear previous log/err/progress on restart
-        for p in (log_path, err_path, progress_path):
+        for p in (log_path, err_path, progress_path, metrics_path):
             if p.exists():
                 p.unlink()
 
-        # Set env vars so scripts can verify they were launched by the backend
         run_token = secrets.token_hex(16)
         env = {
             **os.environ,
@@ -247,6 +246,7 @@ class ExperimentRunner:
             "THE_LAB_EXP_ID": str(exp_id),
             "THE_LAB_IDEA_ID": str(exp["idea_id"]),
             "THE_LAB_PROGRESS": str(progress_path),
+            "THE_LAB_METRICS": str(metrics_path),
         }
 
         # Write stdout/stderr directly to the log file so it survives server restarts.
