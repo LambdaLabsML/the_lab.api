@@ -1,5 +1,5 @@
 import { useState } from "preact/hooks";
-import { activeTagFilters } from "../../state/settings";
+import { activeTagFilters, tagFilterMode } from "../../state/settings";
 import { allExperiments } from "../../state/signals";
 import { renameTag } from "../../state/api";
 import { refreshChartData } from "../../state/polling";
@@ -7,6 +7,7 @@ import { refreshChartData } from "../../state/polling";
 export function TagFilter() {
   const experiments = allExperiments.value;
   const active = activeTagFilters.value;
+  const mode = tagFilterMode.value;
 
   // Collect all unique tags
   const tagSet = new Set<string>();
@@ -33,6 +34,16 @@ export function TagFilter() {
       }}
     >
       Tags:
+      {tags.length > 0 && active.length > 1 && (
+        <span
+          class="tag-toggle active"
+          style={{ fontSize: "9px", padding: "1px 6px", cursor: "pointer" }}
+          onClick={() => { tagFilterMode.value = mode === "and" ? "or" : "and"; }}
+          title={mode === "and" ? "AND: experiments must have all selected tags" : "OR: experiments must have any selected tag"}
+        >
+          {mode.toUpperCase()}
+        </span>
+      )}
       {tags.length === 0 && (
         <span style={{ color: "#484f58", fontSize: "11px" }}>none</span>
       )}

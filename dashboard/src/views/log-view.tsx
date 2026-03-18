@@ -28,7 +28,7 @@ export function LogView() {
   const filtered = entries.filter((e) => active[e.type] !== false);
 
   return (
-    <div id="log-container" class="active">
+    <div id="log-container">
       <div id="log-filters">
         {FILTERS.map((f) => (
           <label key={f.key}>

@@ -23,6 +23,7 @@ export function buildChartData(
   metricKey: string,
   allExperiments: Experiment[],
   activeTagFilters: string[],
+  tagFilterMode: "or" | "and",
   improvementsOnly: boolean,
   colorMode: string,
   allIdeas: Record<number, IdeaNode>,
@@ -34,9 +35,15 @@ export function buildChartData(
 
   if (activeTagFilters.length > 0) {
     const tagSet = new Set(activeTagFilters);
-    filtered = filtered.filter(
-      (e) => e.tags && e.tags.some((t) => tagSet.has(t)),
-    );
+    if (tagFilterMode === "and") {
+      filtered = filtered.filter(
+        (e) => e.tags && activeTagFilters.every((t) => e.tags!.includes(t)),
+      );
+    } else {
+      filtered = filtered.filter(
+        (e) => e.tags && e.tags.some((t) => tagSet.has(t)),
+      );
+    }
   }
 
   if (improvementsOnly) {

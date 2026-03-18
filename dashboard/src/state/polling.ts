@@ -13,6 +13,7 @@
 // ------------------------------------------------------------
 
 import { getBacklog, getGraph, getChartData, getAllIdeas, getIdea } from "./api";
+import { resetGlobalBestBeforeCache } from "../lib/colors";
 import {
   backlogData,
   graphData,
@@ -78,6 +79,7 @@ async function pollChartData(): Promise<void> {
       const tb = b.finished_at || b.started_at || "";
       return ta.localeCompare(tb);
     });
+    resetGlobalBestBeforeCache();
     allExperiments.value = merged;
   } catch {
     // Network error — keep stale data.
@@ -186,6 +188,7 @@ export async function refreshChartData(): Promise<void> {
       const tb = b.finished_at || b.started_at || "";
       return ta.localeCompare(tb);
     });
+    resetGlobalBestBeforeCache();
     allExperiments.value = merged;
   } catch {
     // ignore

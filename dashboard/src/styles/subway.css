@@ -1,6 +1,6 @@
 /* subway.css — DAG / subway graph view styles */
 
-#graph-container { flex: 1; position: relative; overflow: auto; }
+#graph-container { flex: 1; position: relative; overflow: auto; min-height: 0; }
 #graph { position: relative; min-height: 100%; }
 
 .subway-station {

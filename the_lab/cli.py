@@ -25,14 +25,21 @@ def _start_vite(dashboard_dir: Path, api_port: int) -> subprocess.Popen | None:
         print("  Falling back to API-only mode (no HMR)\n")
         return None
 
-    npx = shutil.which("npx")
-    if not npx:
-        print("\033[33m  npx not found — Vite HMR disabled\033[0m\n")
-        return None
+    # Use the local node_modules/.bin/vite directly to avoid
+    # npx/nvm path issues with system Node being too old.
+    vite_bin = dashboard_dir / "node_modules" / ".bin" / "vite"
+    if not vite_bin.exists():
+        npx = shutil.which("npx")
+        if not npx:
+            print("\033[33m  npx not found — Vite HMR disabled\033[0m\n")
+            return None
+        cmd = [npx, "vite", "--clearScreen", "false"]
+    else:
+        cmd = [str(vite_bin), "--clearScreen", "false"]
 
     env = {**os.environ, "VITE_API_PORT": str(api_port)}
     proc = subprocess.Popen(
-        [npx, "vite", "--clearScreen", "false"],
+        cmd,
         cwd=str(dashboard_dir),
         env=env,
     )

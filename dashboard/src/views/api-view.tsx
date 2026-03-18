@@ -153,7 +153,7 @@ export function ApiView() {
 
   return (
     <>
-      <div id="api-container" class="active">
+      <div id="api-container">
         <div id="api-list">
           {!spec && <div style={{ padding: "20px", color: "#484f58" }}>Loading API spec...</div>}
           {TAG_ORDER.map((tag) => {

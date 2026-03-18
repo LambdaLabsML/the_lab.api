@@ -12,6 +12,14 @@ body {
   overflow: hidden;
 }
 
+#app {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  overflow: hidden;
+  min-height: 0;
+}
+
 /* Badges */
 .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
 .badge-active { background: #0f5323; color: #3fb950; }
@@ -25,7 +33,7 @@ body {
 .badge-suggested { background: #2d1a00; color: #d29922; }
 
 /* Main layout */
-#main { display: flex; flex: 1; overflow: hidden; }
+#main { display: flex; flex: 1; overflow: hidden; min-height: 0; }
 
 /* View tabs */
 #view-tabs {
@@ -48,8 +56,7 @@ body {
 .view-tab.active { color: #58a6ff; border-bottom-color: #58a6ff; }
 
 /* Timeline container */
-#timeline-container { flex: 1; position: relative; display: none; overflow: auto; padding: 16px; }
-#timeline-container.active { display: block; }
+#timeline-container { flex: 1; position: relative; display: block; overflow: auto; padding: 16px; }
 #timeline-wrap { position: relative; min-height: 200px; }
 
 /* Mobile: general */

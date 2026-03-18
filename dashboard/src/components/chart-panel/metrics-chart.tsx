@@ -15,6 +15,7 @@ import {
   colorMode,
   improvementsOnly,
   activeTagFilters,
+  tagFilterMode,
 } from "../../state/settings";
 import { buildChartData } from "../../lib/chart-data";
 import type { ChartDataResult } from "../../lib/chart-data";
@@ -41,6 +42,7 @@ export function MetricsChart() {
   const mode = colorMode.value;
   const impOnly = improvementsOnly.value;
   const tags = activeTagFilters.value;
+  const tagMode = tagFilterMode.value;
   const highlighted = highlightedIdea.value;
 
   useEffect(() => {
@@ -50,6 +52,7 @@ export function MetricsChart() {
       metric,
       experiments,
       tags,
+      tagMode,
       impOnly,
       mode,
       ideas,
@@ -96,7 +99,7 @@ export function MetricsChart() {
       chartRef.current?.destroy();
       chartRef.current = null;
     };
-  }, [metric, mode, impOnly, tags, experiments]);
+  }, [metric, mode, impOnly, tags, tagMode, experiments]);
 
   // Handle highlight changes separately (just update point sizes)
   useEffect(() => {

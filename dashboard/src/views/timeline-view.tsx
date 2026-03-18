@@ -155,7 +155,7 @@ export function TimelineView() {
   }
 
   return (
-    <div id="timeline-container" class="active">
+    <div id="timeline-container">
       <div id="timeline-wrap" ref={wrapRef}>
         <canvas ref={canvasRef} onClick={handleClick} />
       </div>

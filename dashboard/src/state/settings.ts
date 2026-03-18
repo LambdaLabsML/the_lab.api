@@ -65,6 +65,9 @@ export const improvementsOnly = useSetting("improvementsOnly", false);
 /** Active tag filter chips (empty = no filtering). */
 export const activeTagFilters = useSetting<string[]>("tagFilters", []);
 
+/** Tag filter mode: "or" = match any, "and" = match all. */
+export const tagFilterMode = useSetting<"or" | "and">("tagFilterMode", "and");
+
 /** Whether the "Suggest idea" panel is expanded. */
 export const suggestOpen = useSetting("suggestOpen", false);
 
