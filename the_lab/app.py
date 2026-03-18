@@ -923,154 +923,160 @@ def compare_curves(
 
 @app.get("/api/v1/digest")
 def get_digest(
-    metric: str | None = Query(default=None, description="Focus on this metric — ranks ideas/experiments by it and returns a leaderboard"),
-    top: int | None = Query(default=None, description="Limit leaderboard to top N experiments (default: all). Only used with metric="),
+    metric: str = Query(..., description="Metric to rank by (e.g. accuracy, accuracy_per_mtoken)"),
+    top: int = Query(default=10, description="Number of top experiments to show in the leaderboard"),
+    recent: int = Query(default=10, description="Number of most recent experiments to show"),
     tags: str | None = Query(default=None, description="Comma-separated tags — experiments must have ALL of them (AND filter)"),
 ):
-    """Get a compact summary of all research activity.
+    """Get a compact, metric-focused research digest.
 
-    Without parameters, returns the full digest: global best metrics,
-    concluded ideas with conclusions and insights, abandoned ideas, and
-    recent key insights. Designed for a quick overview of what has been
-    tried, what worked, and what was learned.
+    Always returns three sections ranked by the given metric:
+    1. **Leaderboard** — top N experiments by metric value (descending)
+    2. **Recent** — most recent N experiments with their metric value
+    3. **Progression** — timeline of when the global best was beaten
 
-    With ``metric=accuracy``, focuses the digest on that metric: returns a
-    ranked leaderboard of the top experiments, the best idea for that metric,
-    and a progression timeline showing how the global best improved over time.
-
-    With ``tags=ablation``, scopes everything to experiments with that tag.
-    Multiple tags are AND-filtered: ``tags=ablation,training`` requires both.
-
-    Combine all three: ``?metric=accuracy&top=10&tags=ablation`` gives the
-    top 10 ablation experiments by accuracy.
+    Plus: open ideas, running experiments, key insights, and the best idea
+    for this metric. Use ``tags=`` to scope to a subset of experiments.
 
     Example:
-        GET /api/v1/digest
-        -> {"total_ideas": 8, "total_experiments": 15, "best_metrics": {...}, ...}
+        GET /api/v1/digest?metric=accuracy&top=10&recent=5
+        -> {"metric": "accuracy", "leaderboard": [...], "recent": [...],
+            "progression": [...], "open_ideas": [...], ...}
 
-        GET /api/v1/digest?metric=accuracy&top=5&tags=ablation,training
-        -> {"metric": "accuracy", "tags": ["ablation", "training"],
-            "leaderboard": [...], "best_idea": {...}, "progression": [...], ...}
+        GET /api/v1/digest?metric=accuracy_per_mtoken&top=5&tags=n-10,swarm-2
+        -> top 5 swarm-2 experiments by efficiency
     """
     all_ideas = store.list_ideas()
     all_exps = store.list_all_experiments()
+    exps_by_idea: dict[int, list[dict]] = {}
+    for exp in all_exps:
+        exps_by_idea.setdefault(exp["idea_id"], []).append(exp)
+
+    def _public_meta(exp: dict) -> dict:
+        return {
+            k: v for k, v in (exp.get("meta") or {}).items()
+            if k not in ("git_branch", "git_commit", "worktree")
+        }
+
+    def _last_activity(idea_exps: list[dict]) -> str | None:
+        stamps = [
+            e.get("finished_at") or e.get("started_at") or e.get("created_at")
+            for e in idea_exps
+            if e.get("finished_at") or e.get("started_at") or e.get("created_at")
+        ]
+        return max(stamps) if stamps else None
+
+    open_ideas = []
+    for idea in all_ideas:
+        if idea.get("status") != "active":
+            continue
+        idea_exps = exps_by_idea.get(idea["id"], [])
+        open_ideas.append({
+            "id": idea["id"],
+            "description": idea["description"],
+            "source": idea.get("source", "agent"),
+            "priority": idea.get("priority", "normal"),
+            "running_experiments": sum(1 for e in idea_exps if e.get("status") == "running"),
+            "pending_experiments": sum(1 for e in idea_exps if e.get("status") == "pending"),
+            "last_activity": _last_activity(idea_exps),
+        })
+
+    running_experiments = []
+    for exp in all_exps:
+        if exp.get("status") != "running":
+            continue
+        idea = store.get_idea(exp["idea_id"])
+        running_experiments.append({
+            "experiment_id": exp["id"],
+            "idea_id": exp["idea_id"],
+            "idea_description": idea["description"] if idea else None,
+            "description": exp.get("description"),
+            "tags": exp.get("tags", []),
+            "started_at": exp.get("started_at"),
+            "runtime": exp.get("runtime"),
+            "meta": _public_meta(exp),
+        })
+    running_experiments.sort(key=lambda e: e.get("started_at") or "", reverse=True)
 
     # Optional tag filter (AND: experiment must have ALL specified tags)
     tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
+    filtered_exps = all_exps
     if tag_list:
-        all_exps = [e for e in all_exps if all(t in (e.get("tags") or []) for t in tag_list)]
+        filtered_exps = [
+            e for e in all_exps
+            if all(t in (e.get("tags") or []) for t in tag_list)
+        ]
 
-    completed = [e for e in all_exps if e.get("status") == "completed" and e.get("metrics")]
+    completed = [e for e in filtered_exps if e.get("status") == "completed" and e.get("metrics")]
 
-    # --- Metric-focused digest ---
-    if metric:
-        # Leaderboard: experiments ranked by this metric (descending)
-        with_metric = [e for e in completed if metric in e["metrics"] and isinstance(e["metrics"][metric], (int, float))]
-        with_metric.sort(key=lambda e: e["metrics"][metric], reverse=True)
+    # Experiments with the requested metric
+    with_metric = [
+        e for e in completed
+        if metric in e["metrics"] and isinstance(e["metrics"][metric], (int, float))
+    ]
 
-        if top is not None and top > 0:
-            leaderboard = with_metric[:top]
-        else:
-            leaderboard = with_metric
+    # --- Leaderboard: top N by metric value ---
+    by_value = sorted(with_metric, key=lambda e: e["metrics"][metric], reverse=True)
+    leaderboard = []
+    for exp in by_value[:top]:
+        idea = store.get_idea(exp["idea_id"])
+        leaderboard.append({
+            "experiment_id": exp["id"],
+            "idea_id": exp["idea_id"],
+            "idea_description": idea["description"] if idea else None,
+            "value": exp["metrics"][metric],
+            "tags": exp.get("tags", []),
+            "meta": _public_meta(exp),
+            "finished_at": exp.get("finished_at"),
+        })
 
-        leaderboard_out = []
-        for exp in leaderboard:
+    # --- Recent: most recent N experiments with this metric ---
+    by_time_desc = sorted(with_metric, key=lambda e: e.get("finished_at") or "", reverse=True)
+    recent_out = []
+    for exp in by_time_desc[:recent]:
+        idea = store.get_idea(exp["idea_id"])
+        recent_out.append({
+            "experiment_id": exp["id"],
+            "idea_id": exp["idea_id"],
+            "idea_description": idea["description"] if idea else None,
+            "value": exp["metrics"][metric],
+            "tags": exp.get("tags", []),
+            "finished_at": exp.get("finished_at"),
+        })
+
+    # --- Best idea for this metric ---
+    best_idea = None
+    if by_value:
+        best_exp = by_value[0]
+        idea = store.get_idea(best_exp["idea_id"])
+        if idea:
+            insights = [n["text"] for n in store.get_notes(idea["id"], levels={"insight"})]
+            best_idea = {
+                "id": idea["id"],
+                "description": idea["description"],
+                "conclusion": idea.get("conclusion"),
+                "best_value": best_exp["metrics"][metric],
+                "key_insights": insights[:5],
+            }
+
+    # --- Progression: when did the global best improve? ---
+    by_time_asc = sorted(with_metric, key=lambda e: e.get("finished_at") or "")
+    progression = []
+    running_best = None
+    for exp in by_time_asc:
+        v = exp["metrics"][metric]
+        if running_best is None or v > running_best:
+            running_best = v
             idea = store.get_idea(exp["idea_id"])
-            leaderboard_out.append({
+            progression.append({
                 "experiment_id": exp["id"],
                 "idea_id": exp["idea_id"],
                 "idea_description": idea["description"] if idea else None,
-                "value": exp["metrics"][metric],
-                "tags": exp.get("tags", []),
-                "meta": {k: v for k, v in (exp.get("meta") or {}).items() if k not in ("git_branch", "git_commit", "worktree")},
+                "value": v,
                 "finished_at": exp.get("finished_at"),
             })
 
-        # Best idea: which idea achieved the highest value for this metric?
-        best_idea = None
-        if leaderboard_out:
-            best_exp = leaderboard_out[0]
-            idea = store.get_idea(best_exp["idea_id"])
-            if idea:
-                insights = [n["text"] for n in store.get_notes(idea["id"], levels={"insight"})]
-                best_idea = {
-                    "id": idea["id"],
-                    "description": idea["description"],
-                    "conclusion": idea.get("conclusion"),
-                    "best_value": best_exp["value"],
-                    "key_insights": insights[:5],
-                }
-
-        # Progression: how the global best improved over time
-        by_time = sorted(with_metric, key=lambda e: e.get("finished_at") or "")
-        progression = []
-        running_best = None
-        for exp in by_time:
-            v = exp["metrics"][metric]
-            if running_best is None or v > running_best:
-                running_best = v
-                idea = store.get_idea(exp["idea_id"])
-                progression.append({
-                    "experiment_id": exp["id"],
-                    "idea_id": exp["idea_id"],
-                    "idea_description": idea["description"] if idea else None,
-                    "value": v,
-                    "finished_at": exp.get("finished_at"),
-                })
-
-        return {
-            "metric": metric,
-            "tags": tag_list or None,
-            "total_experiments_with_metric": len(with_metric),
-            "leaderboard": leaderboard_out,
-            "best_idea": best_idea,
-            "progression": progression,
-        }
-
-    # --- Full digest (no metric focus) ---
-    # Global best metrics
-    best_metrics: dict[str, dict] = {}
-    for exp in completed:
-        for key, value in exp["metrics"].items():
-            if not isinstance(value, (int, float)):
-                continue
-            if key not in best_metrics or value > best_metrics[key]["value"]:
-                best_metrics[key] = {
-                    "value": value,
-                    "idea_id": exp.get("idea_id"),
-                    "experiment_id": exp.get("id"),
-                }
-
-    # Concluded ideas with conclusions and best metrics
-    concluded = []
-    for idea in all_ideas:
-        if idea.get("status") != "concluded":
-            continue
-        idea_exps = [e for e in completed if e.get("idea_id") == idea["id"]]
-        idea_best = {}
-        for exp in idea_exps:
-            for k, v in exp["metrics"].items():
-                if isinstance(v, (int, float)) and (k not in idea_best or v > idea_best[k]):
-                    idea_best[k] = v
-        insights = [
-            n["text"] for n in store.get_notes(idea["id"], levels={"insight"})
-        ]
-        concluded.append({
-            "id": idea["id"],
-            "description": idea["description"],
-            "conclusion": idea.get("conclusion"),
-            "key_insights": insights[:3],
-            "best_metrics": idea_best or None,
-            "experiment_count": len(idea_exps),
-        })
-
-    # Abandoned ideas (compact)
-    abandoned = [
-        {"id": i["id"], "description": i["description"], "reason": i.get("conclusion")}
-        for i in all_ideas if i.get("status") == "abandoned"
-    ]
-
-    # Recent insight-level notes
+    # --- Key insights (most recent) ---
     key_insights = []
     for idea in all_ideas:
         for note in store.get_notes(idea["id"], levels={"insight"}):
@@ -1081,23 +1087,17 @@ def get_digest(
             })
     key_insights.sort(key=lambda n: n.get("created_at", ""), reverse=True)
 
-    status_counts = {}
-    for idea in all_ideas:
-        s = idea.get("status", "unknown")
-        status_counts[s] = status_counts.get(s, 0) + 1
-
     return {
+        "metric": metric,
         "tags": tag_list or None,
-        "total_ideas": len(all_ideas),
-        "total_experiments": len(all_exps),
-        "active_ideas": status_counts.get("active", 0),
-        "suggested_ideas": status_counts.get("suggested", 0),
-        "concluded_count": status_counts.get("concluded", 0),
-        "abandoned_count": status_counts.get("abandoned", 0),
-        "best_metrics": best_metrics,
-        "concluded_ideas": concluded,
-        "abandoned_ideas": abandoned,
-        "key_insights": key_insights[:20],
+        "total_experiments_with_metric": len(with_metric),
+        "open_ideas": open_ideas,
+        "running_experiments": running_experiments,
+        "leaderboard": leaderboard,
+        "recent": recent_out,
+        "best_idea": best_idea,
+        "progression": progression,
+        "key_insights": key_insights[:10],
     }
 
 
