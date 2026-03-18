@@ -71,11 +71,9 @@ Pick your agent and paste the contents of `LOOP.md` as the initial prompt.
 **Claude Code** (recommended — use `/loop` for continuous operation):
 ```bash
 cd /path/to/your/repo
-claude --dangerously-skip-permissions
-```
-Then in the Claude session:
-```
-/loop 10m <paste LOOP.md content here>
+the-lab-agent LOOP.md              # defaults to 15m loop interval
+the-lab-agent LOOP.md -d 10m       # custom interval
+the-lab-agent LOOP.md --model opus # pick a model
 ```
 
 **Codex:**

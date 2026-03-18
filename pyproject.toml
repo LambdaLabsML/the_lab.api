@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "the-lab-api"
 version = "0.1.0"
@@ -15,3 +19,4 @@ include = ["the_lab*"]
 
 [project.scripts]
 the-lab = "the_lab.cli:main"
+the-lab-agent = "the_lab.agent_cli:main"
