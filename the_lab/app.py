@@ -925,7 +925,7 @@ def compare_curves(
 def get_digest(
     metric: str | None = Query(default=None, description="Focus on this metric — ranks ideas/experiments by it and returns a leaderboard"),
     top: int | None = Query(default=None, description="Limit leaderboard to top N experiments (default: all). Only used with metric="),
-    tag: str | None = Query(default=None, description="Filter to experiments with this tag before computing the digest"),
+    tags: str | None = Query(default=None, description="Comma-separated tags — experiments must have ALL of them (AND filter)"),
 ):
     """Get a compact summary of all research activity.
 
@@ -938,25 +938,27 @@ def get_digest(
     ranked leaderboard of the top experiments, the best idea for that metric,
     and a progression timeline showing how the global best improved over time.
 
-    With ``tag=ablation``, scopes everything to experiments with that tag.
+    With ``tags=ablation``, scopes everything to experiments with that tag.
+    Multiple tags are AND-filtered: ``tags=ablation,training`` requires both.
 
-    Combine all three: ``?metric=accuracy&top=10&tag=ablation`` gives the
+    Combine all three: ``?metric=accuracy&top=10&tags=ablation`` gives the
     top 10 ablation experiments by accuracy.
 
     Example:
         GET /api/v1/digest
         -> {"total_ideas": 8, "total_experiments": 15, "best_metrics": {...}, ...}
 
-        GET /api/v1/digest?metric=accuracy&top=5
-        -> {"metric": "accuracy", "leaderboard": [...], "best_idea": {...},
-            "progression": [...], ...}
+        GET /api/v1/digest?metric=accuracy&top=5&tags=ablation,training
+        -> {"metric": "accuracy", "tags": ["ablation", "training"],
+            "leaderboard": [...], "best_idea": {...}, "progression": [...], ...}
     """
     all_ideas = store.list_ideas()
     all_exps = store.list_all_experiments()
 
-    # Optional tag filter
-    if tag:
-        all_exps = [e for e in all_exps if tag in (e.get("tags") or [])]
+    # Optional tag filter (AND: experiment must have ALL specified tags)
+    tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
+    if tag_list:
+        all_exps = [e for e in all_exps if all(t in (e.get("tags") or []) for t in tag_list)]
 
     completed = [e for e in all_exps if e.get("status") == "completed" and e.get("metrics")]
 
@@ -1018,7 +1020,7 @@ def get_digest(
 
         return {
             "metric": metric,
-            "tag": tag,
+            "tags": tag_list or None,
             "total_experiments_with_metric": len(with_metric),
             "leaderboard": leaderboard_out,
             "best_idea": best_idea,
