@@ -1,0 +1,24 @@
+/* tags.css — Tag styles */
+
+.tag-pill {
+  display: inline-block; padding: 1px 7px; border-radius: 10px;
+  font-size: 10px; font-weight: 600; background: #0c2d6b;
+  color: #388bfd; margin-right: 4px; margin-top: 2px;
+}
+
+.tag-toggle {
+  display: inline-block; padding: 2px 8px; border-radius: 10px;
+  font-size: 10px; font-weight: 600; background: #161b22;
+  border: 1px solid #30363d; color: #8b949e; cursor: pointer;
+  user-select: none; transition: all 0.15s;
+}
+.tag-toggle:hover { border-color: #8b949e; color: #c9d1d9; }
+.tag-toggle.active { background: #0c2d6b; border-color: #388bfd; color: #388bfd; }
+
+.tag-rename-input {
+  background: #0d1117; color: #c9d1d9; border: 1px solid #388bfd;
+  border-radius: 10px; padding: 2px 8px; font-family: inherit;
+  font-size: 10px; font-weight: 600; width: 90px; outline: none;
+}
+
+.training-chart-wrap { margin-top: 6px; height: 150px; position: relative; }

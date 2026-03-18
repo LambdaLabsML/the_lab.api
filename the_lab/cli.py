@@ -1,8 +1,43 @@
 """CLI entrypoint for The Lab API server."""
 import argparse
 import os
+import shutil
+import subprocess
 import sys
 from pathlib import Path
+
+
+def _find_dashboard_dir() -> Path | None:
+    """Find the dashboard/ source directory (for Vite dev server)."""
+    # Check relative to the package
+    pkg_dir = Path(__file__).parent.parent / "dashboard"
+    if (pkg_dir / "package.json").exists():
+        return pkg_dir
+    return None
+
+
+def _start_vite(dashboard_dir: Path, api_port: int) -> subprocess.Popen | None:
+    """Start the Vite dev server if node_modules exists."""
+    if not (dashboard_dir / "node_modules").exists():
+        print(
+            f"\033[33m  dashboard/node_modules not found — run 'npm install' in {dashboard_dir}\033[0m"
+        )
+        print("  Falling back to API-only mode (no HMR)\n")
+        return None
+
+    npx = shutil.which("npx")
+    if not npx:
+        print("\033[33m  npx not found — Vite HMR disabled\033[0m\n")
+        return None
+
+    env = {**os.environ, "VITE_API_PORT": str(api_port)}
+    proc = subprocess.Popen(
+        [npx, "vite", "--clearScreen", "false"],
+        cwd=str(dashboard_dir),
+        env=env,
+    )
+    print(f"  vite:     http://localhost:5173 (HMR)")
+    return proc
 
 
 def main():
@@ -38,6 +73,12 @@ def main():
             watch_dir=watch_dir,
         )
 
+        # Start Vite dev server alongside the backend if dashboard/ exists
+        vite_proc = None
+        dashboard_dir = _find_dashboard_dir()
+        if dashboard_dir:
+            vite_proc = _start_vite(dashboard_dir, proxy.internal_port)
+
         async def run_dev():
             await proxy.run()
             config = uvicorn.Config(
@@ -49,7 +90,12 @@ def main():
             server = uvicorn.Server(config)
             await server.serve()
 
-        asyncio.run(run_dev())
+        try:
+            asyncio.run(run_dev())
+        finally:
+            if vite_proc and vite_proc.poll() is None:
+                vite_proc.terminate()
+                vite_proc.wait(timeout=5)
     else:
         import uvicorn
         uvicorn.run("the_lab.app:app", host=args.host, port=args.port)

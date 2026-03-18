@@ -1,0 +1,53 @@
+// ------------------------------------------------------------
+// Utility formatting functions extracted from dashboard.html.
+// Pure functions — no DOM or global state dependencies.
+// ------------------------------------------------------------
+
+/**
+ * Escape a string for safe insertion into HTML.
+ * Uses a regex-based approach (no DOM required) so this works in
+ * both browser and SSR/test contexts.
+ */
+export function escapeHtml(s: string): string {
+  if (!s) return '';
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+/** Format an ISO timestamp for display. Returns '--' when missing. */
+export function formatTime(iso: string): string {
+  if (!iso) return '--';
+  try {
+    return new Date(iso).toLocaleString();
+  } catch {
+    return iso;
+  }
+}
+
+/** Truncate a string to `max` characters, appending '...' if needed. */
+export function truncate(s: string, max: number): string {
+  if (!s) return '';
+  return s.length > max ? s.substring(0, max) + '...' : s;
+}
+
+/**
+ * Extract a short title from an idea description:
+ * text before the first ':', or before the first non-word/space
+ * character if there is no colon.
+ */
+export function ideaTitle(s: string): string {
+  if (!s) return '';
+  const colonIdx = s.indexOf(':');
+  if (colonIdx > 0) return s.substring(0, colonIdx).trim();
+  const m = s.match(/^[\w\s]+/);
+  return m ? m[0].trim() : s;
+}
+
+/** Return a badge `<span>` HTML string for a given status. */
+export function badgeHtml(status: string): string {
+  return '<span class="badge badge-' + status + '">' + status + '</span>';
+}

@@ -1,0 +1,25 @@
+/* subway.css — DAG / subway graph view styles */
+
+#graph-container { flex: 1; position: relative; overflow: auto; }
+#graph { position: relative; min-height: 100%; }
+
+.subway-station {
+  position: absolute;
+  padding: 4px 10px;
+  background: #161b22;
+  border: 2px solid #30363d;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: background 0.15s;
+  white-space: nowrap;
+  z-index: 1;
+}
+.subway-station:hover, .subway-station.highlighted { background: #1c2333; }
+.subway-station.highlighted { box-shadow: 0 0 0 2px #58a6ff; z-index: 3; }
+.subway-station.dimmed { opacity: 0.3; }
+.subway-station .subway-header { display: flex; align-items: center; gap: 6px; }
+.subway-station .subway-id { font-weight: 700; color: #58a6ff; font-size: 11px; }
+.subway-station .subway-desc { color: #c9d1d9; font-size: 12px; display: inline; margin-left: 6px; }
+
+.subway-svg { position: absolute; top: 0; left: 0; pointer-events: none; z-index: 0; }

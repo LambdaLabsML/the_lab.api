@@ -1,0 +1,16 @@
+/* topbar.css — Top bar styles */
+
+#topbar {
+  background: #161b22;
+  border-bottom: 1px solid #30363d;
+  padding: 10px 20px;
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  flex-shrink: 0;
+  font-size: 13px;
+  flex-wrap: wrap;
+}
+#topbar .title { font-size: 15px; font-weight: 700; color: #58a6ff; margin-right: 12px; }
+#topbar .stat { color: #8b949e; }
+#topbar .stat b { color: #c9d1d9; font-weight: 600; }

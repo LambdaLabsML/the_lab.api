@@ -1,0 +1,43 @@
+/* chart.css — Chart panel styles */
+
+#chart-toggle {
+  background: #161b22;
+  border-bottom: 1px solid #30363d;
+  padding: 6px 20px;
+  cursor: pointer;
+  font-size: 12px;
+  color: #8b949e;
+  flex-shrink: 0;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+#chart-toggle:hover { color: #c9d1d9; }
+#chart-toggle .arrow { transition: transform 0.2s; display: inline-block; }
+#chart-toggle .arrow.open { transform: rotate(90deg); }
+
+#chart-panel {
+  background: #0d1117;
+  border-bottom: 1px solid #30363d;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+#chart-panel.collapsed { display: none; }
+
+#chart-wrap { position: relative; height: 220px; padding: 0 20px 12px 20px; overflow-x: auto; }
+#chart-inner { position: relative; height: 100%; min-width: 100%; }
+
+#metric-selector {
+  padding: 8px 20px 0 20px;
+  font-size: 11px;
+  color: #8b949e;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+#metric-selector select {
+  background: #161b22; color: #c9d1d9; border: 1px solid #30363d;
+  padding: 2px 6px; font-family: inherit; font-size: 11px; border-radius: 4px;
+}

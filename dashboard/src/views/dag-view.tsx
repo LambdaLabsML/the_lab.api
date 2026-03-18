@@ -1,0 +1,597 @@
+// ------------------------------------------------------------
+// DagView — Preact component that renders the DAG / subway map.
+//
+// Ported from the updateGraph() function in dashboard.html
+// (lines ~690-1070).  Faithfully reproduces the station
+// measurement, column/y-packing, pass-through reservations,
+// crossing adjustments, and SVG line rendering.
+// ------------------------------------------------------------
+
+import { useRef } from "preact/hooks";
+import { useLayoutEffect, useEffect } from "preact/hooks";
+import type { IdeaNode, StationPos, SubwayLayout } from "../lib/types";
+import { graphData, currentLayout, highlightedIdea, allIdeas, allExperiments } from "../state/signals";
+import { colorMode, selectedIdea, selectedMetric } from "../state/settings";
+import { drawSubwayLines } from "../lib/subway-lines";
+import { IDEA_PALETTE, STATUS_BAR_COLORS, STATUS_ORDER, _colorForIdea } from "../lib/colors";
+import { escapeHtml, ideaTitle, badgeHtml } from "../lib/format";
+
+// ---------------------------------------------------------------------------
+// Module-level station-size cache, keyed by "id:title".
+// Persists across renders so we only measure new / changed nodes.
+// ---------------------------------------------------------------------------
+const _stationSizeCache: Record<string, { w: number; h: number }> = {};
+
+// ---------------------------------------------------------------------------
+// Internal state shared between the measurement (useLayoutEffect) and
+// rendering (useEffect) phases within a single render cycle.
+// ---------------------------------------------------------------------------
+interface MeasuredLayout {
+  stationPos: Record<number, StationPos>;
+  totalW: number;
+  totalH: number;
+}
+
+export function DagView() {
+  const containerRef = useRef<HTMLDivElement>(null);
+  // Ref to pass measured layout from useLayoutEffect to useEffect
+  const measuredRef = useRef<MeasuredLayout | null>(null);
+
+  const data = graphData.value;
+  const layout = currentLayout.value;
+  const mode = colorMode.value;
+  const highlighted = highlightedIdea.value;
+  const metric = selectedMetric.value;
+  const ideas = allIdeas.value;
+  const experiments = allExperiments.value;
+
+  // =========================================================================
+  // MEASUREMENT PHASE — runs synchronously before paint so DOM measurements
+  // happen on hidden probe elements before the user sees anything.
+  // =========================================================================
+  useLayoutEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    if (!data || !data.nodes.length || !layout) {
+      measuredRef.current = null;
+      return;
+    }
+
+    // --- Measure station sizes ---
+    const sizes: Record<number, { w: number; h: number }> = {};
+    const needsMeasure: IdeaNode[] = [];
+    for (const n of data.nodes) {
+      const key = n.id + ":" + ideaTitle(n.description);
+      if (_stationSizeCache[key]) {
+        sizes[n.id] = _stationSizeCache[key];
+      } else {
+        needsMeasure.push(n);
+      }
+    }
+
+    if (needsMeasure.length > 0) {
+      let mHtml = '<div style="position:absolute;visibility:hidden;top:0;left:0">';
+      for (const n of needsMeasure) {
+        const ds = n.has_running ? "running" : n.status;
+        const sc = STATUS_BAR_COLORS[ds] || STATUS_BAR_COLORS.active;
+        const lc = IDEA_PALETTE[layout.ideaLane[n.id] % IDEA_PALETTE.length];
+        mHtml +=
+          '<div class="subway-station" data-id="' +
+          n.id +
+          '" style="' +
+          "position:static;border-color:" +
+          sc +
+          ";border-left:4px solid " +
+          lc +
+          (n.status === "suggested" ? ";border-style:dashed" : "") +
+          '">' +
+          '<div class="subway-header"><span class="subway-id">#' +
+          n.id +
+          "</span>" +
+          badgeHtml(ds) +
+          '<span class="subway-desc">' +
+          escapeHtml(ideaTitle(n.description)) +
+          "</span></div>" +
+          "</div>";
+      }
+      mHtml += "</div>";
+      container.innerHTML = mHtml;
+      container.querySelectorAll(".subway-station").forEach((el) => {
+        const id = parseInt((el as HTMLElement).dataset.id!);
+        const s = { w: (el as HTMLElement).offsetWidth, h: (el as HTMLElement).offsetHeight };
+        sizes[id] = s;
+        const node = data.nodes.find((n) => n.id === id);
+        if (node) _stationSizeCache[id + ":" + ideaTitle(node.description)] = s;
+      });
+    }
+
+    // --- Compute column gap from max fan-out ---
+    const ROUTING_SPACING = 10;
+    const branchCounts: Record<number, number> = {};
+    for (const n of data.nodes) {
+      for (const pid of n.parent_ids || []) {
+        if (layout.ideaLane[n.id] !== layout.ideaLane[pid])
+          branchCounts[pid] = (branchCounts[pid] || 0) + 1;
+      }
+    }
+    const maxFanOut = Math.max(0, ...Object.values(branchCounts));
+    const colGap = Math.max(30, maxFanOut * ROUTING_SPACING + 20);
+
+    // --- Column widths & x-positions ---
+    const colWidth: Record<number, number> = {};
+    for (const n of data.nodes) {
+      const c = layout.depth[n.id];
+      colWidth[c] = Math.max(colWidth[c] || 0, sizes[n.id].w);
+    }
+    const colX: Record<number, number> = {};
+    let cx = 16;
+    for (let c = 0; c <= layout.maxDepth; c++) {
+      colX[c] = cx;
+      cx += (colWidth[c] || 0) + colGap;
+    }
+    const totalW = cx + 16;
+
+    // --- Per-column y-packing with pass-through reservations ---
+    const ROW_GAP = 3;
+    const PAD_Y = 12;
+    const PASS_H = 14;
+
+    // Group stations by column
+    const colNodes: Record<number, IdeaNode[]> = {};
+    for (let idx = 0; idx < data.nodes.length; idx++) {
+      const n = data.nodes[idx];
+      const col = layout.depth[n.id];
+      if (!colNodes[col]) colNodes[col] = [];
+      colNodes[col].push(n);
+    }
+
+    // Compute per-lane SUBTREE activity (includes all descendant lanes via lane tree).
+    const laneDirectAct: Record<number, string> = {};
+    for (let idx = 0; idx < data.nodes.length; idx++) {
+      const n = data.nodes[idx];
+      const li = layout.ideaLane[n.id];
+      const act = n.last_finish || n.first_start || n.created_at || "";
+      if (!laneDirectAct[li] || act > laneDirectAct[li]) laneDirectAct[li] = act;
+    }
+    const laneFullAct: Record<number, string> = {};
+    function computeLaneFullAct(li: number): string {
+      if (laneFullAct[li] !== undefined) return laneFullAct[li];
+      let best = laneDirectAct[li] || "";
+      const ch = layout.laneChildren[li];
+      if (ch) {
+        for (let j = 0; j < ch.length; j++) {
+          const ca = computeLaneFullAct(ch[j].childLane);
+          if (ca > best) best = ca;
+        }
+      }
+      laneFullAct[li] = best;
+      return best;
+    }
+    for (let li = 0; li < layout.lanes.length; li++) computeLaneFullAct(li);
+
+    // Compute per-lane "worst" status (for sorting: concluded=0, active=1, abandoned=2)
+    const laneStatus: Record<number, number> = {};
+    for (let idx = 0; idx < data.nodes.length; idx++) {
+      const n = data.nodes[idx];
+      const li = layout.ideaLane[n.id];
+      const rank = STATUS_ORDER[n.status] !== undefined ? STATUS_ORDER[n.status] : 1;
+      if (laneStatus[li] === undefined || rank > laneStatus[li]) laneStatus[li] = rank;
+    }
+
+    // Build explicit pass-through set by scanning ALL edges.
+    const needsPass: Record<string, number> = {};
+    // a) Same-lane backbone gaps
+    for (let li = 0; li < layout.lanes.length; li++) {
+      const laneIdeas = layout.lanes[li].ideas;
+      if (laneIdeas.length < 2) continue;
+      const cols: number[] = [];
+      for (let j = 0; j < laneIdeas.length; j++) cols.push(layout.depth[laneIdeas[j]]);
+      cols.sort((a, b) => a - b);
+      for (let j = 0; j < cols.length - 1; j++) {
+        for (let cc = cols[j] + 1; cc < cols[j + 1]; cc++) needsPass[li + "," + cc] = li;
+      }
+    }
+    // b) Cross-lane edges that skip columns
+    for (let idx = 0; idx < data.edges.length; idx++) {
+      const e = data.edges[idx];
+      const fl = layout.ideaLane[e.from];
+      const tl = layout.ideaLane[e.to];
+      if (fl === undefined || tl === undefined) continue;
+      if (fl === tl) continue;
+      const fc = layout.depth[e.from];
+      const tc = layout.depth[e.to];
+      if (fc === undefined || tc === undefined) continue;
+      for (let cc = fc + 1; cc < tc; cc++) {
+        needsPass[tl + "," + cc] = e.to;
+      }
+    }
+
+    // Build slots per column: just stations, sorted by status then activity
+    interface Slot {
+      type: string;
+      nodeId: number;
+      lane: number;
+      h: number;
+      statusRank: number;
+      act: string;
+    }
+    const colSlots: Record<number, Slot[]> = {};
+    for (let c = 0; c <= layout.maxDepth; c++) {
+      const slots: Slot[] = [];
+      const nodes = colNodes[c] || [];
+      for (let j = 0; j < nodes.length; j++) {
+        const n = nodes[j];
+        const li = layout.ideaLane[n.id];
+        const sr = STATUS_ORDER[n.status] !== undefined ? STATUS_ORDER[n.status] : 1;
+        slots.push({
+          type: "station",
+          nodeId: n.id,
+          lane: li,
+          h: sizes[n.id].h,
+          statusRank: sr,
+          act: laneFullAct[li] || "",
+        });
+      }
+      // Sort: 1) status (concluded=0, active=1, abandoned=2)  2) subtree activity desc
+      slots.sort((a, b) => {
+        if (a.statusRank !== b.statusRank) return a.statusRank - b.statusRank;
+        if (a.act !== b.act) return b.act > a.act ? 1 : -1;
+        return 0;
+      });
+      colSlots[c] = slots;
+    }
+
+    // === PASS 1: stack stations without pass-throughs ===
+    const stationPos: Record<number, StationPos> = {};
+    let maxY = 0;
+    for (let c = 0; c <= layout.maxDepth; c++) {
+      const slots = colSlots[c] || [];
+      let y = PAD_Y;
+      for (let i = 0; i < slots.length; i++) {
+        const slot = slots[i];
+        let minY = y;
+        // Children never above parent
+        const pids = (layout.nodeMap[slot.nodeId]?.parent_ids || []);
+        for (let j = 0; j < pids.length; j++) {
+          const pp = stationPos[pids[j]];
+          if (pp) minY = Math.max(minY, pp.y);
+        }
+        y = minY;
+        stationPos[slot.nodeId] = { x: colX[c], y: y, w: colWidth[c], h: slot.h };
+        y += slot.h + ROW_GAP;
+      }
+      if (y > maxY) maxY = y;
+    }
+
+    // === PASS 2: push stations down where horizontal line segments cross them ===
+    const crossings: Record<number, number[]> = {};
+    // a) Same-lane backbone: A(colA) -> B(colB) routes horizontally at B.cy
+    for (let li = 0; li < layout.lanes.length; li++) {
+      const laneIdeas = layout.lanes[li].ideas;
+      if (laneIdeas.length < 2) continue;
+      const sorted = laneIdeas.slice().sort((a, b) => layout.depth[a] - layout.depth[b]);
+      for (let j = 0; j < sorted.length - 1; j++) {
+        const aCol = layout.depth[sorted[j]],
+          bCol = layout.depth[sorted[j + 1]];
+        if (bCol <= aCol + 1) continue;
+        const bP = stationPos[sorted[j + 1]];
+        if (!bP) continue;
+        const bCy = bP.y + bP.h / 2;
+        for (let cc = aCol + 1; cc < bCol; cc++) {
+          if (!crossings[cc]) crossings[cc] = [];
+          crossings[cc].push(bCy);
+        }
+      }
+    }
+    // b) Cross-lane branch: routes horizontally at child.cy
+    for (let idx = 0; idx < data.edges.length; idx++) {
+      const e = data.edges[idx];
+      const fl = layout.ideaLane[e.from],
+        tl = layout.ideaLane[e.to];
+      if (fl === undefined || tl === undefined || fl === tl) continue;
+      const fc = layout.depth[e.from],
+        tc = layout.depth[e.to];
+      if (fc === undefined || tc === undefined || tc <= fc + 1) continue;
+      const cP = stationPos[e.to];
+      if (!cP) continue;
+      const cCy = cP.y + cP.h / 2;
+      for (let cc = fc + 1; cc < tc; cc++) {
+        if (!crossings[cc]) crossings[cc] = [];
+        crossings[cc].push(cCy);
+      }
+    }
+    // For each column with crossings, check overlap with station boxes and push down
+    for (let c = 0; c <= layout.maxDepth; c++) {
+      const crs = crossings[c];
+      if (!crs || !crs.length) continue;
+      crs.sort((a, b) => a - b);
+      // Deduplicate nearby crossings
+      const unique = [crs[0]];
+      for (let j = 1; j < crs.length; j++) {
+        if (crs[j] - unique[unique.length - 1] > 4) unique.push(crs[j]);
+      }
+      const slots = colSlots[c] || [];
+      for (let ci = 0; ci < unique.length; ci++) {
+        const lineY = unique[ci];
+        const halfH = PASS_H / 2;
+        // Find any station that overlaps lineY +/- halfH
+        for (let j = 0; j < slots.length; j++) {
+          const sp = stationPos[slots[j].nodeId];
+          if (!sp) continue;
+          if (lineY + halfH > sp.y && lineY - halfH < sp.y + sp.h) {
+            // Push this station and all below it down
+            const pushTo = lineY + halfH + 2;
+            const shift = pushTo - sp.y;
+            if (shift > 0) {
+              for (let k = j; k < slots.length; k++) {
+                const sp2 = stationPos[slots[k].nodeId];
+                if (!sp2) continue;
+                sp2.y += shift;
+              }
+            }
+            break; // only push once per crossing
+          }
+        }
+      }
+    }
+
+    // Recompute maxY after adjustments
+    maxY = 0;
+    for (const nid in stationPos) {
+      const sp = stationPos[nid as unknown as number];
+      const bot = sp.y + sp.h + ROW_GAP;
+      if (bot > maxY) maxY = bot;
+    }
+    const totalH = maxY + PAD_Y;
+
+    measuredRef.current = { stationPos, totalW, totalH };
+  }, [data, layout]);
+
+  // =========================================================================
+  // RENDER PHASE — runs after paint with the measured layout to build the
+  // final station HTML and SVG lines.
+  // =========================================================================
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    if (!data || !data.nodes.length || !layout) {
+      container.innerHTML =
+        '<div style="padding:40px;color:#484f58;text-align:center">No ideas yet</div>';
+      return;
+    }
+
+    const measured = measuredRef.current;
+    if (!measured) return;
+
+    const { stationPos, totalW, totalH } = measured;
+
+    // Helper: color for a given idea, closing over current mode/metric/state
+    function colorForIdea(ideaId: number, m: string): string {
+      return _colorForIdea(ideaId, m, metric, layout!, ideas, experiments);
+    }
+
+    // --- Build SVG lines ---
+    const svgContent = drawSubwayLines(data, layout, stationPos, mode, colorForIdea);
+
+    // --- Build station HTML ---
+    let html =
+      '<svg class="subway-svg" id="subway-svg" width="' +
+      totalW +
+      '" height="' +
+      totalH +
+      '"></svg>';
+
+    for (const n of data.nodes) {
+      const p = stationPos[n.id];
+      if (!p) continue;
+      const ds = n.has_running ? "running" : n.status;
+      const nodeColor = colorForIdea(n.id, mode);
+      html +=
+        '<div class="subway-station" data-id="' +
+        n.id +
+        '" title="' +
+        escapeHtml(n.description) +
+        '" style="' +
+        "left:" +
+        p.x +
+        "px;top:" +
+        p.y +
+        "px;width:" +
+        p.w +
+        "px" +
+        ";border-color:" +
+        nodeColor +
+        '">' +
+        '<div class="subway-header"><span class="subway-id">#' +
+        n.id +
+        "</span>" +
+        badgeHtml(ds) +
+        '<span class="subway-desc">' +
+        escapeHtml(ideaTitle(n.description)) +
+        "</span></div>" +
+        "</div>";
+    }
+
+    container.innerHTML = html;
+    container.style.minWidth = totalW + "px";
+    container.style.minHeight = totalH + "px";
+
+    // Inject SVG content
+    const svgEl = container.querySelector("#subway-svg");
+    if (svgEl) {
+      svgEl.innerHTML = svgContent;
+    }
+
+    // --- Build parent map for ancestor traversal ---
+    const parentMap: Record<number, number[]> = {};
+    for (let idx = 0; idx < data.nodes.length; idx++) {
+      const n = data.nodes[idx];
+      parentMap[n.id] = (n.parent_ids || []).filter((p) => layout.nodeMap[p]);
+    }
+
+    function getAncestors(ideaId: number): Record<number, boolean> {
+      const ancestors: Record<number, boolean> = {};
+      const queue = [ideaId];
+      while (queue.length) {
+        const cur = queue.shift()!;
+        if (ancestors[cur]) continue;
+        ancestors[cur] = true;
+        const pids = parentMap[cur] || [];
+        for (let j = 0; j < pids.length; j++) queue.push(pids[j]);
+      }
+      return ancestors;
+    }
+
+    function applyHighlight(ideaId: number | null) {
+      const ancestors = ideaId ? getAncestors(ideaId) : null;
+      // Highlight/dim stations
+      container.querySelectorAll(".subway-station").forEach((el) => {
+        const id = parseInt((el as HTMLElement).dataset.id!);
+        if (!ancestors) {
+          el.classList.remove("highlighted", "dimmed");
+          return;
+        }
+        if (ancestors[id]) {
+          el.classList.add("highlighted");
+          el.classList.remove("dimmed");
+        } else {
+          el.classList.add("dimmed");
+          el.classList.remove("highlighted");
+        }
+      });
+      // Highlight/dim SVG edges
+      const svg = container.querySelector("#subway-svg");
+      if (svg) {
+        svg.querySelectorAll(".svg-edge").forEach((el) => {
+          const from = parseInt(el.getAttribute("data-from")!);
+          const to = parseInt(el.getAttribute("data-to")!);
+          if (!ancestors) {
+            (el as SVGElement).style.opacity = "";
+            (el as SVGElement).style.strokeWidth = "";
+            return;
+          }
+          if (ancestors[from] && ancestors[to]) {
+            (el as SVGElement).style.opacity = "1";
+            (el as SVGElement).style.strokeWidth = "5";
+          } else {
+            (el as SVGElement).style.opacity = "0.1";
+            (el as SVGElement).style.strokeWidth = "";
+          }
+        });
+        svg.querySelectorAll(".svg-dot").forEach((el) => {
+          const id = parseInt(el.getAttribute("data-idea")!);
+          if (!ancestors) {
+            (el as SVGElement).style.opacity = "";
+            return;
+          }
+          (el as SVGElement).style.opacity = ancestors[id] ? "1" : "0.15";
+        });
+      }
+    }
+
+    // --- Attach hover and click handlers ---
+    container.querySelectorAll(".subway-station").forEach((el) => {
+      el.addEventListener("click", () => {
+        const id = parseInt((el as HTMLElement).dataset.id!);
+        selectedIdea.value = id;
+        history.pushState(null, "", "/ideas/" + id);
+      });
+      el.addEventListener("mouseenter", () => {
+        const id = parseInt((el as HTMLElement).dataset.id!);
+        highlightedIdea.value = id;
+      });
+      el.addEventListener("mouseleave", () => {
+        highlightedIdea.value = null;
+      });
+    });
+
+    // Apply current highlight state (in case it was set before render)
+    applyHighlight(highlightedIdea.value);
+  }, [data, layout, mode, metric, ideas, experiments]);
+
+  // =========================================================================
+  // HIGHLIGHT EFFECT — reacts to highlightedIdea changes without full re-render
+  // =========================================================================
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || !data || !layout) return;
+
+    const parentMap: Record<number, number[]> = {};
+    for (const n of data.nodes) {
+      parentMap[n.id] = (n.parent_ids || []).filter((p) => layout.nodeMap[p]);
+    }
+
+    function getAncestors(ideaId: number): Record<number, boolean> {
+      const ancestors: Record<number, boolean> = {};
+      const queue = [ideaId];
+      while (queue.length) {
+        const cur = queue.shift()!;
+        if (ancestors[cur]) continue;
+        ancestors[cur] = true;
+        const pids = parentMap[cur] || [];
+        for (let j = 0; j < pids.length; j++) queue.push(pids[j]);
+      }
+      return ancestors;
+    }
+
+    const ancestors = highlighted ? getAncestors(highlighted) : null;
+
+    // Highlight/dim stations
+    container.querySelectorAll(".subway-station").forEach((el) => {
+      const id = parseInt((el as HTMLElement).dataset.id!);
+      if (!ancestors) {
+        el.classList.remove("highlighted", "dimmed");
+        return;
+      }
+      if (ancestors[id]) {
+        el.classList.add("highlighted");
+        el.classList.remove("dimmed");
+      } else {
+        el.classList.add("dimmed");
+        el.classList.remove("highlighted");
+      }
+    });
+
+    // Highlight/dim SVG edges
+    const svg = container.querySelector("#subway-svg");
+    if (svg) {
+      svg.querySelectorAll(".svg-edge").forEach((el) => {
+        const from = parseInt(el.getAttribute("data-from")!);
+        const to = parseInt(el.getAttribute("data-to")!);
+        if (!ancestors) {
+          (el as SVGElement).style.opacity = "";
+          (el as SVGElement).style.strokeWidth = "";
+          return;
+        }
+        if (ancestors[from] && ancestors[to]) {
+          (el as SVGElement).style.opacity = "1";
+          (el as SVGElement).style.strokeWidth = "5";
+        } else {
+          (el as SVGElement).style.opacity = "0.1";
+          (el as SVGElement).style.strokeWidth = "";
+        }
+      });
+      svg.querySelectorAll(".svg-dot").forEach((el) => {
+        const id = parseInt(el.getAttribute("data-idea")!);
+        if (!ancestors) {
+          (el as SVGElement).style.opacity = "";
+          return;
+        }
+        (el as SVGElement).style.opacity = ancestors[id] ? "1" : "0.15";
+      });
+    }
+  }, [highlighted, data, layout]);
+
+  // =========================================================================
+  // JSX — the container div hosts imperatively managed DOM content.
+  // =========================================================================
+  return (
+    <div
+      id="graph"
+      ref={containerRef}
+      class="subway-graph"
+      style={{ position: "relative", overflow: "auto" }}
+    />
+  );
+}

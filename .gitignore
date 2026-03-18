@@ -9,3 +9,6 @@ wheels/
 # Virtual environments
 .venv
 /example_proj
+
+# Dashboard dev dependencies
+dashboard/node_modules/

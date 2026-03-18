@@ -6,8 +6,9 @@ import os
 from pathlib import Path
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .git_ops import (
@@ -33,20 +34,29 @@ runner = ExperimentRunner(store)
 async def startup():
     await runner.reattach_running()
 
-_DASHBOARD_HTML: str | None = None
 _DEV_MODE = os.environ.get("THE_LAB_DEV") == "1"
+_STATIC_DIR = Path(__file__).parent / "static"
+
+# Serve Vite build output if it exists, otherwise fall back to legacy dashboard.html
+if _STATIC_DIR.exists() and (_STATIC_DIR / "index.html").exists():
+    _SPA_HTML = (_STATIC_DIR / "index.html").read_text()
+    _ASSETS_DIR = _STATIC_DIR / "assets"
+    if _ASSETS_DIR.exists():
+        app.mount("/assets", StaticFiles(directory=_ASSETS_DIR), name="assets")
+else:
+    _SPA_HTML = None
+
+_DASHBOARD_HTML: str | None = None
 
 def _load_dashboard() -> str:
     global _DASHBOARD_HTML
     if _DEV_MODE or _DASHBOARD_HTML is None:
         html_path = Path(__file__).parent / "dashboard.html"
-        _DASHBOARD_HTML = html_path.read_text()
+        if html_path.exists():
+            _DASHBOARD_HTML = html_path.read_text()
+        else:
+            _DASHBOARD_HTML = "<html><body>Dashboard not found. Run npm run build in dashboard/.</body></html>"
     return _DASHBOARD_HTML
-
-
-@app.get("/", response_class=HTMLResponse)
-def dashboard():
-    return _load_dashboard()
 
 
 # --- Request schemas ---
@@ -799,3 +809,16 @@ def get_chart_data():
                         "idea_status": idea["status"],
                     })
     return {"experiments": completed_exps, "running": running_progress}
+
+
+# --- SPA Fallback (must be last) ---
+# Serves the Preact app for any non-API path (enables client-side routing).
+# Falls back to legacy dashboard.html if Vite build output doesn't exist.
+
+@app.get("/{path:path}", response_class=HTMLResponse, include_in_schema=False)
+def spa_fallback(path: str):
+    if path.startswith("api/"):
+        raise HTTPException(404)
+    if _SPA_HTML:
+        return _SPA_HTML
+    return _load_dashboard()
