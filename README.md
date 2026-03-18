@@ -66,13 +66,20 @@ The server starts at `http://localhost:8000`. Open it in a browser to see the da
 
 ### 4. Launch an agent
 
-Pick your agent and paste the contents of `LOOP.md` as the initial prompt.
-
 **Claude Code** (recommended — use `/loop` for continuous operation):
 ```bash
 cd /path/to/your/repo
+claude --dangerously-skip-permissions
+```
+Then in the Claude session:
+```
+/loop 5m Start by reading the API reference /openapi.json. Then, review finished experiments using the tools in .the_lab/artifacts, conclude and combine ideas that worked well and tag all experiments that YOU start as claude-4.6. Don't abandon ideas unless you are EXTREMELY certain. <paste LOOP.md content here>
+```
+
+Or use `the-lab-agent` for a one-liner:
+```bash
 the-lab-agent LOOP.md              # defaults to 15m loop interval
-the-lab-agent LOOP.md -d 10m       # custom interval
+the-lab-agent LOOP.md -d 5m        # custom interval
 the-lab-agent LOOP.md --model opus # pick a model
 ```
 
