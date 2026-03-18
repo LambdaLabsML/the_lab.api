@@ -74,3 +74,5 @@ Each `/wait` returns the next finished experiment. Read the result, take notes, 
 Scripts must print `{"metrics": {...}}` as last stdout line (or omit for setup tasks).
 Scripts can append to `$THE_LAB_METRICS` for per-step time-series logging.
 Note levels: `insight` · `milestone` · `observation` (default) · `debug`
+
+For a complete list of all endpoints with descriptions and examples, see `GET /openapi.json`.

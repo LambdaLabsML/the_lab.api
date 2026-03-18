@@ -185,6 +185,18 @@ export function ApiView() {
             <span id="api-detail-url">{selected.path}</span>
             <span class="close-btn" onClick={() => setSelected(null)}>&times;</span>
           </div>
+          {selected.op.description && (
+            <div class="api-description">
+              {selected.op.description.split("\n").map((line: string, i: number) => {
+                const trimmed = line.trim();
+                if (!trimmed) return <br key={i} />;
+                if (trimmed.startsWith("Example:") || trimmed.startsWith("→")) {
+                  return <div key={i} class="api-example-line">{trimmed}</div>;
+                }
+                return <div key={i}>{trimmed}</div>;
+              })}
+            </div>
+          )}
           <div id="api-params" class="has-params">
             {(selected.op.parameters || []).map((param: any) => (
               <div key={param.name}>

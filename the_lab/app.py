@@ -149,6 +149,20 @@ def _idea_context(idea_id: int) -> dict:
 
 @app.post("/api/v1/ideas/new", status_code=201)
 def create_idea(req: NewIdeaRequest):
+    """Create a new idea and its corresponding git branch.
+
+    Creates an idea record and a git branch named ``idea/<id>``. If no
+    ``parent_ids`` are supplied, the current branch is inspected: when you are
+    already on ``idea/N``, that idea is automatically used as the parent. For
+    multi-parent ideas the branches are merged; if the merge has conflicts, the
+    response contains a ``conflicts`` list instead of the created idea. The
+    response also includes a ``similar_ideas`` array when existing ideas have
+    descriptions close to the new one, which helps avoid duplicate work.
+
+    Example:
+        POST /api/v1/ideas/new {"parent_ids": [1], "description": "test new hypothesis"}
+        -> {"id": 3, "branch": "idea/3", "status": "active", "similar_ideas": [...]}
+    """
     # If no parents given, infer from current branch (idea/N → parent is N)
     parent_ids = req.parent_ids
     if not parent_ids:
@@ -195,7 +209,17 @@ def create_idea(req: NewIdeaRequest):
 
 @app.post("/api/v1/ideas/{idea_id}/checkout")
 def checkout_idea_endpoint(idea_id: int):
-    """Auto-commit any uncommitted changes and checkout this idea's branch."""
+    """Switch the working tree to an idea's branch.
+
+    Auto-commits any uncommitted changes on the current branch before
+    switching. If there are staged or unstaged changes that cannot be
+    committed, they are stashed so the checkout can proceed cleanly. Returns
+    the new branch name along with the idea context.
+
+    Example:
+        POST /api/v1/ideas/2/checkout
+        -> {"branch": "idea/2", "stashed": false, "idea_id": 2, "idea_description": "..."}
+    """
     idea = store.get_idea(idea_id)
     if not idea:
         raise HTTPException(404, "idea not found")
@@ -212,6 +236,19 @@ def checkout_idea_endpoint(idea_id: int):
 
 @app.get("/api/v1/ideas")
 def list_ideas(status: str | None = None, source: str | None = None):
+    """List all ideas with their notes and a compact experiment summary.
+
+    Each idea in the response includes journal notes (insight/milestone/observation
+    levels) and an ``experiment_summary`` object with counts of total, completed,
+    failed, and running experiments plus the latest completed metrics. Use the
+    ``status`` query parameter (e.g. ``?status=active``) to filter by idea
+    status, and ``source`` (e.g. ``?source=human``) to filter by origin.
+
+    Example:
+        GET /api/v1/ideas?status=active
+        -> [{"id": 1, "description": "...", "status": "active",
+             "notes": [...], "experiment_summary": {"total": 5, "completed": 3, ...}}, ...]
+    """
     ideas = store.list_ideas(status=status, source=source)
     for idea in ideas:
         idea["notes"] = store.get_notes(idea["id"], levels=Store.LISTING_LEVELS)
@@ -232,6 +269,19 @@ def list_ideas(status: str | None = None, source: str | None = None):
 
 @app.get("/api/v1/ideas/{idea_id}")
 def get_idea(idea_id: int, notes: str | None = None):
+    """Get full detail for a single idea, including its experiments and notes.
+
+    Returns the idea record with all associated experiments and journal notes.
+    By default, debug-level notes are excluded. Pass ``?notes=all`` to include
+    every note level (insight, milestone, observation, and debug), which is
+    useful for troubleshooting experiment scripts or understanding low-level
+    decisions.
+
+    Example:
+        GET /api/v1/ideas/1?notes=all
+        -> {"id": 1, "description": "...", "status": "active", "branch": "idea/1",
+            "experiments": [...], "notes": [...]}
+    """
     idea = store.get_idea(idea_id)
     if not idea:
         raise HTTPException(404, "idea not found")
@@ -245,6 +295,17 @@ def get_idea(idea_id: int, notes: str | None = None):
 
 @app.get("/api/v1/ideas/{idea_id}/tree")
 def get_idea_tree(idea_id: int):
+    """Get the ancestor and descendant tree for an idea, with notes.
+
+    Walks the parent chain upward to collect all ancestors and the child chain
+    downward to collect all descendants. Each node in the tree includes its
+    listing-level notes (insight/milestone/observation). The root idea itself
+    is returned with detail-level notes and its full experiment list.
+
+    Example:
+        GET /api/v1/ideas/3/tree
+        -> {"idea": {"id": 3, ...}, "ancestors": [{"id": 1, ...}], "descendants": [{"id": 5, ...}]}
+    """
     idea = store.get_idea(idea_id)
     if not idea:
         raise HTTPException(404, "idea not found")
@@ -288,7 +349,17 @@ def get_idea_diff(
     idea_id: int,
     base: str | None = Query(default=None, description="Base branch (default: first parent's branch, or main)"),
 ):
-    """Get the git diff between this idea's branch and a base branch."""
+    """Get the git diff between this idea's branch and a base branch.
+
+    Shows what changed on this idea's branch relative to a base. By default
+    the base is the first parent idea's branch, or ``main`` if the idea has
+    no parents. You can override this with the ``?base=`` query parameter to
+    diff against any branch.
+
+    Example:
+        GET /api/v1/ideas/3/diff
+        -> {"diff": "diff --git a/model.py b/model.py\\n...", "base": "idea/1", "head": "idea/3"}
+    """
     idea = store.get_idea(idea_id)
     if not idea:
         raise HTTPException(404, "idea not found")
@@ -309,6 +380,16 @@ def get_idea_diff(
 
 @app.post("/api/v1/ideas/{idea_id}/conclude")
 def conclude_idea(idea_id: int, req: ConcludeRequest):
+    """Mark an active idea as concluded with a conclusion text.
+
+    Transitions the idea's status from ``active`` to ``concluded`` and stores
+    the provided conclusion. Only active ideas can be concluded; attempting to
+    conclude an idea in any other status returns a 400 error.
+
+    Example:
+        POST /api/v1/ideas/1/conclude {"conclusion": "Learning rate 3e-4 is optimal"}
+        -> {"id": 1, "status": "concluded", "conclusion": "Learning rate 3e-4 is optimal", ...}
+    """
     idea = store.get_idea(idea_id)
     if not idea:
         raise HTTPException(404, "idea not found")
@@ -319,6 +400,17 @@ def conclude_idea(idea_id: int, req: ConcludeRequest):
 
 @app.post("/api/v1/ideas/{idea_id}/abandon")
 def abandon_idea(idea_id: int, req: AbandonRequest):
+    """Abandon an idea that is no longer worth pursuing.
+
+    Transitions the idea's status to ``abandoned`` and records the reason.
+    Works on both ``active`` and ``suggested`` ideas. Ideas in other states
+    (e.g. already concluded or abandoned) cannot be abandoned again and will
+    return a 400 error.
+
+    Example:
+        POST /api/v1/ideas/2/abandon {"reason": "Approach too slow, superseded by idea 4"}
+        -> {"id": 2, "status": "abandoned", "conclusion": "Approach too slow, superseded by idea 4", ...}
+    """
     idea = store.get_idea(idea_id)
     if not idea:
         raise HTTPException(404, "idea not found")
@@ -329,6 +421,17 @@ def abandon_idea(idea_id: int, req: AbandonRequest):
 
 @app.post("/api/v1/ideas/{idea_id}/reopen")
 def reopen_idea(idea_id: int, req: ReopenRequest):
+    """Reopen a concluded or abandoned idea, returning it to active status.
+
+    Moves the idea back to ``active``. The previous conclusion or abandonment
+    reason is preserved as an insight-level note so it remains visible in the
+    idea's history. A milestone note is also added recording the reopen reason.
+    Only ``concluded`` or ``abandoned`` ideas can be reopened.
+
+    Example:
+        POST /api/v1/ideas/1/reopen {"reason": "New data suggests this is worth revisiting"}
+        -> {"id": 1, "status": "active", "conclusion": null, ...}
+    """
     idea = store.get_idea(idea_id)
     if not idea:
         raise HTTPException(404, "idea not found")
@@ -350,6 +453,20 @@ def reopen_idea(idea_id: int, req: ReopenRequest):
 
 @app.post("/api/v1/ideas/{idea_id}/note", status_code=201)
 def add_note(idea_id: int, req: NoteRequest):
+    """Add a journal note to an idea.
+
+    Attaches a timestamped note to the idea. The ``level`` field controls
+    visibility: ``insight`` for key findings, ``milestone`` for progress
+    markers, ``observation`` (default) for general notes, and ``debug`` for
+    low-level details hidden from most views. You can optionally attach
+    ``resources`` (URL + label pairs) to link relevant files, papers, or
+    dashboards.
+
+    Example:
+        POST /api/v1/ideas/1/note {"text": "Loss plateaued at 0.35", "level": "insight",
+                                    "resources": [{"url": "https://wandb.ai/run/42", "label": "W&B run"}]}
+        -> {"id": 7, "idea_id": 1, "text": "Loss plateaued at 0.35", "level": "insight", ...}
+    """
     idea = store.get_idea(idea_id)
     if not idea:
         raise HTTPException(404, "idea not found")
@@ -361,6 +478,21 @@ def add_note(idea_id: int, req: NoteRequest):
 
 @app.post("/api/v1/ideas/{idea_id}/experiments", status_code=201)
 def create_experiment(idea_id: int, req: NewExperimentRequest):
+    """Create a new experiment under an idea.
+
+    Registers an experiment record and, if ``script_content`` is provided,
+    writes the script file to disk with an auto-injected guard and preamble.
+    The idea must be in ``active`` status. Use ``meta`` to store arbitrary
+    hyperparameters or configuration, and ``tags`` to categorize the
+    experiment for filtering and comparison.
+
+    Example:
+        POST /api/v1/ideas/1/experiments {"description": "baseline run",
+                                           "script_content": "#!/bin/bash\\npython train.py",
+                                           "tags": ["baseline", "v1"],
+                                           "meta": {"lr": 0.001, "epochs": 50}}
+        -> {"id": 4, "idea_id": 1, "status": "pending", "script": ".the_lab/scripts/4.sh", ...}
+    """
     idea = store.get_idea(idea_id)
     if not idea:
         raise HTTPException(404, "idea not found")
@@ -379,12 +511,31 @@ def create_experiment(idea_id: int, req: NewExperimentRequest):
 
 @app.get("/api/v1/ideas/{idea_id}/experiments")
 def list_experiments(idea_id: int):
+    """List all experiments belonging to an idea.
+
+    Returns every experiment record for the given idea, regardless of status.
+    Each record includes the experiment's description, status, metrics, meta,
+    tags, and timing information.
+
+    Example:
+        GET /api/v1/ideas/1/experiments
+        -> [{"id": 4, "idea_id": 1, "status": "completed", "metrics": {"acc": 0.91}, ...}, ...]
+    """
     return store.list_experiments(idea_id)
 
 
 @app.get("/api/v1/experiments/tags")
 def list_tags():
-    """List all unique tags across all experiments, with counts."""
+    """List all unique experiment tags with their usage counts.
+
+    Scans every experiment and returns a sorted list of distinct tags, each
+    paired with the number of experiments that carry it. Useful for populating
+    tag filter UIs and understanding how experiments are categorized.
+
+    Example:
+        GET /api/v1/experiments/tags
+        -> {"tags": [{"tag": "baseline", "count": 3}, {"tag": "v2", "count": 1}]}
+    """
     tag_counts: dict[str, int] = {}
     for exp in store.list_all_experiments():
         for tag in exp.get("tags") or []:
@@ -399,7 +550,17 @@ class RenameTagRequest(BaseModel):
 
 @app.post("/api/v1/experiments/tags/rename")
 def rename_tag(req: RenameTagRequest):
-    """Rename a tag across all experiments."""
+    """Rename a tag across all experiments.
+
+    Replaces every occurrence of ``old`` with ``new`` in every experiment's tag
+    list. If an experiment already has the ``new`` tag, duplicates are removed
+    automatically so each tag appears at most once per experiment. Returns the
+    count of experiments that were updated.
+
+    Example:
+        POST /api/v1/experiments/tags/rename {"old": "basline", "new": "baseline"}
+        -> {"old": "basline", "new": "baseline", "updated": 2}
+    """
     updated = 0
     for exp in store.list_all_experiments():
         tags = exp.get("tags") or []
@@ -422,7 +583,20 @@ def compare_experiments(
     ids: str = Query(..., description="Comma-separated experiment IDs"),
     metrics: str | None = Query(default=None, description="Comma-separated metric keys to include (default: all)"),
 ):
-    """Side-by-side comparison of experiments: metrics, meta, and descriptions."""
+    """Side-by-side comparison of experiments by metrics and metadata.
+
+    Fetches the requested experiments and pivots their metrics and meta into
+    aligned tables so values are easy to compare column-by-column. Pass
+    ``?ids=1,2,3`` to select experiments and optionally ``?metrics=acc,loss``
+    to restrict which metric keys appear. All metric keys are included by
+    default.
+
+    Example:
+        GET /api/v1/experiments/compare?ids=4,5,6&metrics=acc,loss
+        -> {"experiment_ids": [4,5,6], "metric_keys": ["acc","loss"],
+            "metrics": {"acc": [0.91, 0.93, 0.89], "loss": [0.35, 0.30, 0.40]},
+            "meta_keys": ["lr"], "meta": {"lr": [0.001, 0.003, 0.001]}, ...}
+    """
     try:
         exp_ids = [int(x.strip()) for x in ids.split(",") if x.strip()]
     except ValueError:
@@ -468,6 +642,17 @@ def compare_experiments(
 
 @app.get("/api/v1/experiments/{exp_id}")
 def get_experiment(exp_id: int):
+    """Get full detail for a single experiment.
+
+    Returns the complete experiment record including its status, description,
+    metrics, meta, tags, script path, and timing information (started_at,
+    finished_at).
+
+    Example:
+        GET /api/v1/experiments/4
+        -> {"id": 4, "idea_id": 1, "status": "completed", "description": "baseline run",
+            "metrics": {"acc": 0.91, "loss": 0.35}, "meta": {"lr": 0.001}, "tags": ["baseline"], ...}
+    """
     exp = store.get_experiment(exp_id)
     if not exp:
         raise HTTPException(404, "experiment not found")
@@ -476,6 +661,19 @@ def get_experiment(exp_id: int):
 
 @app.post("/api/v1/experiments/{exp_id}/start")
 async def start_experiment(exp_id: int, req: StartExperimentRequest | None = None):
+    """Run an experiment's script.
+
+    Auto-commits any uncommitted changes on the idea's branch, creates a git
+    worktree for isolated execution, and launches the script as a background
+    process. An optional ``timeout`` (in seconds) will automatically cancel
+    the experiment if it exceeds the limit. Returns the experiment record with
+    the current branch context.
+
+    Example:
+        POST /api/v1/experiments/4/start {"timeout": 600}
+        -> {"status": "running", "experiment": {"id": 4, ...},
+            "current_branch": "idea/1", "idea_id": 1, ...}
+    """
     timeout = req.timeout if req else None
     result = await runner.start(exp_id, timeout=timeout)
     if result["status"] == "error":
@@ -489,6 +687,18 @@ async def start_experiment(exp_id: int, req: StartExperimentRequest | None = Non
 
 @app.post("/api/v1/experiments/{exp_id}/restart")
 async def restart_experiment(exp_id: int):
+    """Re-run a failed or cancelled experiment.
+
+    Restarts the experiment using the same script and configuration. Only
+    experiments in ``failed`` or ``cancelled`` status can be restarted;
+    attempting to restart an experiment in any other state returns a 400 error.
+    The experiment transitions back to ``running`` and a new worktree/process
+    is created.
+
+    Example:
+        POST /api/v1/experiments/4/restart
+        -> {"status": "running", "experiment": {"id": 4, ...}, "current_branch": "idea/1", ...}
+    """
     exp = store.get_experiment(exp_id)
     if not exp:
         raise HTTPException(404, "experiment not found")
