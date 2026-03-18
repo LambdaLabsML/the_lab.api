@@ -7,8 +7,7 @@
 // crossing adjustments, and SVG line rendering.
 // ------------------------------------------------------------
 
-import { useRef } from "preact/hooks";
-import { useLayoutEffect, useEffect } from "preact/hooks";
+import { useRef, useEffect } from "preact/hooks";
 import type { IdeaNode, StationPos, SubwayLayout } from "../lib/types";
 import { graphData, currentLayout, highlightedIdea, allIdeas, allExperiments } from "../state/signals";
 import { colorMode, selectedIdea, selectedMetric, improvementsOnly } from "../state/settings";
@@ -31,20 +30,8 @@ const COMPACT_DOT_SIZE = 20; // diameter of compact circle nodes
 // Per-column width overrides, persisted to localStorage
 const colWidthOverrides = useSetting<Record<string, number>>("dagColWidths", {});
 
-// ---------------------------------------------------------------------------
-// Internal state shared between the measurement (useLayoutEffect) and
-// rendering (useEffect) phases within a single render cycle.
-// ---------------------------------------------------------------------------
-interface MeasuredLayout {
-  stationPos: Record<number, StationPos>;
-  totalW: number;
-  totalH: number;
-}
-
 export function DagView() {
   const containerRef = useRef<HTMLDivElement>(null);
-  // Ref to pass measured layout from useLayoutEffect to useEffect
-  const measuredRef = useRef<MeasuredLayout | null>(null);
 
   const data = graphData.value;
   const layout = currentLayout.value;
@@ -64,14 +51,15 @@ export function DagView() {
   }
 
   // =========================================================================
-  // MEASUREMENT PHASE — runs synchronously before paint so DOM measurements
-  // happen on hidden probe elements before the user sees anything.
+  // COMBINED MEASUREMENT + RENDER — single effect to avoid ordering issues
+  // between useLayoutEffect and useEffect in Preact.
   // =========================================================================
-  useLayoutEffect(() => {
+  useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
     if (!data || !data.nodes.length || !layout) {
-      measuredRef.current = null;
+      container.innerHTML =
+        '<div style="padding:40px;color:#484f58;text-align:center">No ideas yet</div>';
       return;
     }
 
@@ -376,27 +364,7 @@ export function DagView() {
     }
     const totalH = maxY + PAD_Y;
 
-    measuredRef.current = { stationPos, totalW, totalH };
-  }, [data, layout]);
-
-  // =========================================================================
-  // RENDER PHASE — runs after paint with the measured layout to build the
-  // final station HTML and SVG lines.
-  // =========================================================================
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
-
-    if (!data || !data.nodes.length || !layout) {
-      container.innerHTML =
-        '<div style="padding:40px;color:#484f58;text-align:center">No ideas yet</div>';
-      return;
-    }
-
-    const measured = measuredRef.current;
-    if (!measured) return;
-
-    const { stationPos, totalW, totalH } = measured;
+    // --- RENDER --- (continues in the same effect)
 
     // Helper: color for a given idea, closing over current mode/metric/state
     function colorForIdea(ideaId: number, m: string): string {
