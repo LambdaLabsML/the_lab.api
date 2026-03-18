@@ -417,6 +417,9 @@
         <option value="idea">by idea sequence</option>
       </select>
       <label style="margin-left:12px;cursor:pointer"><input type="checkbox" id="improvements-only" onchange="updateChart()"> improvements only</label>
+      Tags: <select id="tag-filter" onchange="updateChart(); recolorGraph();" style="min-width:80px">
+        <option value="">all</option>
+      </select>
     </div>
     <div id="chart-wrap"><div id="chart-inner"><canvas id="metrics-chart"></canvas></div></div>
   </div>
@@ -1372,8 +1375,10 @@
 
   function populateMetricSelector() {
     const metricKeys = new Set();
+    const tagSet = new Set();
     for (const exp of allExperiments) {
       if (exp.metrics) { for (const k of Object.keys(exp.metrics)) metricKeys.add(k); }
+      if (exp.tags) { for (const t of exp.tags) tagSet.add(t); }
     }
     const select = document.getElementById('metric-select');
     const prev = select.value;
@@ -1383,6 +1388,15 @@
       opt.value = k; opt.textContent = k; select.appendChild(opt);
     }
     if (prev && metricKeys.has(prev)) { select.value = prev; }
+
+    const tagSelect = document.getElementById('tag-filter');
+    const prevTag = tagSelect.value;
+    tagSelect.innerHTML = '<option value="">all</option>';
+    for (const t of [...tagSet].sort()) {
+      const opt = document.createElement('option');
+      opt.value = t; opt.textContent = t; tagSelect.appendChild(opt);
+    }
+    if (prevTag && tagSet.has(prevTag)) { tagSelect.value = prevTag; }
     else {
       const preferred = ['accuracy_per_mtoken', 'agent_accuracy', 'accuracy'];
       const match = preferred.find(k => metricKeys.has(k));
@@ -1548,6 +1562,11 @@
 
   function _buildChartData(metricKey) {
     let filtered = allExperiments.filter(e => e.metrics && e.metrics[metricKey] !== undefined);
+
+    var tagFilter = (document.getElementById('tag-filter') || {}).value || '';
+    if (tagFilter) {
+      filtered = filtered.filter(e => e.tags && e.tags.indexOf(tagFilter) !== -1);
+    }
 
     if (document.getElementById('improvements-only').checked) {
       let best = -Infinity;

@@ -347,6 +347,16 @@ def list_experiments(idea_id: int):
     return store.list_experiments(idea_id)
 
 
+@app.get("/api/v1/experiments/tags")
+def list_tags():
+    """List all unique tags across all experiments, with counts."""
+    tag_counts: dict[str, int] = {}
+    for exp in store.list_all_experiments():
+        for tag in exp.get("tags") or []:
+            tag_counts[tag] = tag_counts.get(tag, 0) + 1
+    return {"tags": [{"tag": t, "count": c} for t, c in sorted(tag_counts.items())]}
+
+
 @app.get("/api/v1/experiments/compare")
 def compare_experiments(
     ids: str = Query(..., description="Comma-separated experiment IDs"),
