@@ -109,7 +109,16 @@ class Store:
 
     # --- Ideas ---
 
-    def create_idea(self, description: str, parent_ids: list[int], branch: str) -> dict:
+    def create_idea(
+        self,
+        description: str,
+        parent_ids: list[int],
+        branch: str,
+        source: str = "agent",
+        status: str = "active",
+        priority: str = "normal",
+        resources: list[dict] | None = None,
+    ) -> dict:
         with self._lock:
             idea_id = self._next_idea_id
             self._next_idea_id += 1
@@ -118,9 +127,12 @@ class Store:
             "id": idea_id,
             "description": description,
             "parent_ids": parent_ids,
-            "status": "active",
+            "status": status,
             "conclusion": None,
             "branch": branch,
+            "source": source,
+            "priority": priority,
+            "resources": resources or [],
             "created_at": _now(),
         }
         return idea
@@ -148,7 +160,7 @@ class Store:
         _write_json(self._idea_dir(idea_id) / "idea.json", idea)
         return idea
 
-    def list_ideas(self, status: str | None = None) -> list[dict]:
+    def list_ideas(self, status: str | None = None, source: str | None = None) -> list[dict]:
         ideas = []
         if not self.lab_dir.exists():
             return ideas
@@ -162,8 +174,11 @@ class Store:
             idea_path = d / "idea.json"
             if idea_path.exists():
                 idea = _read_json(idea_path)
-                if status is None or idea.get("status") == status:
-                    ideas.append(idea)
+                if status is not None and idea.get("status") != status:
+                    continue
+                if source is not None and idea.get("source") != source:
+                    continue
+                ideas.append(idea)
         return ideas
 
     # --- Notes ---
@@ -172,10 +187,18 @@ class Store:
     DETAIL_LEVELS = {"insight", "milestone", "observation"}
     ALL_LEVELS = {"insight", "milestone", "observation", "debug"}
 
-    def add_note(self, idea_id: int, text: str, level: str = "observation") -> dict:
+    def add_note(
+        self,
+        idea_id: int,
+        text: str,
+        level: str = "observation",
+        resources: list[dict] | None = None,
+    ) -> dict:
         if level not in self.ALL_LEVELS:
             raise ValueError(f"invalid note level: {level}, must be one of {self.ALL_LEVELS}")
         note = {"text": text, "level": level, "created_at": _now()}
+        if resources:
+            note["resources"] = resources
         notes_path = self._idea_dir(idea_id) / "notes.json"
         with self._lock:
             notes = _read_json(notes_path) if notes_path.exists() else []
@@ -265,3 +288,34 @@ class Store:
                     if exp.get("status") == status:
                         results.append(exp)
         return results
+
+    def find_similar_ideas(self, description: str, threshold: float = 0.4) -> list[dict]:
+        """Find existing ideas with overlapping keywords (simple word-overlap)."""
+        stop_words = {
+            "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
+            "have", "has", "had", "do", "does", "did", "will", "would", "could",
+            "should", "may", "might", "can", "shall", "to", "of", "in", "for",
+            "on", "with", "at", "by", "from", "as", "into", "through", "during",
+            "before", "after", "and", "but", "or", "nor", "not", "so", "yet",
+            "this", "that", "these", "those", "it", "its", "we", "our", "vs",
+            "use", "using", "try", "test", "run", "add", "new",
+        }
+
+        def significant_words(text: str) -> set[str]:
+            words = set(text.lower().split())
+            return {w.strip(".,;:!?()[]{}\"'") for w in words} - stop_words
+
+        new_words = significant_words(description)
+        if not new_words:
+            return []
+
+        similar = []
+        for idea in self.list_ideas():
+            idea_words = significant_words(idea.get("description", ""))
+            if not idea_words:
+                continue
+            overlap = len(new_words & idea_words) / min(len(new_words), len(idea_words))
+            if overlap >= threshold:
+                similar.append({"id": idea["id"], "description": idea["description"],
+                                "status": idea["status"], "overlap": round(overlap, 2)})
+        return similar

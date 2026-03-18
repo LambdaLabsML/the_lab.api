@@ -51,9 +51,25 @@ def dashboard():
 
 # --- Request schemas ---
 
+class ResourceItem(BaseModel):
+    url: str
+    label: str = ""
+
+
 class NewIdeaRequest(BaseModel):
     parent_ids: list[int] = []
     description: str
+
+
+class SuggestIdeaRequest(BaseModel):
+    description: str
+    parent_ids: list[int] = []
+    priority: Literal["normal", "high"] = "normal"
+    resources: list[ResourceItem] = []
+
+
+class AdoptRequest(BaseModel):
+    agent_note: str | None = None
 
 
 class NewExperimentRequest(BaseModel):
@@ -65,6 +81,7 @@ class NewExperimentRequest(BaseModel):
 class NoteRequest(BaseModel):
     text: str
     level: Literal["insight", "milestone", "observation", "debug"] = "observation"
+    resources: list[ResourceItem] = []
 
 
 class ConcludeRequest(BaseModel):
@@ -148,6 +165,10 @@ def create_idea(req: NewIdeaRequest):
                 return {"status": "conflict", "conflicts": conflicts}
 
         store.save_idea(idea)
+        similar = store.find_similar_ideas(req.description)
+        similar = [s for s in similar if s["id"] != idea["id"]]
+        if similar:
+            idea["similar_ideas"] = similar
         return idea
     except GitError as e:
         raise HTTPException(500, str(e))
@@ -171,8 +192,8 @@ def checkout_idea_endpoint(idea_id: int):
 
 
 @app.get("/api/v1/ideas")
-def list_ideas(status: str | None = None):
-    ideas = store.list_ideas(status=status)
+def list_ideas(status: str | None = None, source: str | None = None):
+    ideas = store.list_ideas(status=status, source=source)
     for idea in ideas:
         idea["notes"] = store.get_notes(idea["id"], levels=Store.LISTING_LEVELS)
         # Compact experiment summary with latest completed metrics
@@ -258,7 +279,7 @@ def abandon_idea(idea_id: int, req: AbandonRequest):
     idea = store.get_idea(idea_id)
     if not idea:
         raise HTTPException(404, "idea not found")
-    if idea["status"] != "active":
+    if idea["status"] not in ("active", "suggested"):
         raise HTTPException(400, f"idea is {idea['status']}, cannot abandon")
     return store.update_idea(idea_id, status="abandoned", conclusion=req.reason)
 
@@ -289,7 +310,8 @@ def add_note(idea_id: int, req: NoteRequest):
     idea = store.get_idea(idea_id)
     if not idea:
         raise HTTPException(404, "idea not found")
-    return store.add_note(idea_id, req.text, level=req.level)
+    resources = [r.model_dump() for r in req.resources] if req.resources else None
+    return store.add_note(idea_id, req.text, level=req.level, resources=resources)
 
 
 # --- Experiments ---
@@ -432,6 +454,59 @@ def get_experiment_progress(exp_id: int):
     return result
 
 
+# --- Suggest & Adopt ---
+
+@app.post("/api/v1/ideas/suggest", status_code=201)
+def suggest_idea(req: SuggestIdeaRequest):
+    for pid in req.parent_ids:
+        if not store.get_idea(pid):
+            raise HTTPException(404, f"parent idea {pid} not found")
+    resources = [r.model_dump() for r in req.resources] if req.resources else []
+    idea = store.create_idea(
+        req.description,
+        parent_ids=req.parent_ids,
+        branch="",
+        source="human",
+        status="suggested",
+        priority=req.priority,
+        resources=resources,
+    )
+    store.save_idea(idea)
+    return idea
+
+
+@app.post("/api/v1/ideas/{idea_id}/adopt")
+def adopt_idea(idea_id: int, req: AdoptRequest | None = None):
+    idea = store.get_idea(idea_id)
+    if not idea:
+        raise HTTPException(404, "idea not found")
+    if idea["status"] != "suggested":
+        raise HTTPException(400, f"idea is {idea['status']}, can only adopt suggested ideas")
+
+    branch_name = f"idea/{idea_id}"
+    parent_ids = idea.get("parent_ids", [])
+
+    try:
+        if len(parent_ids) == 0:
+            base = get_default_branch(cwd=REPO_DIR)
+            create_branch_from(branch_name, base, cwd=REPO_DIR)
+        elif len(parent_ids) == 1:
+            parent = store.get_idea(parent_ids[0])
+            create_branch_from(branch_name, parent["branch"], cwd=REPO_DIR)
+        else:
+            parent_branches = [store.get_idea(pid)["branch"] for pid in parent_ids]
+            conflicts = create_branch_from_merge(branch_name, parent_branches, cwd=REPO_DIR)
+            if conflicts is not None:
+                return {"status": "conflict", "conflicts": conflicts}
+
+        store.update_idea(idea_id, status="active", branch=branch_name)
+        if req and req.agent_note:
+            store.add_note(idea_id, req.agent_note, level="observation")
+        return store.get_idea(idea_id)
+    except GitError as e:
+        raise HTTPException(500, str(e))
+
+
 # --- Wait ---
 
 @app.get("/api/v1/wait")
@@ -472,14 +547,22 @@ def get_backlog():
         result.append({
             "id": idea["id"],
             "description": idea["description"],
+            "source": idea.get("source", "agent"),
             "pending_experiments": pending,
             "running_experiments": running,
             "completed_experiments": completed,
             "failed_experiments": failed,
         })
+    suggested = store.list_ideas(status="suggested")
+    suggested_items = [
+        {"id": s["id"], "description": s["description"],
+         "priority": s.get("priority", "normal"), "resources": s.get("resources", [])}
+        for s in suggested
+    ]
     return {
         "current_branch": current,
         "active_ideas": result,
+        "suggested_ideas": suggested_items,
         "total_running": total_running,
         "total_pending": total_pending,
     }
@@ -499,6 +582,8 @@ def get_graph():
             "id": i["id"],
             "description": i["description"],
             "status": i["status"],
+            "source": i.get("source", "agent"),
+            "priority": i.get("priority", "normal"),
             "has_running": has_running,
             "created_at": i.get("created_at"),
             "first_start": min(starts) if starts else i.get("created_at"),
