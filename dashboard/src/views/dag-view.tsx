@@ -12,6 +12,7 @@ import { useLayoutEffect, useEffect } from "preact/hooks";
 import type { IdeaNode, StationPos, SubwayLayout } from "../lib/types";
 import { graphData, currentLayout, highlightedIdea, allIdeas, allExperiments } from "../state/signals";
 import { colorMode, selectedIdea, selectedMetric } from "../state/settings";
+import { useSetting } from "../state/settings";
 import { drawSubwayLines } from "../lib/subway-lines";
 import { IDEA_PALETTE, STATUS_BAR_COLORS, STATUS_ORDER, _colorForIdea } from "../lib/colors";
 import { escapeHtml, ideaTitle, badgeHtml } from "../lib/format";
@@ -21,6 +22,12 @@ import { escapeHtml, ideaTitle, badgeHtml } from "../lib/format";
 // Persists across renders so we only measure new / changed nodes.
 // ---------------------------------------------------------------------------
 const _stationSizeCache: Record<string, { w: number; h: number }> = {};
+
+const DEFAULT_MAX_COL_WIDTH = 250;
+const MIN_COL_WIDTH = 80;
+
+// Per-column width overrides, persisted to localStorage
+const colWidthOverrides = useSetting<Record<string, number>>("dagColWidths", {});
 
 // ---------------------------------------------------------------------------
 // Internal state shared between the measurement (useLayoutEffect) and
@@ -118,10 +125,19 @@ export function DagView() {
     const colGap = Math.max(30, maxFanOut * ROUTING_SPACING + 20);
 
     // --- Column widths & x-positions ---
+    const overrides = colWidthOverrides.value;
     const colWidth: Record<number, number> = {};
     for (const n of data.nodes) {
       const c = layout.depth[n.id];
       colWidth[c] = Math.max(colWidth[c] || 0, sizes[n.id].w);
+    }
+    // Apply max-width cap and user overrides
+    for (let c = 0; c <= layout.maxDepth; c++) {
+      if (overrides[c] !== undefined) {
+        colWidth[c] = Math.max(MIN_COL_WIDTH, overrides[c]);
+      } else {
+        colWidth[c] = Math.min(colWidth[c] || DEFAULT_MAX_COL_WIDTH, DEFAULT_MAX_COL_WIDTH);
+      }
     }
     const colX: Record<number, number> = {};
     let cx = 16;
@@ -413,6 +429,14 @@ export function DagView() {
         "</div>";
     }
 
+    // Add column resize handles
+    for (let c = 0; c <= layout.maxDepth; c++) {
+      const handleX = colX[c] + colWidth[c];
+      html +=
+        '<div class="dag-col-resize" data-col="' + c + '" style="' +
+        "left:" + (handleX - 3) + "px;top:0;height:" + totalH + 'px"></div>';
+    }
+
     container.innerHTML = html;
     container.style.minWidth = totalW + "px";
     container.style.minHeight = totalH + "px";
@@ -422,6 +446,37 @@ export function DagView() {
     if (svgEl) {
       svgEl.innerHTML = svgContent;
     }
+
+    // --- Column resize drag handlers ---
+    container.querySelectorAll(".dag-col-resize").forEach((handle) => {
+      const col = parseInt((handle as HTMLElement).dataset.col!);
+      let startX = 0;
+      let startWidth = 0;
+
+      function onMouseMove(e: MouseEvent) {
+        const delta = e.clientX - startX;
+        const newWidth = Math.max(MIN_COL_WIDTH, startWidth + delta);
+        const updated = { ...colWidthOverrides.value, [col]: newWidth };
+        colWidthOverrides.value = updated;
+      }
+
+      function onMouseUp() {
+        document.removeEventListener("mousemove", onMouseMove);
+        document.removeEventListener("mouseup", onMouseUp);
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+      }
+
+      (handle as HTMLElement).addEventListener("mousedown", (e: MouseEvent) => {
+        e.preventDefault();
+        startX = e.clientX;
+        startWidth = colWidth[col] || DEFAULT_MAX_COL_WIDTH;
+        document.body.style.cursor = "col-resize";
+        document.body.style.userSelect = "none";
+        document.addEventListener("mousemove", onMouseMove);
+        document.addEventListener("mouseup", onMouseUp);
+      });
+    });
 
     // --- Build parent map for ancestor traversal ---
     const parentMap: Record<number, number[]> = {};

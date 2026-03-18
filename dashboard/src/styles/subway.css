@@ -18,8 +18,26 @@
 .subway-station:hover, .subway-station.highlighted { background: #1c2333; }
 .subway-station.highlighted { box-shadow: 0 0 0 2px #58a6ff; z-index: 3; }
 .subway-station.dimmed { opacity: 0.3; }
-.subway-station .subway-header { display: flex; align-items: center; gap: 6px; }
-.subway-station .subway-id { font-weight: 700; color: #58a6ff; font-size: 11px; }
-.subway-station .subway-desc { color: #c9d1d9; font-size: 12px; display: inline; margin-left: 6px; }
+.subway-station .subway-header { display: flex; align-items: center; gap: 6px; overflow: hidden; }
+.subway-station .subway-id { font-weight: 700; color: #58a6ff; font-size: 11px; flex-shrink: 0; }
+.subway-station .subway-desc {
+  color: #c9d1d9; font-size: 12px; display: inline; margin-left: 6px;
+  overflow: hidden; white-space: nowrap;
+  mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
+}
 
 .subway-svg { position: absolute; top: 0; left: 0; pointer-events: none; z-index: 0; }
+
+.dag-col-resize {
+  position: absolute;
+  width: 6px;
+  cursor: col-resize;
+  z-index: 5;
+  background: transparent;
+}
+.dag-col-resize:hover,
+.dag-col-resize:active {
+  background: rgba(88, 166, 255, 0.3);
+  border-radius: 2px;
+}
