@@ -1,6 +1,6 @@
 /* log.css — Log view styles */
 
-#log-container { flex: 1; display: flex; overflow-y: auto; padding: 0; flex-direction: column; min-height: 0; }
+#log-container { flex: 1 1 0%; display: flex; overflow-y: auto; padding: 0; flex-direction: column; min-height: 0; }
 
 #log-filters {
   padding: 8px 16px; background: #161b22; border-bottom: 1px solid #30363d;
