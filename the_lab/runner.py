@@ -133,7 +133,6 @@ class ExperimentRunner:
         now = datetime.now(timezone.utc).isoformat()
         output = log_path.read_text() if log_path.exists() else ""
 
-        # Try to determine exit status from the output
         result = self._extract_json(output)
         if result is not None:
             metrics = result.get("metrics", {})
@@ -143,12 +142,11 @@ class ExperimentRunner:
                 pid=None, finished_at=now,
             )
         else:
+            # Metrics-optional: assume success if process was running normally
             self._store.update_experiment(
-                exp_id, status="failed",
-                error="process exited but no valid JSON found in output",
+                exp_id, status="completed", metrics=None,
                 pid=None, finished_at=now,
             )
-            err_path.write_text("process exited but no valid JSON found in output")
 
         # Clean up worktree
         wt = (exp.get("meta") or {}).get("worktree")
@@ -161,7 +159,7 @@ class ExperimentRunner:
         self._tasks.pop(exp_id, None)
         self._finished_queue.put_nowait(exp_id)
 
-    async def start(self, exp_id: int) -> dict:
+    async def start(self, exp_id: int, timeout: float | None = None) -> dict:
         exp = self._store.get_experiment(exp_id)
         if not exp:
             return {"status": "error", "reason": f"experiment {exp_id} not found"}
@@ -178,7 +176,6 @@ class ExperimentRunner:
 
         os.chmod(script_path, os.stat(script_path).st_mode | 0o755)
 
-        # Commit any pending changes so the git hash captures exactly what runs
         try:
             desc = exp.get("description", "")
             auto_commit(cwd=self._store.repo_dir, message=f"exp {exp_id}: {desc}")
@@ -213,7 +210,6 @@ class ExperimentRunner:
         except Exception:
             worktree_path = None  # fall back to main repo
 
-        # Record git state + worktree in experiment meta
         try:
             cur_branch = get_current_branch(cwd=self._store.repo_dir)
             cur_commit = get_head_commit(cwd=self._store.repo_dir)
@@ -270,7 +266,7 @@ class ExperimentRunner:
         )
 
         task = asyncio.create_task(
-            self._monitor(exp_id, process, err_path)
+            self._monitor(exp_id, process, err_path, timeout=timeout)
         )
         self._tasks[exp_id] = task
 
@@ -281,19 +277,44 @@ class ExperimentRunner:
         exp_id: int,
         process: asyncio.subprocess.Process,
         err_path: Path,
+        timeout: float | None = None,
     ):
-        await process.wait()
+        timed_out = False
+        if timeout is not None:
+            try:
+                await asyncio.wait_for(process.wait(), timeout=timeout)
+            except asyncio.TimeoutError:
+                timed_out = True
+                try:
+                    os.kill(process.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=10)
+                except asyncio.TimeoutError:
+                    try:
+                        os.kill(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    await process.wait()
+        else:
+            await process.wait()
 
         exp = self._store.get_experiment(exp_id)
         if not exp or exp["status"] == "cancelled":
             return
 
-        # Read the log file (written directly by the bash process)
         log_path = (self._store.repo_dir / exp["script"]).with_suffix(".log")
         output = log_path.read_text() if log_path.exists() else ""
         now = datetime.now(timezone.utc).isoformat()
 
-        if process.returncode == 0:
+        if timed_out:
+            error = f"killed: exceeded timeout of {timeout}s"
+            self._store.update_experiment(
+                exp_id, status="failed", error=error, pid=None, finished_at=now,
+            )
+            err_path.write_text(f"{error}\n\n{output[-2000:]}")
+        elif process.returncode == 0:
             result = self._extract_json(output)
             if result is not None:
                 metrics = result.get("metrics", {})
@@ -303,11 +324,10 @@ class ExperimentRunner:
                     pid=None, finished_at=now,
                 )
             else:
-                error = "script exited 0 but no valid JSON found in last stdout line"
                 self._store.update_experiment(
-                    exp_id, status="failed", error=error, pid=None, finished_at=now,
+                    exp_id, status="completed", metrics=None,
+                    pid=None, finished_at=now,
                 )
-                err_path.write_text(error)
         else:
             error = f"exit code {process.returncode}"
             self._store.update_experiment(

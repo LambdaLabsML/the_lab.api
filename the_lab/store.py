@@ -84,6 +84,10 @@ class Store:
         else:
             exclude_file.write_text(f"{entry}\n")
 
+        # Ensure shared artifacts directory exists
+        artifacts_dir = self.repo_dir / ".the_lab" / "artifacts"
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+
     def _recover_counters(self):
         """Scan existing data to recover the next IDs."""
         max_idea = 0
@@ -192,7 +196,13 @@ class Store:
 
     # --- Experiments ---
 
-    def create_experiment(self, idea_id: int, description: str, meta: dict | None = None) -> dict:
+    def create_experiment(
+        self,
+        idea_id: int,
+        description: str,
+        meta: dict | None = None,
+        tags: list[str] | None = None,
+    ) -> dict:
         with self._lock:
             exp_id = self._next_exp_id
             self._next_exp_id += 1
@@ -208,6 +218,7 @@ class Store:
             "metrics": None,
             "error": None,
             "pid": None,
+            "tags": tags or [],
             "created_at": _now(),
             "started_at": None,
             "finished_at": None,

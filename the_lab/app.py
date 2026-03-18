@@ -60,6 +60,11 @@ class NewExperimentRequest(BaseModel):
     description: str
     meta: dict | None = None
     script_content: str | None = None
+    tags: list[str] = []
+
+
+class StartExperimentRequest(BaseModel):
+    timeout: float | None = None
 
 
 class NoteRequest(BaseModel):
@@ -89,12 +94,15 @@ fi
 """
 
 
+PREAMBLE_SOURCE = 'source .the_lab/preamble.sh 2>/dev/null || true\n'
+
+
 def _wrap_script(content: str) -> str:
-    """Inject a guard that prevents running outside the backend."""
+    """Inject a guard + optional preamble that prevents running outside the backend."""
     lines = content.split("\n", 1)
     if lines[0].startswith("#!"):
-        return lines[0] + "\n" + SCRIPT_GUARD + (lines[1] if len(lines) > 1 else "")
-    return "#!/bin/bash\n" + SCRIPT_GUARD + content
+        return lines[0] + "\n" + SCRIPT_GUARD + PREAMBLE_SOURCE + (lines[1] if len(lines) > 1 else "")
+    return "#!/bin/bash\n" + SCRIPT_GUARD + PREAMBLE_SOURCE + content
 
 
 def _idea_context(idea_id: int) -> dict:
@@ -301,7 +309,7 @@ def create_experiment(idea_id: int, req: NewExperimentRequest):
         raise HTTPException(404, "idea not found")
     if idea["status"] != "active":
         raise HTTPException(400, f"idea is {idea['status']}, cannot add experiments")
-    exp = store.create_experiment(idea_id, req.description, meta=req.meta)
+    exp = store.create_experiment(idea_id, req.description, meta=req.meta, tags=req.tags)
 
     if req.script_content is not None:
         script_path = REPO_DIR / exp["script"]
@@ -375,8 +383,9 @@ def get_experiment(exp_id: int):
 
 
 @app.post("/api/v1/experiments/{exp_id}/start")
-async def start_experiment(exp_id: int):
-    result = await runner.start(exp_id)
+async def start_experiment(exp_id: int, req: StartExperimentRequest | None = None):
+    timeout = req.timeout if req else None
+    result = await runner.start(exp_id, timeout=timeout)
     if result["status"] == "error":
         raise HTTPException(400, result)
     # Add idea context + current branch
