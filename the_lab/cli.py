@@ -82,6 +82,28 @@ def _start_vite(dashboard_dir: Path, api_port: int) -> subprocess.Popen | None:
     return proc
 
 
+def _ensure_self_signed_cert(repo_dir: Path) -> tuple[str, str]:
+    """Generate a self-signed TLS cert if one doesn't exist. Returns (certfile, keyfile)."""
+    cert_dir = repo_dir / ".the_lab" / "tls"
+    cert_dir.mkdir(parents=True, exist_ok=True)
+    cert_file = cert_dir / "cert.pem"
+    key_file = cert_dir / "key.pem"
+
+    if cert_file.exists() and key_file.exists():
+        return str(cert_file), str(key_file)
+
+    import subprocess as _sp
+    _sp.run([
+        "openssl", "req", "-x509", "-newkey", "rsa:2048",
+        "-keyout", str(key_file), "-out", str(cert_file),
+        "-days", "365", "-nodes",
+        "-subj", "/CN=the-lab-local",
+        "-addext", "subjectAltName=DNS:localhost,IP:127.0.0.1,IP:0.0.0.0",
+    ], check=True, capture_output=True)
+    print(f"  generated self-signed cert: {cert_file}")
+    return str(cert_file), str(key_file)
+
+
 def main():
     parser = argparse.ArgumentParser(description="The Lab — Experiment Management API")
     parser.add_argument(
@@ -93,6 +115,7 @@ def main():
     parser.add_argument("--host", default="0.0.0.0", help="Host to bind to (default: 0.0.0.0)")
     parser.add_argument("--port", type=int, default=8000, help="Port to bind to (default: 8000)")
     parser.add_argument("--dev", action="store_true", help="Development mode: auto-reload on code changes, hold requests during restart")
+    parser.add_argument("--https", action="store_true", help="Enable HTTPS with a self-signed certificate")
     args = parser.parse_args()
 
     repo_path = Path(args.repo).resolve()
@@ -101,6 +124,14 @@ def main():
         sys.exit(1)
 
     os.environ["THE_LAB_REPO"] = str(repo_path)
+
+    ssl_kwargs = {}
+    if args.https:
+        cert_file, key_file = _ensure_self_signed_cert(repo_path)
+        ssl_kwargs = {"ssl_certfile": cert_file, "ssl_keyfile": key_file}
+        scheme = "https"
+    else:
+        scheme = "http"
 
     if args.dev:
         import asyncio
@@ -128,6 +159,7 @@ def main():
                 host=args.host,
                 port=args.port,
                 log_level="warning",
+                **ssl_kwargs,
             )
             server = uvicorn.Server(config)
             await server.serve()
@@ -140,7 +172,7 @@ def main():
                 vite_proc.wait(timeout=5)
     else:
         import uvicorn
-        uvicorn.run("the_lab.app:app", host=args.host, port=args.port)
+        uvicorn.run("the_lab.app:app", host=args.host, port=args.port, **ssl_kwargs)
 
 
 if __name__ == "__main__":
