@@ -22,9 +22,16 @@ def _run(args: list[str], cwd: str | Path | None = None, check: bool = True) -> 
 
 
 def get_default_branch(cwd: str | Path | None = None) -> str:
-    """Get the current HEAD branch name."""
-    result = _run(["rev-parse", "--abbrev-ref", "HEAD"], cwd=cwd)
-    return result.stdout.strip()
+    """Get the default branch name (main or master)."""
+    # Try symbolic-ref first (works even in empty repos)
+    result = _run(["symbolic-ref", "--short", "HEAD"], cwd=cwd, check=False)
+    if result.returncode == 0 and result.stdout.strip():
+        return result.stdout.strip()
+    # Fallback: try rev-parse (works after first commit)
+    result = _run(["rev-parse", "--abbrev-ref", "HEAD"], cwd=cwd, check=False)
+    if result.returncode == 0 and result.stdout.strip():
+        return result.stdout.strip()
+    return "main"
 
 
 def get_current_branch(cwd: str | Path | None = None) -> str:
@@ -33,9 +40,11 @@ def get_current_branch(cwd: str | Path | None = None) -> str:
 
 
 def get_head_commit(cwd: str | Path | None = None) -> str:
-    """Get the short hash of HEAD."""
-    result = _run(["rev-parse", "--short", "HEAD"], cwd=cwd)
-    return result.stdout.strip()
+    """Get the short hash of HEAD, or empty string for empty repos."""
+    result = _run(["rev-parse", "--short", "HEAD"], cwd=cwd, check=False)
+    if result.returncode == 0:
+        return result.stdout.strip()
+    return ""
 
 
 def branch_exists(branch: str, cwd: str | Path | None = None) -> bool:
@@ -43,8 +52,17 @@ def branch_exists(branch: str, cwd: str | Path | None = None) -> bool:
     return result.returncode == 0
 
 
+def _has_commits(cwd: str | Path | None = None) -> bool:
+    """Check if the repo has any commits."""
+    result = _run(["rev-parse", "HEAD"], cwd=cwd, check=False)
+    return result.returncode == 0
+
+
 def create_branch_from(new_branch: str, source_branch: str, cwd: str | Path | None = None):
     """Create a new branch from a source branch (does not checkout)."""
+    if not _has_commits(cwd=cwd):
+        # Empty repo: create an initial commit so branches can exist
+        _run(["commit", "--allow-empty", "-m", "initial commit"], cwd=cwd)
     _run(["branch", new_branch, source_branch], cwd=cwd)
 
 
