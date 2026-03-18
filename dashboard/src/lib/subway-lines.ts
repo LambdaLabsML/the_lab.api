@@ -32,8 +32,11 @@ export function drawSubwayLines(
   stationPos: Record<number, StationPos>,
   colorMode: string,
   colorForIdea: (ideaId: number, mode: string) => string,
+  reversed: boolean = false,
 ): string {
-  // Build position map from computed layout
+  // Build position map from computed layout.
+  // When reversed, the "outgoing" edge of a parent is its LEFT side
+  // and the "incoming" edge of a child is its RIGHT side.
   const pos: Record<number, NodePos> = {};
   for (const n of data.nodes) {
     const p = stationPos[n.id];
@@ -45,6 +48,13 @@ export function drawSubwayLines(
       r: p.x + p.w,
     };
   }
+
+  // Connection edges: parent "out" side → child "in" side
+  // Normal: parent.r → child.l (left to right)
+  // Reversed: parent.l → child.r (right to left)
+  function outX(p: NodePos) { return reversed ? p.l : p.r; }
+  function inX(p: NodePos) { return reversed ? p.r : p.l; }
+  const dir = reversed ? -1 : 1; // sign for horizontal offsets
 
   let s = '';
 
@@ -61,71 +71,30 @@ export function drawSubwayLines(
         b = pts[i + 1];
       const edgeAttr =
         ' data-from="' + ids[i] + '" data-to="' + ids[i + 1] + '" class="svg-edge"';
+      const aOut = outX(a), bIn = inX(b);
       if (Math.abs(a.cy - b.cy) < 2) {
         s +=
-          '<line x1="' +
-          a.r +
-          '" y1="' +
-          a.cy +
-          '" x2="' +
-          b.l +
-          '" y2="' +
-          b.cy +
-          '" stroke="' +
-          color +
+          '<line x1="' + aOut + '" y1="' + a.cy +
+          '" x2="' + bIn + '" y2="' + b.cy +
+          '" stroke="' + color +
           '" stroke-width="4" stroke-opacity="0.7"' +
-          ' stroke-linecap="round"' +
-          edgeAttr +
-          '/>';
+          ' stroke-linecap="round"' + edgeAttr + '/>';
       } else {
-        const mx = (a.r + b.l) / 2;
+        const mx = (aOut + bIn) / 2;
         const dy = b.cy > a.cy ? 1 : -1;
         const vd = Math.abs(b.cy - a.cy);
-        const r = Math.min(
-          6,
-          vd / 2,
-          Math.max(0, mx - a.r) / 2,
-          Math.max(0, b.l - mx) / 2,
-        );
+        const gap = Math.abs(bIn - aOut);
+        const r = Math.min(6, vd / 2, gap / 4);
         s +=
-          '<path d="M' +
-          a.r +
-          ',' +
-          a.cy +
-          ' L' +
-          (mx - r) +
-          ',' +
-          a.cy +
-          ' Q' +
-          mx +
-          ',' +
-          a.cy +
-          ' ' +
-          mx +
-          ',' +
-          (a.cy + dy * r) +
-          ' L' +
-          mx +
-          ',' +
-          (b.cy - dy * r) +
-          ' Q' +
-          mx +
-          ',' +
-          b.cy +
-          ' ' +
-          (mx + r) +
-          ',' +
-          b.cy +
-          ' L' +
-          b.l +
-          ',' +
-          b.cy +
-          '" fill="none" stroke="' +
-          color +
+          '<path d="M' + aOut + ',' + a.cy +
+          ' L' + (mx - dir * r) + ',' + a.cy +
+          ' Q' + mx + ',' + a.cy + ' ' + mx + ',' + (a.cy + dy * r) +
+          ' L' + mx + ',' + (b.cy - dy * r) +
+          ' Q' + mx + ',' + b.cy + ' ' + (mx + dir * r) + ',' + b.cy +
+          ' L' + bIn + ',' + b.cy +
+          '" fill="none" stroke="' + color +
           '" stroke-width="4" stroke-opacity="0.7"' +
-          ' stroke-linecap="round"' +
-          edgeAttr +
-          '/>';
+          ' stroke-linecap="round"' + edgeAttr + '/>';
       }
     }
   }
@@ -173,73 +142,39 @@ export function drawSubwayLines(
       const c = pos[br.cid];
       if (!c) continue;
 
-      const jx = p.r + SPACING * (i + 1);
+      const pOut = outX(p);
+      const cIn = inX(c);
+      const jx = pOut + dir * SPACING * (i + 1);
       const dy = c.cy > p.cy ? 1 : -1;
       const vertDist = Math.abs(c.cy - p.cy);
-      const horizAfter = Math.max(0, c.l - jx);
+      const horizAfter = Math.abs(cIn - jx);
       const r = Math.min(CORNER, vertDist / 2, horizAfter / 2, (SPACING * (i + 1)) / 2);
 
       s +=
-        '<path d="' +
-        'M' +
-        p.r +
-        ',' +
-        p.cy +
-        ' L' +
-        (jx - r) +
-        ',' +
-        p.cy +
-        ' Q' +
-        jx +
-        ',' +
-        p.cy +
-        ' ' +
-        jx +
-        ',' +
-        (p.cy + dy * r) +
-        ' L' +
-        jx +
-        ',' +
-        (c.cy - dy * r) +
-        ' Q' +
-        jx +
-        ',' +
-        c.cy +
-        ' ' +
-        (jx + r) +
-        ',' +
-        c.cy +
-        ' L' +
-        c.l +
-        ',' +
-        c.cy +
-        '" fill="none" stroke="' +
-        br.color +
+        '<path d="M' + pOut + ',' + p.cy +
+        ' L' + (jx - dir * r) + ',' + p.cy +
+        ' Q' + jx + ',' + p.cy + ' ' + jx + ',' + (p.cy + dy * r) +
+        ' L' + jx + ',' + (c.cy - dy * r) +
+        ' Q' + jx + ',' + c.cy + ' ' + (jx + dir * r) + ',' + c.cy +
+        ' L' + cIn + ',' + c.cy +
+        '" fill="none" stroke="' + br.color +
         '" stroke-width="3" stroke-opacity="0.7"' +
         ' stroke-linecap="round" stroke-linejoin="round"' +
-        ' data-from="' +
-        br.pid +
-        '" data-to="' +
-        br.cid +
-        '" class="svg-edge"/>';
+        ' data-from="' + br.pid + '" data-to="' + br.cid + '" class="svg-edge"/>';
     }
   }
 
-  // 3. Station dots — colored by current mode
+  // 3. Station dots — on the "incoming" side of each node
   for (const n of data.nodes) {
     if (!pos[n.id]) continue;
     const dotColor = colorForIdea(n.id, colorMode);
+    const dotX = inX(pos[n.id]);
     s +=
-      '<circle cx="' +
-      pos[n.id].l +
-      '" cy="' +
-      pos[n.id].cy +
-      '" r="6" fill="' +
-      dotColor +
+      '<circle cx="' + dotX +
+      '" cy="' + pos[n.id].cy +
+      '" r="6" fill="' + dotColor +
       '" stroke="#0d1117" stroke-width="2.5"' +
-      ' data-idea="' +
-      n.id +
-      '" class="svg-dot"/>';
+      ' data-idea="' + n.id + '" class="svg-dot"/>';
   }
 
   return s;

@@ -398,7 +398,7 @@ export function DagView() {
     }
 
     // --- Build SVG lines ---
-    const svgContent = drawSubwayLines(data, layout, stationPos, mode, colorForIdea);
+    const svgContent = drawSubwayLines(data, layout, stationPos, mode, colorForIdea, reversed);
 
     // --- Build station HTML ---
     let html =
