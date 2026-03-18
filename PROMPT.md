@@ -27,7 +27,7 @@ You have access to a local experiment management API at `http://localhost:8000/a
 
 ### Research workflow
 
-**Start every session by checking the digest** — `GET /digest` returns a compact summary of all concluded ideas, key insights, and global best metrics.
+**Start every session by checking the digest** — `GET /digest` returns a compact summary of concluded ideas, open ideas, running experiments, key insights, and global best metrics.
 
 Then check for human suggestions — `GET /ideas?status=suggested`. Adopt feasible ones, abandon infeasible ones with a note.
 

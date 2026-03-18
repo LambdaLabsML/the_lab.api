@@ -16,6 +16,7 @@ Read `PROMPT.md` for the research goal, background, and setup.
 Start by reading the research digest to understand what has been tried and learned:
 ```
 GET /digest              → compact summary: concluded ideas, key insights, best metrics
+                        → also includes open ideas and running experiments
 ```
 
 Then check for human-suggested ideas — these take priority over your own:

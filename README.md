@@ -276,7 +276,7 @@ The digest endpoint provides a compact summary of all research for agent context
 GET /api/v1/digest
 ```
 
-Returns: total ideas/experiments, global best metrics (with source idea/experiment), concluded ideas with conclusions and key insights, abandoned ideas with reasons. Designed to fit in a manageable context window even after 50+ ideas.
+Returns: total ideas/experiments, global best metrics (with source idea/experiment), concluded ideas with conclusions and key insights, abandoned ideas with reasons, plus the current open ideas and running experiments. Designed to fit in a manageable context window even after 50+ ideas.
 
 ---
 
