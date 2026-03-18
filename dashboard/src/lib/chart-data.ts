@@ -28,6 +28,7 @@ export function buildChartData(
   colorMode: string,
   allIdeas: Record<number, IdeaNode>,
   currentLayout: SubwayLayout | null,
+  reversed: boolean = false,
 ): ChartDataResult {
   let filtered = allExperiments.filter(
     (e) => e.metrics && e.metrics[metricKey] !== undefined,
@@ -72,6 +73,8 @@ export function buildChartData(
     const c = _colorForExp(exp, metricKey, colorMode, currentLayout, allIdeas, allExperiments);
     return c || ideaColorMap[exp.idea_id] || '#8b949e';
   }
+
+  if (reversed) filtered = filtered.slice().reverse();
 
   return {
     labels: filtered.map((e) => 'exp/' + e.id + (e._running ? ' \u25B6' : '')),

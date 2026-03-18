@@ -1,6 +1,6 @@
 import { useRef, useEffect } from "preact/hooks";
 import { graphData } from "../state/signals";
-import { selectedIdea } from "../state/settings";
+import { selectedIdea, reverseTime } from "../state/settings";
 import { STATUS_BAR_COLORS } from "../lib/colors";
 import { truncate } from "../lib/format";
 
@@ -9,12 +9,17 @@ export function TimelineView() {
   const wrapRef = useRef<HTMLDivElement>(null);
   const nodesRef = useRef<any[]>([]);
   const data = graphData.value;
+  const reversed = reverseTime.value;
 
   useEffect(() => {
     if (!data || !canvasRef.current || !wrapRef.current) return;
     const nodes = data.nodes.filter((n) => n.first_start);
     if (!nodes.length) return;
-    nodes.sort((a, b) => (a.first_start || "").localeCompare(b.first_start || ""));
+    if (reversed) {
+      nodes.sort((a, b) => (b.first_start || "").localeCompare(a.first_start || ""));
+    } else {
+      nodes.sort((a, b) => (a.first_start || "").localeCompare(b.first_start || ""));
+    }
     nodesRef.current = nodes;
 
     const canvas = canvasRef.current;
@@ -39,7 +44,8 @@ export function TimelineView() {
     const chartW = canvas.width - labelW - padRight;
 
     function tToX(t: number) {
-      return labelW + ((t - tMin) / (tMax - tMin)) * chartW;
+      const frac = (t - tMin) / (tMax - tMin);
+      return labelW + (reversed ? (1 - frac) : frac) * chartW;
     }
 
     // Time axis
@@ -139,7 +145,7 @@ export function TimelineView() {
       ctx.textAlign = "right";
       ctx.fillText("#" + n.id + ": " + truncate(n.description, 25), labelW - 8, y + rowH / 2 + 4);
     }
-  }, [data]);
+  }, [data, reversed]);
 
   function handleClick(e: MouseEvent) {
     const canvas = canvasRef.current;

@@ -1,7 +1,10 @@
 import { backlogData } from "../state/signals";
+import { reverseTime } from "../state/settings";
 
 export function Topbar() {
   const data = backlogData.value;
+  const reversed = reverseTime.value;
+
   return (
     <div id="topbar">
       <span class="title">The Lab</span>
@@ -17,6 +20,13 @@ export function Topbar() {
       <span class="stat">
         Branch: <b>{data ? data.current_branch : "--"}</b>
       </span>
+      <button
+        class="time-direction-btn"
+        onClick={() => { reverseTime.value = !reversed; }}
+        title={reversed ? "Newest left/top (click to reverse)" : "Oldest left/top (click to reverse)"}
+      >
+        {reversed ? "← newest" : "oldest →"}
+      </button>
     </div>
   );
 }

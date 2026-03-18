@@ -10,7 +10,7 @@
 import { useRef, useEffect } from "preact/hooks";
 import type { IdeaNode, StationPos, SubwayLayout } from "../lib/types";
 import { graphData, currentLayout, highlightedIdea, allIdeas, allExperiments } from "../state/signals";
-import { colorMode, selectedIdea, selectedMetric, improvementsOnly, activeTagFilters, tagFilterMode } from "../state/settings";
+import { colorMode, selectedIdea, selectedMetric, improvementsOnly, activeTagFilters, tagFilterMode, reverseTime } from "../state/settings";
 import { useSetting } from "../state/settings";
 import { _ideaHasGlobalImprovement, resetGlobalBestBeforeCache } from "../lib/colors";
 import { drawSubwayLines } from "../lib/subway-lines";
@@ -42,6 +42,7 @@ export function DagView() {
   const ideas = allIdeas.value;
   const experiments = allExperiments.value;
   const compactMode = improvementsOnly.value;
+  const reversed = reverseTime.value;
 
   // In compact mode, only ideas with global improvements get full boxes.
   // When tag filters are active, only consider filtered experiments for milestone detection.
@@ -160,9 +161,17 @@ export function DagView() {
     }
     const colX: Record<number, number> = {};
     let cx = 16;
-    for (let c = 0; c <= layout.maxDepth; c++) {
-      colX[c] = cx;
-      cx += (colWidth[c] || 0) + colGap;
+    if (reversed) {
+      // Newest (deepest) on the left
+      for (let c = layout.maxDepth; c >= 0; c--) {
+        colX[c] = cx;
+        cx += (colWidth[c] || 0) + colGap;
+      }
+    } else {
+      for (let c = 0; c <= layout.maxDepth; c++) {
+        colX[c] = cx;
+        cx += (colWidth[c] || 0) + colGap;
+      }
     }
     const totalW = cx + 16;
 
@@ -569,7 +578,7 @@ export function DagView() {
 
     // Apply current highlight state (in case it was set before render)
     applyHighlight(highlightedIdea.value);
-  }, [data, layout, mode, metric, ideas, experiments, compactMode, tags, tagMode]);
+  }, [data, layout, mode, metric, ideas, experiments, compactMode, tags, tagMode, reversed]);
 
   // =========================================================================
   // HIGHLIGHT EFFECT — reacts to highlightedIdea changes without full re-render

@@ -17,6 +17,7 @@ import {
   improvementsOnly,
   activeTagFilters,
   tagFilterMode,
+  reverseTime,
 } from "../../state/settings";
 import { buildChartData } from "../../lib/chart-data";
 import type { ChartDataResult } from "../../lib/chart-data";
@@ -45,6 +46,7 @@ export function MetricsChart() {
   const tags = activeTagFilters.value;
   const tagMode = tagFilterMode.value;
   const highlighted = highlightedIdea.value;
+  const reversed = reverseTime.value;
 
   useEffect(() => {
     if (!metric || !canvasRef.current) return;
@@ -57,7 +59,8 @@ export function MetricsChart() {
       impOnly,
       mode,
       ideas,
-      layout
+      layout,
+      reversed
     );
 
     if (!chartData) return;
@@ -100,7 +103,7 @@ export function MetricsChart() {
       chartRef.current?.destroy();
       chartRef.current = null;
     };
-  }, [metric, mode, impOnly, tags, tagMode, experiments]);
+  }, [metric, mode, impOnly, tags, tagMode, experiments, reversed]);
 
   // Handle highlight changes separately (just update point sizes)
   useEffect(() => {

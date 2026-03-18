@@ -14,3 +14,10 @@
 #topbar .title { font-size: 15px; font-weight: 700; color: #58a6ff; margin-right: 12px; }
 #topbar .stat { color: #8b949e; }
 #topbar .stat b { color: #c9d1d9; font-weight: 600; }
+
+.time-direction-btn {
+  background: #161b22; border: 1px solid #30363d; color: #8b949e;
+  border-radius: 4px; padding: 2px 8px; font-family: inherit;
+  font-size: 10px; cursor: pointer; margin-left: auto;
+}
+.time-direction-btn:hover { color: #c9d1d9; border-color: #8b949e; }

@@ -73,3 +73,6 @@ export const suggestOpen = useSetting("suggestOpen", false);
 
 /** Currently selected idea ID (shown in the detail panel). */
 export const selectedIdea = useSetting<number | null>("selectedIdea", null);
+
+/** When true, newest items appear on the left/top instead of right/bottom. */
+export const reverseTime = useSetting("reverseTime", true);
