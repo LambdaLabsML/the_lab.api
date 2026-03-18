@@ -18,6 +18,9 @@ import {
   activeTagFilters,
   tagFilterMode,
   reverseTime,
+  showAbandoned,
+  showConcluded,
+  showRunning,
 } from "../../state/settings";
 import { buildChartData } from "../../lib/chart-data";
 import type { ChartDataResult } from "../../lib/chart-data";
@@ -48,6 +51,12 @@ export function MetricsChart() {
   const highlighted = highlightedIdea.value;
   const reversed = reverseTime.value;
 
+  // Build set of hidden idea statuses
+  const hiddenStatuses = new Set<string>();
+  if (!showAbandoned.value) hiddenStatuses.add("abandoned");
+  if (!showConcluded.value) hiddenStatuses.add("concluded");
+  if (!showRunning.value) { hiddenStatuses.add("active"); hiddenStatuses.add("suggested"); }
+
   useEffect(() => {
     if (!metric || !canvasRef.current) return;
 
@@ -60,7 +69,8 @@ export function MetricsChart() {
       mode,
       ideas,
       layout,
-      reversed
+      reversed,
+      hiddenStatuses,
     );
 
     if (!chartData) return;
@@ -103,7 +113,7 @@ export function MetricsChart() {
       chartRef.current?.destroy();
       chartRef.current = null;
     };
-  }, [metric, mode, impOnly, tags, tagMode, experiments, reversed]);
+  }, [metric, mode, impOnly, tags, tagMode, experiments, reversed, showAbandoned.value, showConcluded.value, showRunning.value]);
 
   // Handle highlight changes separately (just update point sizes)
   useEffect(() => {

@@ -10,9 +10,9 @@ const TABS = [
 export function ViewTabs() {
   const view = currentView.value;
 
-  function switchTo(key: string, path: string) {
+  function switchTo(key: string) {
     currentView.value = key;
-    history.pushState(null, "", path);
+    // URL is auto-updated by the effect in app.tsx
   }
 
   return (
@@ -21,7 +21,7 @@ export function ViewTabs() {
         <div
           key={tab.key}
           class={`view-tab${view === tab.key ? " active" : ""}`}
-          onClick={() => switchTo(tab.key, tab.path)}
+          onClick={() => switchTo(tab.key)}
         >
           {tab.label}
         </div>

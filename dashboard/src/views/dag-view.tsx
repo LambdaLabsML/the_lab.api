@@ -10,7 +10,7 @@
 import { useRef, useEffect } from "preact/hooks";
 import type { IdeaNode, StationPos, SubwayLayout } from "../lib/types";
 import { graphData, currentLayout, highlightedIdea, allIdeas, allExperiments } from "../state/signals";
-import { colorMode, selectedIdea, selectedMetric, improvementsOnly, activeTagFilters, tagFilterMode, reverseTime } from "../state/settings";
+import { colorMode, selectedIdea, selectedMetric, improvementsOnly, activeTagFilters, tagFilterMode, reverseTime, showAbandoned, showConcluded, showRunning } from "../state/settings";
 import { useSetting } from "../state/settings";
 import { _ideaHasGlobalImprovement } from "../lib/colors";
 import { drawSubwayLines } from "../lib/subway-lines";
@@ -45,21 +45,37 @@ export function DagView() {
   const compactMode = improvementsOnly.value;
   const reversed = reverseTime.value;
 
+  // Build set of hidden idea statuses
+  const hiddenStatuses = new Set<string>();
+  if (!showAbandoned.value) hiddenStatuses.add("abandoned");
+  if (!showConcluded.value) hiddenStatuses.add("concluded");
+  if (!showRunning.value) { hiddenStatuses.add("active"); hiddenStatuses.add("suggested"); }
+
   // In compact mode, only ideas with global improvements get full boxes.
-  // When tag filters are active, only consider filtered experiments for milestone detection.
+  // Status-hidden ideas are also compacted.
   const tags = activeTagFilters.value;
   const tagMode = tagFilterMode.value;
   const metricExperiments = metric
-    ? filterMetricExperiments(metric, experiments, tags, tagMode)
+    ? filterMetricExperiments(metric, experiments, tags, tagMode, hiddenStatuses)
     : [];
   const isImportant: Record<number, boolean> = {};
-  if (compactMode && data) {
+  if (data) {
     for (const n of data.nodes) {
-      isImportant[n.id] =
-        !!n.has_running ||
-        (!!metric && _ideaHasGlobalImprovement(n.id, metric, metricExperiments));
+      const statusHidden = hiddenStatuses.has(n.has_running ? "active" : n.status);
+      if (statusHidden) {
+        isImportant[n.id] = false;
+      } else if (compactMode) {
+        isImportant[n.id] =
+          !!n.has_running ||
+          (!!metric && _ideaHasGlobalImprovement(n.id, metric, metricExperiments));
+      } else {
+        isImportant[n.id] = true;
+      }
     }
   }
+
+  // Override compactMode if any status filters are active
+  const effectiveCompactMode = compactMode || hiddenStatuses.size > 0;
 
   // =========================================================================
   // COMBINED MEASUREMENT + RENDER — single effect to avoid ordering issues
@@ -80,7 +96,7 @@ export function DagView() {
     const STATION_HEIGHT = 28; // fallback if measurement fails
     const heights: Record<number, number> = {};
     for (const n of data.nodes) {
-      if (compactMode && !isImportant[n.id]) {
+      if (effectiveCompactMode && !isImportant[n.id]) {
         heights[n.id] = COMPACT_H;
         continue;
       }
@@ -150,7 +166,7 @@ export function DagView() {
       } else {
         // In compact mode, columns with only dots can be narrower
         const nodesInCol = data.nodes.filter((n) => layout.depth[n.id] === c);
-        const hasFullStation = nodesInCol.some((n) => !compactMode || isImportant[n.id]);
+        const hasFullStation = nodesInCol.some((n) => !effectiveCompactMode || isImportant[n.id]);
         colWidth[c] = hasFullStation ? DEFAULT_MAX_COL_WIDTH : COMPACT_W;
       }
     }
@@ -296,7 +312,7 @@ export function DagView() {
           if (pp) minY = Math.max(minY, pp.y);
         }
         y = minY;
-        const isCompact = compactMode && !isImportant[slot.nodeId];
+        const isCompact = effectiveCompactMode && !isImportant[slot.nodeId];
         const nodeW = isCompact ? COMPACT_W : colWidth[c];
         stationPos[slot.nodeId] = { x: colX[c], y: y, w: nodeW, h: slot.h };
         y += slot.h + ROW_GAP;
@@ -409,7 +425,7 @@ export function DagView() {
       const ds = n.has_running ? "running" : n.status;
       const nodeColor = colorForIdea(n.id, mode);
 
-      if (compactMode && !isImportant[n.id]) {
+      if (effectiveCompactMode && !isImportant[n.id]) {
         // Compact pill node — positioned at column start like full stations
         html +=
           '<div class="subway-dot" data-id="' + n.id +
@@ -573,7 +589,7 @@ export function DagView() {
 
     // Apply current highlight state (in case it was set before render)
     applyHighlight(highlightedIdea.value);
-  }, [data, layout, mode, metric, ideas, experiments, compactMode, tags, tagMode, reversed]);
+  }, [data, layout, mode, metric, ideas, experiments, effectiveCompactMode, tags, tagMode, reversed, showAbandoned.value, showConcluded.value, showRunning.value]);
 
   // =========================================================================
   // HIGHLIGHT EFFECT — reacts to highlightedIdea changes without full re-render

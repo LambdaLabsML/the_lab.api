@@ -1,4 +1,5 @@
-import { chartOpen, selectedMetric, colorMode, improvementsOnly } from "../../state/settings";
+import type { Signal } from "@preact/signals";
+import { chartOpen, selectedMetric, colorMode, improvementsOnly, showAbandoned, showConcluded, showRunning } from "../../state/settings";
 import { allExperiments } from "../../state/signals";
 import { MetricsChart } from "./metrics-chart";
 import { TagFilter } from "./tag-filter";
@@ -80,9 +81,29 @@ export function ChartPanel() {
             <span class="improvements-toggle-label">Improvements Only</span>
           </button>
           <TagFilter />
+          <span class="status-filters" style={{ display: "inline-flex", gap: "4px", alignItems: "center", marginLeft: "12px" }}>
+            Show:
+            <StatusToggle label="concluded" signal={showConcluded} color="#58a6ff" />
+            <StatusToggle label="abandoned" signal={showAbandoned} color="#f85149" />
+            <StatusToggle label="running" signal={showRunning} color="#d29922" />
+          </span>
         </div>
         <MetricsChart />
       </div>
     </>
+  );
+}
+
+function StatusToggle({ label, signal: s, color }: { label: string; signal: Signal<boolean>; color: string }) {
+  const active = s.value;
+  return (
+    <span
+      class={`tag-toggle${active ? " active" : ""}`}
+      style={active ? { borderColor: color, color } : undefined}
+      onClick={() => { s.value = !active; }}
+      title={active ? `Hide ${label} ideas` : `Show ${label} ideas`}
+    >
+      {label}
+    </span>
   );
 }

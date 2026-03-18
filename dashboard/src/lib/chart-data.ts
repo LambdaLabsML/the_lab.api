@@ -12,10 +12,16 @@ export function filterMetricExperiments(
   allExperiments: Experiment[],
   activeTagFilters: string[],
   tagFilterMode: "or" | "and",
+  hiddenStatuses?: Set<string>,
 ): Experiment[] {
   let filtered = allExperiments.filter(
     (e) => e.metrics && e.metrics[metricKey] !== undefined,
   );
+
+  // Filter by idea status visibility
+  if (hiddenStatuses && hiddenStatuses.size > 0) {
+    filtered = filtered.filter((e) => !hiddenStatuses.has(e.idea_status || "active"));
+  }
 
   if (activeTagFilters.length === 0) return filtered;
 
@@ -37,12 +43,14 @@ export function filterVisibleChartExperiments(
   activeTagFilters: string[],
   tagFilterMode: "or" | "and",
   improvementsOnly: boolean,
+  hiddenStatuses?: Set<string>,
 ): Experiment[] {
   const filtered = filterMetricExperiments(
     metricKey,
     allExperiments,
     activeTagFilters,
     tagFilterMode,
+    hiddenStatuses,
   );
 
   if (!improvementsOnly) return filtered;
@@ -81,12 +89,14 @@ export function buildChartData(
   allIdeas: Record<number, IdeaNode>,
   currentLayout: SubwayLayout | null,
   reversed: boolean = false,
+  hiddenStatuses?: Set<string>,
 ): ChartDataResult {
   const metricFiltered = filterMetricExperiments(
     metricKey,
     allExperiments,
     activeTagFilters,
     tagFilterMode,
+    hiddenStatuses,
   );
   let filtered = filterVisibleChartExperiments(
     metricKey,
@@ -94,6 +104,7 @@ export function buildChartData(
     activeTagFilters,
     tagFilterMode,
     improvementsOnly,
+    hiddenStatuses,
   );
 
   // Fallback sequential palette for 'idea' mode

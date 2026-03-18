@@ -76,3 +76,8 @@ export const selectedIdea = useSetting<number | null>("selectedIdea", null);
 
 /** When true, newest items appear on the left/top instead of right/bottom. */
 export const reverseTime = useSetting("reverseTime", true);
+
+/** Status visibility filters for graph and chart. */
+export const showAbandoned = useSetting("showAbandoned", true);
+export const showConcluded = useSetting("showConcluded", true);
+export const showRunning = useSetting("showRunning", true);
