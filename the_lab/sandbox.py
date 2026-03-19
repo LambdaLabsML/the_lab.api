@@ -345,10 +345,17 @@ def sandbox_capabilities() -> dict:
 
 
 def build_sandbox_command(repo_dir: Path, kind: str, label: str, target_cmd: list[str]) -> list[str]:
-    return [
+    cmd = [
         "rootlesskit",
         "--net=slirp4netns",
         "--copy-up=/etc",
+    ]
+    if kind in ("claude", "codex"):
+        # Agent CLIs use /tmp/claude-<uid>/ for their Bash sandbox workspace.
+        # --copy-up=/tmp creates a tmpfs overlay so the dropped-privilege
+        # process can write there without affecting the host's /tmp.
+        cmd.append("--copy-up=/tmp")
+    cmd.extend([
         sys.executable,
         "-m",
         "the_lab.sandbox_guest",
@@ -360,7 +367,8 @@ def build_sandbox_command(repo_dir: Path, kind: str, label: str, target_cmd: lis
         label,
         "--",
         *target_cmd,
-    ]
+    ])
+    return cmd
 
 
 def save_runtime_info(repo_dir: Path, payload: dict) -> dict:

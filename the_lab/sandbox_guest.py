@@ -244,7 +244,7 @@ class ExplicitProxy:
       try:
         await self._handle(reader, writer)
       except Exception as exc:
-        print(f"[sandbox-proxy] handler error: {exc}", flush=True)
+        pass  # swallow handler errors to keep the proxy alive
         writer.close()
         try:
             await writer.wait_closed()
@@ -258,11 +258,8 @@ class ExplicitProxy:
             first = b""
 
         req = _parse_proxy_request(first)
-        mode = "explicit" if req else None
         if req is None:
             req = _build_transparent_req(first, writer)
-            mode = "transparent" if req else None
-        print(f"[sandbox-proxy] conn: mode={mode} host={req['host'] if req else '?'}:{req['port'] if req else '?'} proto={req.get('protocol','?') if req else '?'} first_bytes={len(first)}", flush=True)
         if req is None:
             writer.close()
             try:
@@ -442,7 +439,6 @@ def _prepare_agent_home() -> str | None:
     target_uid = int(os.environ.get("THE_LAB_SANDBOX_TARGET_UID", "1000"))
     target_gid = int(os.environ.get("THE_LAB_SANDBOX_TARGET_GID", str(target_uid)))
     real_home = os.environ.get("HOME", str(Path.home()))
-    print(f"[sandbox] preparing agent home from {real_home}", flush=True)
 
     # Use a fresh temp dir every time — previous runs leave files owned by
     # the namespace-mapped UID that we can't rmtree from the next invocation.
@@ -450,7 +446,6 @@ def _prepare_agent_home() -> str | None:
 
     copy_dirs = [".claude", ".config"]
     copy_files = [".claude.json", ".gitconfig", ".gitignore_global"]
-    copied = []
 
     for d in copy_dirs:
         src = os.path.join(real_home, d)
@@ -458,9 +453,8 @@ def _prepare_agent_home() -> str | None:
         if os.path.isdir(src):
             try:
                 shutil.copytree(src, dst)
-                copied.append(d + "/")
-            except Exception as exc:
-                print(f"[sandbox] warning: failed to copy {d}/: {exc}", flush=True)
+            except Exception:
+                pass
 
     for f in copy_files:
         src = os.path.join(real_home, f)
@@ -468,9 +462,8 @@ def _prepare_agent_home() -> str | None:
         if os.path.isfile(src):
             try:
                 shutil.copy2(src, dst)
-                copied.append(f)
-            except Exception as exc:
-                print(f"[sandbox] warning: failed to copy {f}: {exc}", flush=True)
+            except Exception:
+                pass
 
     # chown+chmod everything so the target UID can read/write after privilege-drop.
     for dirpath, dirnames, filenames in os.walk(agent_home):
@@ -488,7 +481,6 @@ def _prepare_agent_home() -> str | None:
     os.chown(agent_tmp, target_uid, target_gid)
     os.chmod(agent_tmp, 0o1777)
 
-    print(f"[sandbox] copied to {agent_home}: {copied}", flush=True)
     return agent_home
 
 
@@ -566,13 +558,7 @@ def _make_executable_accessible(command: list[str]) -> list[str]:
 
 async def _run_target(command: list[str], env: dict[str, str]) -> int:
     command = _make_executable_accessible(command)
-    print(f"[sandbox] launching: {command[0]}", flush=True)
-    try:
-        proc = subprocess.Popen(command, env=env, preexec_fn=_drop_privileges)
-    except Exception as exc:
-        print(f"[sandbox] Popen failed: {exc}", flush=True)
-        raise
-    print(f"[sandbox] pid={proc.pid}, waiting…", flush=True)
+    proc = subprocess.Popen(command, env=env, preexec_fn=_drop_privileges)
 
     loop = asyncio.get_running_loop()
 
@@ -617,18 +603,16 @@ async def _main() -> int:
     api_port = int(runtime.get("api_port", 8000))
     api_scheme = runtime.get("api_scheme", "http")
 
-    print(f"[sandbox] guest starting: kind={args.kind} label={args.label}", flush=True)
-    print(f"[sandbox] command: {command}", flush=True)
     proxy = ExplicitProxy(repo_dir, args.kind, args.label)
     proxy_server = await asyncio.start_server(proxy.handle, "127.0.0.1", PROXY_PORT)
-    print(f"[sandbox] proxy listening on 127.0.0.1:{PROXY_PORT}", flush=True)
     forward_server = await _start_forwarder(api_port, HOST_GATEWAY, api_port)
-    print(f"[sandbox] forwarder ready, applying iptables…", flush=True)
     _run_iptables(args.kind)
-    print(f"[sandbox] iptables applied, launching target…", flush=True)
 
     env = _target_env(api_scheme, api_port)
     if args.kind in _AGENT_KINDS:
+        target_uid = int(os.environ.get("THE_LAB_SANDBOX_TARGET_UID", "1000"))
+        target_gid = int(os.environ.get("THE_LAB_SANDBOX_TARGET_GID", str(target_uid)))
+
         # Agent CLIs refuse to run as root (--dangerously-skip-permissions).
         # Prepare a temp home with the user's config so the dropped-privilege
         # process can access API keys, git config, etc.
@@ -636,7 +620,16 @@ async def _main() -> int:
         if agent_home:
             env["HOME"] = agent_home
             env["TMPDIR"] = os.path.join(agent_home, "tmp")
-            print(f"[sandbox] agent HOME={agent_home}", flush=True)
+
+        # Claude Code uses /tmp/claude-<uid>/ for its Bash sandbox workspace.
+        # --copy-up=/tmp created a tmpfs overlay; replace the symlink to the
+        # host directory with a real writable directory for the target UID.
+        claude_tmp = f"/tmp/claude-{target_uid}"
+        if os.path.islink(claude_tmp):
+            os.unlink(claude_tmp)
+        os.makedirs(claude_tmp, exist_ok=True)
+        os.chown(claude_tmp, target_uid, target_gid)
+        os.chmod(claude_tmp, 0o700)
 
     try:
         return await _run_target(command, env)
