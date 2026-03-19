@@ -171,17 +171,32 @@ export function DagView() {
     }
 
     // --- Column widths & x-positions ---
+    // In compact mode, column width is based on the majority:
+    // - All compact → COMPACT_W
+    // - Mixed (few important among many compact) → COMPACT_W for column layout,
+    //   important nodes overflow beyond the column (they're absolutely positioned)
+    // - All important or not in compact mode → full width
     const overrides = colWidthOverrides.value;
     const colWidth: Record<number, number> = {};
     for (let c = 0; c <= layout.maxDepth; c++) {
+      if (!effectiveCompactMode) {
+        colWidth[c] = overrides[c] !== undefined
+          ? Math.max(MIN_COL_WIDTH, overrides[c])
+          : DEFAULT_MAX_COL_WIDTH;
+        continue;
+      }
       const nodesInCol = data.nodes.filter((n) => layout.depth[n.id] === c);
-      const hasFullStation = nodesInCol.some((n) => isImportant[n.id]);
-      if (!hasFullStation && effectiveCompactMode) {
+      const importantCount = nodesInCol.filter((n) => isImportant[n.id]).length;
+      if (importantCount === 0) {
         colWidth[c] = COMPACT_W;
-      } else if (overrides[c] !== undefined) {
-        colWidth[c] = Math.max(MIN_COL_WIDTH, overrides[c]);
+      } else if (importantCount <= 2 && nodesInCol.length > importantCount + 2) {
+        // Few milestones among many compact — use compact column width,
+        // milestone stations will overflow (absolutely positioned, z-index handles layering)
+        colWidth[c] = COMPACT_W;
       } else {
-        colWidth[c] = DEFAULT_MAX_COL_WIDTH;
+        colWidth[c] = overrides[c] !== undefined
+          ? Math.max(MIN_COL_WIDTH, overrides[c])
+          : DEFAULT_MAX_COL_WIDTH;
       }
     }
     // Pre-compute the gap between each pair of adjacent columns (d, d+1).
@@ -347,7 +362,8 @@ export function DagView() {
         }
         y = minY;
         const isCompact = effectiveCompactMode && !isImportant[slot.nodeId];
-        const nodeW = isCompact ? COMPACT_W : colWidth[c];
+        // Important nodes in compact columns overflow — give them full width for text
+        const nodeW = isCompact ? COMPACT_W : Math.max(colWidth[c], DEFAULT_MAX_COL_WIDTH);
         stationPos[slot.nodeId] = { x: colX[c], y: y, w: nodeW, h: slot.h };
         y += slot.h + ROW_GAP;
       }
