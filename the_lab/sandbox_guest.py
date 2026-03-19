@@ -621,12 +621,13 @@ async def _main() -> int:
             env["HOME"] = agent_home
             env["TMPDIR"] = os.path.join(agent_home, "tmp")
 
-        # Claude Code uses /tmp/claude-<uid>/ for its Bash sandbox workspace.
-        # --copy-up=/tmp created a tmpfs overlay; replace the symlink to the
-        # host directory with a real writable directory for the target UID.
+        # Claude Code hardcodes /tmp/claude-<uid>/ for its Bash sandbox.
+        # Inside rootlesskit the host UID maps to namespace root, so the
+        # directory (if it exists) is owned by UID 0 and inaccessible after
+        # privilege-drop.  Re-create it for the target UID.  This touches
+        # the host's /tmp but Claude Code recreates the dir on next launch.
         claude_tmp = f"/tmp/claude-{target_uid}"
-        if os.path.islink(claude_tmp):
-            os.unlink(claude_tmp)
+        shutil.rmtree(claude_tmp, ignore_errors=True)
         os.makedirs(claude_tmp, exist_ok=True)
         os.chown(claude_tmp, target_uid, target_gid)
         os.chmod(claude_tmp, 0o700)
