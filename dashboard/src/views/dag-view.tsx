@@ -12,7 +12,7 @@ import type { IdeaNode, StationPos, SubwayLayout } from "../lib/types";
 import { graphData, currentLayout, highlightedIdea, allIdeas, allExperiments } from "../state/signals";
 import { colorMode, selectedIdea, selectedMetric, improvementsOnly, activeTagFilters, tagFilterMode, reverseTime, showAbandoned, showConcluded, showRunning } from "../state/settings";
 import { useSetting } from "../state/settings";
-import { _ideaHasGlobalImprovement } from "../lib/colors";
+import { _ideaHasGlobalImprovement, resetGlobalBestBeforeCache } from "../lib/colors";
 import { drawSubwayLines } from "../lib/subway-lines";
 import { IDEA_PALETTE, STATUS_BAR_COLORS, STATUS_ORDER, _colorForIdea } from "../lib/colors";
 import { filterMetricExperiments } from "../lib/chart-data";
@@ -55,6 +55,8 @@ export function DagView() {
   // Status-hidden ideas are also compacted.
   const tags = activeTagFilters.value;
   const tagMode = tagFilterMode.value;
+  // Reset the global-best cache so milestone detection uses the current filtered set
+  resetGlobalBestBeforeCache();
   const metricExperiments = metric
     ? filterMetricExperiments(metric, experiments, tags, tagMode, hiddenStatuses)
     : [];
