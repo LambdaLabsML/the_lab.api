@@ -919,6 +919,23 @@ def compare_curves(
     return {"key": key, "experiments": result}
 
 
+# --- Metric direction heuristic ---
+
+_LOWER_IS_BETTER_PATTERNS = (
+    "loss", "bpb", "perplexity", "error", "mse", "mae", "rmse",
+    "cost", "latency", "time", "bytes", "regret", "cer", "wer",
+    "fid", "distance", "penalty",
+)
+
+
+def metric_direction(key: str) -> str:
+    """Infer whether a metric should be minimized or maximized from its name."""
+    k = key.lower()
+    if any(p in k for p in _LOWER_IS_BETTER_PATTERNS):
+        return "minimize"
+    return "maximize"
+
+
 # --- Digest ---
 
 @app.get("/api/v1/digest")
@@ -931,20 +948,23 @@ def get_digest(
     """Get a compact, metric-focused research digest.
 
     Always returns three sections ranked by the given metric:
-    1. **Leaderboard** — top N experiments by metric value (descending)
+    1. **Leaderboard** — top N experiments by best metric value
     2. **Recent** — most recent N experiments with their metric value
     3. **Progression** — timeline of when the global best was beaten
+
+    The sort direction is auto-detected from the metric name (e.g. metrics
+    containing "loss", "bpb", "error" are minimized; others are maximized).
+    The inferred ``direction`` is included in the response.
 
     Plus: open ideas, running experiments, key insights, and the best idea
     for this metric. Use ``tags=`` to scope to a subset of experiments.
 
     Example:
         GET /api/v1/digest?metric=accuracy&top=10&recent=5
-        -> {"metric": "accuracy", "leaderboard": [...], "recent": [...],
-            "progression": [...], "open_ideas": [...], ...}
+        -> {"metric": "accuracy", "direction": "maximize", "leaderboard": [...], ...}
 
-        GET /api/v1/digest?metric=accuracy_per_mtoken&top=5&tags=n-10,swarm-2
-        -> top 5 swarm-2 experiments by efficiency
+        GET /api/v1/digest?metric=val_bpb&top=5
+        -> {"metric": "val_bpb", "direction": "minimize", "leaderboard": [...], ...}
     """
     all_ideas = store.list_ideas()
     all_exps = store.list_all_experiments()
@@ -1016,7 +1036,9 @@ def get_digest(
     ]
 
     # --- Leaderboard: top N by metric value ---
-    by_value = sorted(with_metric, key=lambda e: e["metrics"][metric], reverse=True)
+    direction = metric_direction(metric)
+    minimize = direction == "minimize"
+    by_value = sorted(with_metric, key=lambda e: e["metrics"][metric], reverse=not minimize)
     leaderboard = []
     for exp in by_value[:top]:
         idea = store.get_idea(exp["idea_id"])
@@ -1065,7 +1087,8 @@ def get_digest(
     running_best = None
     for exp in by_time_asc:
         v = exp["metrics"][metric]
-        if running_best is None or v > running_best:
+        improved = running_best is None or (v < running_best if minimize else v > running_best)
+        if improved:
             running_best = v
             idea = store.get_idea(exp["idea_id"])
             progression.append({
@@ -1089,6 +1112,7 @@ def get_digest(
 
     return {
         "metric": metric,
+        "direction": direction,
         "tags": tag_list or None,
         "total_experiments_with_metric": len(with_metric),
         "open_ideas": open_ideas,
@@ -1099,6 +1123,23 @@ def get_digest(
         "progression": progression,
         "key_insights": key_insights[:10],
     }
+
+
+@app.get("/api/v1/metric-direction")
+def get_metric_direction(
+    metric: str = Query(..., description="Metric name to infer direction for"),
+):
+    """Infer whether a metric should be minimized or maximized.
+
+    Uses a name-based heuristic: metrics containing "loss", "bpb", "error",
+    "perplexity", "cost", "latency", "bytes", etc. are minimized; everything
+    else is maximized.
+
+    Example:
+        GET /api/v1/metric-direction?metric=val_bpb  -> {"metric": "val_bpb", "direction": "minimize"}
+        GET /api/v1/metric-direction?metric=accuracy  -> {"metric": "accuracy", "direction": "maximize"}
+    """
+    return {"metric": metric, "direction": metric_direction(metric)}
 
 
 # --- Wait ---
