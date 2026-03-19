@@ -13,6 +13,7 @@ import {
   currentView, selectedIdea, selectedMetric, colorMode,
   improvementsOnly, activeTagFilters, tagFilterMode, reverseTime,
   showAbandoned, showConcluded, showRunning,
+  applyServerDefaults,
 } from "./state/settings";
 import { startPolling, stopPolling } from "./state/polling";
 
@@ -111,7 +112,7 @@ function syncUrlFromSignals() {
 
 export function App() {
   useEffect(() => {
-    readFiltersFromUrl();
+    applyServerDefaults().then(() => readFiltersFromUrl());
     window.addEventListener("popstate", readFiltersFromUrl);
     startPolling();
 

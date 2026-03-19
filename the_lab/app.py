@@ -1279,6 +1279,32 @@ def get_chart_data():
     return {"experiments": completed_exps, "running": running_progress}
 
 
+# --- Dashboard config ---
+
+@app.get("/api/v1/config")
+def get_dashboard_config():
+    """Dashboard UI defaults for this project.
+
+    Reads ``.the_lab/dashboard.json`` from the repo root. Any key present
+    in this file is used as the default for new users (before localStorage
+    overrides). Missing file or missing keys → empty defaults.
+
+    Supported keys: ``tagFilters``, ``tagFilterMode``, ``selectedMetric``,
+    ``colorMode``, ``improvementsOnly``, ``reverseTime``, ``showAbandoned``,
+    ``showConcluded``, ``showRunning``.
+
+    Example ``.the_lab/dashboard.json``:
+        {"tagFilters": ["held-out"], "selectedMetric": "accuracy_per_mtoken"}
+    """
+    config_path = REPO_DIR / ".the_lab" / "dashboard.json"
+    if config_path.exists():
+        try:
+            return json.loads(config_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {}
+
+
 # --- SPA Fallback (must be last) ---
 # Serves the Preact app for any non-API path (enables client-side routing).
 # Falls back to legacy dashboard.html if Vite build output doesn't exist.
