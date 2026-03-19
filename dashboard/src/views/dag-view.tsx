@@ -157,54 +157,50 @@ export function DagView() {
     const maxFanOut = Math.max(0, ...Object.values(branchCounts));
     const colGap = Math.max(30, maxFanOut * ROUTING_SPACING + 20);
 
-    // --- Per-column routing width needed for branch lines passing through ---
-    // Count how many cross-lane branches originate from or pass through each column.
-    const colFanOut: Record<number, number> = {};
+    // --- Per-column fan-out: how many branch lines originate from each column ---
+    // These lines extend into the GAP after the column, not into the column itself.
+    const colBranchOut: Record<number, number> = {};
     for (const n of data.nodes) {
       for (const pid of n.parent_ids || []) {
         if (layout.ideaLane[n.id] === layout.ideaLane[pid]) continue;
-        // The branch line originates at the parent's column
         const pc = layout.depth[pid];
-        colFanOut[pc] = (colFanOut[pc] || 0) + 1;
-        // And passes through all intermediate columns
-        const cc = layout.depth[n.id];
-        const lo = Math.min(pc, cc), hi = Math.max(pc, cc);
-        for (let mid = lo + 1; mid < hi; mid++) {
-          colFanOut[mid] = (colFanOut[mid] || 0) + 1;
-        }
+        colBranchOut[pc] = (colBranchOut[pc] || 0) + 1;
       }
     }
 
     // --- Column widths & x-positions ---
-    // User overrides only apply to columns with full stations.
-    // All-compact columns collapse but account for routing lines through them.
     const overrides = colWidthOverrides.value;
     const colWidth: Record<number, number> = {};
     for (let c = 0; c <= layout.maxDepth; c++) {
       const nodesInCol = data.nodes.filter((n) => layout.depth[n.id] === c);
       const hasFullStation = nodesInCol.some((n) => isImportant[n.id]);
       if (!hasFullStation && effectiveCompactMode) {
-        // Compact width + space for routing lines passing through
-        const routingExtra = (colFanOut[c] || 0) * ROUTING_SPACING;
-        colWidth[c] = COMPACT_W + routingExtra;
+        colWidth[c] = COMPACT_W;
       } else if (overrides[c] !== undefined) {
         colWidth[c] = Math.max(MIN_COL_WIDTH, overrides[c]);
       } else {
         colWidth[c] = DEFAULT_MAX_COL_WIDTH;
       }
     }
-    const COMPACT_GAP = 12; // tighter gap between all-compact columns
+    // Per-column gap: must fit the branch lines that originate from that column
+    const COMPACT_GAP = 14;
     const colX: Record<number, number> = {};
     let cx = 16;
     if (reversed) {
       for (let c = layout.maxDepth; c >= 0; c--) {
         colX[c] = cx;
-        cx += (colWidth[c] || 0) + (colWidth[c] <= COMPACT_W ? COMPACT_GAP : colGap);
+        const fanOut = colBranchOut[c] || 0;
+        const minGap = Math.max(COMPACT_GAP, fanOut * ROUTING_SPACING + 10);
+        const isCompact = colWidth[c] <= COMPACT_W;
+        cx += (colWidth[c] || 0) + (isCompact ? minGap : Math.max(colGap, minGap));
       }
     } else {
       for (let c = 0; c <= layout.maxDepth; c++) {
         colX[c] = cx;
-        cx += (colWidth[c] || 0) + (colWidth[c] <= COMPACT_W ? COMPACT_GAP : colGap);
+        const fanOut = colBranchOut[c] || 0;
+        const minGap = Math.max(COMPACT_GAP, fanOut * ROUTING_SPACING + 10);
+        const isCompact = colWidth[c] <= COMPACT_W;
+        cx += (colWidth[c] || 0) + (isCompact ? minGap : Math.max(colGap, minGap));
       }
     }
     const totalW = cx + 16;
