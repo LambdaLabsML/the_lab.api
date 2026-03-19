@@ -182,25 +182,38 @@ export function DagView() {
         colWidth[c] = DEFAULT_MAX_COL_WIDTH;
       }
     }
-    // Per-column gap: must fit the branch lines that originate from that column
+    // Pre-compute the gap between each pair of adjacent columns (d, d+1).
+    // The gap must fit branch lines from the PARENT column. In the DAG,
+    // parents are at lower depth. Lines exit the parent's outgoing edge
+    // into the gap toward the child.
+    //   Normal:   parent(d).right → gap → child(d+1).left   — gap is AFTER col d
+    //   Reversed: parent(d).left  → gap → child(d+1).right  — gap is BEFORE col d
     const COMPACT_GAP = 14;
+    const gapAfterDepth: Record<number, number> = {};
+    for (let d = 0; d < layout.maxDepth; d++) {
+      const fanOut = colBranchOut[d] || 0;
+      const minGap = Math.max(COMPACT_GAP, fanOut * ROUTING_SPACING + 10);
+      // Use tighter gap if both sides are compact
+      const leftCompact = colWidth[d] <= COMPACT_W;
+      const rightCompact = colWidth[d + 1] <= COMPACT_W;
+      gapAfterDepth[d] = (leftCompact && rightCompact) ? minGap : Math.max(colGap, minGap);
+    }
+
     const colX: Record<number, number> = {};
     let cx = 16;
     if (reversed) {
+      // Layout left→right: maxDepth, gap, maxDepth-1, gap, ..., 0
       for (let c = layout.maxDepth; c >= 0; c--) {
         colX[c] = cx;
-        const fanOut = colBranchOut[c] || 0;
-        const minGap = Math.max(COMPACT_GAP, fanOut * ROUTING_SPACING + 10);
-        const isCompact = colWidth[c] <= COMPACT_W;
-        cx += (colWidth[c] || 0) + (isCompact ? minGap : Math.max(colGap, minGap));
+        cx += colWidth[c] || 0;
+        if (c > 0) cx += gapAfterDepth[c - 1] || COMPACT_GAP;
       }
     } else {
+      // Layout left→right: 0, gap, 1, gap, ..., maxDepth
       for (let c = 0; c <= layout.maxDepth; c++) {
         colX[c] = cx;
-        const fanOut = colBranchOut[c] || 0;
-        const minGap = Math.max(COMPACT_GAP, fanOut * ROUTING_SPACING + 10);
-        const isCompact = colWidth[c] <= COMPACT_W;
-        cx += (colWidth[c] || 0) + (isCompact ? minGap : Math.max(colGap, minGap));
+        cx += colWidth[c] || 0;
+        if (c < layout.maxDepth) cx += gapAfterDepth[c] || COMPACT_GAP;
       }
     }
     const totalW = cx + 16;
