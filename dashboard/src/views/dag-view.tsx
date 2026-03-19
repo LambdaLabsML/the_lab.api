@@ -157,16 +157,36 @@ export function DagView() {
     const maxFanOut = Math.max(0, ...Object.values(branchCounts));
     const colGap = Math.max(30, maxFanOut * ROUTING_SPACING + 20);
 
+    // --- Per-column routing width needed for branch lines passing through ---
+    // Count how many cross-lane branches originate from or pass through each column.
+    const colFanOut: Record<number, number> = {};
+    for (const n of data.nodes) {
+      for (const pid of n.parent_ids || []) {
+        if (layout.ideaLane[n.id] === layout.ideaLane[pid]) continue;
+        // The branch line originates at the parent's column
+        const pc = layout.depth[pid];
+        colFanOut[pc] = (colFanOut[pc] || 0) + 1;
+        // And passes through all intermediate columns
+        const cc = layout.depth[n.id];
+        const lo = Math.min(pc, cc), hi = Math.max(pc, cc);
+        for (let mid = lo + 1; mid < hi; mid++) {
+          colFanOut[mid] = (colFanOut[mid] || 0) + 1;
+        }
+      }
+    }
+
     // --- Column widths & x-positions ---
     // User overrides only apply to columns with full stations.
-    // All-compact columns always collapse to COMPACT_W.
+    // All-compact columns collapse but account for routing lines through them.
     const overrides = colWidthOverrides.value;
     const colWidth: Record<number, number> = {};
     for (let c = 0; c <= layout.maxDepth; c++) {
       const nodesInCol = data.nodes.filter((n) => layout.depth[n.id] === c);
       const hasFullStation = nodesInCol.some((n) => isImportant[n.id]);
       if (!hasFullStation && effectiveCompactMode) {
-        colWidth[c] = COMPACT_W;
+        // Compact width + space for routing lines passing through
+        const routingExtra = (colFanOut[c] || 0) * ROUTING_SPACING;
+        colWidth[c] = COMPACT_W + routingExtra;
       } else if (overrides[c] !== undefined) {
         colWidth[c] = Math.max(MIN_COL_WIDTH, overrides[c]);
       } else {
