@@ -20,6 +20,18 @@ DEFAULT_PACKAGE_HOSTS = [
     "deb.debian.org",
 ]
 
+# Hosts that agent CLIs (Claude Code, Codex) need to function.
+DEFAULT_AGENT_HOSTS = [
+    "api.anthropic.com",
+    "platform.claude.com",
+    "*.claude.ai",
+    "api.openai.com",
+    "sentry.io",
+    "*.sentry.io",
+    "statsig.anthropic.com",
+    "*.datadoghq.com",
+]
+
 REQUIRED_BINARIES = [
     "rootlesskit",
     "slirp4netns",
@@ -147,6 +159,7 @@ def builtin_allowlist(repo_dir: Path) -> list[str]:
     del repo_dir  # reserved for future repo-specific defaults
     rules = normalize_rules([
         *DEFAULT_PACKAGE_HOSTS,
+        *DEFAULT_AGENT_HOSTS,
         *_env_default_hosts(),
         *_apt_default_hosts(),
     ])

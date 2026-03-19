@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "preact/hooks";
+import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { getSandboxState, updateSandboxState } from "../state/api";
 import type { SandboxCapabilities, SandboxObservedEntry, SandboxState } from "../lib/types";
 import { formatTime } from "../lib/format";
@@ -12,11 +12,7 @@ function splitRules(text: string): string[] {
 }
 
 function snapshot(enabled: boolean, allowText: string, denyText: string): string {
-  return JSON.stringify({
-    enabled,
-    allowText: allowText.trim(),
-    denyText: denyText.trim(),
-  });
+  return JSON.stringify({ enabled, allowText, denyText });
 }
 
 export function SandboxView() {
@@ -43,6 +39,16 @@ export function SandboxView() {
     }
   }
 
+  // Refs so the poll interval always reads current values without re-triggering the effect.
+  const enabledRef = useRef(enabled);
+  const allowTextRef = useRef(allowText);
+  const denyTextRef = useRef(denyText);
+  const savedSnapshotRef = useRef(savedSnapshot);
+  enabledRef.current = enabled;
+  allowTextRef.current = allowText;
+  denyTextRef.current = denyText;
+  savedSnapshotRef.current = savedSnapshot;
+
   useEffect(() => {
     let cancelled = false;
 
@@ -65,7 +71,7 @@ export function SandboxView() {
       try {
         const state = await getSandboxState();
         if (cancelled) return;
-        const dirty = snapshot(enabled, allowText, denyText) !== savedSnapshot;
+        const dirty = snapshot(enabledRef.current, allowTextRef.current, denyTextRef.current) !== savedSnapshotRef.current;
         applyState(state, !dirty);
       } catch {
         // keep last good state
@@ -76,7 +82,7 @@ export function SandboxView() {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [enabled, allowText, denyText, savedSnapshot]);
+  }, []);
 
   const currentSnapshot = useMemo(
     () => snapshot(enabled, allowText, denyText),
@@ -94,7 +100,11 @@ export function SandboxView() {
           allowlist: splitRules(allowText),
           denylist: splitRules(denyText),
         });
-        applyState(state, true);
+        // Update observed/capabilities from server but keep the user's draft
+        // text intact — overwriting it resets cursor position and strips
+        // trailing newlines, making continued editing impossible.
+        applyState(state, false);
+        setSavedSnapshot(currentSnapshot);
         setSaveState("saved");
         window.setTimeout(() => setSaveState((prev) => (prev === "saved" ? "idle" : prev)), 1500);
       } catch (err) {

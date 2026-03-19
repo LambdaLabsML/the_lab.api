@@ -4,7 +4,10 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import shutil
 import signal
+import socket
+import struct
 import subprocess
 from pathlib import Path
 from urllib.parse import urlparse
@@ -20,6 +23,15 @@ PROXY_PORT = 18080
 HOST_GATEWAY = "10.0.2.2"
 HTTP_METHODS = (b"GET ", b"POST ", b"PUT ", b"PATCH ", b"DELETE ", b"HEAD ", b"OPTIONS ", b"CONNECT ")
 
+_AGENT_KINDS = frozenset({"claude", "codex"})
+
+# Linux: from <linux/netfilter_ipv4.h>
+SO_ORIGINAL_DST = 80
+
+
+# ---------------------------------------------------------------------------
+# Helpers — parsing
+# ---------------------------------------------------------------------------
 
 def _split_authority(authority: str, default_port: int) -> tuple[str, int]:
     authority = authority.strip()
@@ -96,6 +108,110 @@ def _parse_proxy_request(data: bytes) -> dict | None:
     }
 
 
+# ---------------------------------------------------------------------------
+# Transparent proxy helpers
+# ---------------------------------------------------------------------------
+
+def _get_original_dst(writer: asyncio.StreamWriter) -> tuple[str, int] | None:
+    """Retrieve the original destination of a NAT-redirected connection."""
+    sock = writer.get_extra_info("socket")
+    if sock is None:
+        return None
+    try:
+        data = sock.getsockopt(socket.SOL_IP, SO_ORIGINAL_DST, 16)
+        port = struct.unpack("!H", data[2:4])[0]
+        ip = socket.inet_ntoa(data[4:8])
+        # If it points at the proxy itself, this was a direct (explicit) connection.
+        if ip == "127.0.0.1" and port == PROXY_PORT:
+            return None
+        return ip, port
+    except (OSError, struct.error):
+        return None
+
+
+def _extract_tls_sni(data: bytes) -> str | None:
+    """Extract the Server Name Indication hostname from a TLS ClientHello."""
+    try:
+        if len(data) < 5 or data[0] != 0x16:
+            return None
+        # record header(5) + handshake header(4) + client version(2) + random(32)
+        pos = 5 + 4 + 2 + 32
+        if pos + 1 > len(data):
+            return None
+        session_len = data[pos]
+        pos += 1 + session_len
+        if pos + 2 > len(data):
+            return None
+        cipher_len = struct.unpack("!H", data[pos:pos + 2])[0]
+        pos += 2 + cipher_len
+        if pos + 1 > len(data):
+            return None
+        comp_len = data[pos]
+        pos += 1 + comp_len
+        if pos + 2 > len(data):
+            return None
+        ext_len = struct.unpack("!H", data[pos:pos + 2])[0]
+        pos += 2
+        ext_end = pos + ext_len
+        while pos + 4 <= ext_end:
+            ext_type = struct.unpack("!H", data[pos:pos + 2])[0]
+            ext_data_len = struct.unpack("!H", data[pos + 2:pos + 4])[0]
+            pos += 4
+            if ext_type == 0:  # SNI
+                if pos + 5 <= len(data):
+                    name_len = struct.unpack("!H", data[pos + 3:pos + 5])[0]
+                    if pos + 5 + name_len <= len(data):
+                        return data[pos + 5:pos + 5 + name_len].decode("ascii", "ignore")
+            pos += ext_data_len
+    except (IndexError, struct.error):
+        pass
+    return None
+
+
+def _extract_http_host(data: bytes) -> str | None:
+    """Extract the Host header from a plain HTTP request."""
+    try:
+        end = data.find(b"\r\n\r\n")
+        head = data[:end if end != -1 else len(data)].decode("latin1", "ignore")
+        for line in head.split("\r\n")[1:]:
+            if line.lower().startswith("host:"):
+                host = line.split(":", 1)[1].strip()
+                # Strip port if present
+                if ":" in host:
+                    host = host.rsplit(":", 1)[0]
+                return host
+    except Exception:
+        pass
+    return None
+
+
+def _build_transparent_req(first: bytes, writer: asyncio.StreamWriter) -> dict | None:
+    """Build a request dict for a transparently redirected connection."""
+    orig = _get_original_dst(writer)
+    if orig is None:
+        return None
+    ip, port = orig
+    # Try to recover a hostname for logging and policy checks.
+    if port == 443:
+        host = _extract_tls_sni(first) or ip
+    else:
+        host = _extract_http_host(first) or ip
+    return {
+        "host": host,
+        "port": port,
+        "protocol": "transparent-tls" if port == 443 else "transparent-tcp",
+        "tunnel": False,
+        "transparent": True,
+        "payload": first,
+        # Keep the original IP for connecting — more reliable than re-resolving.
+        "_connect_ip": ip,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Pipe / relay
+# ---------------------------------------------------------------------------
+
 async def _pipe(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
     try:
         while True:
@@ -114,6 +230,10 @@ async def _pipe(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> N
             pass
 
 
+# ---------------------------------------------------------------------------
+# Proxy handler
+# ---------------------------------------------------------------------------
+
 class ExplicitProxy:
     def __init__(self, repo_dir: Path, kind: str, label: str):
         self.repo_dir = repo_dir
@@ -121,12 +241,28 @@ class ExplicitProxy:
         self.label = label
 
     async def handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+      try:
+        await self._handle(reader, writer)
+      except Exception as exc:
+        print(f"[sandbox-proxy] handler error: {exc}", flush=True)
+        writer.close()
+        try:
+            await writer.wait_closed()
+        except Exception:
+            pass
+
+    async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:
             first = await asyncio.wait_for(reader.read(8192), timeout=2)
         except asyncio.TimeoutError:
             first = b""
 
         req = _parse_proxy_request(first)
+        mode = "explicit" if req else None
+        if req is None:
+            req = _build_transparent_req(first, writer)
+            mode = "transparent" if req else None
+        print(f"[sandbox-proxy] conn: mode={mode} host={req['host'] if req else '?'}:{req['port'] if req else '?'} proto={req.get('protocol','?') if req else '?'} first_bytes={len(first)}", flush=True)
         if req is None:
             writer.close()
             try:
@@ -145,18 +281,19 @@ class ExplicitProxy:
                     "kind": self.kind,
                     "label": self.label,
                     "host": req["host"],
-                    "ip": None,
+                    "ip": req.get("_connect_ip"),
                     "port": req["port"],
                     "protocol": req["protocol"],
                     "decision": "blocked",
                     "reason": reason,
                 },
             )
-            writer.write(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
-            try:
-                await writer.drain()
-            except ConnectionResetError:
-                pass
+            if not req.get("transparent"):
+                writer.write(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
+                try:
+                    await writer.drain()
+                except ConnectionResetError:
+                    pass
             writer.close()
             try:
                 await writer.wait_closed()
@@ -164,8 +301,11 @@ class ExplicitProxy:
                 pass
             return
 
+        # Connect to the remote.  For transparent connections use the original
+        # IP directly (avoids a DNS lookup the target already performed).
+        connect_host = req.get("_connect_ip") or req["host"]
         try:
-            remote_reader, remote_writer = await asyncio.open_connection(req["host"], req["port"])
+            remote_reader, remote_writer = await asyncio.open_connection(connect_host, req["port"])
         except OSError:
             append_access_log(
                 self.repo_dir,
@@ -173,7 +313,7 @@ class ExplicitProxy:
                     "kind": self.kind,
                     "label": self.label,
                     "host": req["host"],
-                    "ip": None,
+                    "ip": req.get("_connect_ip"),
                     "port": req["port"],
                     "protocol": req["protocol"],
                     "decision": "blocked",
@@ -188,7 +328,7 @@ class ExplicitProxy:
             return
 
         peer = remote_writer.get_extra_info("peername")
-        ip = peer[0] if peer else None
+        ip = peer[0] if peer else req.get("_connect_ip")
         append_access_log(
             self.repo_dir,
             {
@@ -203,7 +343,11 @@ class ExplicitProxy:
             },
         )
 
-        if req["tunnel"]:
+        if req.get("transparent"):
+            # Forward the initial bytes the client already sent.
+            if req["payload"]:
+                remote_writer.write(req["payload"])
+        elif req["tunnel"]:
             writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
         else:
             remote_writer.write(req["payload"])
@@ -218,6 +362,10 @@ class ExplicitProxy:
             _pipe(remote_reader, writer),
         )
 
+
+# ---------------------------------------------------------------------------
+# Port forwarder (API gateway)
+# ---------------------------------------------------------------------------
 
 async def _start_forwarder(local_port: int, remote_host: str, remote_port: int) -> asyncio.base_events.Server:
     async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -238,18 +386,42 @@ async def _start_forwarder(local_port: int, remote_host: str, remote_port: int) 
     return await asyncio.start_server(handle, "127.0.0.1", local_port)
 
 
-def _run_iptables() -> None:
-    commands = [
+# ---------------------------------------------------------------------------
+# iptables
+# ---------------------------------------------------------------------------
+
+def _run_iptables(kind: str) -> None:
+    commands: list[list[str]] = [
         ["ip", "link", "set", "lo", "up"],
         ["iptables", "-F", "OUTPUT"],
         ["iptables", "-A", "OUTPUT", "-m", "owner", "--uid-owner", "0", "-j", "ACCEPT"],
         ["iptables", "-A", "OUTPUT", "-o", "lo", "-j", "ACCEPT"],
         ["iptables", "-A", "OUTPUT", "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"],
-        ["iptables", "-A", "OUTPUT", "-j", "REJECT", "--reject-with", "icmp-port-unreachable"],
     ]
+    if kind in _AGENT_KINDS:
+        # Agent CLIs (Claude Code, Codex) don't honour HTTP_PROXY.  Use
+        # iptables NAT to transparently redirect all their outbound TCP to the
+        # proxy so it still gets logged & policy-checked.  DNS (UDP 53) must
+        # be allowed through so the target can resolve hostnames.
+        commands.extend([
+            ["iptables", "-t", "nat", "-F", "OUTPUT"],
+            ["iptables", "-t", "nat", "-A", "OUTPUT", "-p", "tcp",
+             "-m", "owner", "!", "--uid-owner", "0",
+             "!", "-d", "127.0.0.0/8",
+             "-j", "REDIRECT", "--to-port", str(PROXY_PORT)],
+            # Allow DNS through — the proxy logs the TCP connections, not DNS.
+            ["iptables", "-A", "OUTPUT", "-p", "udp", "--dport", "53", "-j", "ACCEPT"],
+        ])
+    commands.append(
+        ["iptables", "-A", "OUTPUT", "-j", "REJECT", "--reject-with", "icmp-port-unreachable"]
+    )
     for cmd in commands:
         subprocess.run(cmd, check=True)
 
+
+# ---------------------------------------------------------------------------
+# Privilege drop
+# ---------------------------------------------------------------------------
 
 def _drop_privileges() -> None:
     uid = int(os.environ.get("THE_LAB_SANDBOX_TARGET_UID", "1000"))
@@ -260,6 +432,64 @@ def _drop_privileges() -> None:
         pass
     os.setgid(gid)
     os.setuid(uid)
+
+
+def _prepare_agent_home() -> str | None:
+    """Copy the user's Claude/Codex config into a temp home accessible after
+    privilege-drop.  Returns the temp home path, or None if not needed."""
+    import tempfile
+
+    target_uid = int(os.environ.get("THE_LAB_SANDBOX_TARGET_UID", "1000"))
+    target_gid = int(os.environ.get("THE_LAB_SANDBOX_TARGET_GID", str(target_uid)))
+    real_home = os.environ.get("HOME", str(Path.home()))
+    print(f"[sandbox] preparing agent home from {real_home}", flush=True)
+
+    # Use a fresh temp dir every time — previous runs leave files owned by
+    # the namespace-mapped UID that we can't rmtree from the next invocation.
+    agent_home = tempfile.mkdtemp(prefix="_lab_agent_home_")
+
+    copy_dirs = [".claude", ".config"]
+    copy_files = [".claude.json", ".gitconfig", ".gitignore_global"]
+    copied = []
+
+    for d in copy_dirs:
+        src = os.path.join(real_home, d)
+        dst = os.path.join(agent_home, d)
+        if os.path.isdir(src):
+            try:
+                shutil.copytree(src, dst)
+                copied.append(d + "/")
+            except Exception as exc:
+                print(f"[sandbox] warning: failed to copy {d}/: {exc}", flush=True)
+
+    for f in copy_files:
+        src = os.path.join(real_home, f)
+        dst = os.path.join(agent_home, f)
+        if os.path.isfile(src):
+            try:
+                shutil.copy2(src, dst)
+                copied.append(f)
+            except Exception as exc:
+                print(f"[sandbox] warning: failed to copy {f}: {exc}", flush=True)
+
+    # chown+chmod everything so the target UID can read/write after privilege-drop.
+    for dirpath, dirnames, filenames in os.walk(agent_home):
+        os.chown(dirpath, target_uid, target_gid)
+        os.chmod(dirpath, 0o755)
+        for fn in filenames:
+            fp = os.path.join(dirpath, fn)
+            os.chown(fp, target_uid, target_gid)
+            os.chmod(fp, 0o644)
+
+    # Create a writable tmp dir — Claude Code uses /tmp/claude-<uid>/ for its
+    # workspace, but the host's /tmp is shared and the mapped UID can't write there.
+    agent_tmp = os.path.join(agent_home, "tmp")
+    os.makedirs(agent_tmp, exist_ok=True)
+    os.chown(agent_tmp, target_uid, target_gid)
+    os.chmod(agent_tmp, 0o1777)
+
+    print(f"[sandbox] copied to {agent_home}: {copied}", flush=True)
+    return agent_home
 
 
 def _target_env(api_scheme: str, api_port: int) -> dict[str, str]:
@@ -285,8 +515,65 @@ def _target_env(api_scheme: str, api_port: int) -> dict[str, str]:
     return env
 
 
+# ---------------------------------------------------------------------------
+# Executable accessibility fix
+# ---------------------------------------------------------------------------
+
+def _make_executable_accessible(command: list[str]) -> list[str]:
+    """Ensure the target executable is accessible after privilege-drop.
+
+    Inside rootlesskit the guest starts as (namespace) root but
+    _drop_privileges changes to the target UID.  If the original binary
+    lives under a directory like /home/ubuntu (mode 750), the dropped UID
+    cannot traverse it.  We fix this by resolving symlinks and, if the real
+    path is still inaccessible, copying it into /tmp.
+    """
+    exe = shutil.which(command[0]) or command[0]
+    try:
+        real = str(Path(exe).resolve())
+    except OSError:
+        return command
+
+    if os.access(real, os.X_OK):
+        uid = int(os.environ.get("THE_LAB_SANDBOX_TARGET_UID", "1000"))
+        parts = Path(real).parents
+        accessible = True
+        for p in parts:
+            try:
+                st = os.stat(p)
+                if st.st_uid != uid and not (st.st_mode & 0o001):
+                    accessible = False
+                    break
+            except OSError:
+                break
+        if accessible:
+            if command[0] != real:
+                return [real] + command[1:]
+            return command
+
+    import hashlib
+    name_hash = hashlib.sha256(real.encode()).hexdigest()[:12]
+    tmp_exe = f"/tmp/_lab_sandbox_bin_{name_hash}"
+    if not os.path.exists(tmp_exe):
+        shutil.copy2(real, tmp_exe)
+        os.chmod(tmp_exe, 0o755)
+    return [tmp_exe] + command[1:]
+
+
+# ---------------------------------------------------------------------------
+# Target process
+# ---------------------------------------------------------------------------
+
 async def _run_target(command: list[str], env: dict[str, str]) -> int:
-    proc = subprocess.Popen(command, env=env, preexec_fn=_drop_privileges)
+    command = _make_executable_accessible(command)
+    print(f"[sandbox] launching: {command[0]}", flush=True)
+    try:
+        proc = subprocess.Popen(command, env=env, preexec_fn=_drop_privileges)
+    except Exception as exc:
+        print(f"[sandbox] Popen failed: {exc}", flush=True)
+        raise
+    print(f"[sandbox] pid={proc.pid}, waiting…", flush=True)
+
     loop = asyncio.get_running_loop()
 
     def _forward(sig: int) -> None:
@@ -307,6 +594,10 @@ async def _run_target(command: list[str], env: dict[str, str]) -> int:
             await asyncio.to_thread(proc.wait)
 
 
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
 async def _main() -> int:
     parser = argparse.ArgumentParser(description="Run a command inside the_lab network sandbox")
     parser.add_argument("--repo", required=True)
@@ -326,13 +617,29 @@ async def _main() -> int:
     api_port = int(runtime.get("api_port", 8000))
     api_scheme = runtime.get("api_scheme", "http")
 
+    print(f"[sandbox] guest starting: kind={args.kind} label={args.label}", flush=True)
+    print(f"[sandbox] command: {command}", flush=True)
     proxy = ExplicitProxy(repo_dir, args.kind, args.label)
     proxy_server = await asyncio.start_server(proxy.handle, "127.0.0.1", PROXY_PORT)
+    print(f"[sandbox] proxy listening on 127.0.0.1:{PROXY_PORT}", flush=True)
     forward_server = await _start_forwarder(api_port, HOST_GATEWAY, api_port)
-    _run_iptables()
+    print(f"[sandbox] forwarder ready, applying iptables…", flush=True)
+    _run_iptables(args.kind)
+    print(f"[sandbox] iptables applied, launching target…", flush=True)
+
+    env = _target_env(api_scheme, api_port)
+    if args.kind in _AGENT_KINDS:
+        # Agent CLIs refuse to run as root (--dangerously-skip-permissions).
+        # Prepare a temp home with the user's config so the dropped-privilege
+        # process can access API keys, git config, etc.
+        agent_home = _prepare_agent_home()
+        if agent_home:
+            env["HOME"] = agent_home
+            env["TMPDIR"] = os.path.join(agent_home, "tmp")
+            print(f"[sandbox] agent HOME={agent_home}", flush=True)
 
     try:
-        return await _run_target(command, _target_env(api_scheme, api_port))
+        return await _run_target(command, env)
     finally:
         proxy_server.close()
         forward_server.close()

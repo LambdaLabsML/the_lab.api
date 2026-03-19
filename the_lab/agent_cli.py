@@ -21,17 +21,21 @@ def _find_repo_root(*paths: Path) -> Path | None:
 
 
 def _agent_binary(agent: str) -> str:
-    return "claude" if agent == "claude" else "codex"
+    name = "claude" if agent == "claude" else "codex"
+    # Resolve to absolute path so the binary is reachable inside the sandbox
+    # where PATH may differ from the host environment.
+    return shutil.which(name) or name
 
 
 def _build_launch_command(
     agent: str,
+    agent_bin: str,
     loop_prompt: str,
     model: str | None,
     no_skip_permissions: bool,
 ) -> list[str]:
     if agent == "claude":
-        cmd = ["claude"]
+        cmd = [agent_bin]
         if not no_skip_permissions:
             cmd.append("--dangerously-skip-permissions")
         if model:
@@ -39,7 +43,7 @@ def _build_launch_command(
         cmd.append(loop_prompt)
         return cmd
 
-    cmd = ["codex", "--yolo"]
+    cmd = [agent_bin, "--yolo"]
     if model:
         cmd.extend(["--model", model])
     cmd.append(loop_prompt)
@@ -82,6 +86,11 @@ def main():
         action="store_true",
         help="Launch the agent directly without the network sandbox",
     )
+    parser.add_argument(
+        "--repo",
+        help="Path to the git repository (must match the repo the server was started with). "
+             "Defaults to auto-detect from CWD.",
+    )
     args = parser.parse_args()
 
     prompt_path = Path(args.prompt_file)
@@ -90,7 +99,7 @@ def main():
         sys.exit(1)
 
     agent_bin = _agent_binary(args.agent)
-    if not shutil.which(agent_bin):
+    if not os.path.isfile(agent_bin):
         print(f"Error: '{agent_bin}' not found in PATH.", file=sys.stderr)
         sys.exit(1)
 
@@ -98,6 +107,7 @@ def main():
     loop_prompt = f"/loop {args.duration} {content}"
     cmd = _build_launch_command(
         args.agent,
+        agent_bin,
         loop_prompt,
         args.model,
         args.no_skip_permissions,
@@ -105,7 +115,13 @@ def main():
 
     env = dict(os.environ)
     if not args.no_sandbox:
-        repo_root = _find_repo_root(Path.cwd(), prompt_path.parent)
+        if args.repo:
+            repo_root = Path(args.repo).resolve()
+            if not (repo_root / ".git").exists():
+                print(f"Error: {repo_root} is not a git repository", file=sys.stderr)
+                sys.exit(1)
+        else:
+            repo_root = _find_repo_root(Path.cwd(), prompt_path.parent)
         if repo_root is None:
             print(
                 "Error: could not find the repo root for the sandboxed Claude launch. "
