@@ -158,30 +158,33 @@ export function DagView() {
     const colGap = Math.max(30, maxFanOut * ROUTING_SPACING + 20);
 
     // --- Column widths & x-positions ---
+    // User overrides only apply to columns with full stations.
+    // All-compact columns always collapse to COMPACT_W.
     const overrides = colWidthOverrides.value;
     const colWidth: Record<number, number> = {};
     for (let c = 0; c <= layout.maxDepth; c++) {
-      if (overrides[c] !== undefined) {
+      const nodesInCol = data.nodes.filter((n) => layout.depth[n.id] === c);
+      const hasFullStation = nodesInCol.some((n) => isImportant[n.id]);
+      if (!hasFullStation && effectiveCompactMode) {
+        colWidth[c] = COMPACT_W;
+      } else if (overrides[c] !== undefined) {
         colWidth[c] = Math.max(MIN_COL_WIDTH, overrides[c]);
       } else {
-        // In compact mode, columns with only dots can be narrower
-        const nodesInCol = data.nodes.filter((n) => layout.depth[n.id] === c);
-        const hasFullStation = nodesInCol.some((n) => !effectiveCompactMode || isImportant[n.id]);
-        colWidth[c] = hasFullStation ? DEFAULT_MAX_COL_WIDTH : COMPACT_W;
+        colWidth[c] = DEFAULT_MAX_COL_WIDTH;
       }
     }
+    const COMPACT_GAP = 12; // tighter gap between all-compact columns
     const colX: Record<number, number> = {};
     let cx = 16;
     if (reversed) {
-      // Newest (deepest) on the left
       for (let c = layout.maxDepth; c >= 0; c--) {
         colX[c] = cx;
-        cx += (colWidth[c] || 0) + colGap;
+        cx += (colWidth[c] || 0) + (colWidth[c] <= COMPACT_W ? COMPACT_GAP : colGap);
       }
     } else {
       for (let c = 0; c <= layout.maxDepth; c++) {
         colX[c] = cx;
-        cx += (colWidth[c] || 0) + colGap;
+        cx += (colWidth[c] || 0) + (colWidth[c] <= COMPACT_W ? COMPACT_GAP : colGap);
       }
     }
     const totalW = cx + 16;
