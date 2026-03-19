@@ -7,6 +7,7 @@ import "./styles/subway.css";
 import "./styles/detail.css";
 import "./styles/log.css";
 import "./styles/api.css";
+import "./styles/sandbox.css";
 import "./styles/suggest.css";
 import "./styles/tags.css";
 

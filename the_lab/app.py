@@ -20,6 +20,12 @@ from .git_ops import (
     get_current_branch,
     get_default_branch,
 )
+from .sandbox import (
+    list_observed_accesses,
+    load_sandbox_config,
+    save_sandbox_config,
+    sandbox_capabilities,
+)
 from .store import Store
 from .runner import ExperimentRunner
 
@@ -110,6 +116,12 @@ class AbandonRequest(BaseModel):
 
 class ReopenRequest(BaseModel):
     reason: str
+
+
+class SandboxConfigRequest(BaseModel):
+    enabled: bool = True
+    allowlist: list[str] = []
+    denylist: list[str] = []
 
 
 # --- Script guard ---
@@ -1303,6 +1315,37 @@ def get_dashboard_config():
         except (json.JSONDecodeError, OSError):
             pass
     return {}
+
+
+@app.get("/api/v1/sandbox")
+def get_sandbox_state():
+    config = load_sandbox_config(REPO_DIR)
+    capabilities = sandbox_capabilities()
+    observed = list_observed_accesses(REPO_DIR)
+    return {
+        **config,
+        "capabilities": capabilities,
+        "observed": observed,
+    }
+
+
+@app.put("/api/v1/sandbox")
+def update_sandbox_state(req: SandboxConfigRequest):
+    config = save_sandbox_config(
+        REPO_DIR,
+        {
+            "enabled": req.enabled,
+            "allowlist": req.allowlist,
+            "denylist": req.denylist,
+        },
+    )
+    capabilities = sandbox_capabilities()
+    observed = list_observed_accesses(REPO_DIR)
+    return {
+        **config,
+        "capabilities": capabilities,
+        "observed": observed,
+    }
 
 
 # --- SPA Fallback (must be last) ---

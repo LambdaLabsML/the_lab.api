@@ -12,6 +12,7 @@ import type {
   Experiment,
   ProgressResponse,
   OpenAPISpec,
+  SandboxState,
   SuggestIdeaRequest,
 } from "../lib/types";
 
@@ -136,4 +137,26 @@ export async function renameTag(
 /** GET /openapi.json */
 export async function getOpenApiSpec(): Promise<OpenAPISpec> {
   return fetchJson<OpenAPISpec>("/openapi.json");
+}
+
+// ---------------------------------------------------------------------------
+// Sandbox
+// ---------------------------------------------------------------------------
+
+/** GET /api/v1/sandbox */
+export async function getSandboxState(): Promise<SandboxState> {
+  return fetchJson<SandboxState>("/api/v1/sandbox");
+}
+
+/** PUT /api/v1/sandbox */
+export async function updateSandboxState(req: {
+  enabled: boolean;
+  allowlist: string[];
+  denylist: string[];
+}): Promise<SandboxState> {
+  return fetchJson<SandboxState>("/api/v1/sandbox", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+  });
 }

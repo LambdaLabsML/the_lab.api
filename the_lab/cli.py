@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from .sandbox import save_runtime_info
+
 
 def _find_dashboard_dir() -> Path | None:
     """Find the dashboard/ source directory (for Vite dev server)."""
@@ -132,6 +134,15 @@ def main():
         scheme = "https"
     else:
         scheme = "http"
+
+    save_runtime_info(
+        repo_path,
+        {
+            "api_scheme": scheme,
+            "api_host": args.host,
+            "api_port": args.port,
+        },
+    )
 
     if args.dev:
         import asyncio

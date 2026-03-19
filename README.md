@@ -81,6 +81,7 @@ Or use `the-lab-agent` for a one-liner:
 the-lab-agent LOOP.md              # defaults to 15m loop interval
 the-lab-agent LOOP.md -d 5m        # custom interval
 the-lab-agent LOOP.md --model opus # pick a model
+the-lab-agent LOOP.md --agent codex # launch Codex with --yolo instead
 ```
 
 **Codex:**
@@ -296,6 +297,30 @@ POST /experiments/<id>/start  {"timeout": 1200}
 ```
 
 If the experiment exceeds the timeout, it is killed (SIGTERM → SIGKILL) and marked as failed.
+
+---
+
+## Network Sandbox
+
+Outbound network sandboxing is **enabled by default** for:
+- experiments started through the API
+- Claude or Codex launched through `the-lab-agent`
+
+The sandbox is **network-only** — local file reads/writes still work normally with the process's usual OS permissions. Experiments still run from their worktree directory, and `.the_lab/` remains writable on disk.
+
+### Default behavior
+
+- **Default deny** for outbound internet access
+- **Built-in allowlist** for package installation hosts used by `uv`, `pip`, and `apt-get` (derived from common defaults plus your local pip/apt config where possible)
+- **User allowlist / denylist** editable live from the dashboard's **Sandbox** tab
+- **Observed access log** ("gray list") that records requested destinations and whether they were allowed or blocked
+
+Changes in the Sandbox tab apply automatically to new outbound connections from already-running sandboxed processes.
+
+### Notes
+
+- Manual `claude` / `codex` launches are not intercepted; use `the-lab-agent` if you want the agent session sandboxed by The Lab.
+- The sandbox configuration and observed access log live under `.the_lab/sandbox/`.
 
 ---
 

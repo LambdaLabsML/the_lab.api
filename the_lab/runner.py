@@ -18,6 +18,7 @@ from .git_ops import (
     remove_worktree,
     resolve_branch_commit,
 )
+from .sandbox import build_sandbox_command, load_sandbox_config, sandbox_capabilities
 from .store import Store
 
 
@@ -244,11 +245,26 @@ class ExperimentRunner:
             "THE_LAB_PROGRESS": str(progress_path),
             "THE_LAB_METRICS": str(metrics_path),
         }
+        command = ["bash", str(script_path)]
+        sandbox_config = load_sandbox_config(self._store.repo_dir)
+        if sandbox_config.get("enabled", True):
+            capabilities = sandbox_capabilities()
+            if not capabilities.get("available"):
+                details = capabilities.get("details") or "sandbox runtime unavailable"
+                return {"status": "error", "reason": f"sandbox is enabled but unavailable: {details}"}
+            env["THE_LAB_SANDBOX_TARGET_UID"] = str(os.getuid())
+            env["THE_LAB_SANDBOX_TARGET_GID"] = str(os.getgid())
+            command = build_sandbox_command(
+                self._store.repo_dir,
+                "experiment",
+                f"exp-{exp_id}",
+                command,
+            )
 
         # Write stdout/stderr directly to the log file so it survives server restarts.
         log_file = open(log_path, "w")
         process = await asyncio.create_subprocess_exec(
-            "bash", str(script_path),
+            *command,
             stdout=log_file,
             stderr=asyncio.subprocess.STDOUT,
             cwd=run_cwd,

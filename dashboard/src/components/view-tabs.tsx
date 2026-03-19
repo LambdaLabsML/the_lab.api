@@ -5,6 +5,7 @@ const TABS = [
   { key: "timeline", label: "Timeline", path: "/timeline" },
   { key: "log", label: "Log", path: "/log" },
   { key: "api", label: "API", path: "/api" },
+  { key: "sandbox", label: "Sandbox", path: "/sandbox" },
 ] as const;
 
 export function ViewTabs() {

@@ -150,6 +150,36 @@ export interface SuggestIdeaRequest {
   resources?: { url: string; label: string }[];
 }
 
+export interface SandboxCapabilities {
+  available: boolean;
+  missing: string[];
+  details: string;
+}
+
+export interface SandboxObservedEntry {
+  host: string;
+  port: number;
+  kind: string;
+  ips: string[];
+  labels: string[];
+  attempts: number;
+  allowed: number;
+  blocked: number;
+  first_seen?: string;
+  last_seen?: string;
+  top_reason: string;
+}
+
+export interface SandboxState {
+  enabled: boolean;
+  mode: string;
+  allowlist: string[];
+  denylist: string[];
+  builtin_allowlist: string[];
+  capabilities: SandboxCapabilities;
+  observed: SandboxObservedEntry[];
+}
+
 /** Full idea detail (single idea endpoint with notes + experiments) */
 export type IdeaDetail = IdeaNode;
 
