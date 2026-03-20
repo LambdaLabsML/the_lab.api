@@ -720,23 +720,10 @@ async def _main() -> int:
             env["TMPDIR"] = os.path.join(agent_home, "tmp")
 
         # Claude Code hardcodes /tmp/claude-<uid>/ for its Bash sandbox.
-        # Inside rootlesskit the host UID maps to namespace root, so entries
-        # from non-sandboxed sessions are owned by namespace UID 0 and
-        # inaccessible after privilege-drop.  Recursively chown everything
-        # we can to the target UID.  Files from previous sandbox runs are
-        # already owned by the same mapped UID and will be silently skipped.
-        claude_tmp = f"/tmp/claude-{target_uid}"
-        os.makedirs(claude_tmp, exist_ok=True)
-        for dirpath, dirnames, filenames in os.walk(claude_tmp):
-            try:
-                os.chown(dirpath, target_uid, target_gid)
-            except OSError:
-                pass
-            for fn in filenames:
-                try:
-                    os.chown(os.path.join(dirpath, fn), target_uid, target_gid)
-                except OSError:
-                    pass
+        # Instead of chowning the host's /tmp/claude-<uid>/ (which breaks
+        # the host user's Claude sessions), point TMPDIR at the agent home
+        # so Claude creates its workspace there instead.
+        # TMPDIR is already set above to agent_home/tmp.
 
     try:
         return await _run_target(command, env)
