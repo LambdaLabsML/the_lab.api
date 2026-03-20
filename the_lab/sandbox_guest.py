@@ -511,6 +511,64 @@ def _target_env(api_scheme: str, api_port: int) -> dict[str, str]:
 # Executable accessibility fix
 # ---------------------------------------------------------------------------
 
+def _is_path_accessible(path: str, uid: int) -> bool:
+    """Check whether *path* is traversable by *uid* after privilege-drop."""
+    try:
+        for p in Path(path).resolve().parents:
+            st = os.stat(p)
+            if st.st_uid != uid and not (st.st_mode & 0o001):
+                return False
+    except OSError:
+        pass
+    return True
+
+
+def _fix_path_for_sandbox(env: dict[str, str]) -> None:
+    """Copy binaries from inaccessible PATH dirs to a temp bin directory.
+
+    After privilege-drop, PATH entries under e.g. /home/ubuntu (mode 750)
+    are unreachable.  We copy the actual binaries into /tmp/_lab_sandbox_path/
+    and prepend it to PATH.
+    """
+    uid = int(os.environ.get("THE_LAB_SANDBOX_TARGET_UID", "1000"))
+    target_gid = int(os.environ.get("THE_LAB_SANDBOX_TARGET_GID", str(uid)))
+    sandbox_bin = "/tmp/_lab_sandbox_path"
+    os.makedirs(sandbox_bin, exist_ok=True)
+
+    copied = False
+    for entry in env.get("PATH", "").split(":"):
+        if not entry or not os.path.isdir(entry):
+            continue
+        if _is_path_accessible(entry, uid):
+            continue
+        # This PATH entry is inaccessible — copy its executables.
+        try:
+            for name in os.listdir(entry):
+                src = os.path.join(entry, name)
+                dst = os.path.join(sandbox_bin, name)
+                if os.path.isfile(src) and os.access(src, os.X_OK) and not os.path.exists(dst):
+                    try:
+                        shutil.copy2(src, dst)
+                        os.chmod(dst, 0o755)
+                        copied = True
+                    except OSError:
+                        pass
+        except OSError:
+            pass
+
+    if copied:
+        os.chown(sandbox_bin, uid, target_gid)
+        for fn in os.listdir(sandbox_bin):
+            try:
+                os.chown(os.path.join(sandbox_bin, fn), uid, target_gid)
+            except OSError:
+                pass
+    # Always prepend if the sandbox bin dir has any executables (they may
+    # have been copied by a previous run).
+    if os.path.isdir(sandbox_bin) and os.listdir(sandbox_bin):
+        env["PATH"] = sandbox_bin + ":" + env.get("PATH", "")
+
+
 def _make_executable_accessible(command: list[str]) -> list[str]:
     """Ensure the target executable is accessible after privilege-drop.
 
@@ -609,10 +667,50 @@ async def _main() -> int:
     _run_iptables(args.kind)
 
     env = _target_env(api_scheme, api_port)
-    if args.kind in _AGENT_KINDS:
-        target_uid = int(os.environ.get("THE_LAB_SANDBOX_TARGET_UID", "1000"))
-        target_gid = int(os.environ.get("THE_LAB_SANDBOX_TARGET_GID", str(target_uid)))
 
+    # Experiments run in isolated worktrees that need write access after
+    # privilege-drop.  Agent kinds use the main repo — DON'T chown that
+    # or the host user loses access to the entire repo.
+    target_uid = int(os.environ.get("THE_LAB_SANDBOX_TARGET_UID", "1000"))
+    target_gid = int(os.environ.get("THE_LAB_SANDBOX_TARGET_GID", str(target_uid)))
+    if args.kind not in _AGENT_KINDS:
+        cwd = os.getcwd()
+        # Remove .venv symlinks — they point to the shared venv which is
+        # read-only after privilege-drop.  Let `uv sync` in the experiment
+        # script create a fresh writable .venv.
+        for entry in os.listdir(cwd):
+            p = os.path.join(cwd, entry)
+            if os.path.islink(p) and entry.startswith(".venv"):
+                os.unlink(p)
+
+        # Make all directories world-writable so the dropped-privilege
+        # process can create files (e.g. sed -i, uv sync).  Only touches
+        # directory inodes — much faster than chowning every file on NFS.
+        for dirpath, dirnames, filenames in os.walk(cwd):
+            try:
+                os.chmod(dirpath, 0o777)
+            except OSError:
+                pass
+
+    # Copy binaries from inaccessible PATH entries (e.g. /home/ubuntu/.local/bin)
+    # to a world-readable temp dir so the dropped-privilege process can run them.
+    _fix_path_for_sandbox(env)
+
+    # /home/ubuntu is mode 750 and inaccessible after privilege-drop.
+    # Tools like uv, pip, npm need writable cache dirs under HOME.
+    # Create a minimal writable home for all sandbox kinds.
+    import tempfile
+    sandbox_home = tempfile.mkdtemp(prefix="_lab_sandbox_home_")
+    os.chown(sandbox_home, target_uid, target_gid)
+    os.chmod(sandbox_home, 0o755)
+    env["HOME"] = sandbox_home
+    # Point tool-specific cache dirs at the writable sandbox home so they
+    # don't try to write under the inaccessible /home/ubuntu/.cache/.
+    env["XDG_CACHE_HOME"] = os.path.join(sandbox_home, ".cache")
+    env["HF_HOME"] = os.path.join(sandbox_home, ".cache", "huggingface")
+    env["UV_CACHE_DIR"] = os.path.join(sandbox_home, ".cache", "uv")
+
+    if args.kind in _AGENT_KINDS:
         # Agent CLIs refuse to run as root (--dangerously-skip-permissions).
         # Prepare a temp home with the user's config so the dropped-privilege
         # process can access API keys, git config, etc.
@@ -622,15 +720,23 @@ async def _main() -> int:
             env["TMPDIR"] = os.path.join(agent_home, "tmp")
 
         # Claude Code hardcodes /tmp/claude-<uid>/ for its Bash sandbox.
-        # Inside rootlesskit the host UID maps to namespace root, so the
-        # directory (if it exists) is owned by UID 0 and inaccessible after
-        # privilege-drop.  Re-create it for the target UID.  This touches
-        # the host's /tmp but Claude Code recreates the dir on next launch.
+        # Inside rootlesskit the host UID maps to namespace root, so entries
+        # from non-sandboxed sessions are owned by namespace UID 0 and
+        # inaccessible after privilege-drop.  Recursively chown everything
+        # we can to the target UID.  Files from previous sandbox runs are
+        # already owned by the same mapped UID and will be silently skipped.
         claude_tmp = f"/tmp/claude-{target_uid}"
-        shutil.rmtree(claude_tmp, ignore_errors=True)
         os.makedirs(claude_tmp, exist_ok=True)
-        os.chown(claude_tmp, target_uid, target_gid)
-        os.chmod(claude_tmp, 0o700)
+        for dirpath, dirnames, filenames in os.walk(claude_tmp):
+            try:
+                os.chown(dirpath, target_uid, target_gid)
+            except OSError:
+                pass
+            for fn in filenames:
+                try:
+                    os.chown(os.path.join(dirpath, fn), target_uid, target_gid)
+                except OSError:
+                    pass
 
     try:
         return await _run_target(command, env)

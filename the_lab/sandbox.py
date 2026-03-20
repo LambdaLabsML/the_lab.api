@@ -22,16 +22,17 @@ DEFAULT_PACKAGE_HOSTS = [
 
 # Hosts that agent CLIs (Claude Code, Codex) need to function.
 DEFAULT_AGENT_HOSTS = [
-    "api.anthropic.com",
-    "mcp-proxy.anthropic.com",
-    "platform.claude.com",
+    "*.anthropic.com",
     "*.claude.ai",
-    "api.openai.com",
-    "sentry.io",
+    "platform.claude.com",
+    "*.openai.com",
+    "*.googleapis.com",
+    "huggingface.co",
+    "*.huggingface.co",
+    "*.hf.co",
     "*.sentry.io",
-    "statsig.anthropic.com",
     "*.datadoghq.com",
-    "storage.googleapis.com",
+    "sentry.io",
 ]
 
 REQUIRED_BINARIES = [
