@@ -12,3 +12,5 @@ wheels/
 
 # Dashboard dev dependencies
 dashboard/node_modules/
+
+.env

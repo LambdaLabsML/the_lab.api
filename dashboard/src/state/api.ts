@@ -137,3 +137,60 @@ export async function renameTag(
 export async function getOpenApiSpec(): Promise<OpenAPISpec> {
   return fetchJson<OpenAPISpec>("/openapi.json");
 }
+
+// ---------------------------------------------------------------------------
+// Chat
+// ---------------------------------------------------------------------------
+
+/** GET /api/v1/chat/status */
+export async function getChatStatus(): Promise<{ available: boolean }> {
+  return fetchJson<{ available: boolean }>("/api/v1/chat/status");
+}
+
+/**
+ * POST /api/v1/chat — streams Claude's response via SSE.
+ * Calls `onText` for each text chunk and `onDone` when finished.
+ */
+export async function streamChat(
+  messages: Array<{ role: string; content: string }>,
+  onText: (text: string) => void,
+  onDone: () => void,
+  onError: (err: string) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await fetch("/api/v1/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ messages }),
+    signal,
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    onError(`HTTP ${res.status}: ${body}`);
+    return;
+  }
+  const reader = res.body?.getReader();
+  if (!reader) {
+    onError("No response body");
+    return;
+  }
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      if (!line.startsWith("data: ")) continue;
+      try {
+        const evt = JSON.parse(line.slice(6));
+        if (evt.type === "text") onText(evt.text);
+        else if (evt.type === "done") onDone();
+        else if (evt.type === "error") onError(evt.error);
+      } catch { /* skip malformed lines */ }
+    }
+  }
+  onDone();
+}

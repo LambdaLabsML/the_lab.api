@@ -123,6 +123,11 @@ def main():
         print(f"Error: {repo_path} is not a git repository", file=sys.stderr)
         sys.exit(1)
 
+    # Load .env from the repo dir, then from the package dir (repo takes precedence)
+    from dotenv import load_dotenv
+    load_dotenv(repo_path / ".env")
+    load_dotenv(Path(__file__).parent.parent / ".env")
+
     os.environ["THE_LAB_REPO"] = str(repo_path)
 
     ssl_kwargs = {}

@@ -3,6 +3,7 @@ import { effect } from "@preact/signals";
 import { Topbar } from "./components/topbar";
 import { ChartPanel } from "./components/chart-panel/chart-panel";
 import { SuggestPanel } from "./components/suggest-panel";
+import { ChatPanel } from "./components/chat-panel";
 import { ViewTabs } from "./components/view-tabs";
 import { DagView } from "./views/dag-view";
 import { TimelineView } from "./views/timeline-view";
@@ -140,6 +141,7 @@ export function App() {
         {view === "api" && <ApiView />}
         {view !== "api" && <DetailPanel />}
       </div>
+      <ChatPanel />
     </>
   );
 }

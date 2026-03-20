@@ -8,8 +8,10 @@ version = "0.1.0"
 description = "Experiment management API for AI-driven research loops"
 requires-python = ">=3.10"
 dependencies = [
+    "anthropic>=0.52.0",
     "fastapi>=0.135.1",
     "httpx>=0.28.1",
+    "python-dotenv>=1.0.0",
     "uvicorn[standard]>=0.42.0",
     "watchfiles>=1.1.1",
 ]

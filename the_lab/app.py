@@ -2,14 +2,17 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 
 from .git_ops import (
     GitError,
@@ -1318,6 +1321,194 @@ def get_chart_data():
                         "idea_status": idea["status"],
                     })
     return {"experiments": completed_exps, "running": running_progress}
+
+
+# --- Chat ---
+
+_INTERNAL_META_KEYS = frozenset(("git_branch", "git_commit", "worktree"))
+
+
+def _build_chat_context() -> str:
+    """Serialize the full project state into structured text for an LLM."""
+    all_ideas = store.list_ideas()
+    all_exps = store.list_all_experiments()
+
+    exps_by_idea: dict[int, list[dict]] = {}
+    for exp in all_exps:
+        exps_by_idea.setdefault(exp["idea_id"], []).append(exp)
+
+    # Discover all metric keys and their inferred directions
+    all_metric_keys: set[str] = set()
+    for exp in all_exps:
+        if exp.get("metrics"):
+            all_metric_keys.update(exp["metrics"].keys())
+
+    lines: list[str] = []
+
+    # Header with project stats
+    n_ideas = len(all_ideas)
+    n_exps = len(all_exps)
+    n_completed = sum(1 for e in all_exps if e.get("status") == "completed")
+    lines.append(f"# Project State: {n_ideas} ideas, {n_exps} experiments ({n_completed} completed)")
+    lines.append("")
+
+    if all_metric_keys:
+        lines.append("## Metric Directions")
+        for key in sorted(all_metric_keys):
+            lines.append(f"  {key}: {metric_direction(key)}")
+        lines.append("")
+
+    for idea in all_ideas:
+        idea_id = idea["id"]
+        status = idea.get("status", "unknown")
+        desc = idea.get("description", "")
+        parents = idea.get("parent_ids", [])
+        parent_str = ", ".join(f"#{p}" for p in parents) if parents else "root"
+        created = (idea.get("created_at") or "")[:16]
+
+        lines.append(f"## Idea #{idea_id} [{status}] \"{desc}\"")
+        lines.append(f"  Parents: {parent_str} | Source: {idea.get('source', 'agent')} | Created: {created}")
+
+        conclusion = idea.get("conclusion")
+        if conclusion:
+            lines.append(f"  Conclusion: \"{conclusion}\"")
+
+        notes = store.get_notes(idea_id, levels=Store.ALL_LEVELS)
+        if notes:
+            lines.append("  Notes:")
+            for note in notes:
+                ts = (note.get("created_at") or "")[:16]
+                level = note.get("level", "observation")
+                lines.append(f"    [{level} {ts}] \"{note['text']}\"")
+
+        idea_exps = exps_by_idea.get(idea_id, [])
+        idea_exps.sort(key=lambda e: e.get("created_at", ""))
+        if idea_exps:
+            lines.append("  Experiments:")
+            for exp in idea_exps:
+                exp_status = exp.get("status", "unknown")
+                exp_desc = exp.get("description", "")
+                line = f"    #{exp['id']} [{exp_status}] \"{exp_desc}\""
+
+                metrics = exp.get("metrics")
+                if metrics:
+                    metric_parts = [f"{k}: {v}" for k, v in metrics.items() if v is not None]
+                    if metric_parts:
+                        line += f"\n      metrics: {{{', '.join(metric_parts)}}}"
+
+                meta = exp.get("meta") or {}
+                public_meta = {k: v for k, v in meta.items() if k not in _INTERNAL_META_KEYS}
+                if public_meta:
+                    meta_parts = [f"{k}: {v}" for k, v in public_meta.items()]
+                    line += f"\n      meta: {{{', '.join(meta_parts)}}}"
+
+                tags = exp.get("tags") or []
+                runtime = exp.get("runtime")
+                extra = []
+                if tags:
+                    extra.append(f"tags: [{', '.join(tags)}]")
+                if runtime:
+                    extra.append(f"runtime: {runtime}")
+                if exp.get("error"):
+                    extra.append(f"error: \"{exp['error']}\"")
+                if extra:
+                    line += f"\n      {' | '.join(extra)}"
+
+                lines.append(line)
+
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+_CHAT_SYSTEM_PROMPT = """\
+You are a research assistant for a project tracked in The Lab, an experiment \
+management system. Below is the complete project state.
+
+**Data schema:**
+- **Ideas** form a DAG (directed acyclic graph). Each has an ID, description, \
+status (active/concluded/abandoned/suggested), optional conclusion, and parent IDs.
+- **Experiments** belong to ideas. Each has an ID, description, status, \
+metrics (arbitrary key-value pairs of results), meta (configuration/hyperparameters), \
+tags, and timing info.
+- **Notes** are journal entries on ideas with levels: insight (key findings), \
+milestone (progress), observation (general), debug (low-level).
+
+**Metric direction convention:**
+Metrics with names containing "loss", "bpb", "perplexity", "error", "mse", \
+"mae", "rmse", "cost", "latency", "time", "bytes", "regret", "cer", "wer", \
+"fid", "distance", or "penalty" should be MINIMIZED (lower is better). \
+All other metrics should be MAXIMIZED (higher is better).
+
+**Instructions:**
+- Always cite specific idea and experiment IDs (e.g. "Idea #7, Experiment #38").
+- When comparing experiments, highlight exactly what changed in meta/configuration \
+and the resulting metric differences.
+- Be precise with numbers — quote actual metric values.
+- If the data doesn't contain enough information to answer, say so.
+"""
+
+
+class ChatRequest(BaseModel):
+    messages: list[dict]
+
+
+@app.get("/api/v1/chat/status")
+def chat_status():
+    """Check whether the chat feature is available.
+
+    Returns ``{"available": true}`` when an ``ANTHROPIC_API_KEY`` environment
+    variable is set, ``{"available": false}`` otherwise. The dashboard uses
+    this to decide whether to show the chat button.
+    """
+    return {"available": bool(os.environ.get("ANTHROPIC_API_KEY"))}
+
+
+@app.post("/api/v1/chat")
+async def chat(req: ChatRequest):
+    """Ask a question about the research project using Claude.
+
+    Accepts a conversation history as ``messages`` (list of
+    ``{role, content}`` dicts). The server gathers the full project state
+    from the store, sends it to Claude as context, and streams the response
+    back as Server-Sent Events.
+
+    Example:
+        POST /api/v1/chat {"messages": [{"role": "user", "content": "What is the best result so far?"}]}
+        -> text/event-stream: data: {"type":"text","text":"The best..."}
+    """
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise HTTPException(501, "ANTHROPIC_API_KEY not set")
+
+    try:
+        import anthropic
+    except ImportError:
+        raise HTTPException(501, "anthropic package not installed")
+
+    context = _build_chat_context()
+    system = _CHAT_SYSTEM_PROMPT + "\n---\n\n" + context
+
+    client = anthropic.Anthropic(api_key=api_key)
+
+    async def _stream():
+        try:
+            with client.messages.stream(
+                model="claude-sonnet-4-20250514",
+                max_tokens=4096,
+                system=system,
+                messages=req.messages,
+            ) as stream:
+                for text in stream.text_stream:
+                    payload = json.dumps({"type": "text", "text": text})
+                    yield f"data: {payload}\n\n"
+            yield "data: {\"type\": \"done\"}\n\n"
+        except Exception as e:
+            logger.exception("Chat stream error")
+            err = json.dumps({"type": "error", "error": str(e)})
+            yield f"data: {err}\n\n"
+
+    return StreamingResponse(_stream(), media_type="text/event-stream")
 
 
 # --- SPA Fallback (must be last) ---

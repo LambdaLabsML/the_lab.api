@@ -9,5 +9,6 @@ import "./styles/log.css";
 import "./styles/api.css";
 import "./styles/suggest.css";
 import "./styles/tags.css";
+import "./styles/chat.css";
 
 render(<App />, document.getElementById("app")!);
