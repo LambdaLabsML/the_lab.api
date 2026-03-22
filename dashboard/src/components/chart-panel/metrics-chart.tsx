@@ -1,14 +1,5 @@
 import { useRef, useEffect } from "preact/hooks";
-import {
-  Chart,
-  LineController,
-  LineElement,
-  PointElement,
-  LinearScale,
-  CategoryScale,
-  Tooltip,
-  Filler,
-} from "chart.js";
+import { Chart } from "chart.js/auto";
 import { allExperiments, allIdeas, currentLayout, highlightedIdea } from "../../state/signals";
 import {
   selectedMetric,
@@ -24,16 +15,6 @@ import {
 } from "../../state/settings";
 import { buildChartData } from "../../lib/chart-data";
 import type { ChartDataResult } from "../../lib/chart-data";
-
-Chart.register(
-  LineController,
-  LineElement,
-  PointElement,
-  LinearScale,
-  CategoryScale,
-  Tooltip,
-  Filler
-);
 
 export function MetricsChart() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -57,6 +38,15 @@ export function MetricsChart() {
   if (!showConcluded.value) hiddenStatuses.add("concluded");
   if (!showRunning.value) { hiddenStatuses.add("active"); hiddenStatuses.add("suggested"); }
 
+  // Destroy chart only on unmount
+  useEffect(() => {
+    return () => {
+      chartRef.current?.destroy();
+      chartRef.current = null;
+    };
+  }, []);
+
+  // Create or update chart when data/settings change
   useEffect(() => {
     if (!metric || !canvasRef.current) return;
 
@@ -75,13 +65,14 @@ export function MetricsChart() {
 
     if (!chartData) return;
 
-    // Size the container for horizontal scroll
+    // Size the container for horizontal scroll, capped to avoid
+    // exceeding mobile browser canvas size limits (~4096px).
     if (innerRef.current) {
       const parent = innerRef.current.parentElement;
-      const minW = Math.max(
-        parent ? parent.clientWidth : 400,
-        chartData.labels.length * 50
-      );
+      const parentW = parent ? parent.clientWidth : 400;
+      const maxCanvasW = 4000;
+      const idealW = chartData.labels.length * 50;
+      const minW = Math.max(parentW, Math.min(idealW, maxCanvasW));
       innerRef.current.style.width = minW + "px";
     }
 
@@ -108,11 +99,6 @@ export function MetricsChart() {
     }
 
     chartRef.current = createChart(canvasRef.current, metric, chartData);
-
-    return () => {
-      chartRef.current?.destroy();
-      chartRef.current = null;
-    };
   }, [metric, mode, impOnly, tags, tagMode, experiments, reversed, showAbandoned.value, showConcluded.value, showRunning.value]);
 
   // Handle highlight changes separately (just update point sizes)
@@ -208,7 +194,7 @@ function createChart(
               size: 10,
               family: "SF Mono, Fira Code, Consolas, monospace",
             },
-            autoSkip: false,
+            autoSkip: true,
           },
           grid: { color: "#21262d" },
         },

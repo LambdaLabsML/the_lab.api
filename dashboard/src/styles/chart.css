@@ -36,6 +36,8 @@
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+  max-height: 80px;
+  overflow-y: auto;
 }
 #metric-selector select {
   background: #161b22; color: #c9d1d9; border: 1px solid #30363d;

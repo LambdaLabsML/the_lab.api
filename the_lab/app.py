@@ -1295,6 +1295,10 @@ def get_graph():
 def get_chart_data():
     """Get all data for the dashboard metrics chart in one request.
 
+    .. note::
+       Non-numeric metric values (dicts, strings) are stripped from the
+       ``metrics`` object so the dashboard chart receives only plottable data.
+
     Returns completed experiments (with their final metrics) and running
     experiments (with their latest progress data) in a single response,
     avoiding the N+1 pattern of fetching ideas then experiments per idea.
@@ -1312,6 +1316,11 @@ def get_chart_data():
     running_progress = []
     # Build idea lookup once
     idea_cache: dict[int, dict] = {}
+
+    def _numeric_metrics(metrics: dict) -> dict:
+        """Strip non-numeric values so the dashboard chart never gets objects/strings."""
+        return {k: v for k, v in metrics.items() if isinstance(v, (int, float))}
+
     for exp in all_exps:
         idea_id = exp["idea_id"]
         if idea_id not in idea_cache:
@@ -1323,6 +1332,7 @@ def get_chart_data():
         if exp.get("status") == "completed" and exp.get("metrics"):
             completed_exps.append({
                 **exp,
+                "metrics": _numeric_metrics(exp["metrics"]),
                 "idea_description": idea["description"],
                 "idea_status": idea["status"],
             })
@@ -1337,7 +1347,7 @@ def get_chart_data():
             if progress and len(progress) > 0:
                 running_progress.append({
                     **exp,
-                    "metrics": progress,
+                    "metrics": _numeric_metrics(progress) if isinstance(progress, dict) else progress,
                     "_running": True,
                     "idea_description": idea["description"],
                     "idea_status": idea["status"],
@@ -1400,6 +1410,46 @@ def update_sandbox_state(req: SandboxConfigRequest):
         "capabilities": capabilities,
         "observed": observed,
     }
+
+
+# --- Debug chart test page ---
+
+_CHART_TEST_HTML = """\
+<!DOCTYPE html>
+<html><head><title>Chart Test</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+</head><body style="background:#0d1117;color:#c9d1d9;font-family:monospace;padding:20px">
+<h3>Chart.js Test</h3>
+<div id="status">Loading chart-data...</div>
+<div style="height:300px;background:#161b22;border:1px solid #30363d;padding:10px">
+  <canvas id="test-chart"></canvas>
+</div>
+<script>
+fetch('/api/v1/chart-data').then(r=>r.json()).then(d=>{
+  const exps=d.experiments.filter(e=>e.metrics&&e.metrics.accuracy_per_mtoken!==undefined);
+  exps.sort((a,b)=>(a.finished_at||'').localeCompare(b.finished_at||''));
+  document.getElementById('status').textContent=
+    'Loaded '+exps.length+' experiments with accuracy_per_mtoken';
+  new Chart(document.getElementById('test-chart'),{
+    type:'line',
+    data:{
+      labels:exps.map(e=>'exp/'+e.id),
+      datasets:[{label:'accuracy_per_mtoken',
+        data:exps.map(e=>e.metrics.accuracy_per_mtoken),
+        borderColor:'#58a6ff',pointRadius:4,pointBackgroundColor:'#58a6ff',tension:0}]
+    },
+    options:{responsive:true,maintainAspectRatio:false,
+      scales:{y:{ticks:{color:'#8b949e'}},x:{ticks:{color:'#8b949e',maxRotation:0,autoSkip:true}}}}
+  });
+}).catch(e=>{document.getElementById('status').textContent='ERROR: '+e.message});
+</script></body></html>
+"""
+
+
+@app.get("/debug/chart-test", response_class=HTMLResponse, include_in_schema=False)
+def chart_test_page():
+    """Minimal Chart.js test page — for debugging chart rendering issues."""
+    return _CHART_TEST_HTML
 
 
 # --- SPA Fallback (must be last) ---
