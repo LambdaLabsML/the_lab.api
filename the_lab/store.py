@@ -284,10 +284,7 @@ class Store:
         return exp
 
     def get_experiment(self, exp_id: int) -> dict | None:
-        exp = self._experiments.get(exp_id)
-        if exp is None:
-            return None
-        return _enrich_experiment(exp)
+        return self._experiments.get(exp_id)
 
     def update_experiment(self, exp_id: int, **fields) -> dict | None:
         exp = self._experiments.get(exp_id)
@@ -303,14 +300,13 @@ class Store:
 
     def list_experiments(self, idea_id: int) -> list[dict]:
         exp_ids = self._exp_by_idea.get(idea_id, set())
-        exps = [_enrich_experiment(self._experiments[eid]) for eid in exp_ids if eid in self._experiments]
+        exps = [self._experiments[eid] for eid in exp_ids if eid in self._experiments]
         return sorted(exps, key=lambda e: e.get("created_at", ""))
 
     def list_experiments_by_status(self, status: str) -> list[dict]:
         """List all experiments across all ideas with a given status."""
         return [
-            _enrich_experiment(exp)
-            for exp in self._experiments.values()
+            exp for exp in self._experiments.values()
             if exp.get("status") == status
         ]
 
@@ -366,4 +362,36 @@ class Store:
 
     def list_all_experiments(self) -> list[dict]:
         """List all experiments across all ideas."""
-        return [_enrich_experiment(exp) for exp in self._experiments.values()]
+        return list(self._experiments.values())
+
+    def search_ideas_by_keywords(self, keywords: list[str]) -> list[dict]:
+        """Search ideas by multiple keywords, ranked by descending relevance.
+
+        Relevance = fraction of query keywords found in the idea description.
+        Each idea is returned with its experiments (including metrics).
+        """
+        if not keywords:
+            return []
+
+        # Normalize keywords
+        query_tokens = {k.lower().strip() for k in keywords if k.strip()}
+        if not query_tokens:
+            return []
+
+        results = []
+        for idea in self._ideas.values():
+            desc_lower = idea.get("description", "").lower()
+            matched = sum(1 for kw in query_tokens if kw in desc_lower)
+            if matched == 0:
+                continue
+            relevance = matched / len(query_tokens)
+
+            idea_copy = dict(idea)
+            # Attach experiments with metrics
+            exps = self.list_experiments(idea["id"])
+            idea_copy["experiments"] = exps
+            idea_copy["relevance"] = round(relevance, 3)
+            results.append(idea_copy)
+
+        results.sort(key=lambda r: r["relevance"], reverse=True)
+        return results

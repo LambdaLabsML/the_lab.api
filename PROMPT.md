@@ -33,14 +33,16 @@ Then check for human suggestions — `GET /ideas?status=suggested`. Adopt feasib
 
 The core loop:
 
-1. **Create idea** → `POST /ideas/new {parent_ids, description}` — creates git branch
-2. **Checkout** → `POST /ideas/<id>/checkout` — auto-commits current work, switches branch
-3. **Create experiment** → `POST /ideas/<id>/experiments {description, script_content, meta, tags}`
-4. **Start** → `POST /experiments/<id>/start {timeout?}` — runs script in isolated worktree
-5. **Monitor** → `GET /experiments/<id>/progress`, `GET /experiments/<id>/log?tail=50`
-6. **Wait** → `GET /wait?experiment_id=<id>` — blocks until finished
-7. **Note findings** → `POST /ideas/<id>/note {text, level}`
-8. **Conclude** → `POST /ideas/<id>/conclude {conclusion}` — then branch into next idea
+1. **Search existing ideas** → `GET /ideas/search?q=keyword1,keyword2,...` — before creating an idea, search for similar ones by keywords. Review the returned ideas and their experiment metrics to avoid duplicating work and to build on prior results.
+2. **Create idea** → `POST /ideas/new {parent_ids, description}` — creates git branch
+3. **Checkout** → `POST /ideas/<id>/checkout` — auto-commits current work, switches branch
+4. **Create experiment** → `POST /ideas/<id>/experiments {description, script_content, meta, tags}`
+5. **Start** → `POST /experiments/<id>/start {timeout?}` — runs script in isolated worktree
+6. **Monitor** → `GET /experiments/<id>/progress`, `GET /experiments/<id>/log?tail=50`
+7. **Wait** → `GET /wait?experiment_id=<id>` — blocks until finished
+8. **Compare with best** → `GET /digest` — compare your experiment's metrics against the current leaderboard and best-known results. Note whether you improved, matched, or regressed relative to the previous best.
+9. **Note findings** → `POST /ideas/<id>/note {text, level}` — include how results compare to the previous best
+10. **Conclude** → `POST /ideas/<id>/conclude {conclusion}` — then branch into next idea
 
 ### Script contract
 

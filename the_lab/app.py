@@ -279,6 +279,28 @@ def list_ideas(status: str | None = None, source: str | None = None):
     return ideas
 
 
+@app.get("/api/v1/ideas/search")
+def search_ideas(
+    q: str = Query(..., description="Comma-separated keywords to search for in idea descriptions"),
+):
+    """Search ideas by multiple keywords, ranked by descending relevance.
+
+    Returns ideas whose descriptions contain the given keywords, sorted by how
+    many keywords match (most relevant first). Each result includes its full
+    list of experiments with their metrics, so you can evaluate prior results
+    before creating a new idea.
+
+    Example:
+        GET /api/v1/ideas/search?q=temperature,sampling,top_p
+        -> [{"id": 5, "description": "...", "relevance": 1.0,
+             "experiments": [{"id": 12, "metrics": {...}, ...}]}, ...]
+    """
+    keywords = [k.strip() for k in q.split(",") if k.strip()]
+    if not keywords:
+        raise HTTPException(400, "provide at least one keyword in the 'q' parameter")
+    return store.search_ideas_by_keywords(keywords)
+
+
 @app.get("/api/v1/ideas/{idea_id}")
 def get_idea(idea_id: int, notes: str | None = None):
     """Get full detail for a single idea, including its experiments and notes.
@@ -484,6 +506,28 @@ def add_note(idea_id: int, req: NoteRequest):
         raise HTTPException(404, "idea not found")
     resources = [r.model_dump() for r in req.resources] if req.resources else None
     return store.add_note(idea_id, req.text, level=req.level, resources=resources)
+
+
+@app.get("/api/v1/ideas/{idea_id}/notes")
+def get_notes(
+    idea_id: int,
+    level: str | None = Query(default=None, description="Filter by note level: insight, milestone, observation, debug"),
+):
+    """Get all notes for an idea.
+
+    Returns the list of journal notes attached to the idea, ordered
+    chronologically. Use the ``level`` query parameter to filter by a single
+    level (e.g. ``?level=insight``). Without a filter, all levels are returned.
+
+    Example:
+        GET /api/v1/ideas/1/notes?level=insight
+        -> [{"text": "Loss plateaued at 0.35", "level": "insight", "created_at": "..."}]
+    """
+    idea = store.get_idea(idea_id)
+    if not idea:
+        raise HTTPException(404, "idea not found")
+    levels = {level} if level else None
+    return store.get_notes(idea_id, levels=levels)
 
 
 # --- Experiments ---
@@ -960,9 +1004,16 @@ def get_digest(
     """
     all_ideas = store.list_ideas()
     all_exps = store.list_all_experiments()
+
+    # Build lookup dicts once
+    idea_by_id: dict[int, dict] = {idea["id"]: idea for idea in all_ideas}
     exps_by_idea: dict[int, list[dict]] = {}
     for exp in all_exps:
         exps_by_idea.setdefault(exp["idea_id"], []).append(exp)
+
+    def _idea_desc(idea_id: int) -> str | None:
+        idea = idea_by_id.get(idea_id)
+        return idea["description"] if idea else None
 
     def _public_meta(exp: dict) -> dict:
         return {
@@ -997,11 +1048,10 @@ def get_digest(
     for exp in all_exps:
         if exp.get("status") != "running":
             continue
-        idea = store.get_idea(exp["idea_id"])
         running_experiments.append({
             "experiment_id": exp["id"],
             "idea_id": exp["idea_id"],
-            "idea_description": idea["description"] if idea else None,
+            "idea_description": _idea_desc(exp["idea_id"]),
             "description": exp.get("description"),
             "tags": exp.get("tags", []),
             "started_at": exp.get("started_at"),
@@ -1031,11 +1081,10 @@ def get_digest(
     by_value = sorted(with_metric, key=lambda e: e["metrics"][metric], reverse=True)
     leaderboard = []
     for exp in by_value[:top]:
-        idea = store.get_idea(exp["idea_id"])
         leaderboard.append({
             "experiment_id": exp["id"],
             "idea_id": exp["idea_id"],
-            "idea_description": idea["description"] if idea else None,
+            "idea_description": _idea_desc(exp["idea_id"]),
             "value": exp["metrics"][metric],
             "tags": exp.get("tags", []),
             "meta": _public_meta(exp),
@@ -1046,11 +1095,10 @@ def get_digest(
     by_time_desc = sorted(with_metric, key=lambda e: e.get("finished_at") or "", reverse=True)
     recent_out = []
     for exp in by_time_desc[:recent]:
-        idea = store.get_idea(exp["idea_id"])
         recent_out.append({
             "experiment_id": exp["id"],
             "idea_id": exp["idea_id"],
-            "idea_description": idea["description"] if idea else None,
+            "idea_description": _idea_desc(exp["idea_id"]),
             "value": exp["metrics"][metric],
             "tags": exp.get("tags", []),
             "finished_at": exp.get("finished_at"),
@@ -1060,7 +1108,7 @@ def get_digest(
     best_idea = None
     if by_value:
         best_exp = by_value[0]
-        idea = store.get_idea(best_exp["idea_id"])
+        idea = idea_by_id.get(best_exp["idea_id"])
         if idea:
             insights = [n["text"] for n in store.get_notes(idea["id"], levels={"insight"})]
             best_idea = {
@@ -1079,11 +1127,10 @@ def get_digest(
         v = exp["metrics"][metric]
         if running_best is None or v > running_best:
             running_best = v
-            idea = store.get_idea(exp["idea_id"])
             progression.append({
                 "experiment_id": exp["id"],
                 "idea_id": exp["idea_id"],
-                "idea_description": idea["description"] if idea else None,
+                "idea_description": _idea_desc(exp["idea_id"]),
                 "value": v,
                 "finished_at": exp.get("finished_at"),
             })
@@ -1260,34 +1307,41 @@ def get_chart_data():
         -> {"experiments": [{"id": 4, "metrics": {"acc": 0.91}, "idea_description": "...", ...}],
             "running": [{"id": 6, "metrics": {...}, "_running": true, "idea_description": "...", ...}]}
     """
-    ideas = store.list_ideas()
+    all_exps = store.list_all_experiments()
     completed_exps = []
     running_progress = []
-    for idea in ideas:
-        exps = store.list_experiments(idea["id"])
-        for exp in exps:
-            if exp.get("status") == "completed" and exp.get("metrics"):
-                completed_exps.append({
+    # Build idea lookup once
+    idea_cache: dict[int, dict] = {}
+    for exp in all_exps:
+        idea_id = exp["idea_id"]
+        if idea_id not in idea_cache:
+            idea = store.get_idea(idea_id)
+            idea_cache[idea_id] = idea
+        idea = idea_cache[idea_id]
+        if not idea:
+            continue
+        if exp.get("status") == "completed" and exp.get("metrics"):
+            completed_exps.append({
+                **exp,
+                "idea_description": idea["description"],
+                "idea_status": idea["status"],
+            })
+        elif exp.get("status") == "running":
+            progress_path = REPO_DIR / exp["script"].replace(".sh", ".progress")
+            progress = None
+            if progress_path.exists():
+                try:
+                    progress = json.loads(progress_path.read_text())
+                except (json.JSONDecodeError, OSError):
+                    pass
+            if progress and len(progress) > 0:
+                running_progress.append({
                     **exp,
+                    "metrics": progress,
+                    "_running": True,
                     "idea_description": idea["description"],
                     "idea_status": idea["status"],
                 })
-            elif exp.get("status") == "running":
-                progress_path = REPO_DIR / exp["script"].replace(".sh", ".progress")
-                progress = None
-                if progress_path.exists():
-                    try:
-                        progress = json.loads(progress_path.read_text())
-                    except (json.JSONDecodeError, OSError):
-                        pass
-                if progress and len(progress) > 0:
-                    running_progress.append({
-                        **exp,
-                        "metrics": progress,
-                        "_running": True,
-                        "idea_description": idea["description"],
-                        "idea_status": idea["status"],
-                    })
     return {"experiments": completed_exps, "running": running_progress}
 
 
