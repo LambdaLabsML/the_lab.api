@@ -125,6 +125,12 @@ class SandboxConfigRequest(BaseModel):
     denylist: list[str] = []
 
 
+class AnalyzeRequest(BaseModel):
+    experiment_ids: list[int]
+    script: str
+    args: list[str] = []
+
+
 # --- Script guard ---
 
 SCRIPT_GUARD = """\
@@ -744,6 +750,135 @@ def compare_experiments(
             "idea_descriptions": idea_desc_diff,
         },
     }
+
+
+@app.post("/api/v1/experiments/analyze")
+async def analyze_experiments(req: AnalyzeRequest):
+    """Run an analysis script against one or more experiments.
+
+    Executes a script from ``.the_lab/artifacts/trace_tools/`` with a JSON
+    manifest describing the target experiments (IDs, paths, metadata, metrics).
+    The script receives ``--manifest <path>`` plus any extra ``args``. It must
+    print a JSON object to stdout with ``columns`` (ordered key list) and
+    ``rows`` (array of objects) for easy table formatting.
+
+    Example:
+        POST /api/v1/experiments/analyze
+        {"experiment_ids": [315, 320], "script": "analyze_collab_uptake",
+         "args": ["--max-rollouts", "5"]}
+        -> {"experiment_ids": [315, 320], "script": "analyze_collab_uptake",
+            "columns": ["experiment_id", "problem", "exposures", ...],
+            "rows": [{"experiment_id": 315, "problem": "066", ...}, ...]}
+    """
+    import asyncio
+    import tempfile
+
+    if not req.experiment_ids:
+        raise HTTPException(400, "no experiment IDs provided")
+
+    # Validate script name (prevent path traversal)
+    script_name = req.script.replace("/", "").replace("\\", "").replace("..", "")
+    tools_dir = REPO_DIR / ".the_lab" / "artifacts" / "trace_tools"
+    script_path = None
+    for ext in ("", ".py", ".sh"):
+        candidate = tools_dir / (script_name + ext)
+        if candidate.exists():
+            script_path = candidate
+            break
+    if not script_path:
+        available = [f.stem for f in tools_dir.glob("*") if f.is_file()] if tools_dir.exists() else []
+        raise HTTPException(404, f"script '{script_name}' not found in .the_lab/artifacts/trace_tools/. Available: {available}")
+
+    # Build manifest with experiment metadata and paths
+    experiments = []
+    for eid in req.experiment_ids:
+        exp = store.get_experiment(eid)
+        if not exp:
+            raise HTTPException(404, f"experiment {eid} not found")
+        idea = store.get_idea(exp["idea_id"])
+        exp_dir = str(store.lab_dir / str(exp["idea_id"]))
+        # Find rollout output dir from meta if available
+        rollout_dir = None
+        meta = exp.get("meta") or {}
+        for key in ("outdir", "rollout_outdir"):
+            if key in meta:
+                candidate = REPO_DIR / meta[key]
+                if candidate.exists():
+                    rollout_dir = str(candidate)
+                    break
+        # Also check standard location: {exp_id}_rollouts/
+        if not rollout_dir:
+            standard = store.lab_dir / str(exp["idea_id"]) / f"{eid}_rollouts"
+            if standard.exists():
+                rollout_dir = str(standard)
+        experiments.append({
+            "id": eid,
+            "idea_id": exp["idea_id"],
+            "idea_description": idea["description"] if idea else None,
+            "description": exp.get("description"),
+            "status": exp.get("status"),
+            "dir": exp_dir,
+            "rollout_dir": rollout_dir,
+            "script_path": str(REPO_DIR / exp["script"]) if exp.get("script") else None,
+            "log_path": str((REPO_DIR / exp["script"]).with_suffix(".log")) if exp.get("script") else None,
+            "meta": meta,
+            "metrics": exp.get("metrics"),
+            "tags": exp.get("tags", []),
+        })
+
+    # Write manifest to temp file
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, dir="/tmp") as f:
+        json.dump({"experiments": experiments}, f)
+        manifest_path = f.name
+
+    try:
+        # Determine how to run the script
+        if script_path.suffix == ".py":
+            cmd = ["python3", str(script_path), "--manifest", manifest_path] + req.args
+        else:
+            cmd = ["bash", str(script_path), "--manifest", manifest_path] + req.args
+
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=str(REPO_DIR),
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=300)
+
+        if proc.returncode != 0:
+            raise HTTPException(500, {
+                "error": f"script exited with code {proc.returncode}",
+                "stderr": stderr.decode(errors="replace")[-2000:],
+            })
+
+        # Parse JSON from stdout (last non-empty line or full output)
+        output = stdout.decode(errors="replace").strip()
+        result = None
+        if output:
+            # Try full output first, then last line
+            for candidate in [output, output.split("\n")[-1]]:
+                try:
+                    result = json.loads(candidate)
+                    break
+                except json.JSONDecodeError:
+                    continue
+
+        if result is None:
+            raise HTTPException(500, {
+                "error": "script produced no valid JSON output",
+                "stdout": output[-2000:],
+                "stderr": stderr.decode(errors="replace")[-2000:],
+            })
+
+        return {
+            "experiment_ids": req.experiment_ids,
+            "script": req.script,
+            "columns": result.get("columns", list(result["rows"][0].keys()) if result.get("rows") else []),
+            "rows": result.get("rows", []),
+        }
+    finally:
+        Path(manifest_path).unlink(missing_ok=True)
 
 
 @app.get("/api/v1/experiments/{exp_id}")

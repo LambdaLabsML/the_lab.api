@@ -41,8 +41,9 @@ The core loop:
 6. **Monitor** → `GET /experiments/<id>/progress`, `GET /experiments/<id>/log?tail=50`
 7. **Wait** → `GET /wait?experiment_id=<id>` — blocks until finished
 8. **Compare with best** → `GET /leaderboard?metric=<key>&include_details=true` — compare your experiment's metrics against the current leaderboard and best-known results. Note whether you improved, matched, or regressed relative to the previous best. Use `GET /experiments/compare?ids=<yours>,<best>` to see exactly what config changed.
-9. **Note findings** → `POST /ideas/<id>/note {text, level}` — include how results compare to the previous best
-10. **Conclude** → `POST /ideas/<id>/conclude {conclusion}` — then branch into next idea
+9. **Analyze** → `POST /experiments/analyze {"experiment_ids": [<yours>,<best>], "script": "<tool>"}` — run analysis scripts from `.the_lab/artifacts/trace_tools/` to understand *why* results differ (failure modes, collaboration patterns, etc.). Returns table-ready `columns` + `rows`.
+10. **Note findings** → `POST /ideas/<id>/note {text, level}` — include how results compare to the previous best
+11. **Conclude** → `POST /ideas/<id>/conclude {conclusion}` — then branch into next idea
 
 ### Script contract
 
