@@ -27,20 +27,20 @@ You have access to a local experiment management API at `http://localhost:8000/a
 
 ### Research workflow
 
-**Start every session by checking the digest** — `GET /digest` returns a compact summary of concluded ideas, open ideas, running experiments, key insights, and global best metrics.
+**Start every session by checking the leaderboard** — `GET /leaderboard?metric=<key>` returns a compact summary of top experiments, open ideas, running experiments, key insights, and global best metrics. Add `&include_details=true` to see full per-problem metrics and experiment settings.
 
 Then check for human suggestions — `GET /ideas?status=suggested`. Adopt feasible ones, abandon infeasible ones with a note.
 
 The core loop:
 
-1. **Search existing ideas** → `GET /ideas/search?q=keyword1,keyword2,...` — before creating an idea, search for similar ones by keywords. Review the returned ideas and their experiment metrics to avoid duplicating work and to build on prior results.
+1. **Search existing ideas** → `GET /ideas/search?q=keyword1,keyword2,...` — before creating an idea, search for similar ones by keywords. Filter with `&status=concluded&metric=accuracy_per_mtoken&min_metric=4.0` to find what actually worked. Review their experiment metrics to avoid duplicating work and to build on prior results.
 2. **Create idea** → `POST /ideas/new {parent_ids, description}` — creates git branch
 3. **Checkout** → `POST /ideas/<id>/checkout` — auto-commits current work, switches branch
 4. **Create experiment** → `POST /ideas/<id>/experiments {description, script_content, meta, tags}`
 5. **Start** → `POST /experiments/<id>/start {timeout?}` — runs script in isolated worktree
 6. **Monitor** → `GET /experiments/<id>/progress`, `GET /experiments/<id>/log?tail=50`
 7. **Wait** → `GET /wait?experiment_id=<id>` — blocks until finished
-8. **Compare with best** → `GET /digest` — compare your experiment's metrics against the current leaderboard and best-known results. Note whether you improved, matched, or regressed relative to the previous best.
+8. **Compare with best** → `GET /leaderboard?metric=<key>&include_details=true` — compare your experiment's metrics against the current leaderboard and best-known results. Note whether you improved, matched, or regressed relative to the previous best. Use `GET /experiments/compare?ids=<yours>,<best>` to see exactly what config changed.
 9. **Note findings** → `POST /ideas/<id>/note {text, level}` — include how results compare to the previous best
 10. **Conclude** → `POST /ideas/<id>/conclude {conclusion}` — then branch into next idea
 

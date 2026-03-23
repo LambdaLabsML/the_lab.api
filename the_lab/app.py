@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
@@ -282,23 +283,52 @@ def list_ideas(status: str | None = None, source: str | None = None):
 @app.get("/api/v1/ideas/search")
 def search_ideas(
     q: str = Query(..., description="Comma-separated keywords to search for in idea descriptions"),
+    status: str | None = Query(default=None, description="Filter by idea status (active, concluded, abandoned, suggested)"),
+    metric: str | None = Query(default=None, description="Metric key to filter/sort by (e.g. accuracy_per_mtoken)"),
+    min_metric: float | None = Query(default=None, description="Minimum metric value — requires metric param"),
+    after: str | None = Query(default=None, description="ISO datetime — only ideas created after this timestamp"),
 ):
     """Search ideas by multiple keywords, ranked by descending relevance.
 
     Returns ideas whose descriptions contain the given keywords, sorted by how
     many keywords match (most relevant first). Each result includes its full
     list of experiments with their metrics, so you can evaluate prior results
-    before creating a new idea.
+    before creating a new idea. Use optional filters to narrow results.
 
     Example:
-        GET /api/v1/ideas/search?q=temperature,sampling,top_p
+        GET /api/v1/ideas/search?q=temperature,sampling&status=concluded
+        GET /api/v1/ideas/search?q=board&metric=group_accuracy_per_mtoken&min_metric=4.0
         -> [{"id": 5, "description": "...", "relevance": 1.0,
              "experiments": [{"id": 12, "metrics": {...}, ...}]}, ...]
     """
     keywords = [k.strip() for k in q.split(",") if k.strip()]
     if not keywords:
         raise HTTPException(400, "provide at least one keyword in the 'q' parameter")
-    return store.search_ideas_by_keywords(keywords)
+    if min_metric is not None and not metric:
+        raise HTTPException(400, "min_metric requires the metric parameter")
+
+    results = store.search_ideas_by_keywords(keywords)
+
+    if status is not None:
+        results = [r for r in results if r.get("status") == status]
+
+    if after is not None:
+        try:
+            datetime.fromisoformat(after)
+        except ValueError:
+            raise HTTPException(400, f"invalid ISO datetime: {after}")
+        results = [r for r in results if r.get("created_at", "") > after]
+
+    if metric is not None and min_metric is not None:
+        def _has_min_metric(idea: dict) -> bool:
+            for exp in idea.get("experiments", []):
+                v = (exp.get("metrics") or {}).get(metric)
+                if isinstance(v, (int, float)) and v >= min_metric:
+                    return True
+            return False
+        results = [r for r in results if _has_min_metric(r)]
+
+    return results
 
 
 @app.get("/api/v1/ideas/{idea_id}")
@@ -686,6 +716,20 @@ def compare_experiments(
         for key in meta_keys
     }
 
+    # --- Config diff: highlight what changed between experiments ---
+    meta_diff = {k: v for k, v in meta_table.items() if len(set(str(x) for x in v)) > 1}
+    metric_diff = {k: v for k, v in metrics_table.items() if len(set(str(x) for x in v)) > 1}
+
+    tag_sets = [set(e.get("tags") or []) for e in experiments]
+    all_tags = sorted(set().union(*tag_sets)) if tag_sets else []
+    tag_diff = {t: [t in ts for ts in tag_sets] for t in all_tags if len(set(t in ts for ts in tag_sets)) > 1}
+
+    idea_descs = []
+    for e in experiments:
+        idea = store.get_idea(e["idea_id"])
+        idea_descs.append({"idea_id": e["idea_id"], "idea_description": idea["description"] if idea else None})
+    idea_desc_diff = idea_descs if len(set(d["idea_description"] for d in idea_descs)) > 1 else None
+
     return {
         "experiment_ids": exp_ids,
         "experiments": experiments,
@@ -693,6 +737,12 @@ def compare_experiments(
         "metrics": metrics_table,
         "meta_keys": meta_keys,
         "meta": meta_table,
+        "config_diff": {
+            "meta": meta_diff,
+            "metrics": metric_diff,
+            "tags": tag_diff,
+            "idea_descriptions": idea_desc_diff,
+        },
     }
 
 
@@ -975,37 +1025,16 @@ def compare_curves(
     return {"key": key, "experiments": result}
 
 
-# --- Digest ---
+# --- Leaderboard (formerly Digest) ---
 
-@app.get("/api/v1/digest")
-def get_digest(
-    metric: str = Query(..., description="Metric to rank by (e.g. accuracy, accuracy_per_mtoken)"),
-    top: int = Query(default=10, description="Number of top experiments to show in the leaderboard"),
-    recent: int = Query(default=10, description="Number of most recent experiments to show"),
-    tags: str | None = Query(default=None, description="Comma-separated tags — experiments must have ALL of them (AND filter)"),
-):
-    """Get a compact, metric-focused research digest.
 
-    Always returns three sections ranked by the given metric:
-    1. **Leaderboard** — top N experiments by metric value (descending)
-    2. **Recent** — most recent N experiments with their metric value
-    3. **Progression** — timeline of when the global best was beaten
-
-    Plus: open ideas, running experiments, key insights, and the best idea
-    for this metric. Use ``tags=`` to scope to a subset of experiments.
-
-    Example:
-        GET /api/v1/digest?metric=accuracy&top=10&recent=5
-        -> {"metric": "accuracy", "leaderboard": [...], "recent": [...],
-            "progression": [...], "open_ideas": [...], ...}
-
-        GET /api/v1/digest?metric=accuracy_per_mtoken&top=5&tags=n-10,swarm-2
-        -> top 5 swarm-2 experiments by efficiency
-    """
+def _build_leaderboard_response(
+    metric: str, top: int, recent: int, tags: str | None, include_details: bool,
+) -> dict:
+    """Shared implementation for /leaderboard and /digest endpoints."""
     all_ideas = store.list_ideas()
     all_exps = store.list_all_experiments()
 
-    # Build lookup dicts once
     idea_by_id: dict[int, dict] = {idea["id"]: idea for idea in all_ideas}
     exps_by_idea: dict[int, list[dict]] = {}
     for exp in all_exps:
@@ -1060,7 +1089,6 @@ def get_digest(
         })
     running_experiments.sort(key=lambda e: e.get("started_at") or "", reverse=True)
 
-    # Optional tag filter (AND: experiment must have ALL specified tags)
     tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
     filtered_exps = all_exps
     if tag_list:
@@ -1070,18 +1098,15 @@ def get_digest(
         ]
 
     completed = [e for e in filtered_exps if e.get("status") == "completed" and e.get("metrics")]
-
-    # Experiments with the requested metric
     with_metric = [
         e for e in completed
         if metric in e["metrics"] and isinstance(e["metrics"][metric], (int, float))
     ]
 
-    # --- Leaderboard: top N by metric value ---
     by_value = sorted(with_metric, key=lambda e: e["metrics"][metric], reverse=True)
     leaderboard = []
     for exp in by_value[:top]:
-        leaderboard.append({
+        entry = {
             "experiment_id": exp["id"],
             "idea_id": exp["idea_id"],
             "idea_description": _idea_desc(exp["idea_id"]),
@@ -1089,22 +1114,30 @@ def get_digest(
             "tags": exp.get("tags", []),
             "meta": _public_meta(exp),
             "finished_at": exp.get("finished_at"),
-        })
+        }
+        if include_details:
+            entry["all_metrics"] = exp.get("metrics", {})
+            entry["settings"] = exp.get("meta", {})
+            entry["experiment_description"] = exp.get("description")
+        leaderboard.append(entry)
 
-    # --- Recent: most recent N experiments with this metric ---
     by_time_desc = sorted(with_metric, key=lambda e: e.get("finished_at") or "", reverse=True)
     recent_out = []
     for exp in by_time_desc[:recent]:
-        recent_out.append({
+        entry = {
             "experiment_id": exp["id"],
             "idea_id": exp["idea_id"],
             "idea_description": _idea_desc(exp["idea_id"]),
             "value": exp["metrics"][metric],
             "tags": exp.get("tags", []),
             "finished_at": exp.get("finished_at"),
-        })
+        }
+        if include_details:
+            entry["all_metrics"] = exp.get("metrics", {})
+            entry["settings"] = exp.get("meta", {})
+            entry["experiment_description"] = exp.get("description")
+        recent_out.append(entry)
 
-    # --- Best idea for this metric ---
     best_idea = None
     if by_value:
         best_exp = by_value[0]
@@ -1119,7 +1152,6 @@ def get_digest(
                 "key_insights": insights[:5],
             }
 
-    # --- Progression: when did the global best improve? ---
     by_time_asc = sorted(with_metric, key=lambda e: e.get("finished_at") or "")
     progression = []
     running_best = None
@@ -1135,7 +1167,6 @@ def get_digest(
                 "finished_at": exp.get("finished_at"),
             })
 
-    # --- Key insights (most recent) ---
     key_insights = []
     for idea in all_ideas:
         for note in store.get_notes(idea["id"], levels={"insight"}):
@@ -1158,6 +1189,45 @@ def get_digest(
         "progression": progression,
         "key_insights": key_insights[:10],
     }
+
+
+@app.get("/api/v1/leaderboard")
+def get_leaderboard(
+    metric: str = Query(..., description="Metric to rank by (e.g. accuracy, accuracy_per_mtoken)"),
+    top: int = Query(default=10, description="Number of top experiments to show"),
+    recent: int = Query(default=10, description="Number of most recent experiments to show"),
+    tags: str | None = Query(default=None, description="Comma-separated tags — experiments must have ALL of them (AND filter)"),
+    include_details: bool = Query(default=False, description="Include per-problem metrics and experiment settings/meta"),
+):
+    """Get a compact, metric-focused research leaderboard.
+
+    Returns three sections ranked by the given metric:
+    1. **Leaderboard** — top N experiments by metric value (descending)
+    2. **Recent** — most recent N experiments with their metric value
+    3. **Progression** — timeline of when the global best was beaten
+
+    Plus: open ideas, running experiments, key insights, and the best idea
+    for this metric. Use ``tags=`` to scope to a subset of experiments.
+    Set ``include_details=true`` to get full metrics, settings/meta, and
+    experiment descriptions for each leaderboard and recent entry.
+
+    Example:
+        GET /api/v1/leaderboard?metric=accuracy&top=10&recent=5
+        GET /api/v1/leaderboard?metric=accuracy_per_mtoken&top=5&tags=held-out&include_details=true
+    """
+    return _build_leaderboard_response(metric, top, recent, tags, include_details)
+
+
+@app.get("/api/v1/digest")
+def get_digest_compat(
+    metric: str = Query(..., description="Metric to rank by"),
+    top: int = Query(default=10, description="Number of top experiments to show"),
+    recent: int = Query(default=10, description="Number of most recent experiments to show"),
+    tags: str | None = Query(default=None, description="Comma-separated tags"),
+    include_details: bool = Query(default=False, description="Include per-problem metrics and settings"),
+):
+    """Deprecated alias for ``/leaderboard``. Use ``/leaderboard`` instead."""
+    return _build_leaderboard_response(metric, top, recent, tags, include_details)
 
 
 # --- Wait ---
