@@ -363,6 +363,33 @@ def get_idea(idea_id: int, notes: str | None = None):
     return idea
 
 
+@app.get("/api/v1/ideas/{idea_id}/parent")
+def get_idea_parent(idea_id: int):
+    """Get the direct parent ideas with their experiments and metrics.
+
+    Returns the immediate parents of an idea (from ``parent_ids``), each
+    enriched with experiments and notes. Useful for understanding what an
+    idea branched from and how the parent experiments performed.
+
+    Example:
+        GET /api/v1/ideas/5/parent
+        -> [{"id": 2, "description": "...", "status": "concluded",
+             "experiments": [...], "notes": [...]}]
+    """
+    idea = store.get_idea(idea_id)
+    if not idea:
+        raise HTTPException(404, "idea not found")
+    parents = []
+    for pid in idea.get("parent_ids", []):
+        parent = store.get_idea(pid)
+        if parent:
+            parent = dict(parent)
+            parent["experiments"] = store.list_experiments(pid)
+            parent["notes"] = store.get_notes(pid)
+            parents.append(parent)
+    return parents
+
+
 @app.get("/api/v1/ideas/{idea_id}/tree")
 def get_idea_tree(idea_id: int):
     """Get the ancestor and descendant tree for an idea, with notes.

@@ -34,16 +34,17 @@ Then check for human suggestions — `GET /ideas?status=suggested`. Adopt feasib
 The core loop:
 
 1. **Search existing ideas** → `GET /ideas/search?q=keyword1,keyword2,...` — before creating an idea, search for similar ones by keywords. Filter with `&status=concluded&metric=accuracy_per_mtoken&min_metric=4.0` to find what actually worked. Review their experiment metrics to avoid duplicating work and to build on prior results.
-2. **Create idea** → `POST /ideas/new {parent_ids, description}` — creates git branch
-3. **Checkout** → `POST /ideas/<id>/checkout` — auto-commits current work, switches branch
-4. **Create experiment** → `POST /ideas/<id>/experiments {description, script_content, meta, tags}`
-5. **Start** → `POST /experiments/<id>/start {timeout?}` — runs script in isolated worktree
-6. **Monitor** → `GET /experiments/<id>/progress`, `GET /experiments/<id>/log?tail=50`
-7. **Wait** → `GET /wait?experiment_id=<id>` — blocks until finished
-8. **Compare with best** → `GET /leaderboard?metric=<key>&include_details=true` — compare your experiment's metrics against the current leaderboard and best-known results. Note whether you improved, matched, or regressed relative to the previous best. Use `GET /experiments/compare?ids=<yours>,<best>` to see exactly what config changed.
-9. **Analyze** → `POST /experiments/analyze {"experiment_ids": [<yours>,<best>], "script": "<tool>"}` — run analysis scripts from `.the_lab/artifacts/trace_tools/` to understand *why* results differ (failure modes, collaboration patterns, etc.). Returns table-ready `columns` + `rows`.
-10. **Note findings** → `POST /ideas/<id>/note {text, level}` — include how results compare to the previous best
-11. **Conclude** → `POST /ideas/<id>/conclude {conclusion}` — then branch into next idea
+2. **Check parent context** → `GET /ideas/<id>/parent` — when branching from an existing idea, review the parent's experiments, metrics, and notes to understand what was already tried and what worked.
+3. **Create idea** → `POST /ideas/new {parent_ids, description}` — creates git branch
+4. **Checkout** → `POST /ideas/<id>/checkout` — auto-commits current work, switches branch
+5. **Create experiment** → `POST /ideas/<id>/experiments {description, script_content, meta, tags}`
+6. **Start** → `POST /experiments/<id>/start {timeout?}` — runs script in isolated worktree
+7. **Monitor** → `GET /experiments/<id>/progress`, `GET /experiments/<id>/log?tail=50`
+8. **Wait** → `GET /wait?experiment_id=<id>` — blocks until finished
+9. **Compare with best** → `GET /leaderboard?metric=<key>&include_details=true` — compare your experiment's metrics against the current leaderboard and best-known results. Note whether you improved, matched, or regressed relative to the previous best. Use `GET /experiments/compare?ids=<yours>,<best>` to see exactly what config changed.
+10. **Analyze** → `POST /experiments/analyze {"experiment_ids": [<yours>,<best>], "script": "<tool>"}` — run analysis scripts from `.the_lab/artifacts/trace_tools/` to understand *why* results differ (failure modes, collaboration patterns, etc.). Returns table-ready `columns` + `rows`.
+11. **Note findings** → `POST /ideas/<id>/note {text, level}` — include how results compare to the previous best
+12. **Conclude** → `POST /ideas/<id>/conclude {conclusion}` — then branch into next idea
 
 ### Script contract
 
