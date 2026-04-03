@@ -287,6 +287,12 @@ def list_ideas(status: str | None = None, source: str | None = None):
             "latest_metrics": latest["metrics"] if latest else None,
             "latest_experiment_id": latest["id"] if latest else None,
         }
+    # When filtering for suggested ideas and none exist, include the
+    # current task so agents always have direction.
+    if status == "suggested" and not ideas:
+        task = _read_task()
+        if task:
+            return {"ideas": [], "current_task": task}
     return ideas
 
 
