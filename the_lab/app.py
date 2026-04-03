@@ -131,6 +131,10 @@ class AnalyzeRequest(BaseModel):
     args: list[str] = []
 
 
+class TaskRequest(BaseModel):
+    text: str
+
+
 # --- Script guard ---
 
 SCRIPT_GUARD = """\
@@ -927,6 +931,30 @@ def get_experiment(exp_id: int):
     return exp
 
 
+@app.delete("/api/v1/experiments/{exp_id}")
+def delete_experiment(exp_id: int):
+    """Delete a non-running experiment and its stored artifacts.
+
+    Removes the experiment record from the file-backed store and deletes the
+    associated script/log/progress/metrics files plus any recorded rollout or
+    worktree directories. Running experiments must be cancelled first.
+    """
+    exp = store.get_experiment(exp_id)
+    if not exp:
+        raise HTTPException(404, "experiment not found")
+    if exp.get("status") == "running":
+        raise HTTPException(400, "running experiment must be cancelled before deletion")
+    deleted = store.delete_experiment(exp_id)
+    if deleted is None:
+        raise HTTPException(404, "experiment not found")
+    return {
+        "deleted": True,
+        "experiment_id": exp_id,
+        "idea_id": deleted.get("idea_id"),
+        "status": deleted.get("status"),
+    }
+
+
 @app.post("/api/v1/experiments/{exp_id}/start")
 async def start_experiment(exp_id: int, req: StartExperimentRequest | None = None):
     """Run an experiment's script.
@@ -982,11 +1010,12 @@ async def restart_experiment(exp_id: int):
 
 @app.post("/api/v1/experiments/{exp_id}/cancel")
 async def cancel_experiment(exp_id: int):
-    """Kill a running experiment.
+    """Cancel a pending or running experiment.
 
-    Sends SIGTERM to the experiment process, giving it a chance to clean up.
-    If the process does not exit promptly, SIGKILL is sent to force
-    termination. The experiment status is set to ``cancelled``.
+    For running experiments, sends SIGTERM to the experiment process, giving it
+    a chance to clean up. If the process does not exit promptly, SIGKILL is
+    sent to force termination. Pending experiments are marked ``cancelled``
+    immediately.
 
     Example:
         POST /api/v1/experiments/4/cancel
@@ -1471,13 +1500,17 @@ def get_backlog():
          "priority": s.get("priority", "normal"), "resources": s.get("resources", [])}
         for s in suggested
     ]
-    return {
+    resp: dict = {
         "current_branch": current,
         "active_ideas": result,
         "suggested_ideas": suggested_items,
         "total_running": total_running,
         "total_pending": total_pending,
     }
+    task = _read_task()
+    if task:
+        resp["current_task"] = task
+    return resp
 
 
 @app.get("/api/v1/graph")
@@ -1585,6 +1618,59 @@ def get_chart_data():
                     "idea_status": idea["status"],
                 })
     return {"experiments": completed_exps, "running": running_progress}
+
+
+# --- Current task ---
+
+_TASK_PATH = REPO_DIR / ".the_lab" / "task.json"
+
+
+def _read_task() -> dict | None:
+    if _TASK_PATH.exists():
+        try:
+            return json.loads(_TASK_PATH.read_text())
+        except (json.JSONDecodeError, OSError):
+            pass
+    return None
+
+
+def _write_task(text: str) -> dict:
+    from .store import _now
+    task = {"text": text, "updated_at": _now()}
+    _TASK_PATH.write_text(json.dumps(task, indent=2) + "\n")
+    return task
+
+
+@app.get("/api/v1/task")
+def get_task():
+    """Get the current task (default direction when no ideas are suggested).
+
+    Returns the task text and when it was last updated, or ``null`` if no
+    task is set.
+
+    Example:
+        GET /api/v1/task
+        -> {"text": "Focus on improving group_accuracy on problem 066", "updated_at": "..."}
+    """
+    return _read_task()
+
+
+@app.put("/api/v1/task")
+def set_task(req: TaskRequest):
+    """Set or update the current task.
+
+    The task acts as a standing directive for agents when there are no
+    suggested ideas to adopt. Set an empty ``text`` to clear it.
+
+    Example:
+        PUT /api/v1/task {"text": "Explore cascade strategies with swarm_size=7"}
+        -> {"text": "Explore cascade strategies...", "updated_at": "..."}
+    """
+    if not req.text.strip():
+        if _TASK_PATH.exists():
+            _TASK_PATH.unlink()
+        return None
+    return _write_task(req.text.strip())
 
 
 # --- Dashboard config ---

@@ -10,5 +10,6 @@ import "./styles/api.css";
 import "./styles/sandbox.css";
 import "./styles/suggest.css";
 import "./styles/tags.css";
+import "./styles/task.css";
 
 render(<App />, document.getElementById("app")!);

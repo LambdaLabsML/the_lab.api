@@ -1,6 +1,7 @@
 import { useEffect } from "preact/hooks";
 import { effect } from "@preact/signals";
 import { Topbar } from "./components/topbar";
+import { TaskBanner } from "./components/task-banner";
 import { ChartPanel } from "./components/chart-panel/chart-panel";
 import { SuggestPanel } from "./components/suggest-panel";
 import { ViewTabs } from "./components/view-tabs";
@@ -132,6 +133,7 @@ export function App() {
   return (
     <>
       <Topbar />
+      <TaskBanner />
       <ChartPanel />
       <SuggestPanel />
       <ViewTabs />

@@ -29,7 +29,7 @@ You have access to a local experiment management API at `http://localhost:8000/a
 
 **Start every session by checking the leaderboard** — `GET /leaderboard?metric=<key>` returns a compact summary of top experiments, open ideas, running experiments, key insights, and global best metrics. Add `&include_details=true` to see full per-problem metrics and experiment settings.
 
-Then check for human suggestions — `GET /ideas?status=suggested`. Adopt feasible ones, abandon infeasible ones with a note.
+Then check for human suggestions — `GET /ideas?status=suggested`. Adopt feasible ones, abandon infeasible ones with a note. If there are no suggestions, check `GET /task` for the current standing directive.
 
 The core loop:
 
