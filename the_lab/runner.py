@@ -43,17 +43,18 @@ class ExperimentRunner:
                 if wt:
                     running_worktrees.add(wt)
             else:
-                # Clean up its worktree
-                wt = (exp.get("meta") or {}).get("worktree")
-                if wt and Path(wt).exists():
-                    remove_worktree(wt, cwd=store.repo_dir)
-                self._store.update_experiment(
-                    exp["id"],
-                    status="failed",
-                    error="server restarted while experiment was running (process gone)",
-                    pid=None,
-                    finished_at=datetime.now(timezone.utc).isoformat(),
-                )
+                if not self._reconcile_stale_running(exp):
+                    # Clean up its worktree
+                    wt = (exp.get("meta") or {}).get("worktree")
+                    if wt and Path(wt).exists():
+                        remove_worktree(wt, cwd=store.repo_dir)
+                    self._store.update_experiment(
+                        exp["id"],
+                        status="failed",
+                        error="server restarted while experiment was running (process gone)",
+                        pid=None,
+                        finished_at=datetime.now(timezone.utc).isoformat(),
+                    )
 
         # Clean up stale worktrees (from previous crashes)
         if self._worktree_dir.exists():
@@ -78,26 +79,44 @@ class ExperimentRunner:
         except (ProcessLookupError, PermissionError):
             return False
 
+    @staticmethod
+    def _signal_experiment(pid: int, sig: int) -> None:
+        """Signal the full experiment process group when possible."""
+        try:
+            os.killpg(pid, sig)
+            return
+        except (ProcessLookupError, PermissionError):
+            return
+        except OSError:
+            pass
+        try:
+            os.kill(pid, sig)
+        except (ProcessLookupError, PermissionError):
+            pass
+
     def _symlink_venvs(self, worktree_path: Path):
         """Symlink .venv directories from the main repo into the worktree.
 
         Worktrees only contain git-tracked files, but experiments often need
-        virtual environments (in .gitignore). Walk the main repo for .venv
-        dirs and create matching symlinks in the worktree.
+        virtual environments (in .gitignore). Only inspect the repo root and
+        first-level package directories; traversing `.the_lab/worktrees` makes
+        startup time grow with every historical worktree.
         """
         repo = self._store.repo_dir
-        for venv_dir in repo.rglob(".venv"):
+        candidates = [repo / ".venv"]
+        for child in repo.iterdir():
+            if not child.is_dir():
+                continue
+            if child.name in {".git", ".the_lab"}:
+                continue
+            candidates.append(child / ".venv")
+
+        for venv_dir in candidates:
             if not venv_dir.is_dir():
                 continue
-            # Skip .venvs inside .the_lab/ or other worktrees
             try:
                 rel = venv_dir.relative_to(repo)
             except ValueError:
-                continue
-            if ".the_lab" in rel.parts:
-                continue
-            # Skip nested .venvs (e.g. .venv/.venv)
-            if sum(1 for p in rel.parts if p == ".venv") > 1:
                 continue
             target = worktree_path / rel
             if target.exists() or target.is_symlink():
@@ -116,6 +135,63 @@ class ExperimentRunner:
             ids = [e["id"] for e in self._reattach_running]
             print(f"[the-lab] re-attached to {len(ids)} running experiment(s): {ids}")
         self._reattach_running = []
+
+    def _cleanup_worktree(self, exp: dict) -> None:
+        wt = (exp.get("meta") or {}).get("worktree")
+        if wt and Path(wt).exists():
+            try:
+                remove_worktree(wt, cwd=self._store.repo_dir)
+            except Exception:
+                pass
+
+    def _reconcile_stale_running(self, exp: dict) -> bool:
+        """Recover a running experiment whose PID is gone but output is complete.
+
+        This happens when the backend loses the subprocess wait path but the
+        experiment itself already wrote its final metrics/progress files.
+        """
+        exp_id = exp["id"]
+        script_path = self._store.repo_dir / exp["script"]
+        base = script_path.with_suffix("")
+        log_path = base.with_suffix(".log")
+        progress_path = base.with_suffix(".progress")
+        now = datetime.now(timezone.utc).isoformat()
+
+        output = log_path.read_text() if log_path.exists() else ""
+        result = self._extract_json(output)
+        if result is not None:
+            metrics = result.get("metrics", {})
+            meta = {**exp.get("meta", {}), **result.get("meta", {})}
+            self._store.update_experiment(
+                exp_id,
+                status="completed",
+                metrics=metrics,
+                meta=meta,
+                pid=None,
+                error=None,
+                finished_at=now,
+            )
+            self._cleanup_worktree(exp)
+            return True
+
+        if progress_path.exists():
+            try:
+                progress = json.loads(progress_path.read_text())
+            except json.JSONDecodeError:
+                progress = {}
+            if progress.get("pipeline_status") == "done" or progress.get("status") == "done":
+                self._store.update_experiment(
+                    exp_id,
+                    status="completed",
+                    metrics=exp.get("metrics"),
+                    pid=None,
+                    error=None,
+                    finished_at=now,
+                )
+                self._cleanup_worktree(exp)
+                return True
+
+        return False
 
     async def _monitor_pid(self, exp: dict):
         """Poll a PID until it exits, then capture results from the log file."""
@@ -269,6 +345,7 @@ class ExperimentRunner:
             stderr=asyncio.subprocess.STDOUT,
             cwd=run_cwd,
             env=env,
+            start_new_session=True,
         )
         log_file.close()  # the child process has inherited the fd
 
@@ -301,17 +378,11 @@ class ExperimentRunner:
                 await asyncio.wait_for(process.wait(), timeout=timeout)
             except asyncio.TimeoutError:
                 timed_out = True
-                try:
-                    os.kill(process.pid, signal.SIGTERM)
-                except ProcessLookupError:
-                    pass
+                self._signal_experiment(process.pid, signal.SIGTERM)
                 try:
                     await asyncio.wait_for(process.wait(), timeout=10)
                 except asyncio.TimeoutError:
-                    try:
-                        os.kill(process.pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
+                    self._signal_experiment(process.pid, signal.SIGKILL)
                     await process.wait()
         else:
             await process.wait()
@@ -369,7 +440,9 @@ class ExperimentRunner:
             if not line:
                 continue
             try:
-                return json.loads(line)
+                parsed = json.loads(line)
+                if isinstance(parsed, dict):
+                    return parsed
             except json.JSONDecodeError:
                 continue
         return None
@@ -378,19 +451,19 @@ class ExperimentRunner:
         exp = self._store.get_experiment(exp_id)
         if not exp:
             return None
+        if exp["status"] == "pending":
+            return self._store.update_experiment(
+                exp_id,
+                status="cancelled",
+                finished_at=datetime.now(timezone.utc).isoformat(),
+            )
         if exp["status"] != "running":
             return exp
 
         if exp.get("pid"):
-            try:
-                os.kill(exp["pid"], signal.SIGTERM)
-            except ProcessLookupError:
-                pass
+            self._signal_experiment(exp["pid"], signal.SIGTERM)
             await asyncio.sleep(10)
-            try:
-                os.kill(exp["pid"], signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+            self._signal_experiment(exp["pid"], signal.SIGKILL)
 
         # Clean up worktree
         wt = (exp.get("meta") or {}).get("worktree")
@@ -442,6 +515,12 @@ class ExperimentRunner:
         """
         deadline = asyncio.get_event_loop().time() + timeout
         while True:
+            # Reconcile stale running experiments whose process already exited.
+            for exp in list(self._store.list_experiments_by_status("running")):
+                pid = exp.get("pid")
+                if pid is not None and not self._pid_alive(pid):
+                    self._reconcile_stale_running(exp)
+
             # Check store for any finished experiments we haven't returned yet.
             # This catches results across server restarts and race conditions.
             for status in ("completed", "failed"):
