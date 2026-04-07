@@ -124,6 +124,28 @@ class ExperimentRunner:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.symlink_to(venv_dir)
 
+    def _symlink_the_lab_files(self, worktree_path: Path):
+        """Symlink .the_lab/preamble.sh and .the_lab/bin/ into the worktree.
+
+        These files are gitignored (branch-independent infrastructure) but
+        experiments need them in worktrees — same pattern as _symlink_venvs.
+        """
+        lab_dir = self._store.repo_dir / ".the_lab"
+
+        src = lab_dir / "preamble.sh"
+        if src.exists():
+            dst = worktree_path / ".the_lab" / "preamble.sh"
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            if not dst.exists() and not dst.is_symlink():
+                dst.symlink_to(src)
+
+        src_bin = lab_dir / "bin"
+        if src_bin.is_dir():
+            dst_bin = worktree_path / ".the_lab" / "bin"
+            dst_bin.parent.mkdir(parents=True, exist_ok=True)
+            if not dst_bin.exists() and not dst_bin.is_symlink():
+                dst_bin.symlink_to(src_bin)
+
     async def reattach_running(self):
         """Re-attach to experiments that survived a server restart.
         Call this once after the event loop is running."""
@@ -283,6 +305,7 @@ class ExperimentRunner:
             # Worktrees only contain git-tracked files, but experiments often
             # need virtual environments which are in .gitignore.
             self._symlink_venvs(worktree_path)
+            self._symlink_the_lab_files(worktree_path)
             run_cwd = str(worktree_path)
         except Exception:
             worktree_path = None  # fall back to main repo
