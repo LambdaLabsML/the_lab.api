@@ -18,6 +18,7 @@ O(1) instead of O(I×E) filesystem scans.
 from __future__ import annotations
 
 import json
+import shutil
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -296,6 +297,49 @@ class Store:
         _write_json(idea_dir / f"{exp_id}.json", exp)
         with self._lock:
             self._experiments[exp_id] = exp
+        return exp
+
+    def delete_experiment(self, exp_id: int) -> dict | None:
+        exp = self._experiments.get(exp_id)
+        if not exp:
+            return None
+
+        idea_id = exp["idea_id"]
+        idea_dir = self._idea_dir(idea_id)
+        script_path = self.repo_dir / exp["script"]
+        cleanup_paths = [
+            idea_dir / f"{exp_id}.json",
+            script_path,
+            script_path.with_suffix(".log"),
+            script_path.with_suffix(".err"),
+            script_path.with_suffix(".progress"),
+            script_path.with_suffix(".metrics"),
+            script_path.with_suffix(".metrics.jsonl"),
+        ]
+
+        outdir = (exp.get("meta") or {}).get("outdir")
+        if outdir:
+            cleanup_paths.append(Path(outdir))
+
+        worktree = (exp.get("meta") or {}).get("worktree")
+        if worktree:
+            cleanup_paths.append(Path(worktree))
+
+        for path in cleanup_paths:
+            try:
+                if path.is_dir():
+                    shutil.rmtree(path, ignore_errors=True)
+                else:
+                    path.unlink(missing_ok=True)
+            except FileNotFoundError:
+                pass
+
+        with self._lock:
+            self._experiments.pop(exp_id, None)
+            exp_ids = self._exp_by_idea.get(idea_id)
+            if exp_ids is not None:
+                exp_ids.discard(exp_id)
+
         return exp
 
     def list_experiments(self, idea_id: int) -> list[dict]:
