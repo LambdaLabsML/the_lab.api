@@ -6,7 +6,7 @@
 </h3>
 
 <p align="center">
-    Jump to: <a href="#quick-start">Quick Start</a> | <a href="#writing-experiment-scripts">Experiments</a> | <a href="#environment-variables">Env Vars</a> | <a href="#understanding-loopmd">Agent Loop</a> | <a href="#architecture">Architecture</a>
+    Jump to: <a href="#quick-start">Quick Start</a> | <a href="#writing-experiment-scripts">Experiments</a> | <a href="#environment-variables">Env Vars</a> | <a href="#understanding-loopmd">Agent Loop</a> | <a href="#research-chatbot">Chatbot</a> | <a href="#architecture">Architecture</a>
 </p>
 
 <p align="center">
@@ -286,6 +286,33 @@ GET /api/v1/digest
 ```
 
 Returns: total ideas/experiments, global best metrics (with source idea/experiment), concluded ideas with conclusions and key insights, abandoned ideas with reasons, plus the current open ideas and running experiments. Designed to fit in a manageable context window even after 50+ ideas.
+
+---
+
+## Research Chatbot
+
+The dashboard includes an AI-powered chat panel that lets you ask questions about your research project — experiment comparisons, best results, key insights, or trends. It uses Claude with the full project state as context.
+
+### Setup
+
+Create a `.env` file in your repository root with your Anthropic API key:
+
+```bash
+ANTHROPIC_API_KEY=sk-ant-...your-key-here...
+```
+
+The server loads this file automatically on startup. You can also set the environment variable directly instead of using a `.env` file.
+
+### Usage
+
+Once an API key is configured, a green chat button appears in the bottom-right corner of the dashboard. Click it to open the chat panel. Example questions:
+
+- "What is the best result so far?"
+- "Compare experiments #12 and #15 — what changed and how did metrics differ?"
+- "Which ideas have been abandoned and why?"
+- "Summarize the key insights from concluded ideas"
+
+The chatbot streams responses in real time and cites specific idea/experiment IDs with actual metric values.
 
 ---
 
