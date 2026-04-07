@@ -16,7 +16,7 @@
 
 ## How Experiments Work
 
-You have access to a local experiment management API at `http://localhost:8000/api/v1`. Use it to structure your work. Every endpoint is fully documented — run `GET /openapi.json` or open the **API tab** in the dashboard for descriptions, parameters, and examples.
+You have access to a local experiment management API at `http://localhost:8001/api/v1`. Use it to structure your work.
 
 ### Core concepts
 
@@ -27,31 +27,39 @@ You have access to a local experiment management API at `http://localhost:8000/a
 
 ### Research workflow
 
-**Start every session by checking the leaderboard** — `GET /leaderboard?metric=<key>` returns a compact summary of top experiments, open ideas, running experiments, key insights, and global best metrics. Add `&include_details=true` to see full per-problem metrics and experiment settings.
+**Start every session by checking the digest** — `GET /digest` returns a compact summary of all concluded ideas, key insights, and global best metrics.
 
-Then check for human suggestions — `GET /ideas?status=suggested`. Adopt feasible ones, abandon infeasible ones with a note. If there are no suggestions, check `GET /task` for the current standing directive.
+Then check for human suggestions — `GET /ideas?status=suggested`. Adopt feasible ones, abandon infeasible ones with a note.
 
 The core loop:
 
-1. **Search existing ideas** → `GET /ideas/search?q=keyword1,keyword2,...` — before creating an idea, search for similar ones by keywords. Filter with `&status=concluded&metric=accuracy_per_mtoken&min_metric=4.0` to find what actually worked. Review their experiment metrics to avoid duplicating work and to build on prior results.
-2. **Check parent context** → `GET /ideas/<id>/parent` — when branching from an existing idea, review the parent's experiments, metrics, and notes to understand what was already tried and what worked.
-3. **Create idea** → `POST /ideas/new {parent_ids, description}` — creates git branch
-4. **Checkout** → `POST /ideas/<id>/checkout` — auto-commits current work, switches branch
-5. **Create experiment** → `POST /ideas/<id>/experiments {description, script_content, meta, tags}`
-6. **Start** → `POST /experiments/<id>/start {timeout?}` — runs script in isolated worktree
-7. **Monitor** → `GET /experiments/<id>/progress`, `GET /experiments/<id>/log?tail=50`
-8. **Wait** → `GET /wait?experiment_id=<id>` — blocks until finished
-9. **Compare with best** → `GET /leaderboard?metric=<key>&include_details=true` — compare your experiment's metrics against the current leaderboard and best-known results. Note whether you improved, matched, or regressed relative to the previous best. Use `GET /experiments/compare?ids=<yours>,<best>` to see exactly what config changed.
-10. **Analyze** → `POST /experiments/analyze {"experiment_ids": [<yours>,<best>], "script": "<tool>"}` — run analysis scripts from `.the_lab/artifacts/trace_tools/` to understand *why* results differ (failure modes, collaboration patterns, etc.). Returns table-ready `columns` + `rows`.
-11. **Note findings** → `POST /ideas/<id>/note {text, level}` — include how results compare to the previous best
-12. **Conclude** → `POST /ideas/<id>/conclude {conclusion}` — then branch into next idea
+1. **Search existing ideas** → `GET /ideas/search?q=keyword1,keyword2,...` — before creating an idea, search for similar ones by keywords. Review the returned ideas and their experiment metrics to avoid duplicating work and to build on prior results.
+2. **Create idea** → `POST /ideas/new {parent_ids, description}` — creates git branch
+3. **Checkout** → `POST /ideas/<id>/checkout` — auto-commits current work, switches branch
+4. **Create experiment** → `POST /ideas/<id>/experiments {description, script_content, meta, tags}`
+5. **Start** → `POST /experiments/<id>/start {timeout?}` — runs script in isolated worktree
+6. **Monitor** → `GET /experiments/<id>/progress`, `GET /experiments/<id>/log?tail=50`
+7. **Wait** → `GET /wait?experiment_id=<id>` — blocks until finished
+8. **Note findings** → `POST /ideas/<id>/note {text, level}`
+9. **Conclude** → `POST /ideas/<id>/conclude {conclusion}` — then branch into next idea
 
 ### Script contract
 
 Scripts must print `{"metrics": {...}}` as their **last stdout line** (or omit for setup tasks). Optional extras:
 - `$THE_LAB_PROGRESS` — write progress JSON for live monitoring
 - `$THE_LAB_METRICS` — append JSONL for per-step training curves
-- `.the_lab/preamble.sh` — auto-sourced before every script (venv activation, etc.)
+- `.the_lab/preamble.sh` — auto-sourced before every script; use it for shared helpers like `run_findings_lab`
+
+Recommended experiment script pattern:
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+source .the_lab/preamble.sh
+run_findings_lab --held-out --n-per-problem 10 --swarm-size 2 --temperature 0.7 --turns 128
+```
+
+For all experiments started from Codex, include the tag `codex-5.4`.
 
 ### Git integration
 
