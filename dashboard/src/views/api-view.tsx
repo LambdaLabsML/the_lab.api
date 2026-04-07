@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from "preact/hooks";
 import { apiSpec } from "../state/signals";
-import { getOpenApiSpec } from "../state/api";
+import { getOpenApiSpec, getApiStats } from "../state/api";
+import type { ApiStatsResponse } from "../state/api";
 import { syntaxHighlight } from "../lib/syntax-highlight";
 import { escapeHtml } from "../lib/format";
 
@@ -26,7 +27,7 @@ interface Endpoint {
 
 function classifyEndpoint(method: string, path: string, summary: string): string {
   const p = path.toLowerCase();
-  if (p === "/api/v1/digest" || p === "/api/v1/backlog" || p === "/api/v1/graph") return "orientation";
+  if (p === "/api/v1/digest" || p === "/api/v1/leaderboard" || p === "/api/v1/backlog" || p === "/api/v1/graph" || p === "/api/v1/task" || p === "/api/v1/stats") return "orientation";
   if (p.match(/\/experiments\/.*\/(progress|log|timeseries)/)) return "monitoring";
   if (p.match(/\/experiments\/compare/) || p.match(/compare-curves/)) return "comparison";
   if (p.match(/\/experiments\/.*\/(start|restart|cancel)/) || (method === "post" && p.match(/\/experiments\//))) return "lifecycle";
@@ -75,9 +76,12 @@ export function ApiView() {
   const [body, setBody] = useState("");
   const [response, setResponse] = useState<{ status: string; body: string; ok: boolean } | null>(null);
   const [sending, setSending] = useState(false);
+  const [stats, setStats] = useState<ApiStatsResponse | null>(null);
+  const [showStats, setShowStats] = useState(false);
 
   useEffect(() => {
     if (!spec) getOpenApiSpec().then((s) => (apiSpec.value = s));
+    getApiStats().then(setStats).catch(() => {});
   }, []);
 
   const groups = useMemo(() => {
@@ -151,10 +155,56 @@ export function ApiView() {
     }
   }
 
+  // Build endpoint → call count lookup from stats
+  const callCounts = useMemo(() => {
+    const map: Record<string, number> = {};
+    if (!stats) return map;
+    for (const { endpoint, count } of stats.calls) {
+      // endpoint is "GET /api/v1/ideas/{id}" — extract method + path
+      map[endpoint] = count;
+    }
+    return map;
+  }, [stats]);
+
+  function getCount(method: string, path: string): number {
+    // Try exact match, then with {id} normalization
+    const key = `${method} ${path}`;
+    if (callCounts[key]) return callCounts[key];
+    const normalized = path.replace(/\/\{[^}]+\}/g, "/{id}");
+    const normKey = `${method} ${normalized}`;
+    return callCounts[normKey] || 0;
+  }
+
   return (
     <>
       <div id="api-container">
         <div id="api-list">
+          <div
+            class="api-stats-toggle"
+            onClick={() => setShowStats(!showStats)}
+            style={{ padding: "8px 12px", cursor: "pointer", color: "#d29922", fontSize: "11px", borderBottom: "1px solid #21262d" }}
+          >
+            <span class={`arrow${showStats ? " open" : ""}`}>&#9654;</span> Usage Stats
+            {stats && <span style={{ color: "#484f58", marginLeft: "8px" }}>{stats.total_calls} total calls</span>}
+          </div>
+          {showStats && stats && (
+            <div style={{ padding: "8px 12px", fontSize: "11px", borderBottom: "1px solid #21262d", maxHeight: "300px", overflowY: "auto" }}>
+              <div style={{ color: "#8b949e", marginBottom: "6px", fontWeight: 700 }}>Top Endpoints</div>
+              {stats.calls.slice(0, 15).map((c) => (
+                <div key={c.endpoint} style={{ display: "flex", justifyContent: "space-between", padding: "1px 0", color: "#c9d1d9" }}>
+                  <span>{c.endpoint}</span>
+                  <span style={{ color: "#58a6ff", marginLeft: "8px" }}>{c.count}</span>
+                </div>
+              ))}
+              <div style={{ color: "#8b949e", marginTop: "10px", marginBottom: "6px", fontWeight: 700 }}>Common Patterns</div>
+              {stats.patterns.slice(0, 15).map((p) => (
+                <div key={p.sequence} style={{ display: "flex", justifyContent: "space-between", padding: "1px 0", color: "#c9d1d9" }}>
+                  <span style={{ fontSize: "10px" }}>{p.sequence}</span>
+                  <span style={{ color: "#3fb950", marginLeft: "8px", flexShrink: 0 }}>{p.count}</span>
+                </div>
+              ))}
+            </div>
+          )}
           {!spec && <div style={{ padding: "20px", color: "#484f58" }}>Loading API spec...</div>}
           {TAG_ORDER.map((tag) => {
             const items = groups[tag];
@@ -170,6 +220,7 @@ export function ApiView() {
                   >
                     <span class={`api-method ${ep.method.toLowerCase()}`}>{ep.method}</span>
                     <span class="api-path">{ep.path}</span>
+                    {(() => { const n = getCount(ep.method, ep.path); return n > 0 ? <span class="api-call-count">{n}</span> : null; })()}
                     {ep.summary && <span class="api-desc">{ep.summary}</span>}
                   </div>
                 ))}

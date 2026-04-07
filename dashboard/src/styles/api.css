@@ -25,6 +25,7 @@
 .api-method.get { background: #0f5323; color: #3fb950; }
 .api-method.post { background: #2d1a00; color: #d29922; }
 .api-path { color: #c9d1d9; }
+.api-call-count { background: #21262d; color: #58a6ff; font-size: 9px; padding: 1px 5px; border-radius: 8px; margin-left: 4px; flex-shrink: 0; }
 .api-desc { color: #8b949e; margin-left: auto; font-size: 11px; white-space: nowrap; }
 
 #api-detail {

@@ -140,6 +140,21 @@ export async function getOpenApiSpec(): Promise<OpenAPISpec> {
 }
 
 // ---------------------------------------------------------------------------
+// Stats
+// ---------------------------------------------------------------------------
+
+export interface ApiStatsResponse {
+  total_calls: number;
+  calls: { endpoint: string; count: number }[];
+  patterns: { sequence: string; count: number }[];
+}
+
+/** GET /api/v1/stats */
+export async function getApiStats(): Promise<ApiStatsResponse> {
+  return fetchJson<ApiStatsResponse>("/api/v1/stats");
+}
+
+// ---------------------------------------------------------------------------
 // Sandbox
 // ---------------------------------------------------------------------------
 
