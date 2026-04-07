@@ -1,29 +1,30 @@
 /* stats.css — Usage Stats view */
 
-.stats-view { padding: 16px; overflow-y: auto; flex: 1; }
+.stats-view { padding: 16px; overflow: hidden; flex: 1; display: flex; flex-direction: column; }
 .stats-header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 16px; }
 .stats-header h2 { margin: 0; font-size: 16px; color: #c9d1d9; }
 .stats-total { color: #58a6ff; font-size: 13px; font-weight: 600; }
 
-.stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
-@media (max-width: 900px) { .stats-grid { grid-template-columns: 1fr; } }
+.stats-columns { display: flex; gap: 12px; flex: 1; min-height: 0; }
+@media (max-width: 900px) { .stats-columns { flex-direction: column; } }
 
-.stats-card { background: #161b22; border: 1px solid #21262d; border-radius: 8px; overflow: hidden; }
-.stats-card.history { grid-column: 1 / -1; }
+.stats-card { background: #161b22; border: 1px solid #21262d; border-radius: 8px; overflow: hidden; flex: 1; display: flex; flex-direction: column; min-width: 0; }
 .stats-card-title {
   padding: 10px 14px; font-size: 11px; font-weight: 700; text-transform: uppercase;
   letter-spacing: 0.5px; color: #8b949e; border-bottom: 1px solid #21262d;
   display: flex; align-items: center; gap: 8px; background: #0d1117;
 }
-.stats-card-body { padding: 6px 8px; max-height: 420px; overflow-y: auto; }
-.stats-card-body.history { max-height: 300px; }
+.stats-card-body { padding: 6px 8px; overflow-y: auto; flex: 1; min-height: 0; }
+.stats-card-body.history { }
 
 /* --- Bar rows --- */
 .stats-bar-row {
   position: relative; display: flex; align-items: center; gap: 6px;
   padding: 4px 8px; border-radius: 4px; margin-bottom: 1px; overflow: hidden;
 }
+.stats-bar-row { cursor: pointer; }
 .stats-bar-row:hover { background: #1c2128; }
+.stats-bar-row.selected { background: #0c2d6b44; outline: 1px solid #388bfd55; }
 .stats-bar-bg {
   position: absolute; left: 0; top: 0; bottom: 0;
   background: #58a6ff10; border-radius: 4px; pointer-events: none;
@@ -84,3 +85,9 @@
   word-break: break-all; line-height: 1.5;
 }
 .stats-detail-label { color: #58a6ff; font-weight: 600; margin-right: 4px; }
+
+/* --- Example groups --- */
+.stats-example-group { border-bottom: 1px solid #21262d; padding-bottom: 4px; margin-bottom: 4px; }
+.stats-example-group:last-child { border-bottom: none; margin-bottom: 0; }
+.stats-clear-btn { margin-left: auto; color: #484f58; cursor: pointer; font-size: 10px; text-transform: none; letter-spacing: 0; font-weight: 400; }
+.stats-clear-btn:hover { color: #f85149; }

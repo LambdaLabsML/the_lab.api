@@ -1,4 +1,4 @@
-import { useState, useEffect } from "preact/hooks";
+import { useState, useEffect, useMemo } from "preact/hooks";
 import { getApiStats } from "../state/api";
 import type { ApiStatsResponse } from "../state/api";
 
@@ -10,20 +10,80 @@ interface HistoryEntry {
   body: string;
 }
 
+type StatsData = ApiStatsResponse & { history?: HistoryEntry[] };
+
+/** Normalize /api/v1/ideas/42 → /api/v1/ideas/{id} to match pattern keys. */
+function normalizePath(path: string): string {
+  return path.replace(/\/(\d+)(?=\/|$)/g, "/{id}");
+}
+
+/**
+ * Find history entries that match a pattern sequence.
+ * For n=1: match individual calls.
+ * For n>1: find consecutive calls matching the pattern steps.
+ */
+function findExamples(
+  history: HistoryEntry[],
+  pattern: string,
+  nSteps: number,
+  limit = 10,
+): HistoryEntry[][] {
+  if (nSteps === 1) {
+    // pattern is "GET /api/v1/ideas/{id}" — match individual calls
+    return history
+      .filter((h) => `${h.method} ${normalizePath(h.path)}` === pattern)
+      .slice(0, limit)
+      .map((h) => [h]);
+  }
+  const steps = pattern.split(" → ");
+  const results: HistoryEntry[][] = [];
+  for (let i = 0; i <= history.length - nSteps && results.length < limit; i++) {
+    let match = true;
+    for (let s = 0; s < nSteps; s++) {
+      const h = history[i + s];
+      const key = `${h.method} ${normalizePath(h.path)}`;
+      if (key !== steps[s]) { match = false; break; }
+    }
+    if (match) {
+      results.push(history.slice(i, i + nSteps));
+    }
+  }
+  return results;
+}
+
 export function StatsView() {
-  const [stats, setStats] = useState<(ApiStatsResponse & { history?: HistoryEntry[] }) | null>(null);
-  const [patternLen, setPatternLen] = useState(2);
+  const [stats, setStats] = useState<StatsData | null>(null);
+  const [patternLen, setPatternLen] = useState(1);
+  const [selected, setSelected] = useState<string | null>(null);
 
   useEffect(() => {
-    getApiStats(patternLen).then(setStats).catch(() => {});
+    getApiStats(Math.max(patternLen, 2)).then(setStats).catch(() => {});
   }, [patternLen]);
 
   useEffect(() => {
     const timer = setInterval(() => {
-      getApiStats(patternLen).then(setStats).catch(() => {});
+      getApiStats(Math.max(patternLen, 2)).then(setStats).catch(() => {});
     }, 15_000);
     return () => clearInterval(timer);
   }, [patternLen]);
+
+  // Unified list: n=1 uses calls, n>1 uses patterns
+  const rows = useMemo(() => {
+    if (!stats) return [];
+    if (patternLen === 1) {
+      return stats.calls.map((c) => ({ key: c.endpoint, count: c.count }));
+    }
+    return stats.patterns.map((p) => ({ key: p.sequence, count: p.count }));
+  }, [stats, patternLen]);
+
+  const topCount = rows[0]?.count || 1;
+
+  // Examples for selected pattern from history (reversed = oldest first for sequence matching)
+  const examples = useMemo(() => {
+    if (!selected || !stats?.history) return [];
+    const hist = [...stats.history].reverse(); // oldest first
+    return findExamples(hist, selected, patternLen);
+  }, [selected, stats?.history, patternLen]);
 
   if (!stats) return <div style={{ padding: 20, color: "#484f58" }}>Loading stats...</div>;
 
@@ -34,38 +94,18 @@ export function StatsView() {
         <span class="stats-total">{stats.total_calls.toLocaleString()} total calls</span>
       </div>
 
-      <div class="stats-grid">
-        {/* Top Endpoints */}
-        <div class="stats-card">
-          <div class="stats-card-title">Top Endpoints</div>
-          <div class="stats-card-body">
-            {stats.calls.slice(0, 20).map((c) => {
-              const pct = stats.calls[0] ? (c.count / stats.calls[0].count) * 100 : 0;
-              const [method, ...rest] = c.endpoint.split(" ");
-              const path = rest.join(" ");
-              return (
-                <div key={c.endpoint} class="stats-bar-row">
-                  <div class="stats-bar-bg" style={{ width: pct + "%" }} />
-                  <MethodPill method={method} />
-                  <EndpointPath path={path} />
-                  <span class="stats-bar-count">{c.count}</span>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Patterns */}
+      <div class="stats-columns">
+        {/* Left: patterns list */}
         <div class="stats-card">
           <div class="stats-card-title">
             Common Patterns
             <span class="stats-len-selector">
-              {[2, 3, 4, 5].map((n) => (
+              {[1, 2, 3, 4, 5].map((n) => (
                 <span
                   key={n}
                   class={`stats-len-btn${patternLen === n ? " active" : ""}`}
-                  onClick={() => setPatternLen(n)}
-                  title={`${n}-step sequences`}
+                  onClick={() => { setPatternLen(n); setSelected(null); }}
+                  title={n === 1 ? "Individual endpoints" : `${n}-step sequences`}
                 >
                   {n}
                 </span>
@@ -74,49 +114,80 @@ export function StatsView() {
             </span>
           </div>
           <div class="stats-card-body">
-            {stats.patterns.length === 0 && (
+            {rows.length === 0 && (
               <div class="stats-empty">No {patternLen}-step patterns recorded yet</div>
             )}
-            {stats.patterns.slice(0, 15).map((p) => {
-              const pct = stats.patterns[0] ? (p.count / stats.patterns[0].count) * 100 : 0;
-              const steps = p.sequence.split(" → ");
+            {rows.slice(0, 20).map((r) => {
+              const pct = (r.count / topCount) * 100;
+              const isSelected = selected === r.key;
               return (
-                <div key={p.sequence} class="stats-bar-row pattern">
-                  <div class="stats-bar-bg pattern" style={{ width: pct + "%" }} />
-                  <span class="stats-bar-sequence">
-                    {steps.map((step, i) => {
-                      const [method, ...rest] = step.split(" ");
-                      const path = rest.join(" ");
-                      return (
-                        <span key={i}>
-                          {i > 0 && <span class="stats-arrow">→</span>}
-                          <MethodPill method={method} small />
-                          <EndpointPath path={path} short />
-                        </span>
-                      );
-                    })}
-                  </span>
-                  <span class="stats-bar-count pattern">{p.count}</span>
+                <div
+                  key={r.key}
+                  class={`stats-bar-row${patternLen > 1 ? " pattern" : ""}${isSelected ? " selected" : ""}`}
+                  onClick={() => setSelected(isSelected ? null : r.key)}
+                >
+                  <div class={`stats-bar-bg${patternLen > 1 ? " pattern" : ""}`} style={{ width: pct + "%" }} />
+                  <PatternLabel pattern={r.key} nSteps={patternLen} />
+                  <span class={`stats-bar-count${patternLen > 1 ? " pattern" : ""}`}>{r.count}</span>
                 </div>
               );
             })}
           </div>
         </div>
-      </div>
 
-      {/* Call History */}
-      <div class="stats-card history">
-        <div class="stats-card-title">Recent Calls</div>
-        <div class="stats-card-body history">
-          {(!stats.history || stats.history.length === 0) && (
-            <div class="stats-empty">No calls recorded yet (history starts when the server boots)</div>
-          )}
-          {(stats.history || []).map((h, i) => (
-            <HistoryRow key={i} entry={h} />
-          ))}
+        {/* Right: examples detail */}
+        <div class="stats-card">
+          <div class="stats-card-title">
+            {selected ? "Recent Examples" : "Recent Calls"}
+            {selected && (
+              <span class="stats-clear-btn" onClick={() => setSelected(null)}>&times; clear</span>
+            )}
+          </div>
+          <div class="stats-card-body history">
+            {selected && examples.length === 0 && (
+              <div class="stats-empty">No recent examples in history (history tracks live calls only)</div>
+            )}
+            {selected && examples.map((group, gi) => (
+              <div key={gi} class="stats-example-group">
+                {group.map((h, i) => (
+                  <HistoryRow key={i} entry={h} showDate={i === 0} />
+                ))}
+              </div>
+            ))}
+            {!selected && (stats.history || []).map((h, i) => (
+              <HistoryRow key={i} entry={h} showDate />
+            ))}
+          </div>
         </div>
       </div>
     </div>
+  );
+}
+
+function PatternLabel({ pattern, nSteps }: { pattern: string; nSteps: number }) {
+  if (nSteps === 1) {
+    const [method, ...rest] = pattern.split(" ");
+    return (
+      <span class="stats-bar-sequence">
+        <MethodPill method={method} />
+        <EndpointPath path={rest.join(" ")} />
+      </span>
+    );
+  }
+  const steps = pattern.split(" → ");
+  return (
+    <span class="stats-bar-sequence">
+      {steps.map((step, i) => {
+        const [method, ...rest] = step.split(" ");
+        return (
+          <span key={i}>
+            {i > 0 && <span class="stats-arrow">→</span>}
+            <MethodPill method={method} small />
+            <EndpointPath path={rest.join(" ")} short />
+          </span>
+        );
+      })}
+    </span>
   );
 }
 
@@ -129,7 +200,6 @@ function MethodPill({ method, small }: { method: string; small?: boolean }) {
 }
 
 function EndpointPath({ path, short }: { path: string; short?: boolean }) {
-  // Strip /api/v1 prefix for compact display
   const display = path.replace(/^\/api\/v1/, "");
   return (
     <span class={`stats-endpoint${short ? " short" : ""}`} title={path}>
@@ -138,10 +208,12 @@ function EndpointPath({ path, short }: { path: string; short?: boolean }) {
   );
 }
 
-function HistoryRow({ entry }: { entry: HistoryEntry }) {
+function HistoryRow({ entry, showDate }: { entry: HistoryEntry; showDate?: boolean }) {
   const [expanded, setExpanded] = useState(false);
   const time = new Date(entry.t);
-  const timeStr = time.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  const timeStr = showDate
+    ? time.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+    : time.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
   const hasArgs = !!(entry.query || entry.body);
   const argsPreview = entry.query
     ? "?" + entry.query
