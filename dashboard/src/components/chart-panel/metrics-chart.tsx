@@ -87,12 +87,11 @@ export function MetricsChart() {
       ds.pointRadius = chartData.pointRadii as any;
       (ds as any)._expData = chartData.expData;
       chartRef.current.data.labels = chartData.labels;
-      chartRef.current.options.scales!.y!.title = {
-        display: true,
-        text: metric,
-        color: "#8b949e",
-        font: { size: 10 },
-      };
+      const yBounds = computeYBounds(chartData.values);
+      const yScale = chartRef.current.options.scales!.y!;
+      yScale.title = { display: true, text: metric, color: "#8b949e", font: { size: 10 } };
+      yScale.min = yBounds.min;
+      yScale.max = yBounds.max;
       chartRef.current.resize();
       chartRef.current.update("none");
       return;
@@ -130,6 +129,29 @@ export function MetricsChart() {
       </div>
     </div>
   );
+}
+
+/** IQR-based y-axis bounds that clip extreme outliers. */
+function computeYBounds(values: number[]): { min?: number; max?: number } {
+  const nums = values.filter((v) => v != null && isFinite(v));
+  if (nums.length < 4) return {};
+
+  const sorted = nums.slice().sort((a, b) => a - b);
+  const q1 = sorted[Math.floor(sorted.length * 0.25)];
+  const q3 = sorted[Math.floor(sorted.length * 0.75)];
+  const iqr = q3 - q1;
+
+  if (iqr === 0) return {};
+
+  const lo = q1 - 1.5 * iqr;
+  const hi = q3 + 1.5 * iqr;
+
+  const dataMin = sorted[0];
+  const dataMax = sorted[sorted.length - 1];
+  if (dataMin >= lo && dataMax <= hi) return {};
+
+  const pad = (hi - lo) * 0.05;
+  return { min: lo - pad, max: hi + pad };
 }
 
 function createChart(
@@ -199,6 +221,7 @@ function createChart(
           grid: { color: "#21262d" },
         },
         y: {
+          ...computeYBounds(chartData.values),
           title: {
             display: true,
             text: metricKey,
