@@ -78,11 +78,12 @@ export function ApiView() {
   const [sending, setSending] = useState(false);
   const [stats, setStats] = useState<ApiStatsResponse | null>(null);
   const [showStats, setShowStats] = useState(false);
+  const [patternLen, setPatternLen] = useState(2);
 
   useEffect(() => {
     if (!spec) getOpenApiSpec().then((s) => (apiSpec.value = s));
-    getApiStats().then(setStats).catch(() => {});
-  }, []);
+    getApiStats(patternLen).then(setStats).catch(() => {});
+  }, [patternLen]);
 
   const groups = useMemo(() => {
     if (!spec) return {};
@@ -182,27 +183,59 @@ export function ApiView() {
           <div
             class="api-stats-toggle"
             onClick={() => setShowStats(!showStats)}
-            style={{ padding: "8px 12px", cursor: "pointer", color: "#d29922", fontSize: "11px", borderBottom: "1px solid #21262d" }}
           >
-            <span class={`arrow${showStats ? " open" : ""}`}>&#9654;</span> Usage Stats
-            {stats && <span style={{ color: "#484f58", marginLeft: "8px" }}>{stats.total_calls} total calls</span>}
+            <span class={`arrow${showStats ? " open" : ""}`}>&#9654;</span>
+            <span class="api-stats-title">Usage Stats</span>
+            {stats && <span class="api-stats-total">{stats.total_calls.toLocaleString()} calls</span>}
           </div>
           {showStats && stats && (
-            <div style={{ padding: "8px 12px", fontSize: "11px", borderBottom: "1px solid #21262d", maxHeight: "300px", overflowY: "auto" }}>
-              <div style={{ color: "#8b949e", marginBottom: "6px", fontWeight: 700 }}>Top Endpoints</div>
-              {stats.calls.slice(0, 15).map((c) => (
-                <div key={c.endpoint} style={{ display: "flex", justifyContent: "space-between", padding: "1px 0", color: "#c9d1d9" }}>
-                  <span>{c.endpoint}</span>
-                  <span style={{ color: "#58a6ff", marginLeft: "8px" }}>{c.count}</span>
+            <div class="api-stats-panel">
+              <div class="api-stats-section">
+                <div class="api-stats-heading">Top Endpoints</div>
+                <div class="api-stats-bars">
+                  {stats.calls.slice(0, 12).map((c) => {
+                    const pct = stats.calls[0] ? (c.count / stats.calls[0].count) * 100 : 0;
+                    return (
+                      <div key={c.endpoint} class="api-stats-bar-row">
+                        <div class="api-stats-bar-bg" style={{ width: pct + "%" }} />
+                        <span class="api-stats-bar-label">{c.endpoint}</span>
+                        <span class="api-stats-bar-count">{c.count}</span>
+                      </div>
+                    );
+                  })}
                 </div>
-              ))}
-              <div style={{ color: "#8b949e", marginTop: "10px", marginBottom: "6px", fontWeight: 700 }}>Common Patterns</div>
-              {stats.patterns.slice(0, 15).map((p) => (
-                <div key={p.sequence} style={{ display: "flex", justifyContent: "space-between", padding: "1px 0", color: "#c9d1d9" }}>
-                  <span style={{ fontSize: "10px" }}>{p.sequence}</span>
-                  <span style={{ color: "#3fb950", marginLeft: "8px", flexShrink: 0 }}>{p.count}</span>
+              </div>
+              <div class="api-stats-section">
+                <div class="api-stats-heading">
+                  Common Patterns
+                  <span class="api-stats-len-selector">
+                    {[2, 3, 4, 5].map((n) => (
+                      <span
+                        key={n}
+                        class={`api-stats-len-btn${patternLen === n ? " active" : ""}`}
+                        onClick={() => setPatternLen(n)}
+                        title={`${n}-step sequences`}
+                      >
+                        {n}
+                      </span>
+                    ))}
+                    <span class="api-stats-len-label">steps</span>
+                  </span>
                 </div>
-              ))}
+                {stats.patterns.length === 0 && (
+                  <div class="api-stats-empty">No {patternLen}-step patterns recorded yet</div>
+                )}
+                {stats.patterns.slice(0, 12).map((p) => {
+                  const pct = stats.patterns[0] ? (p.count / stats.patterns[0].count) * 100 : 0;
+                  return (
+                    <div key={p.sequence} class="api-stats-bar-row pattern">
+                      <div class="api-stats-bar-bg pattern" style={{ width: pct + "%" }} />
+                      <span class="api-stats-bar-label">{p.sequence}</span>
+                      <span class="api-stats-bar-count">{p.count}</span>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           )}
           {!spec && <div style={{ padding: "20px", color: "#484f58" }}>Loading API spec...</div>}

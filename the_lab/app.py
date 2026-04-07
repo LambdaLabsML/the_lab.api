@@ -1756,32 +1756,36 @@ def update_sandbox_state(req: SandboxConfigRequest):
 # --- API Stats ---
 
 @app.get("/api/v1/stats")
-def get_api_stats():
+def get_api_stats(
+    pattern_length: int = Query(default=2, ge=2, le=5, description="Length of call patterns to return (2=pairs, 3=triples, etc.)"),
+):
     """Get API endpoint usage statistics.
 
     Returns per-endpoint call counts and the most common sequential call
-    patterns (bigrams). Use this to understand how agents interact with
-    the API and which endpoints are most/least used.
+    patterns. Use ``pattern_length`` to control the sequence length:
+    2 for pairs (A→B), 3 for triples (A→B→C), up to 5.
 
     Example:
-        GET /api/v1/stats
-        -> {"total_calls": 5048, "calls": [{"endpoint": "GET /api/v1/digest", "count": 420}, ...],
-            "patterns": [{"sequence": "GET /api/v1/digest → GET /api/v1/ideas?status=suggested", "count": 180}, ...]}
+        GET /api/v1/stats?pattern_length=3
+        -> {"total_calls": 5048, "pattern_length": 3,
+            "calls": [{"endpoint": "GET /api/v1/digest", "count": 420}, ...],
+            "patterns": [{"sequence": "digest → suggested → new", "count": 80}, ...]}
     """
-    return api_stats.get_stats()
+    return api_stats.get_stats(pattern_length=pattern_length)
 
 
 @app.post("/api/v1/stats/import")
 def import_api_stats(data: dict):
     """Import/merge external stats (e.g. from backfill script).
 
-    Accepts ``{"calls": {"endpoint": count, ...}, "patterns": {"A → B": count, ...}}``
+    Accepts ``{"calls": {...}, "patterns": {...}, "patterns_by_n": {"2": {...}, "3": {...}}}``
     and merges them into the current running stats.
-
-    Example:
-        POST /api/v1/stats/import {"calls": {"GET /api/v1/digest": 100}, "patterns": {}}
     """
-    api_stats.merge(data.get("calls", {}), data.get("patterns", {}))
+    api_stats.merge(
+        data.get("calls", {}),
+        data.get("patterns", {}),
+        patterns_by_n=data.get("patterns_by_n"),
+    )
     api_stats.flush()
     return {"status": "ok", "total_calls": api_stats.get_stats()["total_calls"]}
 

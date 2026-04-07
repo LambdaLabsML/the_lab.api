@@ -122,18 +122,23 @@ def scan_codex_sessions(sessions_dir: Path) -> list[tuple[str, str]]:
 
 def build_stats(
     calls: list[tuple[str, str]],
-) -> tuple[dict[str, int], dict[str, int]]:
-    """Build call counts and bigram patterns from a sequence of (method, path) calls."""
+) -> tuple[dict[str, int], dict[int, dict[str, int]]]:
+    """Build call counts and n-gram patterns (2-5) from a sequence of (method, path) calls."""
     counts: dict[str, int] = defaultdict(int)
-    patterns: dict[str, int] = defaultdict(int)
-    prev = None
+    patterns_by_n: dict[int, dict[str, int]] = {n: defaultdict(int) for n in range(2, 6)}
+    window: list[str] = []
     for method, path in calls:
         key = f"{method} {normalize_path(path)}"
         counts[key] += 1
-        if prev and prev != key:
-            patterns[f"{prev} → {key}"] += 1
-        prev = key
-    return dict(counts), dict(patterns)
+        window.append(key)
+        if len(window) > 5:
+            window.pop(0)
+        for n in range(2, min(len(window), 5) + 1):
+            ngram = window[-n:]
+            if len(set(ngram)) == 1:
+                continue
+            patterns_by_n[n][" → ".join(ngram)] += 1
+    return dict(counts), {n: dict(p) for n, p in patterns_by_n.items()}
 
 
 def main():
@@ -169,35 +174,39 @@ def main():
         print("No API calls found in conversation histories.")
         return
 
-    counts, patterns = build_stats(all_calls)
+    counts, patterns_by_n = build_stats(all_calls)
 
     print(f"\nTotal calls extracted: {len(all_calls)}")
     print(f"Unique endpoints: {len(counts)}")
-    print(f"Unique patterns: {len(patterns)}")
+    for n in range(2, 6):
+        print(f"Unique {n}-grams: {len(patterns_by_n.get(n, {}))}")
 
-    # Top 10 endpoints
     print("\nTop endpoints:")
     for k, v in sorted(counts.items(), key=lambda x: x[1], reverse=True)[:10]:
         print(f"  {v:4d}  {k}")
 
-    # Top 10 patterns
-    print("\nTop patterns:")
-    for k, v in sorted(patterns.items(), key=lambda x: x[1], reverse=True)[:10]:
+    print("\nTop 2-step patterns:")
+    for k, v in sorted(patterns_by_n.get(2, {}).items(), key=lambda x: x[1], reverse=True)[:5]:
+        print(f"  {v:4d}  {k}")
+
+    print("\nTop 3-step patterns:")
+    for k, v in sorted(patterns_by_n.get(3, {}).items(), key=lambda x: x[1], reverse=True)[:5]:
         print(f"  {v:4d}  {k}")
 
     # Merge into existing stats file
     stats = ApiStats(stats_path)
-    stats.merge(counts, patterns)
+    stats.merge(counts, {}, patterns_by_n=patterns_by_n)
     stats.flush()
     print(f"\nMerged into {stats_path}")
 
     # Also push to running server if available
     import urllib.request
+    payload = json.dumps({"calls": counts, "patterns_by_n": patterns_by_n}).encode()
     for port in (8001, 8002):
         try:
             req = urllib.request.Request(
                 f"http://localhost:{port}/api/v1/stats/import",
-                data=json.dumps({"calls": counts, "patterns": patterns}).encode(),
+                data=payload,
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )
