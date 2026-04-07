@@ -42,11 +42,23 @@ api_stats = ApiStats(REPO_DIR / ".the_lab" / "api_stats.json")
 
 @app.middleware("http")
 async def track_api_stats(request, call_next):
+    # Capture body preview for POST/PUT before passing to handler
+    body_preview = ""
+    if request.method in ("POST", "PUT") and request.url.path.startswith("/api/v1/"):
+        try:
+            raw = await request.body()
+            body_preview = raw.decode(errors="replace")[:200]
+        except Exception:
+            pass
     response = await call_next(request)
     path = request.url.path
-    if path.startswith("/api/v1/"):
+    if path.startswith("/api/v1/") and not path.startswith("/api/v1/stats"):
         client = request.client.host if request.client else ""
-        api_stats.record(request.method, path, client_ip=client)
+        api_stats.record(
+            request.method, path, client_ip=client,
+            query=str(request.url.query) if request.url.query else "",
+            body_preview=body_preview,
+        )
     return response
 
 
@@ -1771,7 +1783,9 @@ def get_api_stats(
             "calls": [{"endpoint": "GET /api/v1/digest", "count": 420}, ...],
             "patterns": [{"sequence": "digest → suggested → new", "count": 80}, ...]}
     """
-    return api_stats.get_stats(pattern_length=pattern_length)
+    result = api_stats.get_stats(pattern_length=pattern_length)
+    result["history"] = api_stats.get_history(limit=100)
+    return result
 
 
 @app.post("/api/v1/stats/import")

@@ -23,6 +23,9 @@ def normalize_path(path: str) -> str:
     return _ID_RE.sub("/{id}", path)
 
 
+MAX_HISTORY = 200  # recent calls to keep in memory
+
+
 class ApiStats:
     """Thread-safe API call counter with n-gram pattern tracking."""
 
@@ -36,6 +39,8 @@ class ApiStats:
         }
         # Sliding window of recent calls per client for n-gram extraction
         self._history: dict[str, deque[str]] = {}
+        # Recent call log (ring buffer)
+        self._recent: deque[dict] = deque(maxlen=MAX_HISTORY)
         self._last_flush = time.monotonic()
         self._dirty = False
         self._load()
@@ -66,9 +71,18 @@ class ApiStats:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
 
-    def record(self, method: str, path: str, client_ip: str = ""):
+    def record(self, method: str, path: str, client_ip: str = "",
+               query: str = "", body_preview: str = ""):
         """Record an API call and update n-gram pattern tracking."""
         key = f"{method} {normalize_path(path)}"
+        import datetime as _dt
+        self._recent.append({
+            "t": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+            "method": method,
+            "path": path,
+            "query": query,
+            "body": body_preview[:200] if body_preview else "",
+        })
         with self._lock:
             self._calls[key] += 1
             # Maintain sliding window per client
@@ -105,6 +119,10 @@ class ApiStats:
             "pattern_length": n,
             "total_calls": sum(calls.values()),
         }
+
+    def get_history(self, limit: int = 50) -> list[dict]:
+        """Return the most recent API calls (newest first)."""
+        return list(reversed(self._recent))[:limit]
 
     def merge(self, calls: dict[str, int], patterns: dict[str, int],
               patterns_by_n: dict[int, dict[str, int]] | None = None):

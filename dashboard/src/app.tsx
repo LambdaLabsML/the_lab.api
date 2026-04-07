@@ -9,6 +9,7 @@ import { DagView } from "./views/dag-view";
 import { TimelineView } from "./views/timeline-view";
 import { LogView } from "./views/log-view";
 import { ApiView } from "./views/api-view";
+import { StatsView } from "./views/stats-view";
 import { SandboxView } from "./views/sandbox-view";
 import { DetailPanel } from "./components/detail-panel";
 import {
@@ -36,7 +37,7 @@ function readFiltersFromUrl() {
   } else {
     const viewMap: Record<string, string> = {
       "/": "dag", "/dag": "dag", "/graph": "dag",
-      "/timeline": "timeline", "/log": "log", "/api": "api", "/sandbox": "sandbox",
+      "/timeline": "timeline", "/log": "log", "/api": "api", "/stats": "stats", "/sandbox": "sandbox",
     };
     if (viewMap[path]) currentView.value = viewMap[path];
   }
@@ -89,7 +90,7 @@ function syncUrlFromSignals() {
   const _idea = selectedIdea.value;
 
   const viewPaths: Record<string, string> = {
-    dag: "/graph", timeline: "/timeline", log: "/log", api: "/api", sandbox: "/sandbox",
+    dag: "/graph", timeline: "/timeline", log: "/log", api: "/api", stats: "/stats", sandbox: "/sandbox",
   };
   const path = viewPaths[_view] || "/graph";
 
@@ -142,8 +143,9 @@ export function App() {
         {view === "timeline" && <TimelineView />}
         {view === "log" && <LogView />}
         {view === "api" && <ApiView />}
+        {view === "stats" && <StatsView />}
         {view === "sandbox" && <SandboxView />}
-        {view !== "api" && view !== "sandbox" && <DetailPanel />}
+        {view !== "api" && view !== "stats" && view !== "sandbox" && <DetailPanel />}
       </div>
     </>
   );

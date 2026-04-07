@@ -11,5 +11,6 @@ import "./styles/sandbox.css";
 import "./styles/suggest.css";
 import "./styles/tags.css";
 import "./styles/task.css";
+import "./styles/stats.css";
 
 render(<App />, document.getElementById("app")!);

@@ -1,7 +1,6 @@
 import { useState, useEffect, useMemo } from "preact/hooks";
 import { apiSpec } from "../state/signals";
 import { getOpenApiSpec, getApiStats } from "../state/api";
-import type { ApiStatsResponse } from "../state/api";
 import { syntaxHighlight } from "../lib/syntax-highlight";
 import { escapeHtml } from "../lib/format";
 
@@ -76,14 +75,16 @@ export function ApiView() {
   const [body, setBody] = useState("");
   const [response, setResponse] = useState<{ status: string; body: string; ok: boolean } | null>(null);
   const [sending, setSending] = useState(false);
-  const [stats, setStats] = useState<ApiStatsResponse | null>(null);
-  const [showStats, setShowStats] = useState(false);
-  const [patternLen, setPatternLen] = useState(2);
+  const [callCounts, setCallCounts] = useState<Record<string, number>>({});
 
   useEffect(() => {
     if (!spec) getOpenApiSpec().then((s) => (apiSpec.value = s));
-    getApiStats(patternLen).then(setStats).catch(() => {});
-  }, [patternLen]);
+    getApiStats().then((s) => {
+      const map: Record<string, number> = {};
+      for (const { endpoint, count } of s.calls) map[endpoint] = count;
+      setCallCounts(map);
+    }).catch(() => {});
+  }, []);
 
   const groups = useMemo(() => {
     if (!spec) return {};
@@ -156,88 +157,17 @@ export function ApiView() {
     }
   }
 
-  // Build endpoint → call count lookup from stats
-  const callCounts = useMemo(() => {
-    const map: Record<string, number> = {};
-    if (!stats) return map;
-    for (const { endpoint, count } of stats.calls) {
-      // endpoint is "GET /api/v1/ideas/{id}" — extract method + path
-      map[endpoint] = count;
-    }
-    return map;
-  }, [stats]);
-
   function getCount(method: string, path: string): number {
-    // Try exact match, then with {id} normalization
     const key = `${method} ${path}`;
     if (callCounts[key]) return callCounts[key];
     const normalized = path.replace(/\/\{[^}]+\}/g, "/{id}");
-    const normKey = `${method} ${normalized}`;
-    return callCounts[normKey] || 0;
+    return callCounts[`${method} ${normalized}`] || 0;
   }
 
   return (
     <>
       <div id="api-container">
         <div id="api-list">
-          <div
-            class="api-stats-toggle"
-            onClick={() => setShowStats(!showStats)}
-          >
-            <span class={`arrow${showStats ? " open" : ""}`}>&#9654;</span>
-            <span class="api-stats-title">Usage Stats</span>
-            {stats && <span class="api-stats-total">{stats.total_calls.toLocaleString()} calls</span>}
-          </div>
-          {showStats && stats && (
-            <div class="api-stats-panel">
-              <div class="api-stats-section">
-                <div class="api-stats-heading">Top Endpoints</div>
-                <div class="api-stats-bars">
-                  {stats.calls.slice(0, 12).map((c) => {
-                    const pct = stats.calls[0] ? (c.count / stats.calls[0].count) * 100 : 0;
-                    return (
-                      <div key={c.endpoint} class="api-stats-bar-row">
-                        <div class="api-stats-bar-bg" style={{ width: pct + "%" }} />
-                        <span class="api-stats-bar-label">{c.endpoint}</span>
-                        <span class="api-stats-bar-count">{c.count}</span>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-              <div class="api-stats-section">
-                <div class="api-stats-heading">
-                  Common Patterns
-                  <span class="api-stats-len-selector">
-                    {[2, 3, 4, 5].map((n) => (
-                      <span
-                        key={n}
-                        class={`api-stats-len-btn${patternLen === n ? " active" : ""}`}
-                        onClick={() => setPatternLen(n)}
-                        title={`${n}-step sequences`}
-                      >
-                        {n}
-                      </span>
-                    ))}
-                    <span class="api-stats-len-label">steps</span>
-                  </span>
-                </div>
-                {stats.patterns.length === 0 && (
-                  <div class="api-stats-empty">No {patternLen}-step patterns recorded yet</div>
-                )}
-                {stats.patterns.slice(0, 12).map((p) => {
-                  const pct = stats.patterns[0] ? (p.count / stats.patterns[0].count) * 100 : 0;
-                  return (
-                    <div key={p.sequence} class="api-stats-bar-row pattern">
-                      <div class="api-stats-bar-bg pattern" style={{ width: pct + "%" }} />
-                      <span class="api-stats-bar-label">{p.sequence}</span>
-                      <span class="api-stats-bar-count">{p.count}</span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
           {!spec && <div style={{ padding: "20px", color: "#484f58" }}>Loading API spec...</div>}
           {TAG_ORDER.map((tag) => {
             const items = groups[tag];
