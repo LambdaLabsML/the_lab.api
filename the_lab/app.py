@@ -29,6 +29,7 @@ from .sandbox import (
 )
 from .store import Store
 from .runner import ExperimentRunner
+from .stats import ApiStats
 
 # --- Configuration ---
 REPO_DIR = Path(os.environ.get("THE_LAB_REPO", os.getcwd())).resolve()
@@ -36,11 +37,27 @@ REPO_DIR = Path(os.environ.get("THE_LAB_REPO", os.getcwd())).resolve()
 store = Store(REPO_DIR)
 app = FastAPI(title="The Lab", version="0.1.0")
 runner = ExperimentRunner(store)
+api_stats = ApiStats(REPO_DIR / ".the_lab" / "api_stats.json")
+
+
+@app.middleware("http")
+async def track_api_stats(request, call_next):
+    response = await call_next(request)
+    path = request.url.path
+    if path.startswith("/api/v1/"):
+        client = request.client.host if request.client else ""
+        api_stats.record(request.method, path, client_ip=client)
+    return response
 
 
 @app.on_event("startup")
 async def startup():
     await runner.reattach_running()
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    api_stats.flush()
 
 _DEV_MODE = os.environ.get("THE_LAB_DEV") == "1"
 _STATIC_DIR = Path(__file__).parent / "static"
@@ -1734,6 +1751,39 @@ def update_sandbox_state(req: SandboxConfigRequest):
         "capabilities": capabilities,
         "observed": observed,
     }
+
+
+# --- API Stats ---
+
+@app.get("/api/v1/stats")
+def get_api_stats():
+    """Get API endpoint usage statistics.
+
+    Returns per-endpoint call counts and the most common sequential call
+    patterns (bigrams). Use this to understand how agents interact with
+    the API and which endpoints are most/least used.
+
+    Example:
+        GET /api/v1/stats
+        -> {"total_calls": 5048, "calls": [{"endpoint": "GET /api/v1/digest", "count": 420}, ...],
+            "patterns": [{"sequence": "GET /api/v1/digest → GET /api/v1/ideas?status=suggested", "count": 180}, ...]}
+    """
+    return api_stats.get_stats()
+
+
+@app.post("/api/v1/stats/import")
+def import_api_stats(data: dict):
+    """Import/merge external stats (e.g. from backfill script).
+
+    Accepts ``{"calls": {"endpoint": count, ...}, "patterns": {"A → B": count, ...}}``
+    and merges them into the current running stats.
+
+    Example:
+        POST /api/v1/stats/import {"calls": {"GET /api/v1/digest": 100}, "patterns": {}}
+    """
+    api_stats.merge(data.get("calls", {}), data.get("patterns", {}))
+    api_stats.flush()
+    return {"status": "ok", "total_calls": api_stats.get_stats()["total_calls"]}
 
 
 # --- Debug chart test page ---
