@@ -52,9 +52,13 @@ async def track_api_stats(request, call_next):
             pass
     response = await call_next(request)
     path = request.url.path
-    # Skip stats tracking for dashboard requests (identified by header)
-    # and stats endpoints themselves
+    # Skip stats tracking for dashboard/browser requests and stats endpoints.
+    # Primary: explicit header set by dashboard JS.
+    # Fallback: detect browser User-Agent (agents use curl/python/httpx).
     is_dashboard = request.headers.get("x-the-lab-source") == "dashboard"
+    if not is_dashboard:
+        ua = request.headers.get("user-agent", "")
+        is_dashboard = "Mozilla/" in ua
     if (path.startswith("/api/v1/")
             and not path.startswith("/api/v1/stats")
             and not is_dashboard):
