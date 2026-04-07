@@ -48,6 +48,27 @@ const _STATUS_COLORS: Record<string, string> = {
 };
 
 // ---------------------------------------------------------------------------
+// Metric direction heuristic — mirrors the backend's metric_direction().
+// ---------------------------------------------------------------------------
+
+const _LOWER_IS_BETTER_PATTERNS = [
+  "loss", "bpb", "perplexity", "error", "mse", "mae", "rmse",
+  "cost", "latency", "time", "bytes", "regret", "cer", "wer",
+  "fid", "distance", "penalty",
+];
+
+/** Infer whether lower values are better for a given metric name. */
+export function isLowerBetter(metricKey: string): boolean {
+  const k = metricKey.toLowerCase();
+  return _LOWER_IS_BETTER_PATTERNS.some((p) => k.includes(p));
+}
+
+/** Returns true when `a` is strictly better than `b`. */
+function _better(a: number, b: number, lower: boolean): boolean {
+  return lower ? a < b : a > b;
+}
+
+// ---------------------------------------------------------------------------
 // Module-level cache for _computeGlobalBestBefore.
 // Keyed by metric + experiment signature so filtered subsets do not collide.
 // Call `resetGlobalBestBeforeCache()` whenever experiment data changes.
@@ -64,8 +85,8 @@ export function resetGlobalBestBeforeCache(): void {
 // ---------------------------------------------------------------------------
 
 /**
- * For a given idea, find the best (maximum) metric value among
- * experiments that belong to any of its parent ideas.
+ * For a given idea, find the best metric value among experiments that
+ * belong to any of its parent ideas.
  */
 export function _parentBestMetric(
   ideaId: number,
@@ -76,13 +97,14 @@ export function _parentBestMetric(
   const idea = allIdeas[ideaId];
   if (!idea) return null;
   const pids = idea.parent_ids || [];
+  const lower = isLowerBetter(metricKey);
   let best: number | null = null;
   for (let i = 0; i < pids.length; i++) {
     for (let j = 0; j < allExperiments.length; j++) {
       const e = allExperiments[j];
-      if (e.idea_id === pids[i] && e.metrics && e.metrics[metricKey] !== undefined) {
+      if (e.idea_id === pids[i] && e.metrics && typeof e.metrics[metricKey] === 'number') {
         const v = e.metrics[metricKey];
-        if (best === null || v > best) best = v;
+        if (best === null || _better(v, best, lower)) best = v;
       }
     }
   }
@@ -95,11 +117,12 @@ export function _ideaBestMetric(
   metricKey: string,
   allExperiments: Experiment[],
 ): number | null {
+  const lower = isLowerBetter(metricKey);
   let best: number | null = null;
   for (let j = 0; j < allExperiments.length; j++) {
     const e = allExperiments[j];
-    if (e.idea_id === ideaId && e.metrics && e.metrics[metricKey] !== undefined) {
-      if (best === null || e.metrics[metricKey] > best) best = e.metrics[metricKey];
+    if (e.idea_id === ideaId && e.metrics && typeof e.metrics[metricKey] === 'number') {
+      if (best === null || _better(e.metrics[metricKey], best, lower)) best = e.metrics[metricKey];
     }
   }
   return best;
@@ -117,7 +140,7 @@ export function _computeGlobalBestBefore(
   allExperiments: Experiment[],
 ): Record<number, number | null> {
   const sorted = allExperiments
-    .filter((e) => e.metrics && e.metrics[metricKey] !== undefined && !e._running)
+    .filter((e) => e.metrics && typeof e.metrics[metricKey] === 'number' && !e._running)
     .slice()
     .sort((a, b) =>
       (a.finished_at || a.started_at || '').localeCompare(b.finished_at || b.started_at || ''),
@@ -128,12 +151,13 @@ export function _computeGlobalBestBefore(
     .join("|");
   if (_globalBestBefore[cacheKey]) return _globalBestBefore[cacheKey];
 
+  const lower = isLowerBetter(metricKey);
   let best: number | null = null;
   const map: Record<number, number | null> = {};
   for (let i = 0; i < sorted.length; i++) {
     map[sorted[i].id] = best; // best BEFORE this experiment
     const v = sorted[i].metrics![metricKey];
-    if (best === null || v > best) best = v;
+    if (best === null || _better(v, best, lower)) best = v;
   }
   _globalBestBefore[cacheKey] = map;
   return map;
@@ -148,13 +172,14 @@ export function _ideaHasGlobalImprovement(
   metricKey: string,
   allExperiments: Experiment[],
 ): boolean {
+  const lower = isLowerBetter(metricKey);
   const bestBefore = _computeGlobalBestBefore(metricKey, allExperiments);
   for (let j = 0; j < allExperiments.length; j++) {
     const e = allExperiments[j];
-    if (e.idea_id !== ideaId || !e.metrics || e.metrics[metricKey] === undefined || e._running)
+    if (e.idea_id !== ideaId || !e.metrics || typeof e.metrics[metricKey] !== 'number' || e._running)
       continue;
     const prev = bestBefore[e.id];
-    if (prev === null || prev === undefined || e.metrics[metricKey] > prev) return true;
+    if (prev === null || prev === undefined || _better(e.metrics[metricKey], prev, lower)) return true;
   }
   return false;
 }
@@ -184,18 +209,19 @@ export function _colorForExp(
   }
   if (mode === 'status+improve') {
     const base = _STATUS_COLORS[exp.idea_status || 'active'] || '#8b949e';
-    if (!exp.metrics || exp.metrics[metricKey] === undefined || exp._running) return base;
+    if (!exp.metrics || typeof exp.metrics[metricKey] !== 'number' || exp._running) return base;
+    const lower = isLowerBetter(metricKey);
     const bestBefore = _computeGlobalBestBefore(metricKey, allExperiments);
     const prev = bestBefore[exp.id];
-    if (prev === null || prev === undefined || exp.metrics[metricKey] > prev)
+    if (prev === null || prev === undefined || _better(exp.metrics[metricKey], prev, lower))
       return '#e078f0'; // purple — new global best at time of running
     return base;
   }
   if (mode === 'improvement') {
-    if (!exp.metrics || exp.metrics[metricKey] === undefined) return '#8b949e';
+    if (!exp.metrics || typeof exp.metrics[metricKey] !== 'number') return '#8b949e';
     const parentBest = _parentBestMetric(exp.idea_id, metricKey, allIdeas, allExperiments);
     if (parentBest === null) return '#d29922';
-    return exp.metrics[metricKey] > parentBest ? '#3fb950' : '#f85149';
+    return _better(exp.metrics[metricKey], parentBest, isLowerBetter(metricKey)) ? '#3fb950' : '#f85149';
   }
   return null; // 'idea' — handled by ideaColorMap in caller
 }
@@ -237,7 +263,7 @@ export function _colorForIdea(
     if (myBest === null) return '#8b949e';
     const parentBest = _parentBestMetric(ideaId, metricKey, allIdeas, allExperiments);
     if (parentBest === null) return '#d29922';
-    return myBest > parentBest ? '#3fb950' : '#f85149';
+    return _better(myBest, parentBest, isLowerBetter(metricKey)) ? '#3fb950' : '#f85149';
   }
   // 'idea' — palette by ID
   return IDEA_PALETTE[(ideaId - 1) % IDEA_PALETTE.length];

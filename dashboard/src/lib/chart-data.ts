@@ -5,7 +5,7 @@
 
 import type { Experiment, IdeaNode, SubwayLayout } from './types';
 export type { ChartDataResult } from './types';
-import { IDEA_PALETTE, _colorForExp } from './colors';
+import { IDEA_PALETTE, _colorForExp, isLowerBetter } from './colors';
 
 export function filterMetricExperiments(
   metricKey: string,
@@ -15,7 +15,7 @@ export function filterMetricExperiments(
   hiddenStatuses?: Set<string>,
 ): Experiment[] {
   let filtered = allExperiments.filter(
-    (e) => e.metrics && e.metrics[metricKey] !== undefined,
+    (e) => e.metrics && typeof e.metrics[metricKey] === 'number',
   );
 
   // Filter by idea status visibility
@@ -55,11 +55,12 @@ export function filterVisibleChartExperiments(
 
   if (!improvementsOnly) return filtered;
 
-  let best = -Infinity;
+  const lower = isLowerBetter(metricKey);
+  let best = lower ? Infinity : -Infinity;
   return filtered.filter((e) => {
     if (e._running) return true;
     const v = e.metrics![metricKey];
-    if (v > best) {
+    if (lower ? v < best : v > best) {
       best = v;
       return true;
     }
