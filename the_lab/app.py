@@ -52,7 +52,12 @@ async def track_api_stats(request, call_next):
             pass
     response = await call_next(request)
     path = request.url.path
-    if path.startswith("/api/v1/") and not path.startswith("/api/v1/stats"):
+    # Skip stats tracking for dashboard requests (identified by header)
+    # and stats endpoints themselves
+    is_dashboard = request.headers.get("x-the-lab-source") == "dashboard"
+    if (path.startswith("/api/v1/")
+            and not path.startswith("/api/v1/stats")
+            and not is_dashboard):
         client = request.client.host if request.client else ""
         api_stats.record(
             request.method, path, client_ip=client,
@@ -1799,6 +1804,7 @@ def import_api_stats(data: dict):
         data.get("calls", {}),
         data.get("patterns", {}),
         patterns_by_n=data.get("patterns_by_n"),
+        reset=bool(data.get("reset")),
     )
     api_stats.flush()
     return {"status": "ok", "total_calls": api_stats.get_stats()["total_calls"]}

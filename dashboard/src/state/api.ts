@@ -21,7 +21,9 @@ import type {
 // ---------------------------------------------------------------------------
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init);
+  const headers = new Headers(init?.headers);
+  headers.set("X-The-Lab-Source", "dashboard");
+  const res = await fetch(url, { ...init, headers });
   if (!res.ok) {
     throw new Error(`${init?.method ?? "GET"} ${url} returned ${res.status}`);
   }

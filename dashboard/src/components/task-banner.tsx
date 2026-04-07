@@ -12,7 +12,7 @@ export function TaskBanner() {
 
   async function load() {
     try {
-      const resp = await fetch("/api/v1/task");
+      const resp = await fetch("/api/v1/task", { headers: { "X-The-Lab-Source": "dashboard" } });
       if (resp.ok) {
         const data = await resp.json();
         setTask(data);
@@ -32,7 +32,7 @@ export function TaskBanner() {
     try {
       const resp = await fetch("/api/v1/task", {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "X-The-Lab-Source": "dashboard" },
         body: JSON.stringify({ text }),
       });
       if (resp.ok) {

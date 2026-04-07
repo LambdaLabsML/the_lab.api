@@ -125,9 +125,17 @@ class ApiStats:
         return list(reversed(self._recent))[:limit]
 
     def merge(self, calls: dict[str, int], patterns: dict[str, int],
-              patterns_by_n: dict[int, dict[str, int]] | None = None):
-        """Merge external stats (e.g. from backfill) into current stats."""
+              patterns_by_n: dict[int, dict[str, int]] | None = None,
+              reset: bool = False):
+        """Merge external stats (e.g. from backfill) into current stats.
+
+        If reset=True, replace all existing stats instead of merging.
+        """
         with self._lock:
+            if reset:
+                self._calls.clear()
+                for n in self._patterns:
+                    self._patterns[n].clear()
             for k, v in calls.items():
                 self._calls[k] += v
             # Legacy: flat patterns dict is treated as bigrams

@@ -144,6 +144,7 @@ def build_stats(
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-dir", default="./example_proj", help="Repo dir with .the_lab/")
+    parser.add_argument("--reset", action="store_true", help="Replace existing stats instead of merging")
     args = parser.parse_args()
 
     repo = Path(args.repo_dir).resolve()
@@ -193,15 +194,19 @@ def main():
     for k, v in sorted(patterns_by_n.get(3, {}).items(), key=lambda x: x[1], reverse=True)[:5]:
         print(f"  {v:4d}  {k}")
 
-    # Merge into existing stats file
+    # Merge into existing stats file (or reset)
+    if args.reset:
+        stats_path.unlink(missing_ok=True)
     stats = ApiStats(stats_path)
     stats.merge(counts, {}, patterns_by_n=patterns_by_n)
     stats.flush()
-    print(f"\nMerged into {stats_path}")
+    action = "Reset and wrote" if args.reset else "Merged into"
+    print(f"\n{action} {stats_path}")
 
     # Also push to running server if available
     import urllib.request
-    payload = json.dumps({"calls": counts, "patterns_by_n": patterns_by_n}).encode()
+    payload = json.dumps({"calls": counts, "patterns_by_n": patterns_by_n,
+                          "reset": args.reset}).encode()
     for port in (8001, 8002):
         try:
             req = urllib.request.Request(
