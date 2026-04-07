@@ -2,15 +2,18 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 
 from .git_ops import (
     GitError,
@@ -167,6 +170,10 @@ class AnalyzeRequest(BaseModel):
     experiment_ids: list[int]
     script: str
     args: list[str] = []
+
+
+class ChatRequest(BaseModel):
+    messages: list[dict]
 
 
 class TaskRequest(BaseModel):
@@ -1260,6 +1267,25 @@ def compare_curves(
     return {"key": key, "experiments": result}
 
 
+# --- Metric direction heuristic ---
+
+_LOWER_IS_BETTER_PATTERNS = (
+    "loss", "bpb", "perplexity", "error", "mse", "mae", "rmse",
+    "cost", "latency", "time", "bytes", "regret", "cer", "wer",
+    "fid", "distance", "penalty",
+)
+
+_INTERNAL_META_KEYS = {"git_branch", "git_commit", "worktree"}
+
+
+def metric_direction(key: str) -> str:
+    """Infer whether a metric should be minimized or maximized from its name."""
+    k = key.lower()
+    if any(p in k for p in _LOWER_IS_BETTER_PATTERNS):
+        return "minimize"
+    return "maximize"
+
+
 # --- Leaderboard (formerly Digest) ---
 
 
@@ -1338,7 +1364,9 @@ def _build_leaderboard_response(
         if metric in e["metrics"] and isinstance(e["metrics"][metric], (int, float))
     ]
 
-    by_value = sorted(with_metric, key=lambda e: e["metrics"][metric], reverse=True)
+    direction = metric_direction(metric)
+    minimize = direction == "minimize"
+    by_value = sorted(with_metric, key=lambda e: e["metrics"][metric], reverse=not minimize)
     leaderboard = []
     for exp in by_value[:top]:
         entry = {
@@ -1392,7 +1420,8 @@ def _build_leaderboard_response(
     running_best = None
     for exp in by_time_asc:
         v = exp["metrics"][metric]
-        if running_best is None or v > running_best:
+        improved = running_best is None or (v < running_best if minimize else v > running_best)
+        if improved:
             running_best = v
             progression.append({
                 "experiment_id": exp["id"],
@@ -1414,6 +1443,7 @@ def _build_leaderboard_response(
 
     return {
         "metric": metric,
+        "direction": direction,
         "tags": tag_list or None,
         "total_experiments_with_metric": len(with_metric),
         "open_ideas": open_ideas,
@@ -1852,6 +1882,91 @@ fetch('/api/v1/chart-data').then(r=>r.json()).then(d=>{
 def chart_test_page():
     """Minimal Chart.js test page — for debugging chart rendering issues."""
     return _CHART_TEST_HTML
+
+
+# --- Metric direction endpoint ---
+
+@app.get("/api/v1/metric-direction")
+def get_metric_direction(
+    metric: str = Query(..., description="Metric name to infer direction for"),
+):
+    """Infer whether a metric should be minimized or maximized."""
+    return {"metric": metric, "direction": metric_direction(metric)}
+
+
+# --- Chat ---
+
+_CHAT_SYSTEM_PROMPT = """\
+You are a research assistant for a project tracked in The Lab. \
+Below is the complete project state. Cite specific idea/experiment IDs, \
+highlight config differences, and be precise with numbers.\
+"""
+
+
+def _build_chat_context() -> str:
+    """Serialize the full project state into structured text for an LLM."""
+    all_ideas = store.list_ideas()
+    all_exps = store.list_all_experiments()
+    exps_by_idea: dict[int, list[dict]] = {}
+    for exp in all_exps:
+        exps_by_idea.setdefault(exp["idea_id"], []).append(exp)
+    lines: list[str] = []
+    lines.append(f"# Project: {len(all_ideas)} ideas, {len(all_exps)} experiments\n")
+    for idea in all_ideas:
+        iid = idea["id"]
+        parents = ", ".join(f"#{p}" for p in idea.get("parent_ids", [])) or "root"
+        lines.append(f"## Idea #{iid} [{idea.get('status')}] \"{idea.get('description', '')}\"")
+        lines.append(f"  Parents: {parents}")
+        if idea.get("conclusion"):
+            lines.append(f"  Conclusion: \"{idea['conclusion']}\"")
+        for note in store.get_notes(iid, levels=Store.ALL_LEVELS):
+            lines.append(f"  [{note.get('level', 'observation')}] \"{note['text']}\"")
+        for exp in sorted(exps_by_idea.get(iid, []), key=lambda e: e.get("created_at", "")):
+            line = f"  #{exp['id']} [{exp.get('status')}] \"{exp.get('description', '')}\""
+            if exp.get("metrics"):
+                line += f"  metrics: {{{', '.join(f'{k}: {v}' for k, v in exp['metrics'].items() if v is not None)}}}"
+            meta = {k: v for k, v in (exp.get("meta") or {}).items() if k not in _INTERNAL_META_KEYS}
+            if meta:
+                line += f"  meta: {{{', '.join(f'{k}: {v}' for k, v in meta.items())}}}"
+            lines.append(line)
+        lines.append("")
+    return "\n".join(lines)
+
+
+@app.get("/api/v1/chat/status")
+def chat_status():
+    """Check whether the chat feature is available."""
+    return {"available": bool(os.environ.get("ANTHROPIC_API_KEY"))}
+
+
+@app.post("/api/v1/chat")
+async def chat(req: ChatRequest):
+    """Ask a question about the research project using Claude. Streams SSE."""
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise HTTPException(501, "ANTHROPIC_API_KEY not set")
+    try:
+        import anthropic
+    except ImportError:
+        raise HTTPException(501, "anthropic package not installed")
+    context = _build_chat_context()
+    system = _CHAT_SYSTEM_PROMPT + "\n---\n\n" + context
+    client = anthropic.Anthropic(api_key=api_key)
+
+    async def _stream():
+        try:
+            with client.messages.stream(
+                model="claude-sonnet-4-20250514", max_tokens=4096,
+                system=system, messages=req.messages,
+            ) as stream:
+                for text in stream.text_stream:
+                    yield f"data: {json.dumps({'type': 'text', 'text': text})}\n\n"
+            yield 'data: {"type": "done"}\n\n'
+        except Exception as e:
+            logger.exception("Chat stream error")
+            yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+
+    return StreamingResponse(_stream(), media_type="text/event-stream")
 
 
 # --- SPA Fallback (must be last) ---
