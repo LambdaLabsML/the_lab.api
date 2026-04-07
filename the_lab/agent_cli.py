@@ -6,7 +6,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from .sandbox import build_sandbox_command, load_sandbox_config, sandbox_capabilities
+from .sandbox import build_sandbox_command, sandbox_capabilities
 
 
 def _find_repo_root(*paths: Path) -> Path | None:
@@ -124,21 +124,21 @@ def main():
             repo_root = _find_repo_root(Path.cwd(), prompt_path.parent)
         if repo_root is None:
             print(
-                "Error: could not find the repo root for the sandboxed Claude launch. "
+                "Error: could not find the repo root for the sandboxed agent launch. "
                 "Run from your git repo or pass --no-sandbox.",
                 file=sys.stderr,
             )
             sys.exit(1)
-        config = load_sandbox_config(repo_root)
-        if config.get("enabled", True):
-            capabilities = sandbox_capabilities()
-            if not capabilities.get("available"):
-                details = capabilities.get("details") or "sandbox runtime unavailable"
-                print(f"Error: sandbox is enabled but unavailable: {details}", file=sys.stderr)
-                sys.exit(1)
-            env["THE_LAB_SANDBOX_TARGET_UID"] = str(os.getuid())
-            env["THE_LAB_SANDBOX_TARGET_GID"] = str(os.getgid())
-            cmd = build_sandbox_command(repo_root, args.agent, prompt_path.name, cmd)
+        # Always sandbox the agent — the config "enabled" flag only controls
+        # experiment sandboxing (server-side).  Use --no-sandbox to skip.
+        capabilities = sandbox_capabilities()
+        if not capabilities.get("available"):
+            details = capabilities.get("details") or "sandbox runtime unavailable"
+            print(f"Error: sandbox is unavailable: {details}", file=sys.stderr)
+            sys.exit(1)
+        env["THE_LAB_SANDBOX_TARGET_UID"] = str(os.getuid())
+        env["THE_LAB_SANDBOX_TARGET_GID"] = str(os.getgid())
+        cmd = build_sandbox_command(repo_root, args.agent, prompt_path.name, cmd)
 
     os.execvpe(cmd[0], cmd, env)
 

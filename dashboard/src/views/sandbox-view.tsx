@@ -121,10 +121,9 @@ export function SandboxView() {
         <div>
           <h2>Network Sandbox</h2>
           <p>
-            Default-deny outbound network policy for experiments and
-            `the-lab-agent` Claude or Codex launches. Built-in package mirrors
-            stay allowed; user allow and deny rules apply live to new
-            connections.
+            Default-deny outbound network policy for experiment runs and
+            `the-lab-agent` launches. Built-in package mirrors stay allowed,
+            and user allow or deny rules apply live to new connections.
           </p>
         </div>
         <div class="sandbox-status-wrap">
@@ -134,8 +133,11 @@ export function SandboxView() {
               checked={enabled}
               onChange={(e) => setEnabled((e.target as HTMLInputElement).checked)}
             />
-            <span>{enabled ? "Enabled" : "Disabled"}</span>
+            <span>{enabled ? "Experiments: On" : "Experiments: Off"}</span>
           </label>
+          <div class="sandbox-status-note">
+            `the-lab-agent` still uses the sandbox unless launched with `--no-sandbox`.
+          </div>
           <div class={`sandbox-save sandbox-save-${saveState}`}>{saveState === "idle" ? "synced" : saveState}</div>
         </div>
       </div>

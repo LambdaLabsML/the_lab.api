@@ -45,6 +45,14 @@
   color: #c9d1d9;
 }
 
+.sandbox-status-note {
+  max-width: 300px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: #8b949e;
+  text-align: right;
+}
+
 .sandbox-save {
   font-size: 11px;
   text-transform: uppercase;
@@ -178,6 +186,10 @@
 
   .sandbox-status-wrap {
     align-items: flex-start;
+  }
+
+  .sandbox-status-note {
+    text-align: left;
   }
 
   .sandbox-grid {
