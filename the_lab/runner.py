@@ -346,7 +346,7 @@ class ExperimentRunner:
         }
         command = ["bash", str(script_path)]
         sandbox_config = load_sandbox_config(self._store.repo_dir)
-        if sandbox_config.get("enabled", True):
+        if sandbox_config.get("enabled", True) and not os.environ.get("THE_LAB_NO_SANDBOX"):
             capabilities = sandbox_capabilities()
             if not capabilities.get("available"):
                 details = capabilities.get("details") or "sandbox runtime unavailable"

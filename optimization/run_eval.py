@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python3 -u
 """Evaluate an API change by running an agent against the test project.
 
 Starts a Lab instance from the current branch's code, copies the test_project
@@ -25,6 +25,14 @@ import signal
 import subprocess
 import sys
 import tempfile
+import urllib.request
+
+# Force unbuffered output — critical when stdout/stderr are redirected to log files
+os.environ["PYTHONUNBUFFERED"] = "1"
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(line_buffering=True)
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(line_buffering=True)
 import time
 from pathlib import Path
 
@@ -38,6 +46,26 @@ TEST_PROJECT_SRC = SCRIPT_DIR / "test_project"
 REPO_ROOT = Path(os.environ.get("THE_LAB_REPO", os.getcwd())).resolve()
 
 # Opus 4 pricing (per million tokens)
+def _get_host() -> str:
+    """Best-effort external hostname/IP for clickable URLs."""
+    import socket
+    try:
+        # Connect to a public DNS to find our outward-facing IP
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return socket.gethostname()
+
+
+def _lab_get(url: str, timeout: float = 5):
+    """GET a Lab API URL with the dashboard header so it's excluded from stats."""
+    req = urllib.request.Request(url, headers={"X-The-Lab-Source": "dashboard"})
+    return urllib.request.urlopen(req, timeout=timeout)
+
+
 PRICE_INPUT = 15.0
 PRICE_OUTPUT = 75.0
 PRICE_CACHE_WRITE = 18.75
@@ -48,7 +76,8 @@ def parse_args():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--model", default="haiku", help="Model for inner agent (haiku|sonnet|opus)")
     p.add_argument("--budget", type=int, default=15, help="Max experiments before giving up")
-    p.add_argument("--timeout", type=int, default=600, help="Wall-time cap in seconds")
+    p.add_argument("--timeout", type=int, default=900, help="Wall-time cap in seconds")
+    p.add_argument("--max-cost", type=float, default=0, help="Max dollar cost for inner agent (0 = no limit)")
     p.add_argument("--baseline", default=str(SCRIPT_DIR / "baseline.json"),
                    help="Path to baseline.json for score normalization")
     p.add_argument("--output", default=None,
@@ -108,6 +137,18 @@ def start_lab(repo_dir: str, port: int) -> subprocess.Popen:
     sandbox_conf.parent.mkdir(parents=True, exist_ok=True)
     sandbox_conf.write_text(json.dumps({"enabled": False}) + "\n")
 
+    # Copy dashboard build so the inner Lab has a UI
+    static_dst = REPO_ROOT / "the_lab" / "static"
+    if not (static_dst / "index.html").exists():
+        # Look for it in the parent repo
+        parent_static = REPO_ROOT.parent / "the_lab" / "static"
+        if not (parent_static / "index.html").exists():
+            # Try two levels up (optimization/proj → optimization → the_lab.api)
+            parent_static = REPO_ROOT.parent.parent / "the_lab" / "static"
+        if (parent_static / "index.html").exists():
+            static_dst.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(parent_static, static_dst, dirs_exist_ok=True)
+
     env = {**os.environ, "THE_LAB_REPO": repo_dir}
     # Strip any inherited sandbox env vars
     for key in list(env):
@@ -119,82 +160,54 @@ def start_lab(repo_dir: str, port: int) -> subprocess.Popen:
         cwd=str(REPO_ROOT),
         env=env,
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
     )
-    # Wait for it to be ready
+    # Wait for it to be ready (up to 30s)
     import urllib.request
-    for _ in range(50):
+    host = _get_host()
+    print(f"  Waiting for Lab on {host}:{port} (cwd={proc.args[0] if hasattr(proc, 'args') else '?'})...", file=sys.stderr)
+    for i in range(60):
+        rc = proc.poll()
+        if rc is not None:
+            raise RuntimeError(f"Lab crashed on startup (exit code {rc})")
         try:
-            urllib.request.urlopen(f"http://127.0.0.1:{port}/api/v1/backlog", timeout=0.5)
+            _lab_get(f"http://{host}:{port}/api/v1/backlog", timeout=1)
             break
-        except Exception:
-            time.sleep(0.2)
+        except Exception as e:
+            if i % 10 == 9:
+                print(f"  Still waiting ({i+1}/60): {e}", file=sys.stderr)
+            time.sleep(0.5)
     else:
-        stderr = proc.stderr.read().decode(errors="replace")[:500] if proc.stderr else ""
         proc.kill()
-        raise RuntimeError(f"Lab failed to start on port {port}.\nStderr: {stderr}")
+        raise RuntimeError(f"Lab failed to start on http://{host}:{port} after 30s. "
+                           f"Verify the_lab/ code is valid and the port is accessible.")
 
-    # Health check: verify the full experiment workflow works
+    # Health check: verify API endpoints respond (no persistent state created)
     print("  Health check...", file=sys.stderr)
-    base_url = f"http://127.0.0.1:{port}/api/v1"
+    base_url = f"http://{_get_host()}:{port}/api/v1"
     try:
-        # Create idea
-        req = urllib.request.Request(
-            f"{base_url}/ideas/new",
-            data=json.dumps({"description": "health check"}).encode(),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        resp = json.loads(urllib.request.urlopen(req, timeout=5).read())
-        idea_id = resp["id"]
+        checks = [
+            ("backlog", "GET", f"{base_url}/backlog"),
+            ("ideas", "GET", f"{base_url}/ideas"),
+            ("docs", "GET", f"http://{_get_host()}:{port}/docs"),
+        ]
+        for name, method, url in checks:
+            resp = _lab_get(url, timeout=5)
+            if resp.status != 200:
+                print(f"  Health check warning: {name} returned {resp.status}", file=sys.stderr)
 
-        # Checkout
-        req = urllib.request.Request(f"{base_url}/ideas/{idea_id}/checkout", method="POST")
-        urllib.request.urlopen(req, timeout=5)
-
-        # Create experiment with a simple script
-        req = urllib.request.Request(
-            f"{base_url}/ideas/{idea_id}/experiments",
-            data=json.dumps({
-                "description": "health check",
-                "script_content": "#!/bin/bash\necho '{\"metrics\": {\"ok\": 1}}'",
-            }).encode(),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        resp = json.loads(urllib.request.urlopen(req, timeout=5).read())
-        exp_id = resp["id"]
-
-        # Start
-        req = urllib.request.Request(f"{base_url}/experiments/{exp_id}/start", method="POST")
-        urllib.request.urlopen(req, timeout=10)
-
-        # Wait
-        resp = json.loads(urllib.request.urlopen(
-            f"{base_url}/wait?experiment_id={exp_id}&timeout=30", timeout=35).read())
-
-        if resp.get("status") == "completed":
-            print("  Health check passed: idea → experiment → run → complete", file=sys.stderr)
-        else:
-            print(f"  Health check warning: experiment status = {resp.get('status')}", file=sys.stderr)
-            # Fetch log for debugging
-            try:
-                log_resp = json.loads(urllib.request.urlopen(
-                    f"{base_url}/experiments/{exp_id}/log?tail=10", timeout=5).read())
-                print(f"  Experiment log: {log_resp.get('log', '')[:200]}", file=sys.stderr)
-            except Exception:
-                pass
-
+        print("  Health check passed: API responding", file=sys.stderr)
     except Exception as e:
         print(f"  Health check FAILED: {e}", file=sys.stderr)
-        print("  The inner agent may not be able to run experiments.", file=sys.stderr)
+        print("  The inner agent may not be able to use the API.", file=sys.stderr)
 
     return proc
 
 
 def launch_agent(
     prompt_path: str, api_port: int, model: str, timeout: int, budget: int,
-) -> Path:
+    **kwargs,
+) -> None:
     """Launch an inner agent, stop when budget experiments are completed or timeout."""
     # Session JSONL is found post-hoc via find_session_jsonl(project_dir)
 
@@ -210,12 +223,15 @@ def launch_agent(
     env = {**os.environ}
 
     # Use --print with stream-json for live progress visibility.
+    max_cost = kwargs.get("max_cost", 0)
     cmd = [
         "claude", "--dangerously-skip-permissions",
         "--model", model,
         "--print", "--verbose", "--output-format", "stream-json",
-        "-p", instruction,
     ]
+    if max_cost > 0:
+        cmd.extend(["--max-budget-usd", str(max_cost)])
+    cmd.extend(["-p", instruction])
 
     # Stream stdout and parse JSON events for human-readable progress
     proc = subprocess.Popen(
@@ -253,6 +269,20 @@ def launch_agent(
                         if text.strip():
                             short = text.strip()[:120]
                             print(f"  > {short}", file=sys.stderr)
+            elif t == "user":
+                # Tool results — show capped output
+                msg = evt.get("message", {})
+                for c in msg.get("content", []):
+                    content = c.get("content", "")
+                    if isinstance(content, str) and content.strip():
+                        # Cap to first 3 lines, 200 chars
+                        lines = content.strip().split("\n")
+                        preview = "\n".join(lines[:3])
+                        if len(lines) > 3:
+                            preview += f"\n    ... ({len(lines)} lines)"
+                        if len(preview) > 200:
+                            preview = preview[:200] + "..."
+                        print(f"    ← {preview}", file=sys.stderr)
             elif t == "result":
                 cost = evt.get("total_cost_usd", 0)
                 turns = evt.get("num_turns", 0)
@@ -266,42 +296,95 @@ def launch_agent(
     # Write progress to $THE_LAB_PROGRESS if set (for the outer Lab's UI)
     import urllib.request
     progress_file = os.environ.get("THE_LAB_PROGRESS")
-    deadline = time.time() + timeout
+    start = time.time()
+    deadline = start + timeout
+
+    # Write initial progress immediately
+    if progress_file:
+        Path(progress_file).write_text(json.dumps({
+            "pct_complete": 0, "experiments_completed": 0,
+            "experiments_running": 0, "budget": budget, "elapsed_s": 0,
+            "status": "inner agent running",
+        }))
+
     while proc.poll() is None and time.time() < deadline:
         time.sleep(5)
+        elapsed = time.time() - start
         try:
-            resp = urllib.request.urlopen(
-                f"http://127.0.0.1:{api_port}/api/v1/chart-data", timeout=2)
+            resp = _lab_get(f"http://{_get_host()}:{api_port}/api/v1/chart-data", timeout=2)
             data = json.loads(resp.read())
             n_completed = len(data.get("experiments", []))
             n_running = len(data.get("running", []))
-            elapsed = time.time() - (deadline - timeout)
-            pct = min(n_completed / max(budget, 1), elapsed / max(timeout, 1))
-            pct = min(pct, 0.99)
-
-            # Write progress for outer Lab
-            if progress_file:
-                progress = {
-                    "pct_complete": round(pct * 100, 1),
-                    "experiments_completed": n_completed,
-                    "experiments_running": n_running,
-                    "budget": budget,
-                    "elapsed_s": round(elapsed, 0),
-                }
-                Path(progress_file).write_text(json.dumps(progress))
-
-            if n_completed >= budget:
-                print(f"Budget reached ({n_completed}/{budget} experiments). Stopping agent.",
-                      file=sys.stderr)
-                proc.terminate()
-                try:
-                    proc.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    proc.wait()
-                break
         except Exception:
-            pass
+            n_completed = 0
+            n_running = 0
+
+        # Extract best score and details from completed experiments
+        best_score = 0.0
+        best_exp_id = None
+        best_metrics = {}
+        completed_exps = data.get("experiments", []) if isinstance(data, dict) else []
+        for exp in completed_exps:
+            m = exp.get("metrics") or {}
+            s = m.get("score", 0)
+            if s > best_score:
+                best_score = s
+                best_exp_id = exp.get("id")
+                best_metrics = m
+
+        # Count ideas from the Lab
+        try:
+            ideas_resp = _lab_get(f"http://{_get_host()}:{api_port}/api/v1/ideas", timeout=2)
+            ideas_data = json.loads(ideas_resp.read())
+            n_ideas = len(ideas_data)
+            n_concluded = sum(1 for i in ideas_data if i.get("status") == "concluded")
+            n_abandoned = sum(1 for i in ideas_data if i.get("status") == "abandoned")
+        except Exception:
+            n_ideas = 0
+            n_concluded = 0
+            n_abandoned = 0
+
+        pct = max(n_completed / max(budget, 1), elapsed / max(timeout, 1))
+        pct = min(pct, 0.99)
+
+        # Log progress to terminal
+        if n_completed > 0 or n_running > 0:
+            print(f"  [{int(elapsed)}s] experiments: {n_completed}/{budget} done, "
+                  f"{n_running} running, {n_ideas} ideas | best score: {best_score:.4f}"
+                  f"{f' (exp/{best_exp_id})' if best_exp_id else ''}",
+                  file=sys.stderr)
+
+        if progress_file:
+            progress = {
+                "pct_complete": round(pct * 100, 1),
+                "status": "inner agent running",
+                "elapsed_s": round(elapsed, 0),
+                "budget": budget,
+                "experiments_completed": n_completed,
+                "experiments_running": n_running,
+                "ideas_total": n_ideas,
+                "ideas_concluded": n_concluded,
+                "ideas_abandoned": n_abandoned,
+                "best_score": round(best_score, 6),
+                "best_experiment_id": best_exp_id,
+            }
+            # Include per-kernel breakdown from best experiment
+            if best_metrics:
+                for k, v in best_metrics.items():
+                    if k.endswith("_accuracy") or k.endswith("_ns") or k.startswith("memory"):
+                        progress[k] = v
+            Path(progress_file).write_text(json.dumps(progress))
+
+        if n_completed >= budget:
+            print(f"Budget reached ({n_completed}/{budget} experiments). Stopping agent.",
+                  file=sys.stderr)
+            proc.terminate()
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+            break
 
     if proc.poll() is None:
         print("Timeout reached. Killing agent.", file=sys.stderr)
@@ -315,7 +398,7 @@ def collect_api_stats(port: int) -> dict:
     """Fetch stats from the test Lab instance."""
     import urllib.request
     try:
-        resp = urllib.request.urlopen(f"http://127.0.0.1:{port}/api/v1/stats?pattern_length=2", timeout=5)
+        resp = _lab_get(f"http://{_get_host()}:{port}/api/v1/stats?pattern_length=2", timeout=5)
         return json.loads(resp.read())
     except Exception:
         return {"total_calls": 0, "calls": [], "patterns": []}
@@ -325,24 +408,24 @@ def collect_lab_state(port: int) -> dict:
     """Fetch ideas and experiments from the test Lab instance."""
     import urllib.request
     try:
-        ideas = json.loads(urllib.request.urlopen(
-            f"http://127.0.0.1:{port}/api/v1/ideas", timeout=5).read())
+        ideas = json.loads(_lab_get(
+            f"http://{_get_host()}:{port}/api/v1/ideas", timeout=5).read())
     except Exception:
         ideas = []
 
     experiments = []
     for idea in ideas:
         try:
-            exps = json.loads(urllib.request.urlopen(
-                f"http://127.0.0.1:{port}/api/v1/ideas/{idea['id']}/experiments", timeout=5).read())
+            exps = json.loads(_lab_get(
+                f"http://{_get_host()}:{port}/api/v1/ideas/{idea['id']}/experiments", timeout=5).read())
             experiments.extend(exps)
         except Exception:
             pass
 
     # Fetch idea DAG
     try:
-        graph = json.loads(urllib.request.urlopen(
-            f"http://127.0.0.1:{port}/api/v1/graph", timeout=5).read())
+        graph = json.loads(_lab_get(
+            f"http://{_get_host()}:{port}/api/v1/graph", timeout=5).read())
     except Exception:
         graph = {"nodes": [], "edges": []}
 
@@ -375,11 +458,11 @@ def find_session_jsonl(project_dir: Path, start_time: float) -> list[Path]:
 def parse_session_tokens(project_dir: Path, start_time: float = 0) -> dict:
     """Parse inner agent's session JSONL for token breakdown."""
     categories = {
-        "bash": {"input": 0, "output": 0, "cache_create": 0, "cache_read": 0},
-        "context": {"input": 0, "output": 0, "cache_create": 0, "cache_read": 0},
-        "reasoning": {"input": 0, "output": 0, "cache_create": 0, "cache_read": 0},
-        "read_search": {"input": 0, "output": 0, "cache_create": 0, "cache_read": 0},
-        "edit_write": {"input": 0, "output": 0, "cache_create": 0, "cache_read": 0},
+        "bash": {"input": 0, "output": 0, "cache_create": 0, "cache_read": 0, "calls": 0},
+        "context": {"input": 0, "output": 0, "cache_create": 0, "cache_read": 0, "calls": 0},
+        "reasoning": {"input": 0, "output": 0, "cache_create": 0, "cache_read": 0, "calls": 0},
+        "read_search": {"input": 0, "output": 0, "cache_create": 0, "cache_read": 0, "calls": 0},
+        "edit_write": {"input": 0, "output": 0, "cache_create": 0, "cache_read": 0, "calls": 0},
     }
 
     session_files = find_session_jsonl(project_dir, start_time)
@@ -415,26 +498,31 @@ def parse_session_tokens(project_dir: Path, start_time: float = 0) -> dict:
                 stop = msg.get("stop_reason", "none")
                 cat = "reasoning" if stop == "end_turn" else "context"
 
+            categories[cat]["calls"] += 1
             categories[cat]["input"] += usage.get("input_tokens", 0)
             categories[cat]["output"] += usage.get("output_tokens", 0)
             categories[cat]["cache_create"] += usage.get("cache_creation_input_tokens", 0)
             categories[cat]["cache_read"] += usage.get("cache_read_input_tokens", 0)
 
-    # Compute costs
+    # Compute costs and call counts
     result = {}
     total_tokens = 0
     total_cost = 0.0
+    total_calls = 0
     for cat, u in categories.items():
         tokens = u["input"] + u["output"] + u["cache_create"] + u["cache_read"]
         cost = (u["input"] * PRICE_INPUT + u["output"] * PRICE_OUTPUT +
                 u["cache_create"] * PRICE_CACHE_WRITE + u["cache_read"] * PRICE_CACHE_READ) / 1e6
         result[f"tokens_{cat}"] = tokens
         result[f"cost_{cat}"] = round(cost, 4)
+        result[f"calls_{cat}"] = u["calls"]
         total_tokens += tokens
         total_cost += cost
+        total_calls += u["calls"]
 
     result["tokens_total"] = total_tokens
     result["cost_total"] = round(total_cost, 4)
+    result["calls_total"] = total_calls
     return result
 
 
@@ -641,24 +729,23 @@ def compute_score(metrics: dict, baseline: dict | None) -> dict:
 
     Fixed budget: agent gets N experiments. Score = how good did it get?
 
-    quality = -log10(1 - final_score)   [0→0, 0.9→1, 0.99→2, 0.999→3]
-    api_score = quality × (1 - failure_rate) × (1 - confusion) / norm_cost
+    quality = log10(1 + final_score)   [0→0, 1→0.3, 3→0.6, 9→1.0]
+    api_score = norm_quality × (1 - failure_rate) × (1 - confusion) / norm_cost
 
     Higher = better API. Baseline = 1.0.
     """
     import math
 
     raw_score = metrics.get("final_score", 0)
-    # -log10(1 - score): rewards pushing past plateaus
-    # Clamp to avoid log(0)
-    quality = -math.log10(max(1.0 - raw_score, 1e-6))
+    # log10(1 + score): monotonic, handles any positive value
+    quality = math.log10(1 + max(raw_score, 0))
 
     total_exps = metrics.get("experiments_completed", 0) + metrics.get("experiments_failed", 0)
     failure_rate = metrics.get("experiments_failed", 0) / max(total_exps, 1)
     confusion = metrics.get("confusion_score", 0)
 
     if baseline:
-        baseline_quality = -math.log10(max(1.0 - baseline.get("final_score", 0), 1e-6))
+        baseline_quality = math.log10(1 + max(baseline.get("final_score", 0), 0))
         norm_quality = quality / max(baseline_quality, 0.001)
         norm_cost = metrics.get("cost_total", 1) / max(baseline.get("cost_total", 1), 0.001)
     else:
@@ -695,7 +782,8 @@ def main():
         s.bind(("", 0))
         port = s.getsockname()[1]
 
-    print(f"Starting Lab on http://127.0.0.1:{port} ...", file=sys.stderr)
+    inner_url = f"http://{_get_host()}:{port}"
+    print(f"Starting inner Lab on {inner_url} ...", file=sys.stderr)
     lab_proc = start_lab(str(project_dir), port)
     build_dashboard_async(REPO_ROOT)
 
@@ -703,7 +791,8 @@ def main():
         t0 = time.time()
 
         print(f"Launching inner agent ({args.model})...", file=sys.stderr)
-        launch_agent(str(project_dir), port, args.model, args.timeout, args.budget)
+        launch_agent(str(project_dir), port, args.model, args.timeout, args.budget,
+                     max_cost=args.max_cost)
 
         wall_time = time.time() - t0
 
@@ -767,6 +856,7 @@ def main():
             "budget": args.budget,
             "test_project": "fast_math",
             "port": port,
+            "inner_lab_url": f"http://{_get_host()}:{port}",
             "baseline_used": args.baseline if baseline else None,
             "confusion_examples": confusion["confusion_examples"],
             "per_experiment_stats": per_experiment,
@@ -807,11 +897,11 @@ def main():
 
         # Lab-compatible JSON output
         json_str = json.dumps(output)
+        # Always print to stdout (Lab captures last JSON line from experiment log)
+        print(json_str)
         if args.output:
             Path(args.output).write_text(json_str + "\n")
             print(f"\nMetrics written to {args.output}", file=sys.stderr)
-        else:
-            print(json_str)
 
     finally:
         lab_proc.send_signal(signal.SIGTERM)

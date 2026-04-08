@@ -14,6 +14,7 @@ import math
 import os
 import sys
 import time
+from pathlib import Path
 
 # Ensure the project root is on sys.path so 'benchmark' is importable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -25,15 +26,17 @@ from benchmark import kernels as k
 # Test ranges for each function
 # ---------------------------------------------------------------------------
 
+# Dense test grids — enough points for thorough accuracy testing AND
+# naturally slow evaluation (~30-90s total depending on kernel speed).
+# 2M points × 3 passes × 7 kernels ≈ 60-120s with naive implementations.
 TESTS = {
-    "sin":     {"func": k.fast_sin,     "ref": ref.ref_sin,     "args": "single", "range": (-6.3, 6.3, 2000)},
-    "cos":     {"func": k.fast_cos,     "ref": ref.ref_cos,     "args": "single", "range": (-6.3, 6.3, 2000)},
-    "exp":     {"func": k.fast_exp,     "ref": ref.ref_exp,     "args": "single", "range": (-10, 10, 2000)},
-    "log":     {"func": k.fast_log,     "ref": ref.ref_log,     "args": "single", "range": (0.001, 1000, 2000)},
-    "sqrt":    {"func": k.fast_sqrt,    "ref": ref.ref_sqrt,    "args": "single", "range": (0, 1e6, 2000)},
-    "atan2":   {"func": k.fast_atan2,   "ref": ref.ref_atan2,   "args": "double", "range": (-10, 10, 500)},
-    "sigmoid": {"func": k.fast_sigmoid, "ref": ref.ref_sigmoid, "args": "single", "range": (-20, 20, 2000)},
-    "tanh":    {"func": k.fast_tanh,    "ref": ref.ref_tanh,    "args": "single", "range": (-10, 10, 2000)},
+    "sin":     {"func": k.fast_sin,     "ref": ref.ref_sin,     "args": "single", "range": (-6.3, 6.3, 2000000)},
+    "cos":     {"func": k.fast_cos,     "ref": ref.ref_cos,     "args": "single", "range": (-6.3, 6.3, 2000000)},
+    "exp":     {"func": k.fast_exp,     "ref": ref.ref_exp,     "args": "single", "range": (-10, 10, 2000000)},
+    "log":     {"func": k.fast_log,     "ref": ref.ref_log,     "args": "single", "range": (0.001, 1000, 2000000)},
+    "sqrt":    {"func": k.fast_sqrt,    "ref": ref.ref_sqrt,    "args": "single", "range": (0, 1e6, 2000000)},
+    "sigmoid": {"func": k.fast_sigmoid, "ref": ref.ref_sigmoid, "args": "single", "range": (-20, 20, 2000000)},
+    "tanh":    {"func": k.fast_tanh,    "ref": ref.ref_tanh,    "args": "single", "range": (-10, 10, 2000000)},
 }
 
 
@@ -87,8 +90,8 @@ def evaluate_single(name: str, spec: dict) -> dict:
         except Exception:
             pass
 
-    # Timed run (multiple passes for stability)
-    n_passes = 5
+    # Timed run (multiple passes for stable throughput measurement)
+    n_passes = 3
     total_calls = len(inputs) * n_passes
     t0 = time.perf_counter()
     for _ in range(n_passes):
@@ -106,45 +109,73 @@ def evaluate_single(name: str, spec: dict) -> dict:
     }
 
 
-def compute_score(results: dict[str, dict]) -> float:
+def check_memory_budget() -> dict:
+    """Check that TABLES fit within MEMORY_BUDGET."""
+    total_floats = sum(len(t) for t in k.TABLES.values())
+    total_bytes = total_floats * 8
+    budget = k.MEMORY_BUDGET
+    return {
+        "total_bytes": total_bytes,
+        "budget_bytes": budget,
+        "within_budget": total_bytes <= budget,
+        "utilization": round(total_bytes / budget, 3) if budget > 0 else 0,
+        "tables": {name: len(t) * 8 for name, t in k.TABLES.items()},
+    }
+
+
+def compute_score(results: dict[str, dict], memory: dict) -> float:
     """Composite score: geometric mean of per-kernel scores.
 
-    Per-kernel score = accuracy * (1000 / ns_per_call), capped at accuracy >= 0.99.
-    This rewards both accuracy AND speed, with a hard accuracy floor.
+    Per-kernel score:
+      - accuracy < 0.9999 (99.99%): score = accuracy * 0.1 (heavy penalty)
+      - accuracy >= 0.9999: score = accuracy * (1000 / ns_per_call)
+
+    Memory penalty: if over budget, multiply total by 0.1.
     """
     scores = []
     for name, r in results.items():
         acc = r["accuracy"]
-        if acc < 0.99:
-            # Below accuracy floor: heavy penalty
-            scores.append(acc * 0.1)
+        if acc < 0.9999:
+            # Below 99.99% accuracy floor
+            scores.append(max(acc, 0.01) * 0.1)
         else:
-            # Score = speed (higher = faster), scaled so 1000ns = 1.0
+            # Score = speed, scaled so 1000ns = 1.0
             scores.append(acc * (1000.0 / max(r["ns_per_call"], 1.0)))
     if not scores:
         return 0.0
     # Geometric mean
     product = 1.0
     for s in scores:
-        product *= s
-    return round(product ** (1.0 / len(scores)), 6)
+        product *= max(s, 1e-6)
+    score = product ** (1.0 / len(scores))
+    # Memory penalty
+    if not memory.get("within_budget", True):
+        score *= 0.1
+    return round(score, 6)
 
 
 def main():
+    # Check memory budget first
+    memory = check_memory_budget()
+
     results = {}
     for name, spec in TESTS.items():
         results[name] = evaluate_single(name, spec)
 
-    score = compute_score(results)
+    score = compute_score(results, memory)
 
     output = {
         "metrics": {
             "score": score,
+            "memory_used_bytes": memory["total_bytes"],
+            "memory_budget_bytes": memory["budget_bytes"],
+            "memory_within_budget": memory["within_budget"],
             **{f"{name}_accuracy": r["accuracy"] for name, r in results.items()},
             **{f"{name}_ns": r["ns_per_call"] for name, r in results.items()},
         },
         "meta": {
             "kernels_tested": len(results),
+            "memory": memory,
             "per_kernel": results,
         },
     }
@@ -155,7 +186,9 @@ def main():
     print("-" * 40, file=sys.stderr)
     for name, r in results.items():
         print(f"{name:<10} {r['accuracy']:>10.6f} {r['ns_per_call']:>10.1f} {r['errors']:>7}", file=sys.stderr)
-    print(f"\nComposite score: {score}", file=sys.stderr)
+    print(f"\nMemory: {memory['total_bytes']}/{memory['budget_bytes']} bytes "
+          f"({'OK' if memory['within_budget'] else 'OVER BUDGET!'})", file=sys.stderr)
+    print(f"Composite score: {score}", file=sys.stderr)
 
     # Lab-compatible JSON on stdout
     print(json.dumps(output))

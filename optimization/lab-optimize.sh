@@ -40,8 +40,8 @@ ensure_proj() {
 
     # Symlinks to committed static files
     ln -sf ../PROMPT.md PROMPT.md
-    ln -sf ../../run_eval.py .the_lab/artifacts/run_eval.py
-    ln -sf ../../test_project .the_lab/artifacts/test_project
+    ln -sf ../../../run_eval.py .the_lab/artifacts/run_eval.py
+    ln -sf ../../../test_project .the_lab/artifacts/test_project
 
     # Install pre-commit hook
     cat > .git/hooks/pre-commit << 'HOOK'
@@ -52,6 +52,10 @@ if git diff --cached --name-only | grep -q '^\.the_lab/' ; then
 fi
 HOOK
     chmod +x .git/hooks/pre-commit
+
+    # Disable sandbox for optimization experiments
+    mkdir -p .the_lab/sandbox
+    echo '{"enabled": false}' > .the_lab/sandbox/config.json
 
     git add -A
     git commit -m "Initial optimization project" 2>/dev/null || true
@@ -105,7 +109,8 @@ cmd_baseline() {
     curl -s -X POST "$api/ideas/$idea_id/checkout" > /dev/null
 
     # Create experiment
-    local script_content='#!/bin/bash\nset -euo pipefail\npython .the_lab/artifacts/run_eval.py --model '"$model"' --budget '"$budget"' --output /tmp/lab_baseline_result.json'
+    local run_eval="$SCRIPT_DIR/run_eval.py"
+    local script_content="#!/bin/bash\nset -euo pipefail\npython $run_eval --model $model --budget $budget --output /tmp/lab_baseline_result.json"
     local exp_resp
     exp_resp=$(curl -s -X POST "$api/ideas/$idea_id/experiments" \
         -H "Content-Type: application/json" \
@@ -196,10 +201,21 @@ cmd_agent() {
 cmd_reset() {
     echo "Resetting optimization/proj/..."
 
-    # Git objects can have read-only permissions — make writable before removing
     if [ -d "$PROJ" ]; then
+        # Git objects can have read-only permissions
         chmod -R u+w "$PROJ/.git" 2>/dev/null || true
-        rm -rf "$PROJ"
+        # NFS stale handles — retry with force
+        rm -rf "$PROJ" 2>/dev/null || true
+        if [ -d "$PROJ" ]; then
+            sleep 2
+            rm -rf "$PROJ" 2>/dev/null || true
+        fi
+        if [ -d "$PROJ" ]; then
+            echo "Warning: could not fully remove proj/ (NFS stale handles)."
+            echo "Cleaning what we can..."
+            find "$PROJ" -not -name '.nfs*' -delete 2>/dev/null || true
+            rm -rf "$PROJ/.git" "$PROJ/the_lab" "$PROJ/.the_lab" "$PROJ/PROMPT.md" "$PROJ/pyproject.toml" 2>/dev/null || true
+        fi
     fi
     ensure_proj
 
