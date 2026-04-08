@@ -1,0 +1,260 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# The Lab v4 Self-Optimization
+#
+# Usage:
+#   ./optimization/lab-optimize.sh baseline [eval-model] [budget]
+#   ./optimization/lab-optimize.sh start [port]
+#   ./optimization/lab-optimize.sh agent [outer-model] [eval-model] [budget]
+#   ./optimization/lab-optimize.sh cherry-pick <commit>
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+PROJ="$SCRIPT_DIR/proj"
+
+# Activate the repo's venv if not already active
+if [ -z "${VIRTUAL_ENV:-}" ] && [ -f "$REPO_ROOT/.venv/bin/activate" ]; then
+    source "$REPO_ROOT/.venv/bin/activate"
+fi
+
+# ── Setup proj/ if it doesn't exist ──────────────────────────────────────────
+
+ensure_proj() {
+    if [ -f "$PROJ/the_lab/app.py" ]; then
+        return
+    fi
+    echo "Setting up optimization/proj/..."
+    mkdir -p "$PROJ/.the_lab/artifacts"
+
+    # Copy .git and checkout optim branch
+    cp -r "$REPO_ROOT/.git" "$PROJ/.git"
+    cd "$PROJ"
+    git checkout -b optim 2>/dev/null || git checkout optim
+
+    # Copy API code
+    cp -r "$REPO_ROOT/the_lab" the_lab
+    rm -rf the_lab/static the_lab/__pycache__
+    find the_lab -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
+    cp "$REPO_ROOT/pyproject.toml" pyproject.toml
+
+    # Symlinks to committed static files
+    ln -sf ../PROMPT.md PROMPT.md
+    ln -sf ../../run_eval.py .the_lab/artifacts/run_eval.py
+    ln -sf ../../test_project .the_lab/artifacts/test_project
+
+    # Install pre-commit hook
+    cat > .git/hooks/pre-commit << 'HOOK'
+#!/bin/bash
+if git diff --cached --name-only | grep -q '^\.the_lab/' ; then
+    echo "ERROR: .the_lab/ files staged for commit." >&2
+    exit 1
+fi
+HOOK
+    chmod +x .git/hooks/pre-commit
+
+    git add -A
+    git commit -m "Initial optimization project" 2>/dev/null || true
+    echo "Done. proj/ ready on branch 'optim'."
+    cd "$SCRIPT_DIR"
+}
+
+# ── Commands ─────────────────────────────────────────────────────────────────
+
+cmd_baseline() {
+    ensure_proj
+    local model="${1:-haiku}"
+    local budget="${2:-10}"
+    local port="${3:-9000}"
+    local api="http://127.0.0.1:$port/api/v1"
+    echo "Establishing baseline (model=$model, budget=$budget)..."
+    echo "This will launch an agent against the test project (~\$1-3, ~5 min)."
+    echo ""
+    cd "$PROJ"
+    local output_file="$SCRIPT_DIR/baseline_full.json"
+
+    # Start outer Lab temporarily if not already running
+    local lab_started=false
+    if ! curl -s "$api/backlog" > /dev/null 2>&1; then
+        echo "Starting outer Lab on port $port..."
+        cd "$REPO_ROOT"
+        THE_LAB_REPO="$PROJ" THE_LAB_NO_SANDBOX=1 \
+            python3 -m uvicorn the_lab.app:app --host 0.0.0.0 --port "$port" --log-level warning &
+        local lab_pid=$!
+        lab_started=true
+        sleep 2
+        cd "$PROJ"
+    fi
+
+    # Create baseline idea via the API
+    echo "Creating baseline idea..."
+    local idea_resp
+    idea_resp=$(curl -s -X POST "$api/ideas/new" \
+        -H "Content-Type: application/json" \
+        -d "{\"description\": \"Baseline: unmodified API (model=$model, budget=$budget)\"}")
+    local idea_id
+    idea_id=$(echo "$idea_resp" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])" 2>/dev/null)
+
+    if [ -z "$idea_id" ]; then
+        echo "Error: failed to create baseline idea. Response: $idea_resp"
+        [ "$lab_started" = true ] && kill "$lab_pid" 2>/dev/null
+        exit 1
+    fi
+
+    # Checkout the idea branch
+    curl -s -X POST "$api/ideas/$idea_id/checkout" > /dev/null
+
+    # Create experiment
+    local script_content='#!/bin/bash\nset -euo pipefail\npython .the_lab/artifacts/run_eval.py --model '"$model"' --budget '"$budget"' --output /tmp/lab_baseline_result.json'
+    local exp_resp
+    exp_resp=$(curl -s -X POST "$api/ideas/$idea_id/experiments" \
+        -H "Content-Type: application/json" \
+        -d "{\"description\": \"Baseline eval (model=$model, budget=$budget)\", \"script_content\": \"$script_content\", \"tags\": [\"baseline\", \"$model\", \"budget-$budget\"]}")
+    local exp_id
+    exp_id=$(echo "$exp_resp" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])" 2>/dev/null)
+
+    if [ -z "$exp_id" ]; then
+        echo "Error: failed to create experiment. Response: $exp_resp"
+        [ "$lab_started" = true ] && kill "$lab_pid" 2>/dev/null
+        exit 1
+    fi
+
+    echo "Created idea #$idea_id, experiment #$exp_id"
+    echo "Starting experiment..."
+
+    # Start and wait
+    curl -s -X POST "$api/experiments/$exp_id/start" > /dev/null
+    echo "Waiting for experiment to finish..."
+    curl -s "$api/wait?experiment_id=$exp_id&timeout=900" > /dev/null
+
+    # Get results
+    local result
+    result=$(curl -s "$api/experiments/$exp_id")
+    echo "$result" > "$output_file"
+
+    # Save baseline.json from the experiment metrics
+    python3 -c "
+import json
+exp = json.load(open('$output_file'))
+metrics = exp.get('metrics', {})
+if metrics:
+    json.dump(metrics, open('.the_lab/artifacts/baseline.json', 'w'), indent=2)
+    print()
+    print(f'  api_score:    {metrics.get(\"api_score\", \"n/a\")}')
+    print(f'  final_score:  {metrics.get(\"final_score\", \"n/a\")}')
+    print(f'  quality_log:  {metrics.get(\"quality_log\", \"n/a\")}')
+    print(f'  api_calls:    {metrics.get(\"total_api_calls\", \"n/a\")}')
+    print(f'  calls/idea:   {metrics.get(\"calls_per_idea\", \"n/a\")}')
+    print(f'  confusion:    {metrics.get(\"confusion_score\", \"n/a\")}')
+    print(f'  cost:         \${metrics.get(\"cost_total\", 0)}')
+    print()
+    print('Baseline saved to .the_lab/artifacts/baseline.json')
+else:
+    print('Warning: experiment has no metrics yet. Status:', exp.get('status'))
+    print('Check: curl $api/experiments/$exp_id/log?tail=20')
+"
+
+    # Conclude the baseline idea
+    curl -s -X POST "$api/ideas/$idea_id/conclude" \
+        -H "Content-Type: application/json" \
+        -d '{"conclusion": "Baseline established. All future scores are relative to this."}' > /dev/null
+    echo "Baseline idea #$idea_id concluded."
+
+    [ "$lab_started" = true ] && kill "$lab_pid" 2>/dev/null
+}
+
+cmd_start() {
+    ensure_proj
+    local port="${1:-9000}"
+    echo "Starting The Lab on port $port..."
+    echo "  Using parent repo's Lab implementation (not proj/the_lab/)"
+    echo "  Dashboard: http://localhost:$port"
+    echo ""
+    cd "$REPO_ROOT"
+    exec env THE_LAB_REPO="$PROJ" THE_LAB_NO_SANDBOX=1 python3 -m uvicorn the_lab.app:app \
+        --host 0.0.0.0 --port "$port"
+}
+
+cmd_agent() {
+    ensure_proj
+    local outer_model="${1:-sonnet}"
+    local eval_model="${2:-haiku}"
+    local budget="${3:-10}"
+    echo "Launching optimization agent..."
+    echo "  Outer model (optimization): $outer_model"
+    echo "  Eval model (inner agent):   $eval_model"
+    echo "  Budget per eval:            $budget experiments"
+    echo "  Working directory:           $PROJ"
+    echo ""
+    cd "$PROJ"
+    # Patch PROMPT.md so the agent uses the right eval model and budget
+    sed -i "s/--model [a-z]*/--model $eval_model/g" "$SCRIPT_DIR/PROMPT.md"
+    sed -i "s/--budget [0-9]*/--budget $budget/g" "$SCRIPT_DIR/PROMPT.md"
+    exec the-lab-agent PROMPT.md --model "$outer_model" --no-sandbox
+}
+
+cmd_reset() {
+    echo "Resetting optimization/proj/..."
+
+    # Git objects can have read-only permissions — make writable before removing
+    if [ -d "$PROJ" ]; then
+        chmod -R u+w "$PROJ/.git" 2>/dev/null || true
+        rm -rf "$PROJ"
+    fi
+    ensure_proj
+
+    echo "Done. Clean slate from parent repo."
+}
+
+cmd_cherry_pick() {
+    local commit="$1"
+    echo "Cherry-picking $commit to main..."
+    cd "$REPO_ROOT"
+    git cherry-pick "$commit"
+    echo "Done. Verify with: git log --oneline -3"
+}
+
+# ── Dispatch ─────────────────────────────────────────────────────────────────
+
+case "${1:-help}" in
+    baseline)
+        shift
+        cmd_baseline "$@"
+        ;;
+    start)
+        shift
+        cmd_start "$@"
+        ;;
+    agent)
+        shift
+        cmd_agent "$@"
+        ;;
+    reset)
+        cmd_reset
+        ;;
+    cherry-pick)
+        shift
+        cmd_cherry_pick "$@"
+        ;;
+    *)
+        echo "The Lab v4 Self-Optimization"
+        echo ""
+        echo "Usage: $0 <command> [args]"
+        echo ""
+        echo "Commands:"
+        echo "  baseline [eval-model] [budget]                  Establish baseline (default: haiku, 10)"
+        echo "  start [port]                                    Start the Lab dashboard (default: 9000)"
+        echo "  agent [outer-model] [eval-model] [budget]       Launch optimization agent"
+        echo "                                                    outer-model: who optimizes the API (default: sonnet)"
+        echo "                                                    eval-model: who runs the test project (default: haiku)"
+        echo "                                                    budget: experiments per eval (default: 10)"
+        echo "  reset                                            Wipe proj/ data, branches, refresh code"
+        echo "  cherry-pick <commit>                            Cherry-pick a winner to main"
+        echo ""
+        echo "Typical flow:"
+        echo "  $0 baseline                                     # ~5 min, ~\$1-3"
+        echo "  $0 start                                        # open dashboard at :9000"
+        echo "  $0 agent opus haiku 10                          # opus optimizes, haiku evaluates"
+        echo "  $0 cherry-pick abc1234                          # merge winners"
+        ;;
+esac

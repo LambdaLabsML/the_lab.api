@@ -17,3 +17,8 @@ dashboard/node_modules/
 the_lab/static/
 /releases
 /.claude
+optimization/proj/
+.claude/
+.codex/
+optimization/baseline_*.json
+optimization/baseline_*.log
