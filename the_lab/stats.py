@@ -72,7 +72,7 @@ class ApiStats:
         self._path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
 
     def record(self, method: str, path: str, client_ip: str = "",
-               query: str = "", body_preview: str = ""):
+               query: str = "", body_preview: str = "", status_code: int = 0):
         """Record an API call and update n-gram pattern tracking."""
         key = f"{method} {normalize_path(path)}"
         import datetime as _dt
@@ -82,6 +82,7 @@ class ApiStats:
             "path": path,
             "query": query,
             "body": body_preview[:200] if body_preview else "",
+            "status": status_code,
         })
         with self._lock:
             self._calls[key] += 1

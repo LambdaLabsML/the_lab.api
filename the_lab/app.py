@@ -70,6 +70,7 @@ async def track_api_stats(request, call_next):
             request.method, path, client_ip=client,
             query=str(request.url.query) if request.url.query else "",
             body_preview=body_preview,
+            status_code=response.status_code,
         )
     return response
 
