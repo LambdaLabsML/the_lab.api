@@ -53,6 +53,49 @@ def _find_node() -> str | None:
     return None
 
 
+def _build_dashboard(dashboard_dir: Path) -> bool:
+    """Run `npx vite build` if dashboard sources are newer than the build."""
+    static_dir = Path(__file__).parent / "static"
+    index_html = static_dir / "index.html"
+
+    # Check if build is needed: no index.html, or any source file newer than it
+    needs_build = not index_html.exists()
+    if not needs_build:
+        build_mtime = index_html.stat().st_mtime
+        src_dir = dashboard_dir / "src"
+        if src_dir.exists():
+            for f in src_dir.rglob("*"):
+                if f.is_file() and f.stat().st_mtime > build_mtime:
+                    needs_build = True
+                    break
+
+    if not needs_build:
+        return True
+
+    node = _find_node()
+    if not node:
+        print("\033[33m  Node.js >= 18 not found — skipping dashboard build\033[0m")
+        return False
+
+    vite_js = dashboard_dir / "node_modules" / "vite" / "bin" / "vite.js"
+    if not vite_js.exists():
+        print("\033[33m  vite not in node_modules — skipping dashboard build\033[0m")
+        return False
+
+    print("\033[36m  building dashboard...\033[0m", end=" ", flush=True)
+    result = subprocess.run(
+        [node, str(vite_js), "build"],
+        cwd=str(dashboard_dir),
+        capture_output=True, text=True, timeout=60,
+    )
+    if result.returncode == 0:
+        print("\033[32mdone\033[0m")
+        return True
+    else:
+        print(f"\033[31mfailed\033[0m\n{result.stderr[:500]}")
+        return False
+
+
 def _start_vite(dashboard_dir: Path, api_port: int) -> subprocess.Popen | None:
     """Start the Vite dev server if node_modules exists."""
     if not (dashboard_dir / "node_modules").exists():
@@ -148,6 +191,11 @@ def main():
         },
     )
 
+    # Auto-build dashboard if sources changed
+    dashboard_dir = _find_dashboard_dir()
+    if dashboard_dir:
+        _build_dashboard(dashboard_dir)
+
     if args.dev:
         import asyncio
         import uvicorn
@@ -163,7 +211,6 @@ def main():
 
         # Start Vite dev server alongside the backend if dashboard/ exists
         vite_proc = None
-        dashboard_dir = _find_dashboard_dir()
         if dashboard_dir:
             vite_proc = _start_vite(dashboard_dir, proxy.internal_port)
 
