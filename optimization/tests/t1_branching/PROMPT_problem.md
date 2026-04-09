@@ -1,24 +1,24 @@
-# Branching Test: Find the Best Path and Continue It
+# Math Kernel Optimization Under Memory Constraints
 
 ## Goal
 
-This project has 15 existing ideas forming a research tree. Your job:
-
-1. **Examine the existing ideas** — use the API to find which idea has the best score
-2. **Branch from the best idea** — create a new idea with the best-scoring idea as parent
-3. **Improve the score** — edit `solver.py` on your new branch and run an experiment
-4. **Conclude** — note your findings and conclude if you improved the score
+Maximize the composite score. Previous researchers explored table-based, polynomial, and hybrid approaches -- review their work and continue from where they left off.
 
 ## Background
 
-`solver.py` contains a `guess()` function that returns a float. `eval_harness.py` scores it — the closer to a hidden target, the higher the score (0.0 to 1.0).
+Seven math functions (sin, cos, exp, log, sqrt, sigmoid, tanh) must be implemented in pure Python without the math stdlib. All lookup tables share a 4096-byte memory budget (512 floats at 8 bytes each).
 
-Previous researchers explored different ranges and left 15 ideas with varying scores. Some branches are dead ends, others are promising. The best score so far is 0.95 — can you beat it?
+The composite score is a geometric mean of per-kernel scores. Each kernel must achieve 99.99% accuracy to earn speed credit -- below that threshold, accuracy is penalized heavily. If tables exceed the memory budget, the entire score is multiplied by 0.1.
+
+Three strategies have been explored so far:
+- **Table-heavy** (ideas 1-5): lookup tables with interpolation
+- **Polynomial** (ideas 6-10): Chebyshev/Pade approximations, no tables
+- **Hybrid** (ideas 11-15): small tables + polynomial corrections
+
+The current best score is 0.75 from the hybrid approach. There is room to improve.
 
 ## Setup
 
 ```bash
-python eval_harness.py
+python benchmark/eval_harness.py
 ```
-
-Returns `{"metrics": {"score": ..., "guess": ..., "error": ...}}`.

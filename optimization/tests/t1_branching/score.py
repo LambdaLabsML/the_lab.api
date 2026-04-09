@@ -5,8 +5,8 @@ sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent.parent))
 from score_common import LabClient, api_call_count, endpoint_was_called, new_ideas_after, score_result
 
 SEED_IDEAS = 15
-BEST_IDEA_ID = 10  # score 0.95
-GOOD_PARENT_IDS = {10, 7, 4}  # acceptable parents (the best branch)
+BEST_IDEA_ID = 13  # score 0.75 (hybrid approach)
+GOOD_PARENT_IDS = {13, 12, 11}  # acceptable parents (the hybrid branch)
 
 
 def score(api_url: str) -> dict:
@@ -49,7 +49,7 @@ def score(api_url: str) -> dict:
     checks["ran_experiment"] = min(new_exps_completed / 1, 1.0)
 
     # Did the score improve?
-    checks["score_improved"] = min(best_new_score / 0.95, 1.0) if best_new_score > 0 else 0.0
+    checks["score_improved"] = min(best_new_score / 0.75, 1.0) if best_new_score > 0 else 0.0
 
     # Did the agent use navigation endpoints?
     checks["used_orient_or_leaderboard"] = 1.0 if (

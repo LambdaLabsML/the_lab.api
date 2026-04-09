@@ -4,8 +4,10 @@ import sys
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent.parent))
 from score_common import LabClient, api_call_count, endpoint_was_called, score_result
 
-SEED_IDEAS = 3
-SEED_FAILED_EXPS = 4  # exp_ids 2,3,4,5
+SEED_IDEAS = 15
+# Idea 14 has 2 experiments: exp 14 (failed) and exp 15 (completed but low score)
+# The failed experiment is the one the agent should investigate
+SEED_TOTAL_EXPS = 15  # 13 ideas with 1 exp each + idea 14 with 2 + idea 15 with 0
 
 
 def score(api_url: str) -> dict:
@@ -22,12 +24,12 @@ def score(api_url: str) -> dict:
     # Did the agent check experiment status (GET /experiments)?
     checks["checked_status"] = 1.0 if endpoint_was_called(stats, "GET /api/v1/experiments/") else 0.0
 
-    # Count new successful experiments
+    # Count new successful experiments (after all seeded ones)
     new_successes = 0
     best_new_score = 0.0
     for idea in ideas:
         for exp in client.experiments(idea["id"]):
-            if exp["id"] > 5 and exp.get("status") == "completed":  # after seed
+            if exp["id"] > SEED_TOTAL_EXPS and exp.get("status") == "completed":
                 new_successes += 1
                 s = (exp.get("metrics") or {}).get("score", 0)
                 best_new_score = max(best_new_score, s)
@@ -35,8 +37,8 @@ def score(api_url: str) -> dict:
     # Fixed at least some failures (created successful replacements)?
     checks["experiments_fixed"] = min(new_successes / 2, 1.0)
 
-    # Score improved over baseline (0.50)?
-    checks["score_improved"] = min(best_new_score / 0.50, 1.0) if best_new_score > 0.50 else (best_new_score / 0.50 if best_new_score > 0 else 0.0)
+    # Score improved over current best (0.75)?
+    checks["score_improved"] = min(best_new_score / 0.75, 1.0) if best_new_score > 0.75 else (best_new_score / 0.75 if best_new_score > 0 else 0.0)
 
     # Did the agent create notes explaining what was wrong?
     total_notes = 0
@@ -46,7 +48,7 @@ def score(api_url: str) -> dict:
             total_notes += len(notes)
         except Exception:
             pass
-    seed_notes = 2
+    seed_notes = 20
     new_notes = max(total_notes - seed_notes, 0)
     checks["documented_errors"] = min(new_notes / 1, 1.0)
 

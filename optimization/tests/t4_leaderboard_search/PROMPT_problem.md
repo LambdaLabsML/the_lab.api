@@ -1,27 +1,24 @@
-# Leaderboard Navigation: Find the Best Direction
+# Math Kernel Optimization Under Memory Constraints
 
 ## Goal
 
-12 ideas span 3 research directions (tagged: `binary-search`, `gradient`, `random`). Your job:
-
-1. **Survey the landscape** — use the leaderboard and search to understand what's been tried
-2. **Identify the best direction** — which approach is closest to the optimum?
-3. **Continue the best work** — branch from the top-scoring idea and push further
-4. **Beat the best score** — current best is 0.95. Get closer to 1.0.
+Maximize the composite score. Previous researchers explored table-based, polynomial, and hybrid approaches -- find the most promising approach and push it further.
 
 ## Background
 
-`solver.py` has a `guess()` function. `eval_harness.py` scores it — closer to a hidden target means higher score (0.0 to 1.0).
+Seven math functions (sin, cos, exp, log, sqrt, sigmoid, tanh) must be implemented in pure Python without the math stdlib. All lookup tables share a 4096-byte memory budget (512 floats at 8 bytes each).
 
-Three teams explored different strategies:
-- **Binary search**: systematic halving of the search range
-- **Gradient**: incremental steps in the improving direction
-- **Random**: exploratory guesses
+The composite score is a geometric mean of per-kernel scores. Each kernel must achieve 99.99% accuracy to earn speed credit -- below that threshold, accuracy is penalized heavily. If tables exceed the memory budget, the entire score is multiplied by 0.1.
 
-Use `/leaderboard?metric=score` and `/ideas/search?q=...` to navigate efficiently rather than reading every idea individually.
+Three strategies have been explored so far:
+- **Table-heavy** (ideas 1-5): lookup tables with interpolation
+- **Polynomial** (ideas 6-10): Chebyshev/Pade approximations, no tables
+- **Hybrid** (ideas 11-15): small tables + polynomial corrections
+
+The current best score is 0.75 from the hybrid approach. There is room to improve.
 
 ## Setup
 
 ```bash
-python eval_harness.py
+python benchmark/eval_harness.py
 ```

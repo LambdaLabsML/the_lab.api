@@ -4,10 +4,10 @@ import sys
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent.parent))
 from score_common import LabClient, api_call_count, endpoint_was_called, new_ideas_after, score_result
 
-SEED_IDEAS = 12
-BEST_DIRECTION_IDS = {1, 2, 3, 4}  # binary search — best score 0.95
-BEST_IDEA_ID = 4  # score 0.95
-SEED_BEST_SCORE = 0.95
+SEED_IDEAS = 15
+BEST_DIRECTION_IDS = {11, 12, 13}  # hybrid — best score 0.75
+BEST_IDEA_ID = 13  # score 0.75
+SEED_BEST_SCORE = 0.75
 
 
 def score(api_url: str) -> dict:
@@ -28,7 +28,7 @@ def score(api_url: str) -> dict:
     # Used orient?
     checks["used_orient"] = 1.0 if endpoint_was_called(stats, "/orient") else 0.0
 
-    # Did the agent choose the best direction?
+    # Did the agent choose the best direction (hybrid)?
     chose_best = 0.0
     if new_ideas:
         for idea in new_ideas:
@@ -36,9 +36,12 @@ def score(api_url: str) -> dict:
             if parents & BEST_DIRECTION_IDS:
                 chose_best = 1.0
                 break
-            # Gradient direction (second best) gets partial credit
-            elif parents & {5, 6, 7, 8}:
+            # Polynomial direction (second best) gets partial credit
+            elif parents & {6, 7, 8, 9, 10}:
                 chose_best = max(chose_best, 0.6)
+            # Table-heavy gets less credit
+            elif parents & {1, 2, 3, 4, 5}:
+                chose_best = max(chose_best, 0.3)
     checks["chose_best_direction"] = chose_best
 
     # Did the agent branch from the actual best idea?
@@ -65,7 +68,7 @@ def score(api_url: str) -> dict:
         1 for c in stats.get("calls", [])
         if "GET /api/v1/ideas/" in c.get("endpoint", "") and "/search" not in c.get("endpoint", "")
     )
-    checks["navigation_efficiency"] = max(0.0, 1.0 - individual_idea_gets / 12)
+    checks["navigation_efficiency"] = max(0.0, 1.0 - individual_idea_gets / 15)
 
     return score_result("t4_leaderboard_search", checks, calls, max_calls=40)
 

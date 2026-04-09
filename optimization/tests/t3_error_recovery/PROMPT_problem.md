@@ -1,28 +1,24 @@
-# Error Recovery: Fix Failing Experiments
+# Math Kernel Optimization Under Memory Constraints
 
 ## Goal
 
-Several experiments have failed with different errors. Your job:
-
-1. **Find the failed experiments** — check experiment statuses across all ideas
-2. **Read the error logs** — understand what went wrong in each case
-3. **Fix the issues** — create new experiments that succeed
-4. **Improve the score** — the working baseline scores 0.50. Beat it.
+Maximize the composite score. Previous researchers explored table-based, polynomial, and hybrid approaches -- some experiments have failed. Investigate and fix them.
 
 ## Background
 
-`solver.py` has a `guess()` function. `eval_harness.py` scores it. The baseline works (score 0.50), but 4 experiments have failed with different errors:
-- Import errors (missing modules)
-- Type errors (wrong data types)
-- Timeout errors (infinite loops)
-- Script errors (typos in filenames)
+Seven math functions (sin, cos, exp, log, sqrt, sigmoid, tanh) must be implemented in pure Python without the math stdlib. All lookup tables share a 4096-byte memory budget (512 floats at 8 bytes each).
 
-Each error has a clear fix. Read the logs to understand what happened.
+The composite score is a geometric mean of per-kernel scores. Each kernel must achieve 99.99% accuracy to earn speed credit -- below that threshold, accuracy is penalized heavily. If tables exceed the memory budget, the entire score is multiplied by 0.1.
+
+Three strategies have been explored so far:
+- **Table-heavy** (ideas 1-5): lookup tables with interpolation
+- **Polynomial** (ideas 6-10): Chebyshev/Pade approximations, no tables
+- **Hybrid** (ideas 11-15): small tables + polynomial corrections
+
+The current best score is 0.75 from the hybrid approach. One experiment crashed due to a bug and another was penalized for exceeding the memory budget.
 
 ## Setup
 
 ```bash
-python eval_harness.py
+python benchmark/eval_harness.py
 ```
-
-Check experiment logs with the API to diagnose failures before creating fixes.

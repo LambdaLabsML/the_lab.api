@@ -4,8 +4,8 @@ import sys
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent.parent))
 from score_common import LabClient, api_call_count, endpoint_was_called, new_ideas_after, best_score_across, score_result
 
-SEED_IDEAS = 2
-SEED_BEST_SCORE = 0.52
+SEED_IDEAS = 15
+SEED_BEST_SCORE = 0.75
 
 
 def score(api_url: str) -> dict:
@@ -17,12 +17,15 @@ def score(api_url: str) -> dict:
     checks = {}
 
     # Count new experiments (across all ideas, including seeded ones)
+    # Each seeded idea has 1 experiment, except idea 14 (2 exps) and idea 15 (0 exps)
+    seed_exp_counts = {i: 1 for i in range(1, 16)}
+    seed_exp_counts[14] = 2
+    seed_exp_counts[15] = 0
     total_new_exps = 0
     for idea in ideas:
         exps = client.experiments(idea["id"])
-        # Seeded: idea 1 has 1 exp, idea 2 has 2 exps = 3 total
-        seed_exp_count = {1: 1, 2: 2}.get(idea["id"], 0)
-        new_exps = len(exps) - seed_exp_count
+        seed_count = seed_exp_counts.get(idea["id"], 0)
+        new_exps = len(exps) - seed_count
         total_new_exps += max(new_exps, 0)
 
     # Created enough experiments? (at least 3 iterations)
@@ -32,7 +35,6 @@ def score(api_url: str) -> dict:
     checks["used_wait"] = 1.0 if endpoint_was_called(stats, "/wait") else 0.0
 
     # Used auto_start (script_content in experiment creation)?
-    # Check if POST /experiments was called without separate POST /start
     start_calls = sum(1 for c in stats.get("calls", []) if "/start" in c.get("endpoint", "") and "POST" in c.get("endpoint", ""))
     exp_create_calls = sum(1 for c in stats.get("calls", []) if "/experiments" in c.get("endpoint", "") and "POST" in c.get("endpoint", "") and "/start" not in c.get("endpoint", ""))
     checks["efficient_start"] = 1.0 if (start_calls == 0 and exp_create_calls > 0) else (0.5 if exp_create_calls > start_calls else 0.0)
@@ -50,7 +52,8 @@ def score(api_url: str) -> dict:
             total_notes += len(notes)
         except Exception:
             pass
-    seed_notes = 2  # pre-seeded
+    # Pre-seeded notes: count from SEED_IDEAS data
+    seed_notes = 20  # total notes across all 15 seeded ideas
     new_notes = max(total_notes - seed_notes, 0)
     checks["documented_findings"] = min(new_notes / 2, 1.0)
 
