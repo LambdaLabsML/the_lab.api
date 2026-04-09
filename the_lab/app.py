@@ -711,10 +711,13 @@ def get_notes(
 
 
 def _resolve_exp(exp_ref) -> dict:
-    """Resolve experiment by global ID (int) or label ('1.2'). Raises 404."""
-    exp = store.resolve_experiment(str(exp_ref))
+    """Resolve experiment by label ('1.2') or legacy global ID. Raises 404/400."""
+    try:
+        exp = store.resolve_experiment(str(exp_ref))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     if not exp:
-        raise HTTPException(404, f"experiment '{exp_ref}' not found (accepts global ID or label like '1.2')")
+        raise HTTPException(404, f"experiment '{exp_ref}' not found (use label like '1.2' or legacy global ID)")
     return exp
 
 
@@ -1637,7 +1640,10 @@ async def wait_for_experiment(
     # Resolve label to global ID if needed
     resolved_exp_id = None
     if experiment_id is not None:
-        exp = store.resolve_experiment(str(experiment_id))
+        try:
+            exp = store.resolve_experiment(str(experiment_id))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
         if exp:
             resolved_exp_id = exp["id"]
         else:

@@ -268,17 +268,13 @@ class Store:
             exp["label"] = f"{exp['idea_id']}.{exp['seq']}"
         return exp
 
-    def resolve_experiment(self, ref: str) -> dict | None:
-        """Resolve experiment by global ID ('5') or label ('1.2')."""
-        # Global integer ID
-        try:
-            exp_id = int(ref)
-            exp = self._experiments.get(exp_id)
-            if exp:
-                return self._label_experiment(exp)
-        except ValueError:
-            pass
-        # Label format: idea_id.seq
+    def resolve_experiment(self, ref: str) -> dict | None | str:
+        """Resolve experiment by label ('1.2') or legacy global ID ('5').
+
+        Returns experiment dict, None if not found, or raises ValueError
+        if a bare integer matches multiple experiments across ideas.
+        """
+        # Label format: idea_id.seq (preferred)
         if "." in ref:
             try:
                 idea_str, seq_str = ref.split(".", 1)
@@ -292,6 +288,33 @@ class Store:
                     return self._label_experiment(idea_exps[seq - 1])
             except (ValueError, IndexError):
                 pass
+            return None
+
+        # Bare integer — legacy global ID or ambiguous seq
+        try:
+            num = int(ref)
+        except ValueError:
+            return None
+
+        # First try legacy global ID (exact match in _experiments dict)
+        exp = self._experiments.get(num)
+        if exp:
+            return self._label_experiment(exp)
+
+        # Fallback: search all ideas for experiments with seq == num
+        matches = []
+        for eid, e in self._experiments.items():
+            labeled = self._label_experiment(e)
+            if labeled.get("seq") == num:
+                matches.append(labeled)
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            labels = [m["label"] for m in matches]
+            raise ValueError(
+                f"Ambiguous experiment '{ref}': matches {', '.join(labels)}. "
+                f"Use the full label (e.g. '{labels[0]}') to disambiguate."
+            )
         return None
 
     def create_experiment(
@@ -302,11 +325,13 @@ class Store:
         tags: list[str] | None = None,
     ) -> dict:
         with self._lock:
+            seq = self._next_seq(idea_id)
+            # ID = per-idea sequence number (not global counter)
+            # Legacy global ID still stored for backward compat with old data
             exp_id = self._next_exp_id
             self._next_exp_id += 1
-            seq = self._next_seq(idea_id)
 
-        script_rel = f".the_lab/experiments/{idea_id}/{exp_id}.sh"
+        script_rel = f".the_lab/experiments/{idea_id}/{seq}.sh"
         exp = {
             "id": exp_id,
             "idea_id": idea_id,
