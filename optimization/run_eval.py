@@ -355,6 +355,16 @@ def launch_agent(
     start = time.time()
     deadline = start + timeout
 
+    # Snapshot initial experiment count (pre-seeded fixtures have existing experiments)
+    initial_completed = 0
+    try:
+        resp = _lab_get(f"http://{_get_host()}:{api_port}/api/v1/chart-data", timeout=5)
+        data = json.loads(resp.read())
+        initial_completed = len(data.get("experiments", []))
+        print(f"  Pre-seeded experiments: {initial_completed} (budget counts new only)", file=sys.stderr)
+    except Exception:
+        pass
+
     # Write initial progress immediately
     if progress_file:
         Path(progress_file).write_text(json.dumps({
@@ -369,7 +379,8 @@ def launch_agent(
         try:
             resp = _lab_get(f"http://{_get_host()}:{api_port}/api/v1/chart-data", timeout=2)
             data = json.loads(resp.read())
-            n_completed = len(data.get("experiments", []))
+            total_completed = len(data.get("experiments", []))
+            n_completed = total_completed - initial_completed  # only new experiments
             n_running = len(data.get("running", []))
         except Exception:
             n_completed = 0
