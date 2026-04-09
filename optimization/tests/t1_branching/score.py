@@ -57,7 +57,7 @@ def score(api_url: str) -> dict:
         endpoint_was_called(stats, "/leaderboard")
     ) else 0.0
 
-    return score_result("t1_branching", checks, calls)
+    return score_result("t1_branching", checks, calls, max_calls=15)
 
 
 if __name__ == "__main__":

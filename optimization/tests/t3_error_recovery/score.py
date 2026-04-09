@@ -52,7 +52,7 @@ def score(api_url: str) -> dict:
     new_notes = max(total_notes - seed_notes, 0)
     checks["documented_errors"] = min(new_notes / 1, 1.0)
 
-    return score_result("t3_error_recovery", checks, calls)
+    return score_result("t3_error_recovery", checks, calls, max_calls=20)
 
 
 if __name__ == "__main__":

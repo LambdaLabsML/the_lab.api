@@ -78,7 +78,7 @@ def score(api_url: str) -> dict:
     )
     checks["navigation_efficiency"] = max(0.0, 1.0 - individual_idea_gets / 15)
 
-    return score_result("t4_leaderboard_search", checks, calls, max_calls=40)
+    return score_result("t4_leaderboard_search", checks, calls, max_calls=15)
 
 
 if __name__ == "__main__":
