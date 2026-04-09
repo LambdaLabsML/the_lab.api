@@ -1755,39 +1755,58 @@ def get_backlog():
 
 
 @app.get("/api/v1/orient")
-def orient():
+def orient(
+    tags: str | None = Query(default=None, description="Comma-separated tags to filter best score and active ideas (running experiments always shown)"),
+):
     """Get a compact orientation summary with recommended next action.
 
     Returns current state and a clear recommendation for what to do next.
-    Designed for agent consumption — tells you exactly which endpoint to call.
+    Use ``?tags=swarm-5,held-out`` to filter best score and active ideas
+    to experiments matching ALL specified tags. Running experiments and
+    suggested ideas are always shown regardless of tag filter.
 
     Example:
-        GET /api/v1/orient
+        GET /api/v1/orient?tags=held-out
         -> {"current_branch": "idea/3", "status": "has_running",
-            "recommendation": "Wait for experiment 4 to finish",
-            "next_steps": [{"action": "GET /api/v1/wait?experiment_id=4"}],
-            "best_score": 0.91, "experiments_completed": 3, "ideas_active": 2}
+            "recommendation": "Wait for experiment 1.3 to finish",
+            "next_steps": [...], "best_score": 0.91, "ideas_active": 2,
+            "tags_filter": ["held-out"]}
     """
+    tag_filter = {t.strip() for t in tags.split(",") if t.strip()} if tags else set()
+
+    def _exp_matches_tags(exp: dict) -> bool:
+        if not tag_filter:
+            return True
+        exp_tags = set(exp.get("tags") or [])
+        return tag_filter.issubset(exp_tags)
+
     current = get_current_branch(cwd=REPO_DIR)
-    ideas = store.list_ideas(status="active")
+    all_ideas = store.list_ideas(status="active")
+
+    # Always collect ALL running/pending (unfiltered)
     all_running = []
     all_pending = []
-    all_completed = []
+    # Filtered by tags: completed experiments and active ideas with matching experiments
+    filtered_completed = []
+    filtered_idea_ids = set()
     best_score = None
     best_exp_id = None
+    best_exp_label = None
     best_idea_id = None
-    total_experiments = 0
 
-    for idea in ideas:
+    for idea in all_ideas:
         exps = store.list_experiments(idea["id"])
+        idea_has_matching = False
         for e in exps:
-            total_experiments += 1
+            # Running/pending: always collected
             if e["status"] == "running":
                 all_running.append(e)
             elif e["status"] == "pending":
                 all_pending.append(e)
-            elif e["status"] == "completed":
-                all_completed.append(e)
+            # Completed: filter by tags for best score
+            elif e["status"] == "completed" and _exp_matches_tags(e):
+                filtered_completed.append(e)
+                idea_has_matching = True
                 metrics = e.get("metrics") or {}
                 for key in ("score", "accuracy", "final_score"):
                     if key in metrics and (best_score is None or metrics[key] > best_score):
@@ -1795,14 +1814,20 @@ def orient():
                         best_exp_id = e["id"]
                         best_exp_label = e.get("label", str(e["id"]))
                         best_idea_id = e["idea_id"]
+        if idea_has_matching or not tag_filter:
+            filtered_idea_ids.add(idea["id"])
+
+    filtered_ideas = [i for i in all_ideas if i["id"] in filtered_idea_ids]
 
     resp = {
         "current_branch": current,
-        "ideas_active": len(ideas),
-        "experiments_completed": len(all_completed),
+        "ideas_active": len(filtered_ideas),
+        "experiments_completed": len(filtered_completed),
         "experiments_running": len(all_running),
         "experiments_pending": len(all_pending),
     }
+    if tag_filter:
+        resp["tags_filter"] = sorted(tag_filter)
 
     if best_score is not None:
         resp["best_score"] = best_score
@@ -1810,13 +1835,13 @@ def orient():
         resp["best_experiment_label"] = best_exp_label
         resp["best_idea_id"] = best_idea_id
 
-    # Determine recommendation
+    # Determine recommendation — running experiments take priority (unfiltered)
     if all_running:
         exp = all_running[0]
         resp["status"] = "has_running"
         resp["recommendation"] = f"Wait for experiment {exp.get('label', exp['id'])} to finish"
         resp["next_steps"] = [
-            {"action": f"GET /api/v1/wait?experiment_id={exp['id']}",
+            {"action": f"GET /api/v1/wait?experiment_id={exp.get('label', exp['id'])}",
              "description": "Wait for running experiment to complete"},
         ]
     elif all_pending:
@@ -1824,17 +1849,17 @@ def orient():
         resp["status"] = "has_pending"
         resp["recommendation"] = f"Start pending experiment {exp.get('label', exp['id'])}"
         resp["next_steps"] = [
-            {"action": f"POST /api/v1/experiments/{exp['id']}/start",
+            {"action": f"POST /api/v1/experiments/{exp.get('label', exp['id'])}/start",
              "description": "Start the pending experiment"},
         ]
-    elif not ideas:
+    elif not filtered_ideas:
         resp["status"] = "no_ideas"
         resp["recommendation"] = "Create your first idea to begin research"
         resp["next_steps"] = [
             {"action": "POST /api/v1/ideas/new",
              "description": "Create a new idea with auto_checkout: true"},
         ]
-    elif all_completed:
+    elif filtered_completed:
         resp["status"] = "ready_for_next"
         if best_score is not None:
             resp["recommendation"] = (
@@ -1844,7 +1869,7 @@ def orient():
         else:
             resp["recommendation"] = "Create a new experiment or branch a new idea"
         resp["next_steps"] = [
-            {"action": f"POST /api/v1/ideas/{ideas[0]['id']}/experiments",
+            {"action": f"POST /api/v1/ideas/{filtered_ideas[0]['id']}/experiments",
              "description": "Run another experiment on current idea (use auto_start: true)"},
             {"action": "POST /api/v1/ideas/new",
              "description": "Branch a new idea (use auto_checkout: true)"},
@@ -1853,11 +1878,11 @@ def orient():
         resp["status"] = "needs_experiment"
         resp["recommendation"] = "Create and run an experiment on an active idea"
         resp["next_steps"] = [
-            {"action": f"POST /api/v1/ideas/{ideas[0]['id']}/experiments",
+            {"action": f"POST /api/v1/ideas/{filtered_ideas[0]['id']}/experiments",
              "description": "Create experiment with auto_start: true"},
         ]
 
-    # Include suggested ideas if any
+    # Suggested ideas: always shown (unfiltered)
     suggested = store.list_ideas(status="suggested")
     if suggested:
         resp["suggested_ideas"] = [
