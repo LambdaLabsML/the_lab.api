@@ -24,3 +24,4 @@ optimization/baseline_*.json
 optimization/baseline_*.log
 PROMPT_generated.md
 optimization/tests/*/fixture/
+optimization/archive_labs
