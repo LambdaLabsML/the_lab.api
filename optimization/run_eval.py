@@ -419,8 +419,13 @@ def launch_agent(
         pct = max(n_completed / max(budget, 1), elapsed / max(timeout, 1))
         pct = min(pct, 0.99)
 
-        # Log progress to terminal
-        if n_completed > 0 or n_running > 0:
+        # Log progress to terminal — only when something changes
+        progress_key = (n_completed, n_running)
+        if not hasattr(launch_agent, '_last_progress'):
+            launch_agent._last_progress = {}
+        last = launch_agent._last_progress.get(tag)
+        if progress_key != last and (n_completed > 0 or n_running > 0):
+            launch_agent._last_progress[tag] = progress_key
             print(f"{pfx}[{int(elapsed)}s] exp: {n_completed}/{budget} done, "
                   f"{n_running} running | best: {best_score:.4f}",
                   file=sys.stderr)
