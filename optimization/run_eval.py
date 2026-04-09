@@ -298,8 +298,11 @@ def launch_agent(
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
     )
 
+    # Buffer detailed log for post-hoc replay; only print compact progress live
+    log_buffer = kwargs.get("log_buffer")  # list, shared with caller
+
     def _stream_progress():
-        """Read stream-json events and print a compact progress summary."""
+        """Read stream-json events, buffer details, print compact live."""
         for raw_line in proc.stdout:
             line = raw_line.decode(errors="replace").strip()
             if not line:
@@ -322,24 +325,27 @@ def launch_agent(
                             preview = (inp.get("file_path") or "")
                         elif name in ("Grep", "Glob"):
                             preview = (inp.get("pattern") or "")
-                        print(f"{pfx}[{name}] {preview}", file=sys.stderr)
+                        if log_buffer is not None:
+                            log_buffer.append(f"  [{name}] {preview}")
                     elif c.get("type") == "text":
                         text = c.get("text", "")
                         if text.strip():
                             short = text.strip()[:100]
-                            print(f"{pfx}> {short}", file=sys.stderr)
+                            if log_buffer is not None:
+                                log_buffer.append(f"  > {short}")
             elif t == "user":
-                # Tool results — show first line only
                 msg = evt.get("message", {})
                 for c in msg.get("content", []):
                     content = c.get("content", "")
                     if isinstance(content, str) and content.strip():
                         first_line = content.strip().split("\n")[0][:120]
-                        print(f"{pfx}  ← {first_line}", file=sys.stderr)
+                        if log_buffer is not None:
+                            log_buffer.append(f"    ← {first_line}")
             elif t == "result":
                 cost = evt.get("total_cost_usd", 0)
                 turns = evt.get("num_turns", 0)
-                print(f"{pfx}[done] {turns} turns, ${cost:.3f}", file=sys.stderr)
+                if log_buffer is not None:
+                    log_buffer.append(f"  [done] {turns} turns, ${cost:.3f}")
 
     import threading
     stream_thread = threading.Thread(target=_stream_progress, daemon=True)
@@ -854,8 +860,9 @@ def run_single_test(test_id: str, args) -> dict:
     try:
         t0 = time.time()
         print(f"{pfx}Launching agent ({args.model})...", file=sys.stderr)
+        log_buf: list[str] = []
         launch_agent(str(project_dir), port, args.model, args.timeout, args.budget,
-                     tag=test_id, max_cost=args.max_cost)
+                     tag=test_id, max_cost=args.max_cost, log_buffer=log_buf)
         wall_time = time.time() - t0
 
         # Collect standard metrics
@@ -890,6 +897,7 @@ def run_single_test(test_id: str, args) -> dict:
             "total_api_calls": api_stats.get("total_calls", 0),
             "confusion_score": confusion["confusion_score"],
             "inner_lab_url": inner_url,
+            "log": log_buf,
             **token_breakdown,
         }
     finally:
@@ -959,18 +967,36 @@ def main():
 
         output = {"metrics": metrics, "meta": meta}
 
-        # Summary
-        print(f"\n{'='*60}", file=sys.stderr)
-        print(f"  API EFFECTIVENESS: {aggregate:.4f}", file=sys.stderr)
+        # Replay each test's detailed log
         for t in test_ids:
             r = results.get(t, {})
             ts = r.get("test_score", {})
-            print(f"    {t}: {ts.get('score', 0):.4f}  (calls={r.get('total_api_calls', 0)}, "
-                  f"confusion={r.get('confusion_score', 0):.3f})", file=sys.stderr)
-            for check, val in ts.get("checks", {}).items():
-                print(f"      {check}: {val:.2f}", file=sys.stderr)
-        print(f"  Total cost: ${total_cost:.4f}", file=sys.stderr)
-        print(f"  Total time: {total_time:.0f}s", file=sys.stderr)
+            score = ts.get("score", 0)
+            print(f"\n{'='*60}", file=sys.stderr)
+            print(f"  {t.upper()}: {ts.get('test', t)}  —  score: {score:.4f}", file=sys.stderr)
+            print(f"{'='*60}", file=sys.stderr)
+            for line in r.get("log", []):
+                print(f"  {line}", file=sys.stderr)
+            if ts.get("checks"):
+                print(f"  --- checks ---", file=sys.stderr)
+                for check, val in ts["checks"].items():
+                    bar = "#" * int(val * 10)
+                    print(f"    {check:<25s} {val:.2f}  {bar}", file=sys.stderr)
+            print(f"  calls={r.get('total_api_calls', 0)}, "
+                  f"confusion={r.get('confusion_score', 0):.3f}, "
+                  f"cost=${r.get('cost_total', 0):.3f}, "
+                  f"time={r.get('wall_time_s', 0):.0f}s", file=sys.stderr)
+
+        # Final aggregate
+        print(f"\n{'='*60}", file=sys.stderr)
+        print(f"  API EFFECTIVENESS: {aggregate:.4f}", file=sys.stderr)
+        score_parts = []
+        for t in test_ids:
+            if t in results:
+                s = results[t]["test_score"].get("score", 0)
+                score_parts.append(f"{t}={s:.3f}")
+        print(f"  {' | '.join(score_parts)}", file=sys.stderr)
+        print(f"  Total cost: ${total_cost:.4f}  |  Total time: {total_time:.0f}s", file=sys.stderr)
         print(f"{'='*60}", file=sys.stderr)
 
         json_str = json.dumps(output)
