@@ -1082,11 +1082,13 @@ def get_experiment(exp_ref: str):
                         if key in em and (best_score is None or em[key] > best_score):
                             best_score = em[key]
                             best_exp_id = e["id"]
+                            best_exp_label = e.get("label", str(e["id"]))
             if best_score is not None:
                 exp["progress"] = {
                     "this_score": current_score,
                     "best_score": best_score,
                     "best_experiment_id": best_exp_id,
+                    "best_experiment_label": best_exp_label,
                     "is_new_best": current_score > best_score,
                 }
     return exp
@@ -1110,6 +1112,7 @@ def delete_experiment(exp_ref: str):
     return {
         "deleted": True,
         "experiment_id": exp_id,
+        "experiment_label": exp.get("label", str(exp_id)),
         "idea_id": deleted.get("idea_id"),
         "status": deleted.get("status"),
     }
@@ -1680,11 +1683,13 @@ async def wait_for_experiment(
                         if key in em and (best_score is None or em[key] > best_score):
                             best_score = em[key]
                             best_exp_id = e["id"]
+                            best_exp_label = e.get("label", str(e["id"]))
             if best_score is not None:
                 result["progress"] = {
                     "this_score": current_score,
                     "best_score": best_score,
                     "best_experiment_id": best_exp_id,
+                    "best_experiment_label": best_exp_label,
                     "is_new_best": current_score > best_score,
                     "delta": round(current_score - best_score, 6),
                 }
@@ -1788,6 +1793,7 @@ def orient():
                     if key in metrics and (best_score is None or metrics[key] > best_score):
                         best_score = metrics[key]
                         best_exp_id = e["id"]
+                        best_exp_label = e.get("label", str(e["id"]))
                         best_idea_id = e["idea_id"]
 
     resp = {
@@ -1801,13 +1807,14 @@ def orient():
     if best_score is not None:
         resp["best_score"] = best_score
         resp["best_experiment_id"] = best_exp_id
+        resp["best_experiment_label"] = best_exp_label
         resp["best_idea_id"] = best_idea_id
 
     # Determine recommendation
     if all_running:
         exp = all_running[0]
         resp["status"] = "has_running"
-        resp["recommendation"] = f"Wait for experiment {exp['id']} to finish"
+        resp["recommendation"] = f"Wait for experiment {exp.get('label', exp['id'])} to finish"
         resp["next_steps"] = [
             {"action": f"GET /api/v1/wait?experiment_id={exp['id']}",
              "description": "Wait for running experiment to complete"},
@@ -1815,7 +1822,7 @@ def orient():
     elif all_pending:
         exp = all_pending[0]
         resp["status"] = "has_pending"
-        resp["recommendation"] = f"Start pending experiment {exp['id']}"
+        resp["recommendation"] = f"Start pending experiment {exp.get('label', exp['id'])}"
         resp["next_steps"] = [
             {"action": f"POST /api/v1/experiments/{exp['id']}/start",
              "description": "Start the pending experiment"},
@@ -1831,7 +1838,7 @@ def orient():
         resp["status"] = "ready_for_next"
         if best_score is not None:
             resp["recommendation"] = (
-                f"Best score so far: {best_score:.4f} (experiment {best_exp_id}, idea {best_idea_id}). "
+                f"Best score so far: {best_score:.4f} (exp/{best_exp_label}). "
                 f"Create a new experiment to improve on this, or branch a new idea."
             )
         else:

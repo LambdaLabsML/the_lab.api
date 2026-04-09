@@ -125,7 +125,7 @@ async function pollLog(): Promise<void> {
           type: "experiment",
           time: t,
           ideaId: full.id,
-          title: `exp/${e.id}${suffix}`,
+          title: `exp/${e.label || e.id}${suffix}`,
           body: e.description,
           status: e.status,
           metrics: e.metrics,

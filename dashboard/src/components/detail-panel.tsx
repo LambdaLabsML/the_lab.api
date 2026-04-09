@@ -231,7 +231,9 @@ function ExperimentItem({ exp, onShowLog }: { exp: Experiment; onShowLog: () => 
   return (
     <div class="exp-item">
       <div class="exp-header">
-        <span class="exp-id">exp/{exp.label || exp.id}</span>
+        <span class="exp-id">
+          exp/{exp.label || exp.id}{exp.label && exp.id !== exp.seq ? ` (legacy: #${exp.id})` : ""}
+        </span>
         <span dangerouslySetInnerHTML={{ __html: badgeHtml(exp.status) }} />
       </div>
       <div class="exp-desc">{exp.description}</div>

@@ -154,8 +154,8 @@ class ExperimentRunner:
             task = asyncio.create_task(self._monitor_pid(exp))
             self._tasks[exp["id"]] = task
         if self._reattach_running:
-            ids = [e["id"] for e in self._reattach_running]
-            print(f"[the-lab] re-attached to {len(ids)} running experiment(s): {ids}")
+            labels = [e.get("label", str(e["id"])) for e in self._reattach_running]
+            print(f"[the-lab] re-attached to {len(labels)} running experiment(s): {labels}")
         self._reattach_running = []
 
     def _cleanup_worktree(self, exp: dict) -> None:
@@ -277,7 +277,8 @@ class ExperimentRunner:
 
         try:
             desc = exp.get("description", "")
-            auto_commit(cwd=self._store.repo_dir, message=f"exp {exp_id}: {desc}")
+            label = exp.get("label", str(exp_id))
+            auto_commit(cwd=self._store.repo_dir, message=f"exp {label}: {desc}")
         except Exception:
             pass
 

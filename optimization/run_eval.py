@@ -334,6 +334,7 @@ def launch_agent(
         # Extract best score and details from completed experiments
         best_score = 0.0
         best_exp_id = None
+        best_exp_label = None
         best_metrics = {}
         completed_exps = data.get("experiments", []) if isinstance(data, dict) else []
         for exp in completed_exps:
@@ -342,6 +343,7 @@ def launch_agent(
             if s > best_score:
                 best_score = s
                 best_exp_id = exp.get("id")
+                best_exp_label = exp.get("label", str(exp.get("id", "?")))
                 best_metrics = m
 
         # Count ideas from the Lab
@@ -363,7 +365,7 @@ def launch_agent(
         if n_completed > 0 or n_running > 0:
             print(f"  [{int(elapsed)}s] experiments: {n_completed}/{budget} done, "
                   f"{n_running} running, {n_ideas} ideas | best score: {best_score:.4f}"
-                  f"{f' (exp/{best_exp_id})' if best_exp_id else ''}",
+                  f"{f' (exp/{best_exp_label})' if best_exp_label else ''}",
                   file=sys.stderr)
 
         if progress_file:
@@ -379,6 +381,7 @@ def launch_agent(
                 "ideas_abandoned": n_abandoned,
                 "best_score": round(best_score, 6),
                 "best_experiment_id": best_exp_id,
+                "best_experiment_label": best_exp_label,
             }
             # Include per-kernel breakdown from best experiment
             if best_metrics:
