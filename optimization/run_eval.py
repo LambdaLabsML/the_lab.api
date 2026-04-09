@@ -262,9 +262,12 @@ def start_lab(repo_dir: str, port: int) -> subprocess.Popen:
 
 def launch_agent(
     prompt_path: str, api_port: int, model: str, timeout: int, budget: int,
+    tag: str = "",
     **kwargs,
 ) -> None:
     """Launch an inner agent, stop when budget experiments are completed or timeout."""
+    pfx = f"[{tag}] " if tag else "  "
+
     # Session JSONL is found post-hoc via find_session_jsonl(project_dir)
 
     instruction = (
@@ -319,30 +322,24 @@ def launch_agent(
                             preview = (inp.get("file_path") or "")
                         elif name in ("Grep", "Glob"):
                             preview = (inp.get("pattern") or "")
-                        print(f"  [{name}] {preview}", file=sys.stderr)
+                        print(f"{pfx}[{name}] {preview}", file=sys.stderr)
                     elif c.get("type") == "text":
                         text = c.get("text", "")
                         if text.strip():
-                            short = text.strip()[:120]
-                            print(f"  > {short}", file=sys.stderr)
+                            short = text.strip()[:100]
+                            print(f"{pfx}> {short}", file=sys.stderr)
             elif t == "user":
-                # Tool results — show capped output
+                # Tool results — show first line only
                 msg = evt.get("message", {})
                 for c in msg.get("content", []):
                     content = c.get("content", "")
                     if isinstance(content, str) and content.strip():
-                        # Cap to first 3 lines, 200 chars
-                        lines = content.strip().split("\n")
-                        preview = "\n".join(lines[:3])
-                        if len(lines) > 3:
-                            preview += f"\n    ... ({len(lines)} lines)"
-                        if len(preview) > 200:
-                            preview = preview[:200] + "..."
-                        print(f"    ← {preview}", file=sys.stderr)
+                        first_line = content.strip().split("\n")[0][:120]
+                        print(f"{pfx}  ← {first_line}", file=sys.stderr)
             elif t == "result":
                 cost = evt.get("total_cost_usd", 0)
                 turns = evt.get("num_turns", 0)
-                print(f"  [done] {turns} turns, ${cost:.3f}", file=sys.stderr)
+                print(f"{pfx}[done] {turns} turns, ${cost:.3f}", file=sys.stderr)
 
     import threading
     stream_thread = threading.Thread(target=_stream_progress, daemon=True)
@@ -361,7 +358,7 @@ def launch_agent(
         resp = _lab_get(f"http://{_get_host()}:{api_port}/api/v1/chart-data", timeout=5)
         data = json.loads(resp.read())
         initial_completed = len(data.get("experiments", []))
-        print(f"  Pre-seeded experiments: {initial_completed} (budget counts new only)", file=sys.stderr)
+        print(f"{pfx}Pre-seeded: {initial_completed} experiments (budget counts new only)", file=sys.stderr)
     except Exception:
         pass
 
@@ -418,9 +415,8 @@ def launch_agent(
 
         # Log progress to terminal
         if n_completed > 0 or n_running > 0:
-            print(f"  [{int(elapsed)}s] experiments: {n_completed}/{budget} done, "
-                  f"{n_running} running, {n_ideas} ideas | best score: {best_score:.4f}"
-                  f"{f' (exp/{best_exp_label})' if best_exp_label else ''}",
+            print(f"{pfx}[{int(elapsed)}s] exp: {n_completed}/{budget} done, "
+                  f"{n_running} running | best: {best_score:.4f}",
                   file=sys.stderr)
 
         if progress_file:
@@ -446,7 +442,7 @@ def launch_agent(
             Path(progress_file).write_text(json.dumps(progress))
 
         if n_completed >= budget:
-            print(f"Budget reached ({n_completed}/{budget} experiments). Stopping agent.",
+            print(f"{pfx}Budget reached ({n_completed}/{budget}). Stopping.",
                   file=sys.stderr)
             proc.terminate()
             try:
@@ -457,7 +453,7 @@ def launch_agent(
             break
 
     if proc.poll() is None:
-        print("Timeout reached. Killing agent.", file=sys.stderr)
+        print(f"{pfx}Timeout reached. Killing agent.", file=sys.stderr)
         proc.kill()
         proc.wait()
 
@@ -835,9 +831,10 @@ def compute_score(metrics: dict, baseline: dict | None) -> dict:
 
 def run_single_test(test_id: str, args) -> dict:
     """Run a single test (T1-T4) and return its results dict."""
-    print(f"\n{'='*50}", file=sys.stderr)
-    print(f"  TEST: {test_id}", file=sys.stderr)
-    print(f"{'='*50}", file=sys.stderr)
+    pfx = f"[{test_id}] "
+    print(f"\n{pfx}{'='*40}", file=sys.stderr)
+    print(f"{pfx}Starting test", file=sys.stderr)
+    print(f"{pfx}{'='*40}", file=sys.stderr)
 
     work_dir = Path(tempfile.mkdtemp(prefix=f"lab_eval_{test_id}_"))
     project_dir = work_dir / "project"
@@ -850,19 +847,19 @@ def run_single_test(test_id: str, args) -> dict:
 
     host = _get_host()
     inner_url = f"http://{host}:{port}"
-    print(f"  Starting inner Lab on {inner_url} ...", file=sys.stderr)
+    print(f"{pfx}Lab on {inner_url}", file=sys.stderr)
     lab_proc = start_lab(str(project_dir), port)
     build_dashboard_async(REPO_ROOT)
 
     try:
         t0 = time.time()
-        print(f"  Launching inner agent ({args.model})...", file=sys.stderr)
+        print(f"{pfx}Launching agent ({args.model})...", file=sys.stderr)
         launch_agent(str(project_dir), port, args.model, args.timeout, args.budget,
-                     max_cost=args.max_cost)
+                     tag=test_id, max_cost=args.max_cost)
         wall_time = time.time() - t0
 
         # Collect standard metrics
-        print(f"  Collecting metrics for {test_id}...", file=sys.stderr)
+        print(f"{pfx}Collecting metrics...", file=sys.stderr)
         api_stats = collect_api_stats(port)
         lab_state = collect_lab_state(port)
         token_breakdown = parse_session_tokens(project_dir, t0)
@@ -881,9 +878,9 @@ def run_single_test(test_id: str, args) -> dict:
                 mod = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(mod)
                 test_score = mod.score(f"http://{host}:{port}/api/v1")
-                print(f"  {test_id} score: {test_score.get('score', '?')}", file=sys.stderr)
+                print(f"{pfx}Score: {test_score.get('score', '?')}", file=sys.stderr)
             except Exception as e:
-                print(f"  {test_id} scoring failed: {e}", file=sys.stderr)
+                print(f"{pfx}Scoring failed: {e}", file=sys.stderr)
                 test_score = {"test": test_id, "score": 0.0, "error": str(e)}
 
         return {
