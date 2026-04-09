@@ -119,6 +119,7 @@ class ResourceItem(BaseModel):
 class NewIdeaRequest(BaseModel):
     parent_ids: list[int] = []
     description: str
+    auto_checkout: bool = True
 
 
 class SuggestIdeaRequest(BaseModel):
@@ -137,6 +138,7 @@ class NewExperimentRequest(BaseModel):
     meta: dict | None = None
     script_content: str | None = None
     tags: list[str] = []
+    auto_start: bool | None = None
 
 
 class StartExperimentRequest(BaseModel):
@@ -145,7 +147,7 @@ class StartExperimentRequest(BaseModel):
 
 class NoteRequest(BaseModel):
     text: str
-    level: Literal["insight", "milestone", "observation", "debug"] = "observation"
+    level: str = "observation"
     resources: list[ResourceItem] = []
 
 
@@ -214,6 +216,46 @@ def _idea_context(idea_id: int) -> dict:
     }
 
 
+def _branch_diff_summary(idea_id: int) -> dict | None:
+    """Return a compact diff summary for an idea branch vs its parent.
+
+    Helps agents see what code actually changed on this branch. Returns None
+    if the idea or branch can't be resolved.
+    """
+    idea = store.get_idea(idea_id)
+    if not idea or not idea.get("branch"):
+        return None
+    parent_ids = idea.get("parent_ids", [])
+    if parent_ids:
+        parent = store.get_idea(parent_ids[0])
+        base = parent["branch"] if parent and parent.get("branch") else "main"
+    else:
+        base = "main"
+    try:
+        diff_info = branch_diff(idea["branch"], base, cwd=REPO_DIR)
+    except Exception:
+        return None
+    if "error" in diff_info:
+        return None
+    stat = diff_info.get("stat", "").strip()
+    files_changed = [
+        line.strip().split("|")[0].strip()
+        for line in stat.splitlines()
+        if "|" in line
+    ]
+    summary = {
+        "base_branch": base,
+        "files_changed": files_changed,
+        "stat": stat,
+    }
+    if not files_changed:
+        summary["warning"] = (
+            "No code changes detected on this branch vs parent. "
+            "Did you forget to edit and save files before creating the experiment?"
+        )
+    return summary
+
+
 # --- Ideas ---
 
 @app.post("/api/v1/ideas/new", status_code=201)
@@ -271,6 +313,12 @@ def create_idea(req: NewIdeaRequest):
         similar = [s for s in similar if s["id"] != idea["id"]]
         if similar:
             idea["similar_ideas"] = similar
+        if req.auto_checkout:
+            try:
+                checkout_idea(idea_id, cwd=REPO_DIR)
+                idea["checked_out"] = True
+            except GitError:
+                idea["checked_out"] = False
         return idea
     except GitError as e:
         raise HTTPException(500, str(e))
@@ -292,6 +340,16 @@ def checkout_idea_endpoint(idea_id: int):
     idea = store.get_idea(idea_id)
     if not idea:
         raise HTTPException(404, "idea not found")
+    # Idempotent: if already on this branch, return success
+    current = get_current_branch(cwd=REPO_DIR)
+    if current == f"idea/{idea_id}":
+        return {
+            "branch": current,
+            "stashed": False,
+            "already_on_branch": True,
+            "idea_id": idea["id"],
+            "idea_description": idea["description"],
+        }
     try:
         result = checkout_idea(idea_id, cwd=REPO_DIR)
         return {
@@ -652,7 +710,7 @@ def get_notes(
 # --- Experiments ---
 
 @app.post("/api/v1/ideas/{idea_id}/experiments", status_code=201)
-def create_experiment(idea_id: int, req: NewExperimentRequest):
+async def create_experiment(idea_id: int, req: NewExperimentRequest):
     """Create a new experiment under an idea.
 
     Registers an experiment record and, if ``script_content`` is provided,
@@ -661,12 +719,16 @@ def create_experiment(idea_id: int, req: NewExperimentRequest):
     hyperparameters or configuration, and ``tags`` to categorize the
     experiment for filtering and comparison.
 
+    Set ``auto_start: true`` to immediately start the experiment after creation,
+    saving a separate ``POST /experiments/<id>/start`` call.
+
     Example:
         POST /api/v1/ideas/1/experiments {"description": "baseline run",
                                            "script_content": "#!/bin/bash\\npython train.py",
                                            "tags": ["baseline", "v1"],
-                                           "meta": {"lr": 0.001, "epochs": 50}}
-        -> {"id": 4, "idea_id": 1, "status": "pending", "script": ".the_lab/scripts/4.sh", ...}
+                                           "meta": {"lr": 0.001, "epochs": 50},
+                                           "auto_start": true}
+        -> {"id": 4, "idea_id": 1, "status": "running", "script": ".the_lab/scripts/4.sh", ...}
     """
     idea = store.get_idea(idea_id)
     if not idea:
@@ -680,6 +742,19 @@ def create_experiment(idea_id: int, req: NewExperimentRequest):
         script_path.parent.mkdir(parents=True, exist_ok=True)
         script_path.write_text(_wrap_script(req.script_content))
         os.chmod(script_path, 0o644)
+
+    # Auto-start: when script_content is provided, start by default unless auto_start=False
+    should_start = req.auto_start if req.auto_start is not None else (req.script_content is not None)
+    if should_start:
+        result = await runner.start(exp["id"])
+        if result["status"] != "error":
+            exp = result.get("experiment", exp)
+            exp["auto_started"] = True
+
+    # Include branch diff summary so agent sees what code changed (or didn't)
+    diff_summary = _branch_diff_summary(idea_id)
+    if diff_summary:
+        exp["branch_diff"] = diff_summary
 
     return exp
 
@@ -980,6 +1055,33 @@ def get_experiment(exp_id: int):
     exp = store.get_experiment(exp_id)
     if not exp:
         raise HTTPException(404, "experiment not found")
+    # Add score comparison for completed experiments
+    if exp.get("status") == "completed":
+        metrics = exp.get("metrics") or {}
+        current_score = None
+        for key in ("score", "accuracy", "final_score"):
+            if key in metrics:
+                current_score = metrics[key]
+                break
+        if current_score is not None:
+            best_score = None
+            best_exp_id = None
+            for idea in store.list_ideas():
+                for e in store.list_experiments(idea["id"]):
+                    if e["id"] == exp_id:
+                        continue
+                    em = e.get("metrics") or {}
+                    for key in ("score", "accuracy", "final_score"):
+                        if key in em and (best_score is None or em[key] > best_score):
+                            best_score = em[key]
+                            best_exp_id = e["id"]
+            if best_score is not None:
+                exp["progress"] = {
+                    "this_score": current_score,
+                    "best_score": best_score,
+                    "best_experiment_id": best_exp_id,
+                    "is_new_best": current_score > best_score,
+                }
     return exp
 
 
@@ -1022,10 +1124,19 @@ async def start_experiment(exp_id: int, req: StartExperimentRequest | None = Non
         -> {"status": "running", "experiment": {"id": 4, ...},
             "current_branch": "idea/1", "idea_id": 1, ...}
     """
+    # Idempotent: if already running, return current state instead of error
+    exp_check = store.get_experiment(exp_id)
+    if exp_check and exp_check.get("status") == "running":
+        return {
+            "status": "already_running",
+            "experiment": exp_check,
+            "current_branch": get_current_branch(cwd=REPO_DIR),
+            **_idea_context(exp_check.get("idea_id")),
+        }
     timeout = req.timeout if req else None
     result = await runner.start(exp_id, timeout=timeout)
     if result["status"] == "error":
-        raise HTTPException(400, result)
+        raise HTTPException(400, result.get("error", "experiment failed to start"))
     # Add idea context + current branch
     exp = result.get("experiment", {})
     result["current_branch"] = get_current_branch(cwd=REPO_DIR)
@@ -1054,7 +1165,7 @@ async def restart_experiment(exp_id: int):
         raise HTTPException(400, f"experiment is {exp['status']}, can only restart failed or cancelled experiments")
     result = await runner.start(exp_id)
     if result["status"] == "error":
-        raise HTTPException(400, result)
+        raise HTTPException(400, result.get("error", "experiment failed to restart"))
     result["current_branch"] = get_current_branch(cwd=REPO_DIR)
     result.update(_idea_context(exp.get("idea_id")))
     return result
@@ -1527,6 +1638,37 @@ async def wait_for_experiment(
     exp = result.get("experiment")
     if exp:
         result.update(_idea_context(exp.get("idea_id")))
+        # Include branch diff summary so agent sees what was tested
+        diff_summary = _branch_diff_summary(exp.get("idea_id"))
+        if diff_summary:
+            result["branch_diff"] = diff_summary
+        # Add score comparison to help agent track progress
+        metrics = exp.get("metrics") or {}
+        current_score = None
+        for key in ("score", "accuracy", "final_score"):
+            if key in metrics:
+                current_score = metrics[key]
+                break
+        if current_score is not None:
+            best_score = None
+            best_exp_id = None
+            for idea in store.list_ideas():
+                for e in store.list_experiments(idea["id"]):
+                    if e["id"] == exp.get("id"):
+                        continue
+                    em = e.get("metrics") or {}
+                    for key in ("score", "accuracy", "final_score"):
+                        if key in em and (best_score is None or em[key] > best_score):
+                            best_score = em[key]
+                            best_exp_id = e["id"]
+            if best_score is not None:
+                result["progress"] = {
+                    "this_score": current_score,
+                    "best_score": best_score,
+                    "best_experiment_id": best_exp_id,
+                    "is_new_best": current_score > best_score,
+                    "delta": round(current_score - best_score, 6),
+                }
     return result
 
 
@@ -1585,6 +1727,118 @@ def get_backlog():
     task = _read_task()
     if task:
         resp["current_task"] = task
+    return resp
+
+
+@app.get("/api/v1/orient")
+def orient():
+    """Get a compact orientation summary with recommended next action.
+
+    Returns current state and a clear recommendation for what to do next.
+    Designed for agent consumption — tells you exactly which endpoint to call.
+
+    Example:
+        GET /api/v1/orient
+        -> {"current_branch": "idea/3", "status": "has_running",
+            "recommendation": "Wait for experiment 4 to finish",
+            "next_steps": [{"action": "GET /api/v1/wait?experiment_id=4"}],
+            "best_score": 0.91, "experiments_completed": 3, "ideas_active": 2}
+    """
+    current = get_current_branch(cwd=REPO_DIR)
+    ideas = store.list_ideas(status="active")
+    all_running = []
+    all_pending = []
+    all_completed = []
+    best_score = None
+    best_exp_id = None
+    best_idea_id = None
+    total_experiments = 0
+
+    for idea in ideas:
+        exps = store.list_experiments(idea["id"])
+        for e in exps:
+            total_experiments += 1
+            if e["status"] == "running":
+                all_running.append(e)
+            elif e["status"] == "pending":
+                all_pending.append(e)
+            elif e["status"] == "completed":
+                all_completed.append(e)
+                metrics = e.get("metrics") or {}
+                for key in ("score", "accuracy", "final_score"):
+                    if key in metrics and (best_score is None or metrics[key] > best_score):
+                        best_score = metrics[key]
+                        best_exp_id = e["id"]
+                        best_idea_id = e["idea_id"]
+
+    resp = {
+        "current_branch": current,
+        "ideas_active": len(ideas),
+        "experiments_completed": len(all_completed),
+        "experiments_running": len(all_running),
+        "experiments_pending": len(all_pending),
+    }
+
+    if best_score is not None:
+        resp["best_score"] = best_score
+        resp["best_experiment_id"] = best_exp_id
+        resp["best_idea_id"] = best_idea_id
+
+    # Determine recommendation
+    if all_running:
+        exp = all_running[0]
+        resp["status"] = "has_running"
+        resp["recommendation"] = f"Wait for experiment {exp['id']} to finish"
+        resp["next_steps"] = [
+            {"action": f"GET /api/v1/wait?experiment_id={exp['id']}",
+             "description": "Wait for running experiment to complete"},
+        ]
+    elif all_pending:
+        exp = all_pending[0]
+        resp["status"] = "has_pending"
+        resp["recommendation"] = f"Start pending experiment {exp['id']}"
+        resp["next_steps"] = [
+            {"action": f"POST /api/v1/experiments/{exp['id']}/start",
+             "description": "Start the pending experiment"},
+        ]
+    elif not ideas:
+        resp["status"] = "no_ideas"
+        resp["recommendation"] = "Create your first idea to begin research"
+        resp["next_steps"] = [
+            {"action": "POST /api/v1/ideas/new",
+             "description": "Create a new idea with auto_checkout: true"},
+        ]
+    elif all_completed:
+        resp["status"] = "ready_for_next"
+        if best_score is not None:
+            resp["recommendation"] = (
+                f"Best score so far: {best_score:.4f} (experiment {best_exp_id}, idea {best_idea_id}). "
+                f"Create a new experiment to improve on this, or branch a new idea."
+            )
+        else:
+            resp["recommendation"] = "Create a new experiment or branch a new idea"
+        resp["next_steps"] = [
+            {"action": f"POST /api/v1/ideas/{ideas[0]['id']}/experiments",
+             "description": "Run another experiment on current idea (use auto_start: true)"},
+            {"action": "POST /api/v1/ideas/new",
+             "description": "Branch a new idea (use auto_checkout: true)"},
+        ]
+    else:
+        resp["status"] = "needs_experiment"
+        resp["recommendation"] = "Create and run an experiment on an active idea"
+        resp["next_steps"] = [
+            {"action": f"POST /api/v1/ideas/{ideas[0]['id']}/experiments",
+             "description": "Create experiment with auto_start: true"},
+        ]
+
+    # Include suggested ideas if any
+    suggested = store.list_ideas(status="suggested")
+    if suggested:
+        resp["suggested_ideas"] = [
+            {"id": s["id"], "description": s["description"], "priority": s.get("priority", "normal")}
+            for s in suggested
+        ]
+
     return resp
 
 
