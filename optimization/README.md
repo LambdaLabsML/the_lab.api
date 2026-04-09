@@ -5,17 +5,20 @@ Use The Lab to optimize The Lab's own API for agent efficiency.
 ## Quick Start
 
 ```bash
-# 1. Establish baseline — creates idea #1 in the Lab (~5 min, ~$1-3)
-./optimization/lab-optimize.sh baseline [eval-model] [budget]
+# 0. Generate test fixtures (once, or after changes to seed_fixture.py)
+python3 optimization/tests/seed_fixture.py
+
+# 1. Reset optimization proj (clean slate)
+./optimization/lab-optimize.sh reset
 
 # 2. Start the Lab dashboard
 ./optimization/lab-optimize.sh start [port]
 
-# 3. Launch an optimization agent
-./optimization/lab-optimize.sh agent [outer-model] [eval-model] [budget]
+# 3. Establish baseline — creates idea #1 in the Lab
+./optimization/lab-optimize.sh baseline [eval-model] [budget]
 
-# 4. Reset proj/ to a clean state
-./optimization/lab-optimize.sh reset
+# 4. Launch an optimization agent
+./optimization/lab-optimize.sh agent [outer-model] [eval-model] [budget]
 
 # 5. Cherry-pick winners back to main
 ./optimization/lab-optimize.sh cherry-pick <commit>
@@ -29,7 +32,8 @@ Run `./optimization/lab-optimize.sh` without arguments for help.
 ┌─────────────────────────────────────────────────────────────────────┐
 │  the_lab.api/  (parent git repo — committed, stable)               │
 │  ├── the_lab/          ← stable API code (outer Lab imports this)  │
-│  └── optimization/     ← static fixtures (test_project, run_eval)  │
+│  └── optimization/     ← static fixtures + test suite              │
+│       ├── tests/       ← T1-T4 test fixtures (generated)           │
 │       └── proj/        ← gitignored from parent                    │
 │                                                                     │
 │  ┌──────────────────────────────────────────────────────────────┐   │
@@ -41,85 +45,91 @@ Run `./optimization/lab-optimize.sh` without arguments for help.
 │  │  OUTER LAB  (port 9000, runs parent's the_lab/ code)         │   │
 │  │  Tracks optimization ideas as branches in proj/.git           │   │
 │  │                                                               │   │
-│  │  Each experiment runs run_eval.py, which creates:             │   │
-│  │  ┌────────────────────────────────────────────────────────┐   │   │
-│  │  │  /tmp/lab_eval_*/  (temp copy of test_project)          │   │   │
-│  │  │  ├── benchmark/kernels.py  ← inner agent modifies this  │   │   │
-│  │  │  └── .the_lab/             ← inner Lab data              │   │   │
-│  │  │                                                          │   │   │
+│  │  Each experiment runs run_eval.py --tests t1,t2,t3,t4:       │   │
+│  │  ┌──────────────── × 4 tests concurrently ───────────────┐   │   │
+│  │  │  /tmp/lab_eval_t{N}_*/  (copy of pre-seeded fixture)   │   │   │
+│  │  │  ├── benchmark/          ← math kernel optimization     │   │   │
+│  │  │  └── .the_lab/           ← 15 pre-seeded ideas          │   │   │
+│  │  │                                                         │   │   │
 │  │  │  INNER LAB  (random port, runs branch's the_lab/ code)  │   │   │
-│  │  │  The thing being tested — uses the modified API          │   │   │
-│  │  │                                                          │   │   │
-│  │  │  ┌──────────────────────────────────────────────────┐    │   │   │
-│  │  │  │  INNER AGENT  (haiku by default)                  │    │   │   │
-│  │  │  │  Optimizes math kernels via the inner Lab API     │    │   │   │
-│  │  │  │  Creates ideas, runs eval_harness.py, iterates    │    │   │   │
-│  │  │  └──────────────────────────────────────────────────┘    │   │   │
-│  │  │                                                          │   │   │
-│  │  │  Metrics collected: api_calls, confusion, tokens, DAG   │   │   │
-│  │  └────────────────────────────────────────────────────────┘   │   │
+│  │  │                                                         │   │   │
+│  │  │  INNER AGENT  (haiku)                                   │   │   │
+│  │  │  Tests API comprehension: branching, experiment mgmt,   │   │   │
+│  │  │  error recovery, leaderboard navigation                 │   │   │
+│  │  │                                                         │   │   │
+│  │  │  SCORING  (post-hoc: checks API usage + Lab state)      │   │   │
+│  │  └─────────────────────────────────────────────────────────┘   │   │
 │  └──────────────────────────────────────────────────────────────┘   │
+│                                                                     │
+│  Git repos:                                                         │
+│    the_lab.api/.git      ← parent (main branch, commits fixtures)  │
+│    proj/.git             ← shared history, optim branch             │
+│    /tmp/.../fixture/.git ← ephemeral (per test, destroyed after)   │
 └─────────────────────────────────────────────────────────────────────┘
-
-Git repos:
-  the_lab.api/.git     ← parent repo (main branch, commits static fixtures)
-  proj/.git            ← shared history, optim branch (idea branches with API changes)
-  /tmp/.../project/.git ← ephemeral (created fresh per eval, destroyed after)
-
-Lab instances:
-  Outer (port 9000)    ← stable code, manages optimization ideas
-  Inner (random port)  ← experimental code from idea branch, tested by inner agent
 ```
+
+## Test Suite
+
+4 tests run concurrently, each with a pre-seeded project (15 ideas, 3 strategy
+families, real kernel implementations):
+
+| Test | What it measures | Key checks |
+|---|---|---|
+| T1 Branching | Find best idea, branch from it | correct parent, used /orient or /leaderboard |
+| T2 Experiment Mgmt | Iterate, use /wait, auto_start | experiments created, used /wait, documented findings |
+| T3 Error Recovery | Read logs, diagnose, fix failures | read logs, new successful experiments |
+| T4 Leaderboard Search | Navigate efficiently, find best direction | used /leaderboard, /search, chose best direction |
+
+Generate fixtures: `python3 optimization/tests/seed_fixture.py`
 
 ## Scoring
 
 ```
-api_score = norm_quality × (1 - failure_rate) × (1 - confusion) / norm_cost
+api_effectiveness = geometric_mean(t1_score, t2_score, t3_score, t4_score)
+task_score = avg(checks) × waste_penalty
+waste_penalty = min(1.0, max_calls / actual_calls)
 ```
 
-Fixed budget of experiments. Score = how good did the agent get?
+| Test | Min calls | Budget | Penalty at |
+|---|---|---|---|
+| T1 | ~5 | 15 | 16+ calls |
+| T2 | ~10 | 25 | 26+ calls |
+| T3 | ~9 | 20 | 21+ calls |
+| T4 | ~6 | 15 | 16+ calls |
 
-| Component | What |
-|---|---|
-| `quality = -log10(1 - score)` | 0.9→1, 0.99→2, 0.999→3 |
-| `confusion_score` | Retries, errors, corrections, oscillations |
-| `norm_cost` | Token cost relative to baseline |
-
-Baseline = 1.0. Higher is better.
+Under budget = no penalty. Over budget = proportional penalty.
 
 ## Structure
 
 ```
 optimization/
-├── lab-optimize.sh      # All commands: baseline, start, agent, reset, cherry-pick
-├── PROMPT.md            # Agent instructions (committed)
-├── run_eval.py          # Eval harness (committed)
-├── test_project/        # Fast math fixture (committed)
-└── proj/                # Lab project (gitignored, own .git)
-    ├── the_lab/         # API code — what gets optimized on branches
-    └── .the_lab/artifacts/ → symlinks to above
+├── lab-optimize.sh           # CLI: baseline, start, agent, reset, cherry-pick
+├── PROMPT.md                 # Optimization agent instructions
+├── run_eval.py               # Multi-test eval harness
+├── test_project/             # Legacy single-test fixture
+└── tests/
+    ├── seed_fixture.py       # Generate all test fixtures
+    ├── score_common.py       # Shared scoring utilities
+    ├── shared_project/       # Math kernel project template
+    └── t{1-4}_{name}/
+        ├── PROMPT_problem.md # Task instruction (problem only, no API docs)
+        ├── score.py          # Post-hoc scoring (checks API usage + Lab state)
+        └── fixture/          # Generated git repo (15 ideas, gitignored)
 ```
-
-Static files versioned in the parent repo. `proj/` has its own git
-(shared history) so cherry-picks to main just work.
 
 ## Dual Model Support
 
-The outer agent (who decides what API changes to try) and the inner agent
-(who tests the API by optimizing math kernels) can use different models:
-
 ```bash
-./optimization/lab-optimize.sh agent opus haiku 10
+./optimization/lab-optimize.sh agent opus haiku 5
 #                                    ^^^^  ^^^^^
 #                                    outer  inner (eval)
 ```
 
-Use a stronger model (opus/sonnet) for the outer loop and a cheaper model
-(haiku) for evaluation.
+Outer model (optimizer) and inner model (evaluator) can differ.
 
 ## Cost
 
-| Model | Per eval run | 3 runs |
+| Inner model | Per test | Full suite (4 tests) |
 |---|---|---|
-| Haiku | ~$1-3 | ~$3-9 |
-| Sonnet | ~$3-8 | ~$9-24 |
+| Haiku | ~$0.50-1 | ~$2-4 |
+| Sonnet | ~$1-3 | ~$4-12 |
