@@ -61,8 +61,11 @@ Ranked by expected impact:
 
 | Metric | Meaning |
 |---|---|
-| `api_score` | Composite (higher = better API) |
-| `quality_log` | -log10(1 - final_score) — quality achieved within budget |
+| `api_effectiveness` | Geometric mean of T1-T4 task scores (higher = better) |
+| `t1_score` | Branching: did the agent find + branch from the best idea? |
+| `t2_score` | Experiment management: iterate, use /wait, auto_start? |
+| `t3_score` | Error recovery: read logs, diagnose, create fixes? |
+| `t4_score` | Leaderboard navigation: use /leaderboard, /search efficiently? |
 | `calls_per_idea` | API calls per research cycle |
 | `confusion_score` | Agent confusion (retries, errors, corrections, oscillation) |
 | `cost_total` | Token cost breakdown (bash, context, reasoning, etc.) |

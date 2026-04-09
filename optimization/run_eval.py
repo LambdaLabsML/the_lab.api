@@ -39,6 +39,7 @@ from pathlib import Path
 # resolve() follows symlinks — gives us the real location of static fixtures
 SCRIPT_DIR = Path(__file__).resolve().parent
 TEST_PROJECT_SRC = SCRIPT_DIR / "test_project"
+TESTS_DIR = SCRIPT_DIR / "tests"
 
 # REPO_ROOT = the working directory where the experiment runs.
 # In a worktree, this is the branch's code; in the main checkout, it's the repo root.
@@ -82,30 +83,73 @@ def parse_args():
                    help="Path to baseline.json for score normalization")
     p.add_argument("--output", default=None,
                    help="Write metrics JSON to this file (default: stdout)")
+    p.add_argument("--tests", default="t1,t2,t3,t4",
+                   help="Comma-separated test IDs to run (default: t1,t2,t3,t4)")
+    p.add_argument("--single-test", default=None,
+                   help="Run a single test fixture dir (for internal use by the multi-test runner)")
     return p.parse_args()
 
 
 def copy_test_project(dest: Path):
-    """Copy the test_project fixture to dest, append API instructions, init git."""
-    shutil.copytree(TEST_PROJECT_SRC, dest, dirs_exist_ok=True)
+    """Copy the old test_project fixture to dest (legacy single-test mode)."""
+    _copy_fixture(TEST_PROJECT_SRC, dest)
 
-    # Concatenate PROMPT.md (fixture) + PROMPT_api.md (from the branch)
-    # The append file contains API workflow instructions that the optimization
-    # agent can modify alongside API code changes.
-    prompt_append = REPO_ROOT / "PROMPT_api.md"
-    if prompt_append.exists():
+
+def copy_test_fixture(test_id: str, dest: Path):
+    """Copy a test fixture (T1-T4) to dest with PROMPT_api.md appended."""
+    test_names = {
+        "t1": "t1_branching",
+        "t2": "t2_experiment_mgmt",
+        "t3": "t3_error_recovery",
+        "t4": "t4_leaderboard_search",
+    }
+    test_name = test_names.get(test_id, test_id)
+    fixture_src = TESTS_DIR / test_name / "fixture"
+    prompt_src = TESTS_DIR / test_name / "PROMPT_problem.md"
+
+    if not fixture_src.exists():
+        raise RuntimeError(f"Fixture not found: {fixture_src}. Run: python optimization/tests/seed_fixture.py {test_id}")
+
+    # Copy the pre-seeded fixture (includes .git, .the_lab, benchmark/)
+    shutil.copytree(fixture_src, dest, dirs_exist_ok=True)
+
+    # Build PROMPT.md = PROMPT_problem.md + PROMPT_api.md
+    prompt_dst = dest / "PROMPT.md"
+    parts = []
+    if prompt_src.exists():
+        parts.append(prompt_src.read_text().strip())
+    elif prompt_dst.exists():
+        parts.append(prompt_dst.read_text().strip())
+    # Append API instructions from the branch being tested
+    prompt_api = REPO_ROOT / "PROMPT_api.md"
+    if prompt_api.exists():
+        parts.append(prompt_api.read_text().strip())
+    else:
+        # Fallback: use the one shipped with the_lab package
+        pkg_api = Path(__file__).resolve().parent.parent / "the_lab" / "PROMPT_api.md"
+        if pkg_api.exists():
+            parts.append(pkg_api.read_text().strip())
+    prompt_dst.write_text("\n\n".join(parts) + "\n")
+    print(f"  Built PROMPT.md for {test_id}", file=sys.stderr)
+
+
+def _copy_fixture(src: Path, dest: Path):
+    """Copy a fixture dir and append PROMPT_api.md."""
+    shutil.copytree(src, dest, dirs_exist_ok=True)
+    prompt_api = REPO_ROOT / "PROMPT_api.md"
+    if prompt_api.exists():
         prompt_dst = dest / "PROMPT.md"
         with open(prompt_dst, "a") as f:
             f.write("\n")
-            f.write(prompt_append.read_text())
-        print(f"  Appended PROMPT_api.md to test project PROMPT.md", file=sys.stderr)
-
-    # The Lab needs a git repo — init one in the copy
-    subprocess.run(["git", "init"], cwd=str(dest), capture_output=True)
-    subprocess.run(["git", "config", "user.name", "eval"], cwd=str(dest), capture_output=True)
-    subprocess.run(["git", "config", "user.email", "eval@local"], cwd=str(dest), capture_output=True)
-    subprocess.run(["git", "add", "-A"], cwd=str(dest), capture_output=True)
-    subprocess.run(["git", "commit", "-m", "initial"], cwd=str(dest), capture_output=True)
+            f.write(prompt_api.read_text())
+        print(f"  Appended PROMPT_api.md", file=sys.stderr)
+    # Init git if not already a repo
+    if not (dest / ".git").exists():
+        subprocess.run(["git", "init"], cwd=str(dest), capture_output=True)
+        subprocess.run(["git", "config", "user.name", "eval"], cwd=str(dest), capture_output=True)
+        subprocess.run(["git", "config", "user.email", "eval@local"], cwd=str(dest), capture_output=True)
+        subprocess.run(["git", "add", "-A"], cwd=str(dest), capture_output=True)
+        subprocess.run(["git", "commit", "-m", "initial"], cwd=str(dest), capture_output=True)
 
 
 def build_dashboard_async(repo_root: Path):
@@ -778,15 +822,161 @@ def compute_score(metrics: dict, baseline: dict | None) -> dict:
     }
 
 
+def run_single_test(test_id: str, args) -> dict:
+    """Run a single test (T1-T4) and return its results dict."""
+    print(f"\n{'='*50}", file=sys.stderr)
+    print(f"  TEST: {test_id}", file=sys.stderr)
+    print(f"{'='*50}", file=sys.stderr)
+
+    work_dir = Path(tempfile.mkdtemp(prefix=f"lab_eval_{test_id}_"))
+    project_dir = work_dir / "project"
+    copy_test_fixture(test_id, project_dir)
+
+    import socket
+    with socket.socket() as s:
+        s.bind(("", 0))
+        port = s.getsockname()[1]
+
+    host = _get_host()
+    inner_url = f"http://{host}:{port}"
+    print(f"  Starting inner Lab on {inner_url} ...", file=sys.stderr)
+    lab_proc = start_lab(str(project_dir), port)
+    build_dashboard_async(REPO_ROOT)
+
+    try:
+        t0 = time.time()
+        print(f"  Launching inner agent ({args.model})...", file=sys.stderr)
+        launch_agent(str(project_dir), port, args.model, args.timeout, args.budget,
+                     max_cost=args.max_cost)
+        wall_time = time.time() - t0
+
+        # Collect standard metrics
+        print(f"  Collecting metrics for {test_id}...", file=sys.stderr)
+        api_stats = collect_api_stats(port)
+        lab_state = collect_lab_state(port)
+        token_breakdown = parse_session_tokens(project_dir, t0)
+        ideas = lab_state["ideas"]
+        experiments = lab_state["experiments"]
+        history = api_stats.get("history", [])
+        confusion = compute_confusion_metrics(history)
+
+        # Run the test-specific scoring script
+        test_score = {}
+        score_module = TESTS_DIR / f"{_test_dir_name(test_id)}" / "score.py"
+        if score_module.exists():
+            try:
+                import importlib.util
+                spec = importlib.util.spec_from_file_location(f"score_{test_id}", str(score_module))
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                test_score = mod.score(f"http://{host}:{port}/api/v1")
+                print(f"  {test_id} score: {test_score.get('score', '?')}", file=sys.stderr)
+            except Exception as e:
+                print(f"  {test_id} scoring failed: {e}", file=sys.stderr)
+                test_score = {"test": test_id, "score": 0.0, "error": str(e)}
+
+        return {
+            "test_id": test_id,
+            "test_score": test_score,
+            "wall_time_s": round(wall_time, 1),
+            "total_api_calls": api_stats.get("total_calls", 0),
+            "confusion_score": confusion["confusion_score"],
+            "inner_lab_url": inner_url,
+            **token_breakdown,
+        }
+    finally:
+        lab_proc.send_signal(signal.SIGTERM)
+        try:
+            lab_proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            lab_proc.kill()
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+
+def _test_dir_name(test_id: str) -> str:
+    names = {"t1": "t1_branching", "t2": "t2_experiment_mgmt",
+             "t3": "t3_error_recovery", "t4": "t4_leaderboard_search"}
+    return names.get(test_id, test_id)
+
+
 def main():
     args = parse_args()
+    test_ids = [t.strip() for t in args.tests.split(",") if t.strip()]
 
-    # Load baseline if it exists
+    # If running multi-test mode (default)
+    if len(test_ids) > 1 or (len(test_ids) == 1 and test_ids[0] in ("t1", "t2", "t3", "t4")):
+        import math
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        print(f"Running {len(test_ids)} tests: {', '.join(test_ids)}", file=sys.stderr)
+        results = {}
+
+        # Run tests concurrently (each gets its own Lab instance + agent)
+        with ThreadPoolExecutor(max_workers=min(len(test_ids), 4)) as pool:
+            futures = {pool.submit(run_single_test, tid, args): tid for tid in test_ids}
+            for future in as_completed(futures):
+                tid = futures[future]
+                try:
+                    results[tid] = future.result()
+                except Exception as e:
+                    print(f"  {tid} FAILED: {e}", file=sys.stderr)
+                    results[tid] = {"test_id": tid, "test_score": {"score": 0.0, "error": str(e)}}
+
+        # Aggregate scores
+        scores = [results[t]["test_score"].get("score", 0) for t in test_ids if t in results]
+        # Geometric mean of test scores
+        if scores and all(s > 0 for s in scores):
+            aggregate = math.exp(sum(math.log(s) for s in scores) / len(scores))
+        else:
+            aggregate = 0.0
+
+        total_cost = sum(results[t].get("cost_total", 0) for t in test_ids if t in results)
+        total_calls = sum(results[t].get("total_api_calls", 0) for t in test_ids if t in results)
+        total_time = sum(results[t].get("wall_time_s", 0) for t in test_ids if t in results)
+
+        metrics = {
+            "api_effectiveness": round(aggregate, 4),
+            **{f"{t}_score": results[t]["test_score"].get("score", 0) for t in test_ids if t in results},
+            "total_api_calls": total_calls,
+            "total_cost": round(total_cost, 4),
+            "total_wall_time_s": round(total_time, 1),
+        }
+
+        meta = {
+            "model": args.model,
+            "budget": args.budget,
+            "tests": test_ids,
+            "per_test": results,
+        }
+
+        output = {"metrics": metrics, "meta": meta}
+
+        # Summary
+        print(f"\n{'='*60}", file=sys.stderr)
+        print(f"  API EFFECTIVENESS: {aggregate:.4f}", file=sys.stderr)
+        for t in test_ids:
+            r = results.get(t, {})
+            ts = r.get("test_score", {})
+            print(f"    {t}: {ts.get('score', 0):.4f}  (calls={r.get('total_api_calls', 0)}, "
+                  f"confusion={r.get('confusion_score', 0):.3f})", file=sys.stderr)
+            for check, val in ts.get("checks", {}).items():
+                print(f"      {check}: {val:.2f}", file=sys.stderr)
+        print(f"  Total cost: ${total_cost:.4f}", file=sys.stderr)
+        print(f"  Total time: {total_time:.0f}s", file=sys.stderr)
+        print(f"{'='*60}", file=sys.stderr)
+
+        json_str = json.dumps(output)
+        print(json_str)
+        if args.output:
+            Path(args.output).write_text(json_str + "\n")
+            print(f"\nMetrics written to {args.output}", file=sys.stderr)
+        return
+
+    # Legacy single-test mode (old test_project)
     baseline = None
     if os.path.exists(args.baseline):
         baseline = json.loads(Path(args.baseline).read_text())
 
-    # Set up temp dir with test project copy
     work_dir = Path(tempfile.mkdtemp(prefix="lab_eval_"))
     project_dir = work_dir / "project"
     copy_test_project(project_dir)
