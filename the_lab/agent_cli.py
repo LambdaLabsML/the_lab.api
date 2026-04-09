@@ -8,6 +8,9 @@ from pathlib import Path
 
 from .sandbox import build_sandbox_command, sandbox_capabilities
 
+# PROMPT_api.md ships with the_lab package
+_PROMPT_API = Path(__file__).parent / "PROMPT_api.md"
+
 
 def _find_repo_root(*paths: Path) -> Path | None:
     for path in paths:
@@ -94,8 +97,23 @@ def main():
     args = parser.parse_args()
 
     prompt_path = Path(args.prompt_file)
-    if not prompt_path.exists():
-        print(f"Error: {prompt_path} not found", file=sys.stderr)
+
+    # --- Prompt generation ---
+    # If PROMPT_problem.md exists, concatenate with PROMPT_api.md → PROMPT_generated.md
+    # Otherwise fall back to PROMPT.md (legacy)
+    project_dir = prompt_path.parent if prompt_path.is_file() else Path.cwd()
+    problem_path = project_dir / "PROMPT_problem.md"
+    generated_path = project_dir / "PROMPT_generated.md"
+
+    if problem_path.exists():
+        problem_content = problem_path.read_text().strip()
+        api_content = _PROMPT_API.read_text().strip() if _PROMPT_API.exists() else ""
+        generated = problem_content + "\n\n" + api_content + "\n"
+        generated_path.write_text(generated)
+        prompt_path = generated_path
+        print(f"Generated {generated_path.name} from PROMPT_problem.md + PROMPT_api.md", file=sys.stderr)
+    elif not prompt_path.exists():
+        print(f"Error: neither PROMPT_problem.md nor {prompt_path} found", file=sys.stderr)
         sys.exit(1)
 
     agent_bin = _agent_binary(args.agent)

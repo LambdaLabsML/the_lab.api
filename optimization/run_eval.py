@@ -89,16 +89,16 @@ def copy_test_project(dest: Path):
     """Copy the test_project fixture to dest, append API instructions, init git."""
     shutil.copytree(TEST_PROJECT_SRC, dest, dirs_exist_ok=True)
 
-    # Concatenate PROMPT.md (fixture) + PROMPT_append.md (from the branch)
+    # Concatenate PROMPT.md (fixture) + PROMPT_api.md (from the branch)
     # The append file contains API workflow instructions that the optimization
     # agent can modify alongside API code changes.
-    prompt_append = REPO_ROOT / "PROMPT_append.md"
+    prompt_append = REPO_ROOT / "PROMPT_api.md"
     if prompt_append.exists():
         prompt_dst = dest / "PROMPT.md"
         with open(prompt_dst, "a") as f:
             f.write("\n")
             f.write(prompt_append.read_text())
-        print(f"  Appended PROMPT_append.md to test project PROMPT.md", file=sys.stderr)
+        print(f"  Appended PROMPT_api.md to test project PROMPT.md", file=sys.stderr)
 
     # The Lab needs a git repo — init one in the copy
     subprocess.run(["git", "init"], cwd=str(dest), capture_output=True)

@@ -22,3 +22,4 @@ optimization/proj/
 .codex/
 optimization/baseline_*.json
 optimization/baseline_*.log
+PROMPT_generated.md
