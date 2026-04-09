@@ -62,6 +62,14 @@ def score(api_url: str) -> dict:
                 best_new_score = max(best_new_score, s)
     checks["score_improved"] = min(best_new_score / SEED_BEST_SCORE, 1.0) if best_new_score > 0 else 0.0
 
+    # Did the agent look for related/similar ideas before creating new ones?
+    # Check if /search was called with keywords related to the best direction
+    search_calls = [
+        c for c in stats.get("calls", [])
+        if "/search" in c.get("endpoint", "") and "GET" in c.get("endpoint", "")
+    ]
+    checks["searched_related"] = min(len(search_calls) / 2, 1.0)
+
     # Efficiency: didn't read every single idea individually
     # (should use leaderboard/search instead)
     individual_idea_gets = sum(
