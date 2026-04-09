@@ -247,6 +247,53 @@ class Store:
 
     # --- Experiments ---
 
+    def _next_seq(self, idea_id: int) -> int:
+        """Next per-idea experiment sequence number (1-based)."""
+        return len(self._exp_by_idea.get(idea_id, set())) + 1
+
+    def _label_experiment(self, exp: dict) -> dict:
+        """Ensure experiment has 'seq' and 'label' fields."""
+        if "seq" not in exp or "label" not in exp:
+            idea_exps = sorted(
+                (self._experiments[eid] for eid in self._exp_by_idea.get(exp["idea_id"], set())
+                 if eid in self._experiments),
+                key=lambda e: e.get("created_at", ""),
+            )
+            for i, e in enumerate(idea_exps, 1):
+                if e["id"] == exp["id"]:
+                    exp["seq"] = i
+                    break
+            else:
+                exp["seq"] = 1
+            exp["label"] = f"{exp['idea_id']}.{exp['seq']}"
+        return exp
+
+    def resolve_experiment(self, ref: str) -> dict | None:
+        """Resolve experiment by global ID ('5') or label ('1.2')."""
+        # Global integer ID
+        try:
+            exp_id = int(ref)
+            exp = self._experiments.get(exp_id)
+            if exp:
+                return self._label_experiment(exp)
+        except ValueError:
+            pass
+        # Label format: idea_id.seq
+        if "." in ref:
+            try:
+                idea_str, seq_str = ref.split(".", 1)
+                idea_id, seq = int(idea_str), int(seq_str)
+                idea_exps = sorted(
+                    (self._experiments[eid] for eid in self._exp_by_idea.get(idea_id, set())
+                     if eid in self._experiments),
+                    key=lambda e: e.get("created_at", ""),
+                )
+                if 1 <= seq <= len(idea_exps):
+                    return self._label_experiment(idea_exps[seq - 1])
+            except (ValueError, IndexError):
+                pass
+        return None
+
     def create_experiment(
         self,
         idea_id: int,
@@ -257,11 +304,14 @@ class Store:
         with self._lock:
             exp_id = self._next_exp_id
             self._next_exp_id += 1
+            seq = self._next_seq(idea_id)
 
         script_rel = f".the_lab/experiments/{idea_id}/{exp_id}.sh"
         exp = {
             "id": exp_id,
             "idea_id": idea_id,
+            "seq": seq,
+            "label": f"{idea_id}.{seq}",
             "description": description,
             "script": script_rel,
             "status": "pending",
@@ -285,7 +335,10 @@ class Store:
         return exp
 
     def get_experiment(self, exp_id: int) -> dict | None:
-        return self._experiments.get(exp_id)
+        exp = self._experiments.get(exp_id)
+        if exp:
+            return self._label_experiment(exp)
+        return None
 
     def update_experiment(self, exp_id: int, **fields) -> dict | None:
         exp = self._experiments.get(exp_id)
@@ -344,13 +397,14 @@ class Store:
 
     def list_experiments(self, idea_id: int) -> list[dict]:
         exp_ids = self._exp_by_idea.get(idea_id, set())
-        exps = [self._experiments[eid] for eid in exp_ids if eid in self._experiments]
+        exps = [self._label_experiment(self._experiments[eid])
+                for eid in exp_ids if eid in self._experiments]
         return sorted(exps, key=lambda e: e.get("created_at", ""))
 
     def list_experiments_by_status(self, status: str) -> list[dict]:
         """List all experiments across all ideas with a given status."""
         return [
-            exp for exp in self._experiments.values()
+            self._label_experiment(exp) for exp in self._experiments.values()
             if exp.get("status") == status
         ]
 

@@ -709,6 +709,15 @@ def get_notes(
 
 # --- Experiments ---
 
+
+def _resolve_exp(exp_ref) -> dict:
+    """Resolve experiment by global ID (int) or label ('1.2'). Raises 404."""
+    exp = store.resolve_experiment(str(exp_ref))
+    if not exp:
+        raise HTTPException(404, f"experiment '{exp_ref}' not found (accepts global ID or label like '1.2')")
+    return exp
+
+
 @app.post("/api/v1/ideas/{idea_id}/experiments", status_code=201)
 async def create_experiment(idea_id: int, req: NewExperimentRequest):
     """Create a new experiment under an idea.
@@ -1039,22 +1048,17 @@ async def analyze_experiments(req: AnalyzeRequest):
         Path(manifest_path).unlink(missing_ok=True)
 
 
-@app.get("/api/v1/experiments/{exp_id}")
-def get_experiment(exp_id: int):
+@app.get("/api/v1/experiments/{exp_ref}")
+def get_experiment(exp_ref: str):
     """Get full detail for a single experiment.
 
-    Returns the complete experiment record including its status, description,
-    metrics, meta, tags, script path, and timing information (started_at,
-    finished_at).
+    Accepts global ID (``4``) or label (``1.2`` = idea 1, experiment 2).
 
     Example:
-        GET /api/v1/experiments/4
-        -> {"id": 4, "idea_id": 1, "status": "completed", "description": "baseline run",
-            "metrics": {"acc": 0.91, "loss": 0.35}, "meta": {"lr": 0.001}, "tags": ["baseline"], ...}
+        GET /api/v1/experiments/1.2
+        -> {"id": 4, "label": "1.2", "idea_id": 1, "seq": 2, "status": "completed", ...}
     """
-    exp = store.get_experiment(exp_id)
-    if not exp:
-        raise HTTPException(404, "experiment not found")
+    exp = _resolve_exp(exp_ref)
     # Add score comparison for completed experiments
     if exp.get("status") == "completed":
         metrics = exp.get("metrics") or {}
@@ -1068,7 +1072,7 @@ def get_experiment(exp_id: int):
             best_exp_id = None
             for idea in store.list_ideas():
                 for e in store.list_experiments(idea["id"]):
-                    if e["id"] == exp_id:
+                    if e["id"] == exp["id"]:
                         continue
                     em = e.get("metrics") or {}
                     for key in ("score", "accuracy", "final_score"):
@@ -1085,17 +1089,16 @@ def get_experiment(exp_id: int):
     return exp
 
 
-@app.delete("/api/v1/experiments/{exp_id}")
-def delete_experiment(exp_id: int):
+@app.delete("/api/v1/experiments/{exp_ref}")
+def delete_experiment(exp_ref: str):
     """Delete a non-running experiment and its stored artifacts.
 
     Removes the experiment record from the file-backed store and deletes the
     associated script/log/progress/metrics files plus any recorded rollout or
     worktree directories. Running experiments must be cancelled first.
     """
-    exp = store.get_experiment(exp_id)
-    if not exp:
-        raise HTTPException(404, "experiment not found")
+    exp = _resolve_exp(exp_ref)
+    exp_id = exp["id"]
     if exp.get("status") == "running":
         raise HTTPException(400, "running experiment must be cancelled before deletion")
     deleted = store.delete_experiment(exp_id)
@@ -1109,8 +1112,8 @@ def delete_experiment(exp_id: int):
     }
 
 
-@app.post("/api/v1/experiments/{exp_id}/start")
-async def start_experiment(exp_id: int, req: StartExperimentRequest | None = None):
+@app.post("/api/v1/experiments/{exp_ref}/start")
+async def start_experiment(exp_ref: str, req: StartExperimentRequest | None = None):
     """Run an experiment's script.
 
     Auto-commits any uncommitted changes on the idea's branch, creates a git
@@ -1124,9 +1127,11 @@ async def start_experiment(exp_id: int, req: StartExperimentRequest | None = Non
         -> {"status": "running", "experiment": {"id": 4, ...},
             "current_branch": "idea/1", "idea_id": 1, ...}
     """
+    # Resolve exp ref (global ID or label like '1.2')
+    exp_check = _resolve_exp(exp_ref)
+    exp_id = exp_check["id"]
     # Idempotent: if already running, return current state instead of error
-    exp_check = store.get_experiment(exp_id)
-    if exp_check and exp_check.get("status") == "running":
+    if exp_check.get("status") == "running":
         return {
             "status": "already_running",
             "experiment": exp_check,
@@ -1144,8 +1149,8 @@ async def start_experiment(exp_id: int, req: StartExperimentRequest | None = Non
     return result
 
 
-@app.post("/api/v1/experiments/{exp_id}/restart")
-async def restart_experiment(exp_id: int):
+@app.post("/api/v1/experiments/{exp_ref}/restart")
+async def restart_experiment(exp_ref: str):
     """Re-run a failed or cancelled experiment.
 
     Restarts the experiment using the same script and configuration. Only
@@ -1158,9 +1163,8 @@ async def restart_experiment(exp_id: int):
         POST /api/v1/experiments/4/restart
         -> {"status": "running", "experiment": {"id": 4, ...}, "current_branch": "idea/1", ...}
     """
-    exp = store.get_experiment(exp_id)
-    if not exp:
-        raise HTTPException(404, "experiment not found")
+    exp = _resolve_exp(exp_ref)
+    exp_id = exp["id"]
     if exp["status"] not in ("failed", "cancelled"):
         raise HTTPException(400, f"experiment is {exp['status']}, can only restart failed or cancelled experiments")
     result = await runner.start(exp_id)
@@ -1171,8 +1175,8 @@ async def restart_experiment(exp_id: int):
     return result
 
 
-@app.post("/api/v1/experiments/{exp_id}/cancel")
-async def cancel_experiment(exp_id: int):
+@app.post("/api/v1/experiments/{exp_ref}/cancel")
+async def cancel_experiment(exp_ref: str):
     """Cancel a pending or running experiment.
 
     For running experiments, sends SIGTERM to the experiment process, giving it
@@ -1184,14 +1188,15 @@ async def cancel_experiment(exp_id: int):
         POST /api/v1/experiments/4/cancel
         -> {"id": 4, "status": "cancelled", ...}
     """
-    result = await runner.cancel(exp_id)
+    exp = _resolve_exp(exp_ref)
+    result = await runner.cancel(exp["id"])
     if result is None:
         raise HTTPException(404, "experiment not found")
     return result
 
 
-@app.get("/api/v1/experiments/{exp_id}/log")
-def get_experiment_log(exp_id: int, tail: int | None = None):
+@app.get("/api/v1/experiments/{exp_ref}/log")
+def get_experiment_log(exp_ref: str, tail: int | None = None):
     """Read the stdout/stderr log for an experiment.
 
     Returns the combined output log captured during experiment execution. Use
@@ -1203,14 +1208,15 @@ def get_experiment_log(exp_id: int, tail: int | None = None):
         GET /api/v1/experiments/4/log?tail=50
         -> {"log": "Epoch 49/50 - loss: 0.31 - acc: 0.92\\nEpoch 50/50 - loss: 0.30 ..."}
     """
-    log = runner.get_log(exp_id, tail=tail)
+    exp = _resolve_exp(exp_ref)
+    log = runner.get_log(exp["id"], tail=tail)
     if log is None:
-        raise HTTPException(404, "experiment not found")
+        raise HTTPException(404, "experiment log not found")
     return {"log": log}
 
 
-@app.get("/api/v1/experiments/{exp_id}/progress")
-def get_experiment_progress(exp_id: int):
+@app.get("/api/v1/experiments/{exp_ref}/progress")
+def get_experiment_progress(exp_ref: str):
     """Read script-reported progress for an experiment.
 
     Returns the experiment's current status and, if the script has written a
@@ -1222,9 +1228,7 @@ def get_experiment_progress(exp_id: int):
         GET /api/v1/experiments/4/progress
         -> {"status": "running", "progress": {"epoch": 25, "total_epochs": 50, "loss": 0.34}}
     """
-    exp = store.get_experiment(exp_id)
-    if not exp:
-        raise HTTPException(404, "experiment not found")
+    exp = _resolve_exp(exp_ref)
     progress_path = REPO_DIR / exp["script"].replace(".sh", ".progress")
     result = {"status": exp["status"]}
     if progress_path.exists():
@@ -1315,9 +1319,9 @@ def adopt_idea(idea_id: int, req: AdoptRequest | None = None):
 
 # --- Timeseries ---
 
-@app.get("/api/v1/experiments/{exp_id}/timeseries")
+@app.get("/api/v1/experiments/{exp_ref}/timeseries")
 def get_experiment_timeseries(
-    exp_id: int,
+    exp_ref: str,
     keys: str | None = Query(default=None, description="Comma-separated metric keys to include"),
     last: int | None = Query(default=None, description="Return only the last N data points"),
 ):
@@ -1334,7 +1338,8 @@ def get_experiment_timeseries(
         -> {"points": [{"step": 900, "wall_time": 1234.5, "loss": 0.31, "lr": 0.0003}, ...],
             "count": 100}
     """
-    points = store.get_timeseries(exp_id)
+    exp = _resolve_exp(exp_ref)
+    points = store.get_timeseries(exp["id"])
     if points is None:
         raise HTTPException(404, "experiment not found")
     if keys:
@@ -1612,7 +1617,7 @@ def get_digest_compat(
 @app.get("/api/v1/wait")
 async def wait_for_experiment(
     timeout: float = Query(default=3600, le=86400),
-    experiment_id: int | None = Query(default=None),
+    experiment_id: str | None = Query(default=None, description="Global ID or label (e.g. '4' or '1.2')"),
     idea_id: int | None = Query(default=None),
 ):
     """Long-poll until an experiment finishes.
@@ -1629,9 +1634,17 @@ async def wait_for_experiment(
         -> {"status": "completed", "experiment": {"id": 4, "metrics": {...}, ...},
             "current_branch": "idea/1", "idea_id": 1, ...}
     """
+    # Resolve label to global ID if needed
+    resolved_exp_id = None
+    if experiment_id is not None:
+        exp = store.resolve_experiment(str(experiment_id))
+        if exp:
+            resolved_exp_id = exp["id"]
+        else:
+            raise HTTPException(404, f"experiment '{experiment_id}' not found")
     result = await runner.wait_any(
         timeout=timeout,
-        experiment_id=experiment_id,
+        experiment_id=resolved_exp_id,
         idea_id=idea_id,
     )
     result["current_branch"] = get_current_branch(cwd=REPO_DIR)
