@@ -110,7 +110,7 @@ cmd_baseline() {
 
     # Create experiment
     local run_eval="$SCRIPT_DIR/run_eval.py"
-    local script_content="#!/bin/bash\nset -euo pipefail\npython $run_eval --model $model --budget $budget --output /tmp/lab_baseline_result.json"
+    local script_content="#!/bin/bash\nset -euo pipefail\npython $run_eval --model $model --budget $budget --tests t1,t2,t3,t4"
     local exp_resp
     exp_resp=$(curl -s -X POST "$api/ideas/$idea_id/experiments" \
         -H "Content-Type: application/json" \
@@ -145,18 +145,17 @@ metrics = exp.get('metrics', {})
 if metrics:
     json.dump(metrics, open('.the_lab/artifacts/baseline.json', 'w'), indent=2)
     print()
-    print(f'  api_score:    {metrics.get(\"api_score\", \"n/a\")}')
-    print(f'  final_score:  {metrics.get(\"final_score\", \"n/a\")}')
-    print(f'  quality_log:  {metrics.get(\"quality_log\", \"n/a\")}')
-    print(f'  api_calls:    {metrics.get(\"total_api_calls\", \"n/a\")}')
-    print(f'  calls/idea:   {metrics.get(\"calls_per_idea\", \"n/a\")}')
-    print(f'  confusion:    {metrics.get(\"confusion_score\", \"n/a\")}')
-    print(f'  cost:         \${metrics.get(\"cost_total\", 0)}')
+    print(f'  api_effectiveness: {metrics.get(\"api_effectiveness\", \"n/a\")}')
+    for k in ('t1_score', 't2_score', 't3_score', 't4_score'):
+        print(f'  {k}:' + ' ' * (17-len(k)) + f'{metrics.get(k, \"n/a\")}')
+    print(f'  total_api_calls:   {metrics.get(\"total_api_calls\", \"n/a\")}')
+    print(f'  total_cost:        \${metrics.get(\"total_cost\", 0)}')
     print()
     print('Baseline saved to .the_lab/artifacts/baseline.json')
 else:
     print('Warning: experiment has no metrics yet. Status:', exp.get('status'))
-    print('Check: curl $api/experiments/$exp_id/log?tail=20')
+    print('Check experiment log:')
+    print(f'  curl $api/experiments/$exp_id/log?tail=30')
 "
 
     # Conclude the baseline idea
