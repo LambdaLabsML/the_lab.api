@@ -126,7 +126,7 @@ export function buildChartData(
   if (reversed) filtered = filtered.slice().reverse();
 
   return {
-    labels: filtered.map((e) => 'exp/' + e.id + (e._running ? ' \u25B6' : '')),
+    labels: filtered.map((e) => 'exp/' + (e.label || e.id) + (e._running ? ' \u25B6' : '')),
     pointColors: filtered.map((e) => getColor(e)),
     pointBgColors: filtered.map((e) => (e._running ? 'transparent' : getColor(e))),
     pointStyles: filtered.map((e) => (e._running ? 'triangle' : 'circle')),

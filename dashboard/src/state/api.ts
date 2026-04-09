@@ -91,13 +91,13 @@ export async function getIdeaExperiments(
   return fetchJson<Experiment[]>(`/api/v1/ideas/${ideaId}/experiments`);
 }
 
-/** GET /api/v1/experiments/:expId/log */
+/** GET /api/v1/experiments/:expRef/log */
 export async function getExperimentLog(
-  expId: number,
+  expRef: string | number,
   tail?: number,
 ): Promise<{ log: string }> {
   const qs = tail ? `?tail=${tail}` : "";
-  return fetchJson<{ log: string }>(`/api/v1/experiments/${expId}/log${qs}`);
+  return fetchJson<{ log: string }>(`/api/v1/experiments/${expRef}/log${qs}`);
 }
 
 /** GET /api/v1/ideas/:ideaId/diff */
@@ -109,11 +109,11 @@ export async function getIdeaDiff(
   return fetchJson(`/api/v1/ideas/${ideaId}/diff${qs}`);
 }
 
-/** GET /api/v1/experiments/:expId/progress */
+/** GET /api/v1/experiments/:expRef/progress */
 export async function getExperimentProgress(
-  expId: number,
+  expRef: string | number,
 ): Promise<ProgressResponse> {
-  return fetchJson<ProgressResponse>(`/api/v1/experiments/${expId}/progress`);
+  return fetchJson<ProgressResponse>(`/api/v1/experiments/${expRef}/progress`);
 }
 
 // ---------------------------------------------------------------------------

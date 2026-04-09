@@ -42,7 +42,7 @@ export function DetailPanel() {
     if (running.length === 0) return;
     function pollProgress() {
       running.forEach((exp) => {
-        getExperimentProgress(exp.id).then((data) => {
+        getExperimentProgress(exp.label || exp.id).then((data) => {
           const el = document.getElementById(`progress-${exp.id}`);
           if (!el || !data.progress) return;
           const p = data.progress;
@@ -65,7 +65,7 @@ export function DetailPanel() {
     setLogExp(exp);
     setLogContent(null);
     setLogLoading(true);
-    getExperimentLog(exp.id)
+    getExperimentLog(exp.label || exp.id)
       .then((data) => setLogContent(data.log))
       .catch(() => setLogContent("Failed to load log"))
       .finally(() => setLogLoading(false));
@@ -178,7 +178,7 @@ export function DetailPanel() {
       {/* Log Lightbox */}
       {logExp && (
         <Lightbox
-          title={`Log — exp/${logExp.id}: ${logExp.description}`}
+          title={`Log — exp/${logExp.label || logExp.id}: ${logExp.description}`}
           onClose={() => setLogExp(null)}
         >
           {logLoading && <div style={{ color: "#8b949e" }}>Loading...</div>}
@@ -231,7 +231,7 @@ function ExperimentItem({ exp, onShowLog }: { exp: Experiment; onShowLog: () => 
   return (
     <div class="exp-item">
       <div class="exp-header">
-        <span class="exp-id">exp/{exp.id}</span>
+        <span class="exp-id">exp/{exp.label || exp.id}</span>
         <span dangerouslySetInnerHTML={{ __html: badgeHtml(exp.status) }} />
       </div>
       <div class="exp-desc">{exp.description}</div>

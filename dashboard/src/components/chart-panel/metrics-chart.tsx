@@ -278,7 +278,7 @@ function createChart(
             label(item) {
               const d = (item.dataset as any)._expData[item.dataIndex];
               return [
-                "exp/" + d.id + ": " + (d.description || "").slice(0, 50),
+                "exp/" + (d.label || d.id) + ": " + (d.description || "").slice(0, 50),
                 d._running ? "\u25B6 running (from progress)" : "",
                 d.runtime ? "runtime: " + d.runtime : "",
                 d.finished_at
