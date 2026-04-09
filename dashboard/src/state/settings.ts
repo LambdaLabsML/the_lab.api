@@ -85,6 +85,7 @@ export const reverseTime = useSetting("reverseTime", true);
 export const showAbandoned = useSetting("showAbandoned", true);
 export const showConcluded = useSetting("showConcluded", true);
 export const showRunning = useSetting("showRunning", true);
+export const clipOutliers = useSetting("clipOutliers", true);
 
 // ---------------------------------------------------------------------------
 // Server-provided defaults from GET /api/v1/config

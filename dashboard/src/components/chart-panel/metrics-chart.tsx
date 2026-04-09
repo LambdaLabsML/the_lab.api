@@ -12,6 +12,7 @@ import {
   showAbandoned,
   showConcluded,
   showRunning,
+  clipOutliers,
 } from "../../state/settings";
 import { buildChartData } from "../../lib/chart-data";
 import type { ChartDataResult } from "../../lib/chart-data";
@@ -31,6 +32,7 @@ export function MetricsChart() {
   const tagMode = tagFilterMode.value;
   const highlighted = highlightedIdea.value;
   const reversed = reverseTime.value;
+  const clip = clipOutliers.value;
 
   // Build set of hidden idea statuses
   const hiddenStatuses = new Set<string>();
@@ -87,7 +89,7 @@ export function MetricsChart() {
       ds.pointRadius = chartData.pointRadii as any;
       (ds as any)._expData = chartData.expData;
       chartRef.current.data.labels = chartData.labels;
-      const yBounds = computeYBounds(chartData.values);
+      const yBounds = clip ? computeYBounds(chartData.values) : {};
       const yScale = chartRef.current.options.scales!.y!;
       yScale.title = { display: true, text: metric, color: "#8b949e", font: { size: 10 } };
       yScale.min = yBounds.min;
@@ -98,7 +100,7 @@ export function MetricsChart() {
     }
 
     chartRef.current = createChart(canvasRef.current, metric, chartData);
-  }, [metric, mode, impOnly, tags, tagMode, experiments, reversed, showAbandoned.value, showConcluded.value, showRunning.value]);
+  }, [metric, mode, impOnly, tags, tagMode, experiments, reversed, showAbandoned.value, showConcluded.value, showRunning.value, clip]);
 
   // Handle highlight changes separately (just update point sizes)
   useEffect(() => {
@@ -221,7 +223,7 @@ function createChart(
           grid: { color: "#21262d" },
         },
         y: {
-          ...computeYBounds(chartData.values),
+          ...(clipOutliers.value ? computeYBounds(chartData.values) : {}),
           title: {
             display: true,
             text: metricKey,

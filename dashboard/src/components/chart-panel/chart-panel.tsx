@@ -1,5 +1,5 @@
 import type { Signal } from "@preact/signals";
-import { chartOpen, selectedMetric, colorMode, improvementsOnly, showAbandoned, showConcluded, showRunning } from "../../state/settings";
+import { chartOpen, selectedMetric, colorMode, improvementsOnly, showAbandoned, showConcluded, showRunning, clipOutliers } from "../../state/settings";
 import { allExperiments } from "../../state/signals";
 import { MetricsChart } from "./metrics-chart";
 import { TagFilter } from "./tag-filter";
@@ -87,6 +87,17 @@ export function ChartPanel() {
             <StatusToggle label="abandoned" signal={showAbandoned} color="#f85149" />
             <StatusToggle label="running" signal={showRunning} color="#d29922" />
           </span>
+          <button
+            type="button"
+            class={`improvements-toggle${!clipOutliers.value ? " active" : ""}`}
+            aria-pressed={!clipOutliers.value}
+            title="Show all data points including outliers (disables IQR-based y-axis clipping)"
+            onClick={() => { clipOutliers.value = !clipOutliers.value; }}
+            style={{ marginLeft: "8px" }}
+          >
+            <span class="improvements-toggle-icon" aria-hidden="true">⤢</span>
+            <span class="improvements-toggle-label">Show Outliers</span>
+          </button>
         </div>
         <MetricsChart />
       </div>
