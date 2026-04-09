@@ -1,84 +1,84 @@
-# Optimizing The Lab API for Agent Efficiency
+# Optimizing The Lab API for Agent Comprehension
 
 ## Goal
 
-Maximize **`api_score`** — a composite metric that measures how efficiently agents can use The Lab API to complete research tasks. The score is relative to a baseline (unmodified API = 1.0). Higher is better.
+Maximize **`api_effectiveness`** — a composite metric measuring how well agents understand and use The Lab API across 4 tasks. Higher is better.
 
 ```
-api_score = norm_quality × (1 - failure_rate) × (1 - confusion) / norm_cost
+api_effectiveness = geometric_mean(t1_score, t2_score, t3_score, t4_score)
 ```
 
-The inner agent gets a **fixed budget** of experiments (default 15). The score measures how good it got within that budget:
-- `quality = -log10(1 - final_score)` — rewards pushing past plateaus (0.9→1, 0.99→2, 0.999→3)
-- `norm_quality`: quality relative to baseline
-- `failure_rate`: fraction of experiments that failed (broken workflows)
-- `confusion_score`: retries, errors, corrections, oscillation (agent couldn't figure out the API)
-- `norm_cost`: token cost relative to baseline
+The 4 tasks test different aspects of API comprehension:
+- **T1 Branching**: Can the agent find the best idea and branch from it?
+- **T2 Experiment Management**: Can the agent iterate efficiently (auto_start, /wait)?
+- **T3 Error Recovery**: Can the agent read logs, diagnose failures, and fix them?
+- **T4 Leaderboard & Search**: Can the agent navigate efficiently using /leaderboard and /search?
+
+Each task scores 0-1 based on correctness checks (did the right API calls happen?) with a waste penalty if API calls exceed budget.
 
 ## Background
 
-Analysis of 914 agent API calls across 29 Claude + 13 Codex sessions ($5,253 total) revealed:
-- **80% of cost is context management** (cache read/write), not generation
-- **50% of total cost ($2,636) is Bash tool calls** — agents shell out to curl
-- **Each API call via curl costs ~$0.39** in context overhead
-- The canonical workflow is 8+ calls per idea: new → checkout → experiments → start → wait → get → note → conclude
-- Many calls are always paired: create→start (49×), new→checkout (21×), wait→get (40×)
+Agents struggle with several aspects of the Lab API:
+- **Branching**: Agents don't understand that branching creates a new idea with `parent_ids`, often calling wrong endpoints
+- **Experiment management**: Agents don't know about `auto_start`, poll instead of using `/wait`
+- **Error recovery**: Agents miss the `/log` endpoint and don't diagnose failures
+- **Navigation**: Agents read every idea individually instead of using `/leaderboard` or `/search`
+
+The optimization target is both the API code (`the_lab/`) AND the API documentation (`PROMPT_api.md`). Better endpoints + better docs = better agent comprehension.
 
 ## Setup
 
-The API code lives in `the_lab/` — modify it directly on idea branches.
+The API code lives in `the_lab/` and API docs in `PROMPT_api.md` — modify both on idea branches.
 
 **Running an evaluation:**
 ```bash
-python .the_lab/artifacts/run_eval.py --model haiku --budget 10
+python .the_lab/artifacts/run_eval.py --model haiku --budget 4 --tests t1,t2,t3,t4
 ```
 
-This starts a Lab instance from the current branch's `the_lab/` code, runs an inner agent against the fast math test project, and collects metrics.
+Runs 4 tests concurrently, each starting a Lab instance from the current branch's code + PROMPT_api.md, launching an inner agent against a pre-seeded math kernel project, and scoring API usage patterns.
 
-**Establishing baseline** (do this first, on unmodified code):
-```bash
-python .the_lab/artifacts/run_eval.py --model haiku --budget 10 2>/dev/null | \
-  python3 -c "import sys,json; json.dump(json.load(sys.stdin)['metrics'], open('.the_lab/artifacts/baseline.json','w'), indent=2)"
-```
-
-**Experiment script pattern** (use absolute path since experiments run in worktrees):
+**Experiment script pattern:**
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
-# $THE_LAB_REPO points to the worktree with the branch's code
-python "$(dirname "$0")/../../artifacts/run_eval.py" --model haiku --budget 10
+python "$(dirname "$0")/../../artifacts/run_eval.py" --model haiku --budget 4 --tests t1,t2,t3,t4
 ```
 
 ## What to optimize
 
-Ranked by expected impact:
-1. **Eliminate redundant calls** — `auto_start=true`, `auto_checkout=true`, `/wait` returning full results
-2. **Bundle orientation** — single `/orient` replacing digest + suggested + search
-3. **Trim response verbosity** — `?compact=true` to strip unused fields
-4. **Reduce confusion** — better error messages, more intuitive endpoint naming
+Two levers per idea:
+
+### 1. API code (`the_lab/routes/`, `the_lab/deps.py`, `the_lab/schemas.py`)
+- Better error messages that tell the agent what to do next
+- Richer responses that include context (e.g., branch diff in /wait)
+- New convenience endpoints (e.g., /orient with recommendations)
+- Default behaviors that reduce call count (auto_start, auto_checkout)
+
+### 2. API documentation (`PROMPT_api.md`)
+- Clearer workflow descriptions
+- Better examples showing the correct call sequence
+- Explicit mention of features agents miss (branching, /search, /log)
+- Shorter, more scannable format
 
 ## Key metrics
 
 | Metric | Meaning |
 |---|---|
-| `api_effectiveness` | Geometric mean of T1-T4 task scores (higher = better) |
-| `t1_score` | Branching: did the agent find + branch from the best idea? |
-| `t2_score` | Experiment management: iterate, use /wait, auto_start? |
-| `t3_score` | Error recovery: read logs, diagnose, create fixes? |
-| `t4_score` | Leaderboard navigation: use /leaderboard, /search efficiently? |
-| `calls_per_idea` | API calls per research cycle |
-| `confusion_score` | Agent confusion (retries, errors, corrections, oscillation) |
-| `cost_total` | Token cost breakdown (bash, context, reasoning, etc.) |
-| `dag_max_depth` | Did the agent build a research tree? |
-| `dag_branching_ratio` | Fraction of ideas that branched from parents |
+| `api_effectiveness` | Geometric mean of T1-T4 scores (0-1, higher = better) |
+| `t1_score` | Branching: correct parent, used /orient or /leaderboard |
+| `t2_score` | Experiment mgmt: used /wait, auto_start, documented findings |
+| `t3_score` | Error recovery: read logs, created fixes |
+| `t4_score` | Navigation: used /leaderboard, /search, chose best direction |
+| `total_api_calls` | Total calls across all 4 tests |
+| `total_cost` | Token cost across all 4 tests |
 
 ## Important notes
 
 - **Non-determinism**: Inner agent behavior varies. Run 2-3 times, report median.
-- **Baseline first**: Establish `baseline.json` before making changes.
-- **One change per idea**: Don't bundle multiple optimizations.
-- **Don't modify fixtures**: `run_eval.py`, `test_project/`, and `baseline.json` are in `.the_lab/artifacts/` (symlinked from `optimization/`). Don't change them.
-- **Key files**: `the_lab/app.py` (endpoints), `the_lab/store.py` (data), `the_lab/runner.py` (execution), `the_lab/stats.py` (tracking)
+- **One change per idea**: Don't bundle API changes + doc changes. Test each independently.
+- **Two levers**: Always consider whether the improvement should be in the code or the docs.
+- **Don't modify fixtures**: Test fixtures in `optimization/tests/` are static.
+- **Key files**: `the_lab/routes/*.py` (endpoints), `the_lab/deps.py` (helpers), `the_lab/schemas.py` (models), `PROMPT_api.md` (agent-facing docs)
 
 ---
 
@@ -88,26 +88,20 @@ You have access to a local experiment management API at `http://localhost:9000/a
 
 ### Core concepts
 
-- **Idea** — a research direction with its own **git branch** (`idea/<id>`). Ideas form a DAG: branch from parents, or merge multiple. Status: `active` → `concluded`/`abandoned`.
-- **Experiment** — a bash script run under an idea. Produces `metrics` as JSON.
+- **Idea** — a research direction with its own **git branch**. Ideas form a DAG: branch from parents.
+- **Experiment** — a bash script run under an idea, labeled as `exp/1.2` (idea 1, experiment 2). Produces `metrics` as JSON.
 - **Notes** — journal on an idea: `insight`, `milestone`, `observation`, `debug`.
 
 ### Research workflow
 
-**Start every session by checking the leaderboard** — `GET /leaderboard?metric=api_score`.
-
-The core loop:
-
-1. **Search** → `GET /ideas/search?q=...`
-2. **Create idea** → `POST /ideas/new {parent_ids, description}`
-3. **Checkout** → `POST /ideas/<id>/checkout`
-4. **Modify** `the_lab/app.py` (or store.py, runner.py, etc.)
-5. **Create experiment** → `POST /ideas/<id>/experiments {description, script_content, meta, tags}`
-6. **Start** → `POST /experiments/<id>/start`
-7. **Wait** → `GET /wait?experiment_id=<id>`
-8. **Compare** → `GET /leaderboard?metric=api_score&include_details=true`
-9. **Note** → `POST /ideas/<id>/note {text, level}`
-10. **Conclude** → `POST /ideas/<id>/conclude {conclusion}`
+1. **Orient** → `GET /orient` — current state + recommended next action
+2. **Search** → `GET /ideas/search?q=...` — find related ideas
+3. **Create idea** → `POST /ideas/new {parent_ids, description}` — auto-checkouts
+4. **Modify** code in `the_lab/` and/or `PROMPT_api.md`
+5. **Create experiment** → `POST /ideas/<id>/experiments {description, script_content}` — auto-starts when script_content provided
+6. **Wait** → `GET /wait?experiment_id=<label>` — blocks until done, returns full result
+7. **Note** → `POST /ideas/<id>/note {text, level}`
+8. **Conclude** → `POST /ideas/<id>/conclude {conclusion}`
 
 ### Script contract
 
