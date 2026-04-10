@@ -138,23 +138,39 @@ export function buildChartData(
     tagFilterMode,
     hiddenStatuses,
   );
-  let filtered = filterVisibleChartExperiments(
-    metricKey,
-    allExperiments,
-    activeTagFilters,
-    tagFilterMode,
-    improvementsOnly,
-    hiddenStatuses,
-  );
+  let filtered: Experiment[];
 
-  // Aggregate by idea mean if enabled (after filtering, before coloring)
+  // For idea mean: aggregate from ALL matching experiments (no improvements-only),
+  // compute milestones on the full aggregated list, then apply improvements-only.
+  // This ensures milestones don't change when toggling improvements-only.
+  const meanMilestones = new Set<number>();
+  let allMeans: Experiment[] = [];
+
   if (useIdeaMean) {
-    filtered = aggregateByIdeaMean(filtered, metricKey);
-    // Re-apply improvements-only on the aggregated data
+    // Get all matching experiments (without improvements-only filter)
+    const allMatching = filterMetricExperiments(
+      metricKey, allExperiments, activeTagFilters, tagFilterMode, hiddenStatuses,
+    );
+    allMeans = aggregateByIdeaMean(allMatching, metricKey);
+
+    // Compute milestones on the FULL aggregated list (stable across toggles)
+    if (colorMode === 'status+improve' || colorMode === 'improvement') {
+      const lower = isLowerBetter(metricKey);
+      let runBest = lower ? Infinity : -Infinity;
+      for (const e of allMeans) {
+        const v = e.metrics?.[metricKey];
+        if (typeof v === 'number' && (lower ? v < runBest : v > runBest)) {
+          runBest = v;
+          meanMilestones.add(e.idea_id);
+        }
+      }
+    }
+
+    // Now apply improvements-only on the aggregated data
     if (improvementsOnly) {
       const lower = isLowerBetter(metricKey);
       let best = lower ? Infinity : -Infinity;
-      filtered = filtered.filter((e) => {
+      filtered = allMeans.filter((e) => {
         const v = e.metrics![metricKey];
         if (lower ? v < best : v > best) {
           best = v;
@@ -162,7 +178,13 @@ export function buildChartData(
         }
         return false;
       });
+    } else {
+      filtered = allMeans;
     }
+  } else {
+    filtered = filterVisibleChartExperiments(
+      metricKey, allExperiments, activeTagFilters, tagFilterMode, improvementsOnly, hiddenStatuses,
+    );
   }
 
   // Fallback sequential palette for 'idea' mode
@@ -172,23 +194,6 @@ export function buildChartData(
     if (!(exp.idea_id in ideaColorMap)) {
       ideaColorMap[exp.idea_id] = IDEA_PALETTE[colorIdx % IDEA_PALETTE.length];
       colorIdx++;
-    }
-  }
-
-  // For idea mean mode, compute milestone colors from the aggregated sequence
-  // (since the synthetic experiments aren't in metricFiltered)
-  const meanMilestones = new Set<number>();
-  if (useIdeaMean && (colorMode === 'status+improve' || colorMode === 'improvement')) {
-    const lower = isLowerBetter(metricKey);
-    let runBest = lower ? Infinity : -Infinity;
-    for (const e of filtered) {
-      const v = e.metrics?.[metricKey];
-      if (typeof v === 'number') {
-        if (lower ? v < runBest : v > runBest) {
-          runBest = v;
-          meanMilestones.add(e.idea_id);
-        }
-      }
     }
   }
 
