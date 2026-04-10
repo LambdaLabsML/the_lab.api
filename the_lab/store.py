@@ -131,26 +131,18 @@ class Store:
             if notes_path.exists():
                 self._notes[idea_id] = json.loads(notes_path.read_text())
 
-            # Load experiments
-            # The JSON file stem is used as the label's seq component,
-            # UNLESS the JSON already has a "seq" field (from a partial
-            # migration where .json and .sh files use different numbering).
+            # Load experiments — file stem IS the seq (the per-idea ID)
             exp_labels: set[str] = set()
             for f in d.glob("*.json"):
                 if f.stem.isdigit():
-                    file_stem = int(f.stem)
-                    exp = _enrich_experiment(json.loads(f.read_text()))
-                    # Use seq from JSON if present, otherwise file stem
-                    seq = exp.get("seq", file_stem)
+                    seq = int(f.stem)
                     label = f"{idea_id}.{seq}"
+                    exp = _enrich_experiment(json.loads(f.read_text()))
                     exp["id"] = label
                     exp["seq"] = seq
                     exp["label"] = label
                     exp["idea_id"] = idea_id
-                    exp["_file_stem"] = file_stem  # for file operations
-                    # Keep existing script path
-                    if "script" not in exp or not exp["script"]:
-                        exp["script"] = f".the_lab/experiments/{idea_id}/{seq}.sh"
+                    exp["script"] = f".the_lab/experiments/{idea_id}/{seq}.sh"
                     self._experiments[label] = exp
                     exp_labels.add(label)
             self._exp_by_idea[idea_id] = exp_labels
@@ -343,8 +335,7 @@ class Store:
         exp.update(fields)
         exp = _enrich_experiment(exp)
         idea_dir = self._idea_dir(exp["idea_id"])
-        file_stem = exp.get("_file_stem", exp["seq"])
-        _write_json(idea_dir / f"{file_stem}.json", exp)
+        _write_json(idea_dir / f"{exp['seq']}.json", exp)
         with self._lock:
             self._experiments[label] = exp
         return exp
@@ -358,9 +349,9 @@ class Store:
         idea_id = exp["idea_id"]
         idea_dir = self._idea_dir(idea_id)
         script_path = self.repo_dir / exp["script"]
-        file_stem = exp.get("_file_stem", exp["seq"])
+        seq = exp["seq"]
         cleanup_paths = [
-            idea_dir / f"{file_stem}.json",
+            idea_dir / f"{seq}.json",
             script_path,
             script_path.with_suffix(".log"),
             script_path.with_suffix(".err"),
