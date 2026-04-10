@@ -8,6 +8,7 @@
 // ------------------------------------------------------------
 
 import { useRef, useEffect } from "preact/hooks";
+import { navigateToIdea } from "../lib/navigate";
 import type { IdeaNode, StationPos, SubwayLayout } from "../lib/types";
 import { graphData, currentLayout, highlightedIdea, allIdeas, allExperiments } from "../state/signals";
 import { colorMode, selectedIdea, selectedMetric, improvementsOnly, activeTagFilters, tagFilterMode, reverseTime, showAbandoned, showConcluded, showRunning } from "../state/settings";
@@ -613,8 +614,7 @@ export function DagView() {
     container.querySelectorAll(".subway-station, .subway-dot").forEach((el) => {
       el.addEventListener("click", () => {
         const id = parseInt((el as HTMLElement).dataset.id!);
-        selectedIdea.value = id;
-        history.pushState(null, "", "/ideas/" + id);
+        navigateToIdea(id);
       });
       el.addEventListener("mouseenter", () => {
         const id = parseInt((el as HTMLElement).dataset.id!);

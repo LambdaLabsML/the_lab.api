@@ -32,6 +32,14 @@ body {
 /* Main layout — must have min-height:0 so flex:1 can shrink below content size */
 #main { display: flex; flex: 1 1 0%; overflow: hidden; min-height: 0; }
 
+/* Dockview container — fills remaining space below topbar/banner */
+#dockview-container {
+  position: relative;
+  flex: 1 1 0%;
+  min-height: 0;
+  overflow: hidden;
+}
+
 /* View tabs */
 #view-tabs {
   background: #161b22;

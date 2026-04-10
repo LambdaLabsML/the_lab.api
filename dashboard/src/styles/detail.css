@@ -45,7 +45,9 @@
 /* Experiment items */
 .exp-item { padding: 8px; margin-bottom: 6px; border-radius: 4px; background: #0d1117; border: 1px solid #30363d; }
 .exp-item .exp-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
-.exp-item .exp-id { font-weight: 600; color: #58a6ff; font-size: 12px; }
+.exp-item .exp-id { font-weight: 600; color: #58a6ff; font-size: 12px; transition: color 0.1s; }
+.exp-item .exp-id:hover { color: #79c0ff; text-decoration: underline; }
+.exp-item.exp-highlight { background: #58a6ff15; outline: 1px solid #58a6ff44; border-radius: 4px; transition: background 0.3s, outline 0.3s; }
 .exp-item .exp-desc { margin-bottom: 4px; line-height: 1.4; }
 .exp-item .exp-meta { font-size: 11px; color: #8b949e; }
 .exp-item .exp-metrics { font-size: 11px; color: #d2a8ff; margin-top: 3px; }

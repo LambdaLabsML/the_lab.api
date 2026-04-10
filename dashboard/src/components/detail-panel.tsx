@@ -1,7 +1,9 @@
 import { useEffect, useState, useRef } from "preact/hooks";
 import { selectedIdea } from "../state/settings";
+import { scrollToExperiment } from "../state/signals";
 import { getIdea, getExperimentProgress, getExperimentLog, getIdeaDiff } from "../state/api";
 import { formatTime, badgeHtml, escapeHtml } from "../lib/format";
+import { navigateFromExperiment } from "../lib/navigate";
 import { Lightbox } from "./lightbox";
 import type { IdeaDetail, Experiment, Note } from "../lib/types";
 
@@ -21,6 +23,7 @@ export function DetailPanel() {
   const [diffData, setDiffData] = useState<{ stat: string; diff: string } | null>(null);
   const [diffLoading, setDiffLoading] = useState(false);
 
+  // Fetch idea data on selection change + poll every 10s for updates
   useEffect(() => {
     if (ideaId === null) {
       setIdea(null);
@@ -29,10 +32,33 @@ export function DetailPanel() {
     }
     const seq = ++fetchRef.current;
     setLoading(true);
-    getIdea(ideaId, true)
-      .then((data) => { if (fetchRef.current === seq) { setIdea(data); setLoading(false); } })
-      .catch(() => { if (fetchRef.current === seq) { setIdea(null); setLoading(false); } });
+
+    function fetchData() {
+      getIdea(ideaId, true)
+        .then((data) => { if (fetchRef.current === seq) { setIdea(data); setLoading(false); } })
+        .catch(() => { if (fetchRef.current === seq) { setIdea(null); setLoading(false); } });
+    }
+
+    fetchData();
+    const timer = setInterval(fetchData, 10_000);
+    return () => clearInterval(timer);
   }, [ideaId]);
+
+  // Scroll to a specific experiment when signaled
+  useEffect(() => {
+    const label = scrollToExperiment.value;
+    if (!label) return;
+    // Wait a tick for DOM to render
+    requestAnimationFrame(() => {
+      const el = document.querySelector(`[data-exp-label="${label}"]`);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        el.classList.add("exp-highlight");
+        setTimeout(() => el.classList.remove("exp-highlight"), 2000);
+      }
+      scrollToExperiment.value = null;
+    });
+  }, [scrollToExperiment.value, idea]);
 
   // Progress polling
   useEffect(() => {
@@ -94,7 +120,17 @@ export function DetailPanel() {
     loadDiff(next);
   }
 
-  if (ideaId === null) return null;
+  if (ideaId === null) {
+    return (
+      <div id="detail-panel" class="open">
+        <div id="detail-content">
+          <div style={{ padding: "20px", color: "#8b949e", fontSize: "12px" }}>
+            Select an idea from the graph, timeline, or chart to see details here.
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   function close() {
     selectedIdea.value = null;
@@ -229,9 +265,9 @@ function colorizeDiff(diff: string): string {
 
 function ExperimentItem({ exp, onShowLog }: { exp: Experiment; onShowLog: () => void }) {
   return (
-    <div class="exp-item">
+    <div class="exp-item" data-exp-label={exp.label || exp.id}>
       <div class="exp-header">
-        <span class="exp-id">
+        <span class="exp-id" style={{ cursor: "pointer" }} onClick={() => navigateFromExperiment(exp.idea_id)} title="Scroll to this idea in graph + highlight in charts">
           exp/{exp.label || exp.id}{exp.label && exp.id !== exp.seq ? ` (legacy: #${exp.id})` : ""}
         </span>
         <span dangerouslySetInnerHTML={{ __html: badgeHtml(exp.status) }} />

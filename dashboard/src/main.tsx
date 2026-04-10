@@ -1,5 +1,7 @@
 import { render } from "preact";
 import { App } from "./app";
+import "dockview-core/dist/styles/dockview.css";
+import "./styles/dockview-overrides.css";
 import "./styles/global.css";
 import "./styles/topbar.css";
 import "./styles/chart.css";
@@ -12,5 +14,6 @@ import "./styles/suggest.css";
 import "./styles/tags.css";
 import "./styles/task.css";
 import "./styles/stats.css";
+import "./styles/chat.css";
 
 render(<App />, document.getElementById("app")!);

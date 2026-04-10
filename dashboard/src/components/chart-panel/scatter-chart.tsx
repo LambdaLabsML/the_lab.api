@@ -1,6 +1,7 @@
-import { useRef, useEffect } from "preact/hooks";
+import { useRef, useEffect, useMemo } from "preact/hooks";
 import { Chart } from "chart.js/auto";
 import { allExperiments, allIdeas, currentLayout, highlightedIdea } from "../../state/signals";
+import { navigateToIdea } from "../../lib/navigate";
 import {
   selectedMetric,
   selectedIdea,
@@ -80,11 +81,23 @@ function computeBounds(values: number[]): { min?: number; max?: number } {
   return { min: lo - pad, max: hi + pad };
 }
 
-export function ScatterChart({ metricKeys }: { metricKeys: string[] }) {
+export function ScatterChart({ metricKeys: metricKeysProp }: { metricKeys?: string[] } = {}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const chartRef = useRef<Chart | null>(null);
 
   const experiments = allExperiments.value;
+
+  // Compute metric keys from experiments if not provided as prop
+  const metricKeys = useMemo(() => {
+    if (metricKeysProp && metricKeysProp.length > 0) return metricKeysProp;
+    const keys = new Set<string>();
+    for (const exp of experiments) {
+      if (exp.metrics) {
+        for (const k of Object.keys(exp.metrics)) keys.add(k);
+      }
+    }
+    return [...keys].sort();
+  }, [metricKeysProp, experiments]);
   const ideas = allIdeas.value;
   const layout = currentLayout.value;
   const mode = colorMode.value;
@@ -238,19 +251,8 @@ export function ScatterChart({ metricKeys }: { metricKeys: string[] }) {
             const idx = elements[0].index;
             const ds = this.data.datasets[0] as any;
             if (ds?._expData?.[idx]) {
-              const ideaId = ds._expData[idx].idea_id;
-              selectedIdea.value = ideaId;
-              history.pushState(null, "", "/ideas/" + ideaId);
-              highlightedIdea.value = ideaId;
-              const station = document.querySelector(
-                `.subway-station[data-id="${ideaId}"], .subway-dot[data-id="${ideaId}"]`,
-              );
-              if (station) {
-                station.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
-              }
-              setTimeout(() => {
-                highlightedIdea.value = null;
-              }, 3000);
+              const d = ds._expData[idx];
+              navigateToIdea(d.idea_id, d.label || d.id);
             }
           }
         },
@@ -342,7 +344,7 @@ export function ScatterChart({ metricKeys }: { metricKeys: string[] }) {
   }, [highlighted]);
 
   return (
-    <div class="chart-col">
+    <div class="chart-col" style={{ height: "100%", display: "flex", flexDirection: "column" }}>
       <div class="chart-col-toolbar">
         X:{" "}
         <select

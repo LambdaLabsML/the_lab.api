@@ -44,6 +44,32 @@
   padding: 2px 6px; font-family: inherit; font-size: 11px; border-radius: 4px;
 }
 
+/* Compact toolbar inside the metrics chart pane */
+.chart-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  font-size: 11px;
+  color: #8b949e;
+  border-bottom: 1px solid #21262d;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+.chart-toolbar select {
+  background: #161b22; color: #c9d1d9; border: 1px solid #30363d;
+  padding: 1px 4px; font-family: inherit; font-size: 10px; border-radius: 3px;
+}
+.chart-toggle-btn {
+  display: inline-flex; align-items: center; gap: 3px;
+  padding: 2px 7px; border: 1px solid #30363d; border-radius: 10px;
+  background: #161b22; color: #8b949e; cursor: pointer;
+  font-family: inherit; font-size: 10px; font-weight: 600;
+  transition: border-color 0.1s, color 0.1s;
+}
+.chart-toggle-btn:hover { border-color: #58a6ff; color: #c9d1d9; }
+.chart-toggle-btn.active { border-color: #f2cc60; color: #f2cc60; background: #241d0f; }
+
 .improvements-toggle {
   display: inline-flex;
   align-items: center;

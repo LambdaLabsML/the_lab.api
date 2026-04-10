@@ -96,6 +96,9 @@ export const scatterOpen = useSetting("scatterOpen", true);
 /** Whether the filter bar (tags + status) is expanded. */
 export const filterBarOpen = useSetting("filterBarOpen", true);
 
+/** Persisted dockview layout JSON (null = use default). */
+export const dashboardLayout = useSetting<object | null>("dashboardLayout", null);
+
 // ---------------------------------------------------------------------------
 // Server-provided defaults from GET /api/v1/config
 // ---------------------------------------------------------------------------

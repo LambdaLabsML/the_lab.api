@@ -1,0 +1,177 @@
+/* dockview-overrides.css — Match dockview dark theme to our color scheme */
+
+.dockview-theme-dark.dockview-theme-dark {
+  /* Doubled selector for specificity over base dockview.css */
+  /* Core backgrounds — blueish-gray, not brownish */
+  --dv-background-color: #0d1117;
+  --dv-group-view-background-color: #0d1117;
+  --dv-tabs-and-actions-container-background-color: #161b22;
+  --dv-tabs-and-actions-container-height: 28px;
+  --dv-tabs-and-actions-container-font-size: 11px;
+
+  /* Active group, visible tab */
+  --dv-activegroup-visiblepanel-tab-background-color: #0d1117;
+  --dv-activegroup-visiblepanel-tab-color: #58a6ff;
+  /* Active group, hidden tab */
+  --dv-activegroup-hiddenpanel-tab-background-color: #161b22;
+  --dv-activegroup-hiddenpanel-tab-color: #8b949e;
+  /* Inactive group, visible tab */
+  --dv-inactivegroup-visiblepanel-tab-background-color: #161b22;
+  --dv-inactivegroup-visiblepanel-tab-color: #8b949e;
+  /* Inactive group, hidden tab */
+  --dv-inactivegroup-hiddenpanel-tab-background-color: #161b22;
+  --dv-inactivegroup-hiddenpanel-tab-color: #484f58;
+
+  /* Borders & dividers */
+  --dv-tab-divider-color: #21262d;
+  --dv-separator-border: #21262d;
+  --dv-paneview-header-border-color: #30363d;
+
+  /* Drag & drop */
+  --dv-drag-over-background-color: rgba(88, 166, 255, 0.08);
+  --dv-drag-over-border-color: #58a6ff;
+  --dv-floating-box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+
+  /* Splitters */
+  --dv-sash-color: #21262d;
+  --dv-active-sash-color: #58a6ff;
+  --dv-active-sash-transition-duration: 0.1s;
+  --dv-active-sash-transition-delay: 0s;
+
+  /* Icons */
+  --dv-icon-hover-background-color: #21262d;
+
+  /* Font */
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 11px;
+}
+
+/* ---- Tab styling ---- */
+
+.dockview-theme-dark .dv-tab {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  transition: color 0.1s, background 0.1s;
+}
+
+.dockview-theme-dark .dv-tab:hover {
+  background: #21262d !important;
+}
+
+.dockview-theme-dark .dv-active-tab {
+  border-bottom: 2px solid #58a6ff !important;
+}
+
+.dockview-theme-dark .dv-inactive-tab {
+  border-bottom: 2px solid transparent;
+}
+
+/* Tab close button — subtle */
+.dockview-theme-dark .dv-default-tab-action {
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.dockview-theme-dark .dv-tab:hover .dv-default-tab-action { opacity: 0.6; }
+.dockview-theme-dark .dv-default-tab-action:hover { opacity: 1; color: #f85149; }
+
+/* ---- Floating panels ---- */
+
+.dockview-theme-dark .dv-overlay-render-container .dv-groupview {
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+
+/* ---- Drop target indicators ---- */
+
+.dockview-theme-dark .dv-drop-target-anchor {
+  background: rgba(88, 166, 255, 0.1) !important;
+  border: 2px solid #58a6ff !important;
+  border-radius: 4px;
+}
+
+/* ---- Custom header action buttons (maximize, float) ---- */
+
+.dv-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-right: 4px;
+  height: 100%;
+}
+
+.dv-header-action-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  background: transparent;
+  color: #484f58;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  transition: color 0.1s, background 0.1s;
+}
+
+.dv-header-action-btn:hover {
+  background: #21262d;
+  color: #c9d1d9;
+}
+
+.dv-header-action-btn.active {
+  color: #58a6ff;
+}
+
+/* ---- Panel content wrapper ---- */
+
+.dv-panel {
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  background: #0d1117;
+  color: #c9d1d9;
+}
+
+.dv-panel #subway-container,
+.dv-panel #timeline-container {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  padding: 12px;
+}
+
+.dv-panel .log-view,
+.dv-panel .api-view,
+.dv-panel .stats-view,
+.dv-panel .sandbox-view {
+  padding: 12px;
+}
+
+.dv-panel #chart-wrap { height: 100%; padding: 8px 12px; }
+.dv-panel #chart-inner { height: 100%; min-width: 100%; }
+.dv-panel .chart-col-canvas { flex: 1; min-height: 0; padding: 8px 12px; }
+
+.dv-panel .filter-bar-standalone {
+  padding: 6px 12px;
+  font-size: 11px;
+  color: #8b949e;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.dv-panel #detail-panel { position: relative; width: 100%; height: 100%; border-left: none; }
+.dv-panel #detail-panel.open { width: 100%; }
+.dv-panel #suggest-panel { border-bottom: none; }
+
+/* ---- Mobile ---- */
+@media (max-width: 800px) {
+  .dockview-theme-dark { font-size: 10px; }
+  .dockview-theme-dark .dv-tab { font-size: 10px; }
+}

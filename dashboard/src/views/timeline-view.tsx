@@ -156,7 +156,6 @@ export function TimelineView() {
     const idx = Math.floor((y - 30) / 36);
     if (idx >= 0 && idx < nodes.length) {
       selectedIdea.value = nodes[idx].id;
-      history.pushState(null, "", `/ideas/${nodes[idx].id}`);
     }
   }
 

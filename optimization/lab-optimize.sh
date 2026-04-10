@@ -170,13 +170,22 @@ else:
 cmd_start() {
     ensure_proj
     local port="${1:-9000}"
+    local dev="${2:-}"
     echo "Starting The Lab on port $port..."
     echo "  Using parent repo's Lab implementation (not proj/the_lab/)"
     echo "  Dashboard: http://localhost:$port"
     echo ""
     cd "$REPO_ROOT"
-    exec env THE_LAB_REPO="$PROJ" THE_LAB_NO_SANDBOX=1 python3 -m uvicorn the_lab.app:app \
-        --host 0.0.0.0 --port "$port"
+    if [ "$dev" = "--dev" ]; then
+        echo "  Dev mode: auto-reload on code changes"
+        exec env THE_LAB_REPO="$PROJ" THE_LAB_NO_SANDBOX=1 THE_LAB_DEV=1 \
+            python3 -m uvicorn the_lab.app:app \
+            --host 0.0.0.0 --port "$port" --reload \
+            --reload-dir the_lab --reload-dir dashboard/src
+    else
+        exec env THE_LAB_REPO="$PROJ" THE_LAB_NO_SANDBOX=1 python3 -m uvicorn the_lab.app:app \
+            --host 0.0.0.0 --port "$port"
+    fi
 }
 
 cmd_agent() {
@@ -258,7 +267,7 @@ case "${1:-help}" in
         echo ""
         echo "Commands:"
         echo "  baseline [eval-model] [budget]                  Establish baseline (default: haiku, 10)"
-        echo "  start [port]                                    Start the Lab dashboard (default: 9000)"
+        echo "  start [port] [--dev]                             Start the Lab dashboard (--dev = auto-reload)"
         echo "  agent [outer-model] [eval-model] [budget]       Launch optimization agent"
         echo "                                                    outer-model: who optimizes the API (default: sonnet)"
         echo "                                                    eval-model: who runs the test project (default: haiku)"

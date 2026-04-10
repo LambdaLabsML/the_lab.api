@@ -58,6 +58,14 @@ export const currentLayout = computed<SubwayLayout | null>(() => {
 /** Idea currently hovered / highlighted in the graph or chart. */
 export const highlightedIdea = signal<number | null>(null);
 
+/** Experiment label to scroll to in the detail panel (e.g. "5.2"). */
+export const scrollToExperiment = signal<string | null>(null);
+
+/** Global ref to activate dockview panels from any component.
+ *  Skips activation when a group is maximized (to avoid exiting fullscreen). */
+export let activatePanel: ((panelId: string) => void) | null = null;
+export function setActivatePanel(fn: (panelId: string) => void) { activatePanel = fn; }
+
 /** Parsed OpenAPI spec (loaded lazily when the API view opens). */
 export const apiSpec = signal<OpenAPISpec | null>(null);
 

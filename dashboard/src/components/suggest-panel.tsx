@@ -1,5 +1,4 @@
 import { useState } from "preact/hooks";
-import { suggestOpen } from "../state/settings";
 import { allIdeas } from "../state/signals";
 import { suggestIdea } from "../state/api";
 import { refreshGraphData } from "../state/polling";
@@ -10,7 +9,6 @@ interface LinkRow {
 }
 
 export function SuggestPanel() {
-  const open = suggestOpen.value;
   const ideas = allIdeas.value;
   const [desc, setDesc] = useState("");
   const [parentId, setParentId] = useState("");
@@ -18,10 +16,6 @@ export function SuggestPanel() {
   const [links, setLinks] = useState<LinkRow[]>([]);
   const [msg, setMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [submitting, setSubmitting] = useState(false);
-
-  function toggle() {
-    suggestOpen.value = !suggestOpen.value;
-  }
 
   function addLink() {
     setLinks([...links, { url: "", label: "" }]);
@@ -67,13 +61,8 @@ export function SuggestPanel() {
   const ideaList = Object.values(ideas).sort((a, b) => a.id - b.id);
 
   return (
-    <>
-      <div id="suggest-toggle" onClick={toggle}>
-        <span class={`arrow${open ? " open" : ""}`}>&#9654;</span> Suggest idea
-      </div>
-      {open && (
-        <div id="suggest-panel">
-          <div class="suggest-form">
+    <div id="suggest-panel">
+      <div class="suggest-form">
             <div class="form-group">
               <span class="form-label">Description</span>
               <textarea
@@ -170,8 +159,6 @@ export function SuggestPanel() {
               <div class={`suggest-msg ${msg.type}`}>{msg.text}</div>
             )}
           </div>
-        </div>
-      )}
-    </>
+    </div>
   );
 }

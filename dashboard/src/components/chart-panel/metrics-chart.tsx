@@ -1,9 +1,8 @@
-import { useRef, useEffect } from "preact/hooks";
+import { useRef, useEffect, useMemo } from "preact/hooks";
 import { Chart } from "chart.js/auto";
 import { allExperiments, allIdeas, currentLayout, highlightedIdea } from "../../state/signals";
 import {
   selectedMetric,
-  selectedIdea,
   colorMode,
   improvementsOnly,
   activeTagFilters,
@@ -16,6 +15,7 @@ import {
   ideaMean,
 } from "../../state/settings";
 import { buildChartData } from "../../lib/chart-data";
+import { navigateToIdea } from "../../lib/navigate";
 import type { ChartDataResult } from "../../lib/chart-data";
 
 export function MetricsChart() {
@@ -127,10 +127,44 @@ export function MetricsChart() {
     chart.update("none");
   }, [highlighted]);
 
+  // Collect metric keys for the selector
+  const metricKeys = useMemo(() => {
+    const keys = new Set<string>();
+    for (const exp of experiments) {
+      if (exp.metrics) for (const k of Object.keys(exp.metrics)) keys.add(k);
+    }
+    return [...keys].sort();
+  }, [experiments]);
+
+  if (!metric && metricKeys.length > 0) {
+    const preferred = ["accuracy_per_mtoken", "agent_accuracy", "accuracy"];
+    const match = preferred.find((k) => metricKeys.includes(k));
+    selectedMetric.value = match || metricKeys[0];
+  }
+
   return (
-    <div id="chart-wrap">
-      <div id="chart-inner" ref={innerRef}>
-        <canvas ref={canvasRef} />
+    <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+      <div class="chart-toolbar">
+        <span>
+          Metric:{" "}
+          <select value={metric} onChange={(e) => { selectedMetric.value = (e.target as HTMLSelectElement).value; }}>
+            {metricKeys.map((k) => <option key={k} value={k}>{k}</option>)}
+          </select>
+        </span>
+        <button type="button" class={`chart-toggle-btn${impOnly ? " active" : ""}`} onClick={() => { improvementsOnly.value = !impOnly; }} title="Show only improvements">
+          ▲ Improvements
+        </button>
+        <button type="button" class={`chart-toggle-btn${mean ? " active" : ""}`} onClick={() => { ideaMean.value = !mean; }} title="One point per idea (mean)">
+          μ Idea Mean
+        </button>
+        <button type="button" class={`chart-toggle-btn${clip ? " active" : ""}`} onClick={() => { clipOutliers.value = !clip; }} title="Hide outliers">
+          ⤢ Outliers
+        </button>
+      </div>
+      <div id="chart-wrap" style={{ flex: 1, minHeight: 0 }}>
+        <div id="chart-inner" ref={innerRef}>
+          <canvas ref={canvasRef} />
+        </div>
       </div>
     </div>
   );
@@ -194,21 +228,8 @@ function createChart(
           const idx = elements[0].index;
           const ds = this.data.datasets[0] as any;
           if (ds?._expData?.[idx]) {
-            const ideaId = ds._expData[idx].idea_id;
-            // Open the idea detail panel
-            selectedIdea.value = ideaId;
-            history.pushState(null, "", "/ideas/" + ideaId);
-            // Highlight and scroll to the idea in the graph
-            highlightedIdea.value = ideaId;
-            const station = document.querySelector(
-              `.subway-station[data-id="${ideaId}"], .subway-dot[data-id="${ideaId}"]`
-            );
-            if (station) {
-              station.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
-            }
-            setTimeout(() => {
-              highlightedIdea.value = null;
-            }, 3000);
+            const d = ds._expData[idx];
+            navigateToIdea(d.idea_id, d.label || d.id);
           }
         }
       },
