@@ -170,8 +170,39 @@
 .dv-panel #detail-panel.open { width: 100%; }
 .dv-panel #suggest-panel { border-bottom: none; }
 
-/* ---- Mobile ---- */
+/* ---- Touch support ---- */
+
+/* Allow touch scrolling in panel content */
+.dv-panel { touch-action: pan-x pan-y; -webkit-overflow-scrolling: touch; }
+
+/* Tab bar: allow horizontal touch scroll for overflow tabs */
+.dockview-theme-dark .dv-tabs-container { touch-action: pan-x; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+/* Splitters: larger hit area on touch */
+@media (pointer: coarse) {
+  .dockview-theme-dark .dv-resize-handle-horizontal,
+  .dockview-theme-dark .dv-resize-handle-vertical {
+    width: 8px !important;
+    height: 8px !important;
+  }
+  .dockview-theme-dark .dv-tab {
+    padding: 0 12px;
+    min-height: 36px;
+    line-height: 36px;
+  }
+  .dv-header-action-btn {
+    width: 32px;
+    height: 32px;
+    font-size: 16px;
+  }
+}
+
+/* ---- Mobile / narrow ---- */
 @media (max-width: 800px) {
   .dockview-theme-dark { font-size: 10px; }
   .dockview-theme-dark .dv-tab { font-size: 10px; }
+  #topbar { padding: 6px 10px; gap: 8px; font-size: 11px; flex-wrap: wrap; }
+  #topbar .title { font-size: 13px; }
+  .layout-menu-container { position: static; }
+  .layout-menu { position: fixed; left: 10px; right: 10px; top: auto; bottom: 10px; }
 }

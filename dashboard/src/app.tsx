@@ -275,7 +275,33 @@ class PanelHeaderActions implements IHeaderActionsRenderer {
 // Bottom row: Graph/Timeline/Log | Detail/API/Stats/Sandbox
 const DEFAULT_LAYOUT: SerializedDockview = {"grid":{"root":{"type":"branch","data":[{"type":"branch","data":[{"type":"leaf","data":{"views":["task"],"activeView":"task","id":"11"},"size":559},{"type":"leaf","data":{"views":["suggest"],"activeView":"suggest","id":"13"},"size":541},{"type":"leaf","data":{"views":["filters"],"activeView":"filters","id":"12"},"size":551}],"size":153},{"type":"leaf","data":{"views":["metrics","scatter"],"activeView":"metrics","id":"9"},"size":249},{"type":"branch","data":[{"type":"leaf","data":{"views":["graph","timeline","log"],"activeView":"graph","id":"5"},"size":928},{"type":"leaf","data":{"views":["detail","api","stats","sandbox"],"activeView":"detail","id":"7"},"size":723}],"size":592}],"size":1651},"width":1651,"height":994,"orientation":"VERTICAL"},"panels":{"task":{"id":"task","contentComponent":"default","title":"Task"},"suggest":{"id":"suggest","contentComponent":"default","title":"Suggest"},"filters":{"id":"filters","contentComponent":"default","title":"Filters"},"metrics":{"id":"metrics","contentComponent":"default","title":"Metrics"},"scatter":{"id":"scatter","contentComponent":"default","title":"Scatter"},"graph":{"id":"graph","contentComponent":"default","title":"Graph"},"timeline":{"id":"timeline","contentComponent":"default","title":"Timeline"},"log":{"id":"log","contentComponent":"default","title":"Log"},"detail":{"id":"detail","contentComponent":"default","title":"Detail"},"api":{"id":"api","contentComponent":"default","title":"API"},"stats":{"id":"stats","contentComponent":"default","title":"Stats"},"sandbox":{"id":"sandbox","contentComponent":"default","title":"Sandbox"}},"activeGroup":"5"} as any;
 
+// Mobile/narrow layout: all panels stacked vertically in two groups
+function buildMobileLayout(dv: DockviewComponent) {
+  const top = dv.addPanel({ id: "graph", component: "default", title: "Graph" });
+  dv.addPanel({ id: "metrics", component: "default", title: "Metrics", position: { referencePanel: top } });
+  dv.addPanel({ id: "scatter", component: "default", title: "Scatter", position: { referencePanel: top } });
+  dv.addPanel({ id: "timeline", component: "default", title: "Timeline", position: { referencePanel: top } });
+  dv.addPanel({ id: "log", component: "default", title: "Log", position: { referencePanel: top } });
+
+  const bottom = dv.addPanel({
+    id: "detail", component: "default", title: "Detail",
+    position: { referencePanel: top, direction: "below" },
+  });
+  dv.addPanel({ id: "api", component: "default", title: "API", position: { referencePanel: bottom } });
+  dv.addPanel({ id: "filters", component: "default", title: "Filters", position: { referencePanel: bottom } });
+  dv.addPanel({ id: "stats", component: "default", title: "Stats", position: { referencePanel: bottom } });
+  dv.addPanel({ id: "suggest", component: "default", title: "Suggest", position: { referencePanel: bottom } });
+  dv.addPanel({ id: "task", component: "default", title: "Task", position: { referencePanel: bottom } });
+  dv.addPanel({ id: "sandbox", component: "default", title: "Sandbox", position: { referencePanel: bottom } });
+}
+
+const NARROW_BREAKPOINT = 800;
+
 function buildDefaultLayout(dv: DockviewComponent) {
+  if (typeof window !== "undefined" && window.innerWidth <= NARROW_BREAKPOINT) {
+    buildMobileLayout(dv);
+    return;
+  }
   try {
     dv.fromJSON(DEFAULT_LAYOUT);
   } catch {
