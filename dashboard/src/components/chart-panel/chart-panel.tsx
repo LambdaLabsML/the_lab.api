@@ -90,6 +90,16 @@ export function ChartPanel() {
             <span class="improvements-toggle-icon" aria-hidden="true">μ</span>
             <span class="improvements-toggle-label">Idea Mean</span>
           </button>
+          <button
+            type="button"
+            class={`improvements-toggle${clipOutliers.value ? " active" : ""}`}
+            aria-pressed={clipOutliers.value}
+            title="Hide outliers via IQR-based y-axis clipping"
+            onClick={() => { clipOutliers.value = !clipOutliers.value; }}
+          >
+            <span class="improvements-toggle-icon" aria-hidden="true">⤢</span>
+            <span class="improvements-toggle-label">Hide Outliers</span>
+          </button>
           <TagFilter />
           <span class="status-filters" style={{ display: "inline-flex", gap: "4px", alignItems: "center", marginLeft: "12px" }}>
             Show:
@@ -97,17 +107,6 @@ export function ChartPanel() {
             <StatusToggle label="abandoned" signal={showAbandoned} color="#f85149" />
             <StatusToggle label="running" signal={showRunning} color="#d29922" />
           </span>
-          <button
-            type="button"
-            class={`improvements-toggle${!clipOutliers.value ? " active" : ""}`}
-            aria-pressed={!clipOutliers.value}
-            title="Show all data points including outliers (disables IQR-based y-axis clipping)"
-            onClick={() => { clipOutliers.value = !clipOutliers.value; }}
-            style={{ marginLeft: "8px" }}
-          >
-            <span class="improvements-toggle-icon" aria-hidden="true">⤢</span>
-            <span class="improvements-toggle-label">Show Outliers</span>
-          </button>
         </div>
         <MetricsChart />
       </div>
