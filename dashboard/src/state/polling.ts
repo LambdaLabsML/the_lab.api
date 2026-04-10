@@ -87,13 +87,17 @@ async function pollChartData(): Promise<void> {
 }
 
 async function pollLog(): Promise<void> {
-  if (currentView.value !== "log") return;
   try {
     const ideas = await getAllIdeas();
     const entries: LogEntry[] = [];
 
+    // Limit to the most recent 50 ideas to avoid N+1 explosion on large projects
+    const recentIdeas = ideas
+      .sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""))
+      .slice(0, 50);
+
     const details = await Promise.all(
-      ideas.map((idea) =>
+      recentIdeas.map((idea) =>
         getIdea(idea.id, true).catch(() => null),
       ),
     );

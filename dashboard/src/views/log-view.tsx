@@ -26,6 +26,9 @@ export function LogView() {
   }
 
   const filtered = entries.filter((e) => active[e.type] !== false);
+  const MAX_VISIBLE = 200;
+  const visible = filtered.slice(0, MAX_VISIBLE);
+  const truncated = filtered.length > MAX_VISIBLE;
 
   return (
     <div id="log-container">
@@ -41,6 +44,9 @@ export function LogView() {
             {" "}{f.label}
           </label>
         ))}
+        <span style={{ color: "#484f58", marginLeft: "auto", fontSize: "10px" }}>
+          {filtered.length} entries{truncated ? ` (showing ${MAX_VISIBLE})` : ""}
+        </span>
       </div>
       <div id="log-entries">
         {filtered.length === 0 && (
@@ -48,9 +54,14 @@ export function LogView() {
             No log entries yet
           </div>
         )}
-        {filtered.map((entry, i) => (
+        {visible.map((entry, i) => (
           <LogEntryRow key={i} entry={entry} />
         ))}
+        {truncated && (
+          <div style={{ padding: "12px", color: "#484f58", textAlign: "center", fontSize: "11px" }}>
+            Showing {MAX_VISIBLE} of {filtered.length} entries
+          </div>
+        )}
       </div>
     </div>
   );
