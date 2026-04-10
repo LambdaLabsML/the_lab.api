@@ -5,6 +5,7 @@ import { getIdea, getExperimentProgress, getExperimentLog, getIdeaDiff } from ".
 import { formatTime, badgeHtml, escapeHtml } from "../lib/format";
 import { navigateFromExperiment } from "../lib/navigate";
 import { Lightbox } from "./lightbox";
+import { JsonView } from "./json-view";
 import type { IdeaDetail, Experiment, Note } from "../lib/types";
 
 export function DetailPanel() {
@@ -279,12 +280,8 @@ function ExperimentItem({ exp, onShowLog }: { exp: Experiment; onShowLog: () => 
       {exp.status === "running" && (
         <div class="exp-progress" id={`progress-${exp.id}`}>loading progress...</div>
       )}
-      {exp.metrics && Object.keys(exp.metrics).length > 0 && (
-        <div class="exp-metrics">metrics: {JSON.stringify(exp.metrics)}</div>
-      )}
-      {exp.meta && Object.keys(exp.meta).length > 0 && (
-        <div class="exp-meta">meta: {JSON.stringify(exp.meta)}</div>
-      )}
+      <JsonView data={exp.metrics} label="metrics" />
+      <JsonView data={exp.meta} label="meta" />
       <div class="exp-timestamps">
         created: {formatTime(exp.created_at)}
         {exp.started_at && <> | started: {formatTime(exp.started_at)}</>}
