@@ -86,6 +86,7 @@ export const showAbandoned = useSetting("showAbandoned", true);
 export const showConcluded = useSetting("showConcluded", true);
 export const showRunning = useSetting("showRunning", true);
 export const clipOutliers = useSetting("clipOutliers", true);
+export const ideaMean = useSetting("ideaMean", false);
 
 // ---------------------------------------------------------------------------
 // Server-provided defaults from GET /api/v1/config

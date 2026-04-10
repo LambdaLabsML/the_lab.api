@@ -1,5 +1,5 @@
 import type { Signal } from "@preact/signals";
-import { chartOpen, selectedMetric, colorMode, improvementsOnly, showAbandoned, showConcluded, showRunning, clipOutliers } from "../../state/settings";
+import { chartOpen, selectedMetric, colorMode, improvementsOnly, showAbandoned, showConcluded, showRunning, clipOutliers, ideaMean } from "../../state/settings";
 import { allExperiments } from "../../state/signals";
 import { MetricsChart } from "./metrics-chart";
 import { TagFilter } from "./tag-filter";
@@ -79,6 +79,16 @@ export function ChartPanel() {
               ▲
             </span>
             <span class="improvements-toggle-label">Improvements Only</span>
+          </button>
+          <button
+            type="button"
+            class={`improvements-toggle${ideaMean.value ? " active" : ""}`}
+            aria-pressed={ideaMean.value}
+            title="Show one point per idea (mean of completed experiments)"
+            onClick={() => { ideaMean.value = !ideaMean.value; }}
+          >
+            <span class="improvements-toggle-icon" aria-hidden="true">μ</span>
+            <span class="improvements-toggle-label">Idea Mean</span>
           </button>
           <TagFilter />
           <span class="status-filters" style={{ display: "inline-flex", gap: "4px", alignItems: "center", marginLeft: "12px" }}>

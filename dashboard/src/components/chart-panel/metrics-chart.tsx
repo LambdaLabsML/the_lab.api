@@ -13,6 +13,7 @@ import {
   showConcluded,
   showRunning,
   clipOutliers,
+  ideaMean,
 } from "../../state/settings";
 import { buildChartData } from "../../lib/chart-data";
 import type { ChartDataResult } from "../../lib/chart-data";
@@ -33,6 +34,7 @@ export function MetricsChart() {
   const highlighted = highlightedIdea.value;
   const reversed = reverseTime.value;
   const clip = clipOutliers.value;
+  const mean = ideaMean.value;
 
   // Build set of hidden idea statuses
   const hiddenStatuses = new Set<string>();
@@ -63,6 +65,7 @@ export function MetricsChart() {
       layout,
       reversed,
       hiddenStatuses,
+      mean,
     );
 
     if (!chartData) return;
@@ -100,7 +103,7 @@ export function MetricsChart() {
     }
 
     chartRef.current = createChart(canvasRef.current, metric, chartData);
-  }, [metric, mode, impOnly, tags, tagMode, experiments, reversed, showAbandoned.value, showConcluded.value, showRunning.value, clip]);
+  }, [metric, mode, impOnly, tags, tagMode, experiments, reversed, showAbandoned.value, showConcluded.value, showRunning.value, clip, mean]);
 
   // Handle highlight changes separately (just update point sizes)
   useEffect(() => {
@@ -280,7 +283,9 @@ function createChart(
             label(item) {
               const d = (item.dataset as any)._expData[item.dataIndex];
               return [
-                "exp/" + (d.label || d.id) + ": " + (d.description || "").slice(0, 50),
+                d._ideaMean
+                  ? `idea/${d.idea_id} mean (${d._meanCount} experiments)`
+                  : "exp/" + (d.label || d.id) + ": " + (d.description || "").slice(0, 50),
                 d._running ? "\u25B6 running (from progress)" : "",
                 d.runtime ? "runtime: " + d.runtime : "",
                 d.finished_at

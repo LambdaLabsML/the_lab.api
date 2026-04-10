@@ -69,6 +69,44 @@ export function filterVisibleChartExperiments(
 }
 
 /**
+ * Aggregate experiments by idea: one point per idea with the mean metric value.
+ * Only completed (non-running) experiments are averaged.
+ * Returns synthetic experiment-like objects representing each idea's mean.
+ */
+function aggregateByIdeaMean(
+  experiments: Experiment[],
+  metricKey: string,
+): Experiment[] {
+  const groups: Record<number, { exps: Experiment[]; sum: number; count: number }> = {};
+  for (const e of experiments) {
+    if (e._running) continue;
+    const v = e.metrics?.[metricKey];
+    if (typeof v !== 'number') continue;
+    if (!groups[e.idea_id]) groups[e.idea_id] = { exps: [], sum: 0, count: 0 };
+    groups[e.idea_id].exps.push(e);
+    groups[e.idea_id].sum += v;
+    groups[e.idea_id].count += 1;
+  }
+
+  const result: Experiment[] = [];
+  for (const ideaId of Object.keys(groups).map(Number).sort((a, b) => a - b)) {
+    const g = groups[ideaId];
+    if (g.count === 0) continue;
+    const mean = g.sum / g.count;
+    // Use the last experiment as a template for metadata
+    const last = g.exps[g.exps.length - 1];
+    result.push({
+      ...last,
+      metrics: { ...last.metrics, [metricKey]: mean },
+      description: `idea/${ideaId} mean (${g.count} exp${g.count > 1 ? 's' : ''})`,
+      _ideaMean: true,
+      _meanCount: g.count,
+    } as Experiment);
+  }
+  return result;
+}
+
+/**
  * Build the data arrays needed to render the Chart.js metrics chart.
  *
  * @param metricKey         - The metric key to plot (e.g. 'accuracy')
@@ -91,6 +129,7 @@ export function buildChartData(
   currentLayout: SubwayLayout | null,
   reversed: boolean = false,
   hiddenStatuses?: Set<string>,
+  useIdeaMean: boolean = false,
 ): ChartDataResult {
   const metricFiltered = filterMetricExperiments(
     metricKey,
@@ -107,6 +146,24 @@ export function buildChartData(
     improvementsOnly,
     hiddenStatuses,
   );
+
+  // Aggregate by idea mean if enabled (after filtering, before coloring)
+  if (useIdeaMean) {
+    filtered = aggregateByIdeaMean(filtered, metricKey);
+    // Re-apply improvements-only on the aggregated data
+    if (improvementsOnly) {
+      const lower = isLowerBetter(metricKey);
+      let best = lower ? Infinity : -Infinity;
+      filtered = filtered.filter((e) => {
+        const v = e.metrics![metricKey];
+        if (lower ? v < best : v > best) {
+          best = v;
+          return true;
+        }
+        return false;
+      });
+    }
+  }
 
   // Fallback sequential palette for 'idea' mode
   const ideaColorMap: Record<number, string> = {};
@@ -126,7 +183,9 @@ export function buildChartData(
   if (reversed) filtered = filtered.slice().reverse();
 
   return {
-    labels: filtered.map((e) => 'exp/' + (e.label || e.id) + (e._running ? ' \u25B6' : '')),
+    labels: filtered.map((e) => (e as any)._ideaMean
+      ? `idea/${e.idea_id} (μ${(e as any)._meanCount})`
+      : 'exp/' + (e.label || e.id) + (e._running ? ' \u25B6' : '')),
     pointColors: filtered.map((e) => getColor(e)),
     pointBgColors: filtered.map((e) => (e._running ? 'transparent' : getColor(e))),
     pointStyles: filtered.map((e) => (e._running ? 'triangle' : 'circle')),
