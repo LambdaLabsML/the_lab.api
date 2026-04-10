@@ -142,9 +142,12 @@ def _build_leaderboard_response(
             best_idea = {
                 "id": idea["id"],
                 "description": idea["description"],
+                "parent_ids": idea.get("parent_ids", []),
+                "branch": idea.get("branch"),
                 "conclusion": idea.get("conclusion"),
                 "best_value": best_exp["metrics"][metric],
                 "key_insights": insights[:5],
+                "branch_from_this": f"POST /ideas/new with parent_ids=[{idea['id']}]",
             }
 
     by_time_asc = sorted(with_metric, key=lambda e: e.get("finished_at") or "")
@@ -173,16 +176,37 @@ def _build_leaderboard_response(
             })
     key_insights.sort(key=lambda n: n.get("created_at", ""), reverse=True)
 
+    # Extract a search keyword from the best idea's description
+    search_hint = None
+    if best_idea:
+        desc = best_idea.get("description") or ""
+        # Pick the longest non-stopword from the description as a search keyword
+        stopwords = {"the", "a", "an", "and", "or", "for", "with", "from", "to", "in", "on", "by", "of", "is", "it", "as", "at", "this", "that", "all", "no", "not", "use", "try", "new", "idea"}
+        words = [w.strip("()[]{}:,.'\"") for w in desc.lower().split() if len(w) > 2]
+        keywords = [w for w in words if w not in stopwords and w.isalpha()]
+        if keywords:
+            # Prefer longer, more specific words
+            kw = sorted(keywords, key=len, reverse=True)[0]
+            search_hint = {
+                "action": f"GET /ideas/search?q={kw}",
+                "description": f"Find all ideas related to '{kw}' before branching",
+            }
+    if not search_hint:
+        search_hint = {
+            "action": "GET /ideas/search?q=keyword",
+            "description": "Search for related ideas before branching",
+        }
+
     return {
+        "next_step": search_hint,
         "metric": metric,
         "direction": direction,
-        "tags": tag_list or None,
+        "best_idea": best_idea,
+        "leaderboard": leaderboard,
         "total_experiments_with_metric": len(with_metric),
         "open_ideas": open_ideas,
         "running_experiments": running_experiments,
-        "leaderboard": leaderboard,
         "recent": recent_out,
-        "best_idea": best_idea,
         "progression": progression,
         "key_insights": key_insights[:10],
     }
@@ -215,6 +239,48 @@ def get_leaderboard(
         GET /api/v1/leaderboard?metric=accuracy_per_mtoken&top=5&tags=held-out&include_details=true
     """
     return _build_leaderboard_response(metric, top, recent, tags, include_details)
+
+
+@router.get("/leaderboard/search")
+def leaderboard_with_search(
+    metric: str = Query(default="score", description="Metric to rank by"),
+    q: str = Query(default="", description="Comma-separated keywords to search for in idea descriptions"),
+    top: int = Query(default=10, description="Number of top experiments to show"),
+):
+    """Combined leaderboard + search: see rankings and find related ideas in one call.
+
+    Returns the full leaderboard plus search results for the given keywords.
+    Use this endpoint to orient yourself in one call instead of calling
+    /leaderboard and /ideas/search separately.
+
+    Example:
+        GET /api/v1/leaderboard/search?metric=score
+    """
+    leaderboard = _build_leaderboard_response(metric, top, 5, None, False)
+    searched_keywords = set()
+    if q.strip():
+        keywords = [k.strip() for k in q.split(",") if k.strip()]
+        searched_keywords = {k.lower() for k in keywords}
+        search_results = store.search_ideas_by_keywords(keywords)
+        leaderboard["search_results"] = search_results[:10]
+        leaderboard["search_query"] = q
+    # Suggest searching for a keyword found in top leaderboard entries but not yet searched
+    if searched_keywords:
+        stopwords = {"the", "a", "an", "and", "or", "for", "with", "from", "to", "in", "on", "by", "of", "is", "it", "as", "at", "this", "that", "all", "no", "not", "use", "try", "new", "idea"}
+        alt_keywords = []
+        for entry in leaderboard.get("leaderboard", [])[:5]:
+            desc = (entry.get("idea_description") or "").lower()
+            words = [w.strip("()[]{}:,.'\"") for w in desc.split() if len(w) > 3]
+            for w in words:
+                if w.isalpha() and w not in stopwords and w not in searched_keywords and w not in alt_keywords:
+                    alt_keywords.append(w)
+        if alt_keywords:
+            next_kw = sorted(alt_keywords, key=len, reverse=True)[0]
+            leaderboard["next_step"] = {
+                "action": f"GET /api/v1/ideas/search?q={next_kw}",
+                "description": f"Search for '{next_kw}' ideas to compare approaches",
+            }
+    return leaderboard
 
 
 @router.get("/digest")
@@ -303,6 +369,38 @@ async def wait_for_experiment(
                     "is_new_best": current_score > best_score,
                     "delta": round(current_score - best_score, 6),
                 }
+        # If experiment failed or scored poorly, point to /log for diagnosis
+        exp_label = exp.get("label", str(exp["id"]))
+        if exp.get("status") == "failed":
+            result["diagnosis"] = (
+                f"Experiment {exp_label} failed. "
+                f"Read the log for error details: GET /api/v1/experiments/{exp_label}/log"
+            )
+        elif current_score is not None and best_score is not None and current_score < best_score:
+            result["diagnosis"] = (
+                f"Score {current_score} is below best {best_score}. "
+                f"Check the log for clues: GET /api/v1/experiments/{exp_label}/log"
+            )
+        # Auto-log experiment result as observation notes
+        idea_id_val = exp.get("idea_id")
+        if idea_id_val and exp.get("status") in ("completed", "failed"):
+            note_text = f"Experiment {exp_label}: "
+            if exp.get("status") == "failed":
+                note_text += f"FAILED — {exp.get('error', 'unknown error')}"
+            elif current_score is not None:
+                note_text += f"score={current_score}"
+            else:
+                note_text += "completed (no score metric)"
+            store.add_note(idea_id_val, note_text, level="observation")
+            # Second note: comparison analysis
+            if current_score is not None and best_score is not None:
+                if current_score > best_score:
+                    comparison = f"Experiment {exp_label} achieved NEW BEST score (+{current_score - best_score:.4f} over previous best {best_score})"
+                else:
+                    comparison = f"Experiment {exp_label} scored {current_score} vs best {best_score} (delta={current_score - best_score:.4f}) — consider a different approach"
+                store.add_note(idea_id_val, comparison, level="observation")
+            elif exp.get("status") == "failed":
+                store.add_note(idea_id_val, f"Experiment {exp_label} needs debugging — check logs with GET /experiments/log", level="debug")
     return result
 
 
@@ -390,10 +488,12 @@ def orient(
 
     current = get_current_branch(cwd=REPO_DIR)
     all_ideas = store.list_ideas(status="active")
+    all_ideas_any = store.list_ideas()  # all statuses for leaderboard
 
     # Always collect ALL running/pending (unfiltered)
     all_running = []
     all_pending = []
+    all_failed = []
     # Filtered by tags: completed experiments and active ideas with matching experiments
     filtered_completed = []
     filtered_idea_ids = set()
@@ -402,27 +502,43 @@ def orient(
     best_exp_label = None
     best_idea_id = None
 
-    for idea in all_ideas:
+    # Collect experiments across ALL ideas (not just active) for leaderboard
+    all_completed_with_score = []
+
+    for idea in all_ideas_any:
         exps = store.list_experiments(idea["id"])
         idea_has_matching = False
         for e in exps:
-            # Running/pending: always collected
-            if e["status"] == "running":
-                all_running.append(e)
-            elif e["status"] == "pending":
-                all_pending.append(e)
+            # Running/pending: collected from active ideas only
+            if idea["status"] == "active":
+                if e["status"] == "running":
+                    all_running.append(e)
+                elif e["status"] == "pending":
+                    all_pending.append(e)
+            # Failed: collected from ALL ideas (so orient always flags failures)
+            if e["status"] == "failed":
+                all_failed.append({**e, "idea_description": idea["description"]})
             # Completed: filter by tags for best score
-            elif e["status"] == "completed" and _exp_matches_tags(e):
+            if e["status"] == "completed" and _exp_matches_tags(e):
                 filtered_completed.append(e)
-                idea_has_matching = True
+                if idea["status"] == "active":
+                    idea_has_matching = True
                 metrics = e.get("metrics") or {}
                 for key in ("score", "accuracy", "final_score"):
-                    if key in metrics and (best_score is None or metrics[key] > best_score):
-                        best_score = metrics[key]
-                        best_exp_id = e["id"]
-                        best_exp_label = e.get("label", str(e["id"]))
-                        best_idea_id = e["idea_id"]
-        if idea_has_matching or not tag_filter:
+                    if key in metrics and isinstance(metrics[key], (int, float)):
+                        all_completed_with_score.append({
+                            "experiment_label": e.get("label", str(e["id"])),
+                            "idea_id": idea["id"],
+                            "idea_description": idea["description"],
+                            "score": metrics[key],
+                            "score_key": key,
+                        })
+                        if best_score is None or metrics[key] > best_score:
+                            best_score = metrics[key]
+                            best_exp_id = e["id"]
+                            best_exp_label = e.get("label", str(e["id"]))
+                            best_idea_id = e["idea_id"]
+        if idea["status"] == "active" and (idea_has_matching or not tag_filter):
             filtered_idea_ids.add(idea["id"])
 
     filtered_ideas = [i for i in all_ideas if i["id"] in filtered_idea_ids]
@@ -432,63 +548,44 @@ def orient(
         "ideas_active": len(filtered_ideas),
         "experiments_completed": len(filtered_completed),
         "experiments_running": len(all_running),
-        "experiments_pending": len(all_pending),
+        "experiments_failed": len(all_failed),
     }
     if tag_filter:
         resp["tags_filter"] = sorted(tag_filter)
 
-    if best_score is not None:
-        resp["best_score"] = best_score
-        resp["best_experiment_id"] = best_exp_id
-        resp["best_experiment_label"] = best_exp_label
-        resp["best_idea_id"] = best_idea_id
-
-    # Determine recommendation -- running experiments take priority (unfiltered)
+    # Determine recommendation -- single focused action per state
     if all_running:
         exp = all_running[0]
         resp["status"] = "has_running"
         resp["recommendation"] = f"Wait for experiment {exp.get('label', exp['id'])} to finish"
-        resp["next_steps"] = [
-            {"action": f"GET /api/v1/wait?experiment_id={exp.get('label', exp['id'])}",
-             "description": "Wait for running experiment to complete"},
-        ]
+        resp["next_step"] = f"GET /api/v1/wait?experiment_id={exp.get('label', exp['id'])}"
+    elif all_failed and not filtered_completed:
+        resp["status"] = "has_failures"
+        resp["recommendation"] = (
+            f"{len(all_failed)} experiment(s) failed. "
+            f"Read the logs to diagnose, then check the leaderboard."
+        )
+        resp["next_step"] = "GET /api/v1/experiments/log"
+        resp["then"] = "GET /api/v1/leaderboard/search?metric=score"
     elif all_pending:
         exp = all_pending[0]
         resp["status"] = "has_pending"
         resp["recommendation"] = f"Start pending experiment {exp.get('label', exp['id'])}"
-        resp["next_steps"] = [
-            {"action": f"POST /api/v1/experiments/{exp.get('label', exp['id'])}/start",
-             "description": "Start the pending experiment"},
-        ]
-    elif not filtered_ideas:
-        resp["status"] = "no_ideas"
-        resp["recommendation"] = "Create your first idea to begin research"
-        resp["next_steps"] = [
-            {"action": "POST /api/v1/ideas/new",
-             "description": "Create a new idea with auto_checkout: true"},
-        ]
-    elif filtered_completed:
-        resp["status"] = "ready_for_next"
-        if best_score is not None:
-            resp["recommendation"] = (
-                f"Best score so far: {best_score:.4f} (exp/{best_exp_label}). "
-                f"Create a new experiment to improve on this, or branch a new idea."
-            )
-        else:
-            resp["recommendation"] = "Create a new experiment or branch a new idea"
-        resp["next_steps"] = [
-            {"action": f"POST /api/v1/ideas/{filtered_ideas[0]['id']}/experiments",
-             "description": "Run another experiment on current idea (use auto_start: true)"},
-            {"action": "POST /api/v1/ideas/new",
-             "description": "Branch a new idea (use auto_checkout: true)"},
-        ]
+        resp["next_step"] = f"POST /api/v1/experiments/{exp.get('label', exp['id'])}/start"
+    elif all_failed:
+        # Has both completed and failed — main path is leaderboard, but alert about failures
+        resp["status"] = "has_failures_and_completions"
+        resp["recommendation"] = "Check the leaderboard and search for related ideas."
+        resp["next_step"] = "GET /api/v1/leaderboard/search?metric=score"
+        resp["failures"] = {
+            "count": len(all_failed),
+            "action": "GET /api/v1/experiments/log",
+            "message": f"{len(all_failed)} experiment(s) failed — read logs to diagnose: GET /api/v1/experiments/log",
+        }
     else:
-        resp["status"] = "needs_experiment"
-        resp["recommendation"] = "Create and run an experiment on an active idea"
-        resp["next_steps"] = [
-            {"action": f"POST /api/v1/ideas/{filtered_ideas[0]['id']}/experiments",
-             "description": "Create experiment with auto_start: true"},
-        ]
+        resp["status"] = "ready" if filtered_completed else "no_experiments"
+        resp["recommendation"] = "Check the leaderboard and search for related ideas."
+        resp["next_step"] = "GET /api/v1/leaderboard/search?metric=score"
 
     # Suggested ideas: always shown (unfiltered)
     suggested = store.list_ideas(status="suggested")

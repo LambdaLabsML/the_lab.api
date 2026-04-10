@@ -84,13 +84,45 @@ def list_experiments(idea_id: int):
 
     Returns every experiment record for the given idea, regardless of status.
     Each record includes the experiment's description, status, metrics, meta,
-    tags, and timing information.
+    tags, and timing information. Failed experiments include a ``read_log`` URL.
 
     Example:
         GET /api/v1/ideas/1/experiments
         -> [{"id": 4, "idea_id": 1, "status": "completed", "metrics": {"acc": 0.91}, ...}, ...]
     """
-    return store.list_experiments(idea_id)
+    exps = store.list_experiments(idea_id)
+    for exp in exps:
+        if exp.get("status") == "failed":
+            label = exp.get("label", str(exp["id"]))
+            exp["read_log"] = f"GET /api/v1/experiments/{label}/log"
+    return exps
+
+
+# --- Aggregate log endpoint (must come before parameterized) ---
+
+@router.get("/experiments/log")
+def get_all_failed_logs(tail: int = Query(default=30, description="Number of log lines per experiment")):
+    """Get logs for all failed experiments in one call.
+
+    Returns the last N lines of stdout/stderr for every failed experiment
+    across all ideas. Use this to quickly diagnose failures without
+    fetching logs one-by-one.
+
+    Example:
+        GET /api/v1/experiments/log
+        -> {"failed_experiments": [{"label": "14.1", "idea_id": 14, "log": "..."}]}
+    """
+    failed = []
+    for exp in store.list_all_experiments():
+        if exp.get("status") == "failed":
+            log = runner.get_log(exp["id"], tail=tail)
+            failed.append({
+                "label": exp.get("label", str(exp["id"])),
+                "idea_id": exp["idea_id"],
+                "error": exp.get("error"),
+                "log": log or "(no log available)",
+            })
+    return {"failed_experiments": failed, "count": len(failed)}
 
 
 # --- Tags (literal paths before parameterized) ---
@@ -431,6 +463,9 @@ def get_experiment(exp_ref: str):
                     "best_experiment_label": best_exp_label,
                     "is_new_best": current_score > best_score,
                 }
+    if exp.get("status") == "failed":
+        label = exp.get("label", str(exp["id"]))
+        exp["read_log"] = f"GET /api/v1/experiments/{label}/log"
     return exp
 
 
@@ -618,3 +653,50 @@ def get_experiment_timeseries(
     if last is not None and last > 0:
         points = points[-last:]
     return {"points": points, "count": len(points)}
+
+
+# --- URL confusion redirects ---
+# Agents often construct wrong URLs like /ideas/{id}/experiments/{exp_ref}
+# instead of /experiments/{exp_ref}. These catch routes serve the correct
+# response and include a hint about the canonical URL.
+
+@router.get("/ideas/{idea_id}/experiments/{exp_ref}")
+def get_experiment_via_idea(idea_id: int, exp_ref: str):
+    """Convenience alias — redirects to GET /experiments/{exp_ref}.
+
+    Agents sometimes construct this URL pattern. This route serves the
+    experiment data directly and includes a hint about the canonical URL.
+    """
+    exp = _resolve_exp(exp_ref)
+    exp["_hint"] = f"Tip: use GET /api/v1/experiments/{exp_ref} directly next time"
+    return exp
+
+
+@router.post("/ideas/{idea_id}/experiments/{exp_ref}/start")
+async def start_experiment_via_idea(idea_id: int, exp_ref: str):
+    """Convenience alias — redirects to POST /experiments/{exp_ref}/start."""
+    return await start_experiment(exp_ref)
+
+
+@router.get("/ideas/{idea_id}/experiments/{exp_ref}/log")
+def get_experiment_log_via_idea(idea_id: int, exp_ref: str, tail: int | None = None):
+    """Convenience alias — redirects to GET /experiments/{exp_ref}/log."""
+    return get_experiment_log(exp_ref, tail=tail)
+
+
+@router.post("/ideas/{idea_id}/experiments/{exp_ref}/cancel")
+async def cancel_experiment_via_idea(idea_id: int, exp_ref: str):
+    """Convenience alias — redirects to POST /experiments/{exp_ref}/cancel."""
+    return await cancel_experiment(exp_ref)
+
+
+@router.post("/ideas/{idea_id}/experiments/{exp_ref}/restart")
+async def restart_experiment_via_idea(idea_id: int, exp_ref: str):
+    """Convenience alias — redirects to POST /experiments/{exp_ref}/restart."""
+    return await restart_experiment(exp_ref)
+
+
+@router.get("/ideas/{idea_id}/experiments/{exp_ref}/progress")
+def get_experiment_progress_via_idea(idea_id: int, exp_ref: str):
+    """Convenience alias — redirects to GET /experiments/{exp_ref}/progress."""
+    return get_experiment_progress(exp_ref)

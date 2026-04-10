@@ -69,7 +69,11 @@ def _resolve_exp(exp_ref) -> dict:
     except ValueError as e:
         raise HTTPException(400, str(e))
     if not exp:
-        raise HTTPException(404, f"experiment '{exp_ref}' not found (use label like '1.2' or legacy global ID)")
+        raise HTTPException(404, (
+            f"experiment '{exp_ref}' not found. "
+            f"Use GET /api/v1/experiments/<label> with a label like '1.2' (idea.seq) or a global ID. "
+            f"To list experiments for an idea: GET /api/v1/ideas/<id>/experiments"
+        ))
     return exp
 
 
