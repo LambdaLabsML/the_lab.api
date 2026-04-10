@@ -101,3 +101,82 @@
   letter-spacing: 0.02em;
   color: #f0f6fc;
 }
+
+/* ---- Collapsible filter bar ---- */
+
+.filter-bar-toggle {
+  padding: 4px 20px;
+  font-size: 11px;
+  color: #8b949e;
+  cursor: pointer;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.filter-bar-toggle:hover { color: #c9d1d9; }
+.filter-bar-toggle .arrow { transition: transform 0.2s; display: inline-block; font-size: 9px; }
+.filter-bar-toggle .arrow.open { transform: rotate(90deg); }
+
+.filter-bar {
+  padding: 4px 20px 6px 20px;
+  font-size: 11px;
+  color: #8b949e;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  border-bottom: 1px solid #21262d;
+}
+.filter-bar.collapsed { display: none; }
+
+/* ---- Side-by-side chart row ---- */
+
+.chart-row {
+  display: flex;
+  flex-direction: row;
+  gap: 0;
+}
+.chart-row.single {
+  /* When scatter is hidden, the time-series chart takes full width */
+}
+
+.chart-col {
+  flex: 1 1 50%;
+  min-width: 0;
+  position: relative;
+}
+.chart-col.full {
+  flex: 1 1 100%;
+}
+
+/* Per-chart toolbar (used by scatter for its own metric selectors) */
+.chart-col-toolbar {
+  padding: 6px 20px 0 20px;
+  font-size: 11px;
+  color: #8b949e;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.chart-col-toolbar select {
+  background: #161b22; color: #c9d1d9; border: 1px solid #30363d;
+  padding: 2px 6px; font-family: inherit; font-size: 11px; border-radius: 4px;
+}
+
+.chart-col-canvas {
+  position: relative;
+  height: 220px;
+  padding: 0 20px 12px 20px;
+}
+
+/* ---- Responsive: stack on narrow screens ---- */
+@media (max-width: 900px) {
+  .chart-row {
+    flex-direction: column;
+  }
+  .chart-col {
+    flex: 1 1 100%;
+  }
+}

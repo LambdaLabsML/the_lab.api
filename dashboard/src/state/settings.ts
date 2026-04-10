@@ -88,6 +88,14 @@ export const showRunning = useSetting("showRunning", true);
 export const clipOutliers = useSetting("clipOutliers", true);
 export const ideaMean = useSetting("ideaMean", false);
 
+/** Scatter chart axis metric selections. */
+export const scatterXMetric = useSetting("scatterXMetric", "");
+export const scatterYMetric = useSetting("scatterYMetric", "");
+/** Whether the scatter chart column is visible. */
+export const scatterOpen = useSetting("scatterOpen", true);
+/** Whether the filter bar (tags + status) is expanded. */
+export const filterBarOpen = useSetting("filterBarOpen", true);
+
 // ---------------------------------------------------------------------------
 // Server-provided defaults from GET /api/v1/config
 // ---------------------------------------------------------------------------

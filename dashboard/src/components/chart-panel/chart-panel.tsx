@@ -1,7 +1,20 @@
 import type { Signal } from "@preact/signals";
-import { chartOpen, selectedMetric, colorMode, improvementsOnly, showAbandoned, showConcluded, showRunning, clipOutliers, ideaMean } from "../../state/settings";
+import {
+  chartOpen,
+  selectedMetric,
+  colorMode,
+  improvementsOnly,
+  showAbandoned,
+  showConcluded,
+  showRunning,
+  clipOutliers,
+  ideaMean,
+  scatterOpen,
+  filterBarOpen,
+} from "../../state/settings";
 import { allExperiments } from "../../state/signals";
 import { MetricsChart } from "./metrics-chart";
+import { ScatterChart } from "./scatter-chart";
 import { TagFilter } from "./tag-filter";
 import { useMemo } from "preact/hooks";
 
@@ -9,6 +22,8 @@ export function ChartPanel() {
   const open = chartOpen.value;
   const experiments = allExperiments.value;
   const metric = selectedMetric.value;
+  const scatter = scatterOpen.value;
+  const filterOpen = filterBarOpen.value;
 
   // Collect all metric keys from experiments
   const metricKeys = useMemo(() => {
@@ -39,6 +54,7 @@ export function ChartPanel() {
         time
       </div>
       <div id="chart-panel" class={open ? "" : "collapsed"}>
+        {/* ---- Shared toolbar: metric selector + toggles ---- */}
         <div id="metric-selector">
           Metric:{" "}
           <select
@@ -100,6 +116,23 @@ export function ChartPanel() {
             <span class="improvements-toggle-icon" aria-hidden="true">⤢</span>
             <span class="improvements-toggle-label">Hide Outliers</span>
           </button>
+          <button
+            type="button"
+            class={`improvements-toggle${scatter ? " active" : ""}`}
+            aria-pressed={scatter}
+            title="Toggle 2D scatter chart"
+            onClick={() => { scatterOpen.value = !scatter; }}
+          >
+            <span class="improvements-toggle-icon" aria-hidden="true">⊞</span>
+            <span class="improvements-toggle-label">Scatter</span>
+          </button>
+        </div>
+
+        {/* ---- Collapsible filter bar (tags + status) ---- */}
+        <div class="filter-bar-toggle" onClick={() => { filterBarOpen.value = !filterOpen; }}>
+          <span class={`arrow${filterOpen ? " open" : ""}`}>&#9654;</span> Filters
+        </div>
+        <div class={`filter-bar${filterOpen ? "" : " collapsed"}`}>
           <TagFilter />
           <span class="status-filters" style={{ display: "inline-flex", gap: "4px", alignItems: "center", marginLeft: "12px" }}>
             Show:
@@ -108,7 +141,14 @@ export function ChartPanel() {
             <StatusToggle label="running" signal={showRunning} color="#d29922" />
           </span>
         </div>
-        <MetricsChart />
+
+        {/* ---- Charts: side by side ---- */}
+        <div class={`chart-row${scatter ? "" : " single"}`}>
+          <div class={`chart-col${scatter ? "" : " full"}`}>
+            <MetricsChart />
+          </div>
+          {scatter && <ScatterChart metricKeys={metricKeys} />}
+        </div>
       </div>
     </>
   );
