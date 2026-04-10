@@ -175,7 +175,30 @@ export function buildChartData(
     }
   }
 
+  // For idea mean mode, compute milestone colors from the aggregated sequence
+  // (since the synthetic experiments aren't in metricFiltered)
+  const meanMilestones = new Set<number>();
+  if (useIdeaMean && (colorMode === 'status+improve' || colorMode === 'improvement')) {
+    const lower = isLowerBetter(metricKey);
+    let runBest = lower ? Infinity : -Infinity;
+    for (const e of filtered) {
+      const v = e.metrics?.[metricKey];
+      if (typeof v === 'number') {
+        if (lower ? v < runBest : v > runBest) {
+          runBest = v;
+          meanMilestones.add(e.idea_id);
+        }
+      }
+    }
+  }
+
   function getColor(exp: Experiment): string {
+    // For mean mode, use milestone tracking instead of per-experiment lookup
+    if ((exp as any)._ideaMean && (colorMode === 'status+improve' || colorMode === 'improvement')) {
+      const base = '#8b949e';
+      const statusBase = ({'concluded': '#58a6ff', 'abandoned': '#f85149', 'active': '#d29922'} as Record<string, string>)[exp.idea_status || 'active'] || base;
+      return meanMilestones.has(exp.idea_id) ? '#e078f0' : statusBase;
+    }
     const c = _colorForExp(exp, metricKey, colorMode, currentLayout, allIdeas, metricFiltered);
     return c || ideaColorMap[exp.idea_id] || '#8b949e';
   }
