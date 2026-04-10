@@ -41,6 +41,7 @@ import {
 } from "./state/settings";
 import { startPolling, stopPolling } from "./state/polling";
 import { setActivatePanel } from "./state/signals";
+import { initTouchMoveMenu } from "./lib/touch-move-menu";
 
 // ---------------------------------------------------------------------------
 // Panel component map — maps panel ID to Preact component
@@ -411,6 +412,9 @@ export function App() {
     });
     dockviewRef.current = dv;
 
+    // Long-press / right-click on tabs shows a "Move panel" menu (touch-friendly)
+    initTouchMoveMenu(dv, container);
+
     // Expose panel activation globally — skips when maximized to avoid exiting fullscreen
     setActivatePanel((panelId: string) => {
       // Don't activate panels in other groups when maximized
@@ -422,23 +426,28 @@ export function App() {
       }
     });
 
-    // Try to restore saved layout
-    const saved = dashboardLayout.value;
-    let restored = false;
-    if (saved) {
-      try {
-        const serialized = saved as SerializedDockview;
-        if (serialized.grid && serialized.panels) {
-          dv.fromJSON(serialized);
-          restored = true;
+    // On narrow screens, always use mobile layout (ignore saved)
+    const isNarrow = typeof window !== "undefined" && window.innerWidth <= NARROW_BREAKPOINT;
+    if (isNarrow) {
+      buildMobileLayout(dv);
+    } else {
+      // Try to restore saved layout
+      const saved = dashboardLayout.value;
+      let restored = false;
+      if (saved) {
+        try {
+          const serialized = saved as SerializedDockview;
+          if (serialized.grid && serialized.panels) {
+            dv.fromJSON(serialized);
+            restored = true;
+          }
+        } catch {
+          // Corrupt layout — fall through to default
         }
-      } catch {
-        // Corrupt layout — fall through to default
       }
-    }
-
-    if (!restored) {
-      buildDefaultLayout(dv);
+      if (!restored) {
+        buildDefaultLayout(dv);
+      }
     }
 
     // Save layout on changes

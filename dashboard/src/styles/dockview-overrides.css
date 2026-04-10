@@ -170,6 +170,22 @@
 .dv-panel #detail-panel.open { width: 100%; }
 .dv-panel #suggest-panel { border-bottom: none; }
 
+/* ---- Long-press move menu ---- */
+.dv-move-menu {
+  position: fixed; z-index: 99999;
+  background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.5); min-width: 180px;
+  padding: 4px 0; font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+}
+.dv-move-menu-title {
+  padding: 6px 12px; font-size: 10px; text-transform: uppercase;
+  color: #484f58; letter-spacing: 0.5px; border-bottom: 1px solid #21262d;
+}
+.dv-move-menu-item {
+  padding: 8px 12px; font-size: 12px; color: #c9d1d9; cursor: pointer;
+}
+.dv-move-menu-item:hover { background: #21262d; color: #58a6ff; }
+
 /* ---- Touch support ---- */
 
 /* Allow touch scrolling in panel content */
