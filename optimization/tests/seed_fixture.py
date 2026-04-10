@@ -2647,6 +2647,146 @@ def build_t4_leaderboard_search(dest: Path):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# T5: Discovery & Adaptation — agent must discover undocumented endpoints
+# ═══════════════════════════════════════════════════════════════════════════
+
+def build_t5_discovery(dest: Path):
+    """15 ideas, same as T1-T4. Agent gets stripped PROMPT_api.md and must discover features."""
+    fb = FixtureBuilder(dest)
+    fb.init_project(BASELINE_KERNELS)
+    _build_full_fixture(fb)
+    fb.finalize()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# T6: Multi-Branch Workflow — agent must work across multiple idea branches
+# ═══════════════════════════════════════════════════════════════════════════
+
+def build_t6_multi_branch(dest: Path):
+    """15 ideas, but idea 13 and 10 are active. Agent must work on both."""
+    fb = FixtureBuilder(dest)
+    fb.init_project(BASELINE_KERNELS)
+
+    # Build from SEED_IDEAS but override statuses for ideas 10 and 13
+    for (idea_id, desc, parents, status, conclusion, kernels,
+         score, mem_bytes, tags, notes) in SEED_IDEAS:
+
+        # Override: idea 10 and 13 become active (not concluded)
+        if idea_id == 10:
+            status = "active"
+            conclusion = None
+            notes = list(notes) + [("This idea needs more optimization -- try improving the exp/log kernels", "observation")]
+        elif idea_id == 13:
+            status = "active"
+            conclusion = None
+            notes = list(notes) + [("This idea needs more optimization -- try improving the exp/log kernels", "observation")]
+
+        fb.add_idea(idea_id, desc, parents, status, conclusion, kernels)
+
+        # Add experiment(s) — same logic as _build_full_fixture
+        if idea_id == 14:
+            fb.add_experiment(
+                idea_id, "Initial run with aggressive tables",
+                status="failed",
+                error="MemoryError: table allocation exceeded system limits",
+                script_content="#!/bin/bash\nset -euo pipefail\ncd \"$(dirname \"$0\")/../..\"\npython benchmark/eval_harness.py",
+                log_content="Allocating tables...\nsin: 256 entries (2048 bytes)\nexp: 128 entries (1024 bytes)\nlog: 64 entries (512 bytes)\nsqrt: 128 entries (1024 bytes)\nTotal: 4608 bytes\nMemoryError: table pre-allocation check failed",
+                err_content="exit code 1\n\nMemoryError: table allocation exceeded system limits",
+                tags=tags,
+            )
+            fb.add_experiment(
+                idea_id, "Re-run with budget check disabled (still over budget)",
+                status="completed",
+                metrics=_metrics(0.08, 4608),
+                log_content=_log_json(0.08, 4608),
+                tags=tags,
+            )
+        elif score is not None:
+            fb.add_experiment(
+                idea_id, f"Evaluate: {desc[:40]}",
+                status="completed",
+                metrics=_metrics(score, mem_bytes),
+                log_content=_log_json(score, mem_bytes),
+                tags=tags,
+            )
+
+        for note_text, note_level in notes:
+            fb.add_note(idea_id, note_text, note_level)
+
+    fb.finalize()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# T7: Analytics & Tag Management — agent must normalize messy tags
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Messy tag overrides for T7
+_T7_MESSY_TAGS = {
+    1: ["table"],
+    2: ["Table"],
+    3: ["table-v1"],
+    4: ["table"],
+    5: ["Table"],
+    6: ["polynomial"],
+    7: ["poly"],
+    8: ["Polynomial"],
+    9: ["polynomial"],
+    10: ["poly"],
+    11: ["hybrid"],
+    12: ["Hybrid"],
+    13: ["hybrid-approach"],
+    14: ["over-budget", "failed"],
+    15: ["hybrid", "merge"],
+}
+
+
+def build_t7_analytics(dest: Path):
+    """15 ideas with messy/inconsistent tags. Agent must normalize and analyze."""
+    fb = FixtureBuilder(dest)
+    fb.init_project(BASELINE_KERNELS)
+
+    for (idea_id, desc, parents, status, conclusion, kernels,
+         score, mem_bytes, _original_tags, notes) in SEED_IDEAS:
+
+        # Use messy tags for T7
+        tags = _T7_MESSY_TAGS.get(idea_id, _original_tags)
+
+        fb.add_idea(idea_id, desc, parents, status, conclusion, kernels)
+
+        # Add experiment(s) — same logic as _build_full_fixture
+        if idea_id == 14:
+            fb.add_experiment(
+                idea_id, "Initial run with aggressive tables",
+                status="failed",
+                error="MemoryError: table allocation exceeded system limits",
+                script_content="#!/bin/bash\nset -euo pipefail\ncd \"$(dirname \"$0\")/../..\"\npython benchmark/eval_harness.py",
+                log_content="Allocating tables...\nsin: 256 entries (2048 bytes)\nexp: 128 entries (1024 bytes)\nlog: 64 entries (512 bytes)\nsqrt: 128 entries (1024 bytes)\nTotal: 4608 bytes\nMemoryError: table pre-allocation check failed",
+                err_content="exit code 1\n\nMemoryError: table allocation exceeded system limits",
+                tags=tags,
+            )
+            fb.add_experiment(
+                idea_id, "Re-run with budget check disabled (still over budget)",
+                status="completed",
+                metrics=_metrics(0.08, 4608),
+                log_content=_log_json(0.08, 4608),
+                tags=tags,
+            )
+        elif score is not None:
+            fb.add_experiment(
+                idea_id, f"Evaluate: {desc[:40]}",
+                status="completed",
+                metrics=_metrics(score, mem_bytes),
+                log_content=_log_json(score, mem_bytes),
+                tags=tags,
+            )
+
+        for note_text, note_level in notes:
+            fb.add_note(idea_id, note_text, note_level)
+
+    fb.finalize()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Main
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -2655,6 +2795,9 @@ BUILDERS = {
     "t2": ("t2_experiment_mgmt/fixture", build_t2_experiment_mgmt),
     "t3": ("t3_error_recovery/fixture", build_t3_error_recovery),
     "t4": ("t4_leaderboard_search/fixture", build_t4_leaderboard_search),
+    "t5": ("t5_discovery/fixture", build_t5_discovery),
+    "t6": ("t6_multi_branch/fixture", build_t6_multi_branch),
+    "t7": ("t7_analytics/fixture", build_t7_analytics),
 }
 
 

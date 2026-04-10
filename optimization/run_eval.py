@@ -83,8 +83,8 @@ def parse_args():
                    help="Path to baseline.json for score normalization")
     p.add_argument("--output", default=None,
                    help="Write metrics JSON to this file (default: stdout)")
-    p.add_argument("--tests", default="t1,t2,t3,t4",
-                   help="Comma-separated test IDs to run (default: t1,t2,t3,t4)")
+    p.add_argument("--tests", default="t1,t2,t3,t4,t5,t6,t7",
+                   help="Comma-separated test IDs to run (default: t1,t2,t3,t4,t5,t6,t7)")
     p.add_argument("--single-test", default=None,
                    help="Run a single test fixture dir (for internal use by the multi-test runner)")
     return p.parse_args()
@@ -102,6 +102,9 @@ def copy_test_fixture(test_id: str, dest: Path):
         "t2": "t2_experiment_mgmt",
         "t3": "t3_error_recovery",
         "t4": "t4_leaderboard_search",
+        "t5": "t5_discovery",
+        "t6": "t6_multi_branch",
+        "t7": "t7_analytics",
     }
     test_name = test_names.get(test_id, test_id)
     fixture_src = TESTS_DIR / test_name / "fixture"
@@ -120,15 +123,24 @@ def copy_test_fixture(test_id: str, dest: Path):
         parts.append(prompt_src.read_text().strip())
     elif prompt_dst.exists():
         parts.append(prompt_dst.read_text().strip())
-    # Append API instructions from the branch being tested
-    prompt_api = REPO_ROOT / "PROMPT_api.md"
-    if prompt_api.exists():
-        parts.append(prompt_api.read_text().strip())
+
+    # T5 uses a stripped PROMPT_api.md (key endpoints omitted for discovery test)
+    if test_id == "t5":
+        stripped_api = TESTS_DIR / "t5_discovery" / "PROMPT_api_stripped.md"
+        if stripped_api.exists():
+            parts.append(stripped_api.read_text().strip())
+        else:
+            print(f"  WARNING: PROMPT_api_stripped.md not found for T5", file=sys.stderr)
     else:
-        # Fallback: use the one shipped with the_lab package
-        pkg_api = Path(__file__).resolve().parent.parent / "the_lab" / "PROMPT_api.md"
-        if pkg_api.exists():
-            parts.append(pkg_api.read_text().strip())
+        # Append API instructions from the branch being tested
+        prompt_api = REPO_ROOT / "PROMPT_api.md"
+        if prompt_api.exists():
+            parts.append(prompt_api.read_text().strip())
+        else:
+            # Fallback: use the one shipped with the_lab package
+            pkg_api = Path(__file__).resolve().parent.parent / "the_lab" / "PROMPT_api.md"
+            if pkg_api.exists():
+                parts.append(pkg_api.read_text().strip())
     prompt_dst.write_text("\n\n".join(parts) + "\n")
     print(f"  Built PROMPT.md for {test_id}", file=sys.stderr)
 
@@ -916,7 +928,9 @@ def run_single_test(test_id: str, args) -> dict:
 
 def _test_dir_name(test_id: str) -> str:
     names = {"t1": "t1_branching", "t2": "t2_experiment_mgmt",
-             "t3": "t3_error_recovery", "t4": "t4_leaderboard_search"}
+             "t3": "t3_error_recovery", "t4": "t4_leaderboard_search",
+             "t5": "t5_discovery", "t6": "t6_multi_branch",
+             "t7": "t7_analytics"}
     return names.get(test_id, test_id)
 
 
@@ -925,7 +939,7 @@ def main():
     test_ids = [t.strip() for t in args.tests.split(",") if t.strip()]
 
     # If running multi-test mode (default)
-    if len(test_ids) > 1 or (len(test_ids) == 1 and test_ids[0] in ("t1", "t2", "t3", "t4")):
+    if len(test_ids) > 1 or (len(test_ids) == 1 and test_ids[0] in ("t1", "t2", "t3", "t4", "t5", "t6", "t7")):
         import math
         from concurrent.futures import ThreadPoolExecutor, as_completed
 

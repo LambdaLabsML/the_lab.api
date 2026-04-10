@@ -60,17 +60,25 @@ Two levers per idea:
 - Explicit mention of features agents miss (branching, /search, /log)
 - Shorter, more scannable format
 
+## Optimization objective
+
+**Minimize `total_cost`** (token cost across all 4 tests) while maintaining `api_effectiveness` ≥ 0.78 (idea/35 baseline median: 0.7979).
+
+Cost baseline (idea/35): median $69.3, range [$62-$110], median 544 turns across 4 tests.
+
+Cost is dominated by context tokens (59%) which grow with each agent turn. Reducing turns or shrinking per-turn context are the main levers. API response sizes accumulate in the agent's conversation context.
+
 ## Key metrics
 
 | Metric | Meaning |
 |---|---|
-| `api_effectiveness` | Geometric mean of T1-T4 scores (0-1, higher = better) |
+| `total_cost` | **PRIMARY** — token cost across all 4 tests (lower = better) |
+| `api_effectiveness` | **CONSTRAINT** — must stay ≥ 0.78 (geometric mean of T1-T4) |
 | `t1_score` | Branching: correct parent, used /orient or /leaderboard |
 | `t2_score` | Experiment mgmt: used /wait, auto_start, documented findings |
 | `t3_score` | Error recovery: read logs, created fixes |
 | `t4_score` | Navigation: used /leaderboard, /search, chose best direction |
 | `total_api_calls` | Total calls across all 4 tests |
-| `total_cost` | Token cost across all 4 tests |
 
 ## Important notes
 
@@ -79,6 +87,7 @@ Two levers per idea:
 - **Two levers**: Always consider whether the improvement should be in the code or the docs.
 - **Don't modify fixtures**: Test fixtures in `optimization/tests/` are static.
 - **Key files**: `the_lab/routes/*.py` (endpoints), `the_lab/deps.py` (helpers), `the_lab/schemas.py` (models), `PROMPT_api.md` (agent-facing docs)
+- **Cost reduction strategies**: Smaller API responses (less context per turn), fewer agent turns (more decisive guidance), removing redundant data from responses
 
 ---
 

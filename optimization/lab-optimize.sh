@@ -110,7 +110,7 @@ cmd_baseline() {
 
     # Create experiment
     local run_eval="$SCRIPT_DIR/run_eval.py"
-    local script_content="#!/bin/bash\nset -euo pipefail\npython $run_eval --model $model --budget $budget --tests t1,t2,t3,t4"
+    local script_content="#!/bin/bash\nset -euo pipefail\npython $run_eval --model $model --budget $budget --tests t1,t2,t3,t4,t5,t6,t7"
     local exp_resp
     exp_resp=$(curl -s -X POST "$api/ideas/$idea_id/experiments" \
         -H "Content-Type: application/json" \
@@ -146,7 +146,7 @@ if metrics:
     json.dump(metrics, open('.the_lab/artifacts/baseline.json', 'w'), indent=2)
     print()
     print(f'  api_effectiveness: {metrics.get(\"api_effectiveness\", \"n/a\")}')
-    for k in ('t1_score', 't2_score', 't3_score', 't4_score'):
+    for k in ('t1_score', 't2_score', 't3_score', 't4_score', 't5_score', 't6_score', 't7_score'):
         print(f'  {k}:' + ' ' * (17-len(k)) + f'{metrics.get(k, \"n/a\")}')
     print(f'  total_api_calls:   {metrics.get(\"total_api_calls\", \"n/a\")}')
     print(f'  total_cost:        \${metrics.get(\"total_cost\", 0)}')
