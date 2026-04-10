@@ -75,7 +75,9 @@ PRICE_CACHE_READ = 1.50
 
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--model", default="haiku", help="Model for inner agent (haiku|sonnet|opus)")
+    p.add_argument("--agent", default="claude", choices=["claude", "codex"],
+                   help="Which agent CLI to use (default: claude)")
+    p.add_argument("--model", default="haiku", help="Model for inner agent (haiku|sonnet|opus for claude; o4-mini|o3 for codex)")
     p.add_argument("--budget", type=int, default=15, help="Max experiments before giving up")
     p.add_argument("--timeout", type=int, default=900, help="Wall-time cap in seconds")
     p.add_argument("--max-cost", type=float, default=0, help="Max dollar cost for inner agent (0 = no limit)")
@@ -277,10 +279,9 @@ def launch_agent(
     tag: str = "",
     **kwargs,
 ) -> None:
-    """Launch an inner agent, stop when budget experiments are completed or timeout."""
+    """Launch an inner agent (claude or codex), stop when budget reached or timeout."""
     pfx = f"[{tag}] " if tag else "  "
-
-    # Session JSONL is found post-hoc via find_session_jsonl(project_dir)
+    agent_type = kwargs.get("agent", "claude")
 
     instruction = (
         f"You have access to a local experiment management API at http://localhost:{api_port}/api/v1. "
@@ -292,29 +293,37 @@ def launch_agent(
     )
 
     env = {**os.environ}
-
-    # Use --print with stream-json for live progress visibility.
     max_cost = kwargs.get("max_cost", 0)
-    cmd = [
-        "claude", "--dangerously-skip-permissions",
-        "--model", model,
-        "--print", "--verbose", "--output-format", "stream-json",
-    ]
-    if max_cost > 0:
-        cmd.extend(["--max-budget-usd", str(max_cost)])
-    cmd.extend(["-p", instruction])
 
-    # Stream stdout and parse JSON events for human-readable progress
+    # Build agent-specific command
+    if agent_type == "codex":
+        cmd = [
+            "codex", "exec",
+            "--dangerously-bypass-approvals-and-sandbox",
+            "-m", model,
+            "--json",
+        ]
+        cmd.append(instruction)
+    else:
+        cmd = [
+            "claude", "--dangerously-skip-permissions",
+            "--model", model,
+            "--print", "--verbose", "--output-format", "stream-json",
+        ]
+        if max_cost > 0:
+            cmd.extend(["--max-budget-usd", str(max_cost)])
+        cmd.extend(["-p", instruction])
+
     proc = subprocess.Popen(
         cmd, cwd=prompt_path, env=env,
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
     )
 
-    # Buffer detailed log for post-hoc replay; only print compact progress live
-    log_buffer = kwargs.get("log_buffer")  # list, shared with caller
+    # Buffer detailed log for post-hoc replay
+    log_buffer = kwargs.get("log_buffer")
 
-    def _stream_progress():
-        """Read stream-json events, buffer details, print compact live."""
+    def _stream_progress_claude():
+        """Parse Claude stream-json events."""
         for raw_line in proc.stdout:
             line = raw_line.decode(errors="replace").strip()
             if not line:
@@ -359,8 +368,48 @@ def launch_agent(
                 if log_buffer is not None:
                     log_buffer.append(f"  [done] {turns} turns, ${cost:.3f}")
 
+    def _stream_progress_codex():
+        """Parse Codex JSON events."""
+        for raw_line in proc.stdout:
+            line = raw_line.decode(errors="replace").strip()
+            if not line:
+                continue
+            try:
+                evt = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            evt_type = evt.get("type", "")
+            payload = evt.get("payload") or evt
+            if evt_type == "function_call" or evt_type == "tool_use":
+                name = payload.get("name", "?")
+                args = payload.get("arguments", "")
+                if isinstance(args, str):
+                    preview = args[:80]
+                else:
+                    preview = str(args)[:80]
+                if log_buffer is not None:
+                    log_buffer.append(f"  [{name}] {preview}")
+            elif evt_type == "message" or evt_type == "response":
+                text = ""
+                content = payload.get("content")
+                if isinstance(content, str):
+                    text = content
+                elif isinstance(content, list):
+                    for c in content:
+                        if isinstance(c, dict) and c.get("type") == "text":
+                            text = c.get("text", "")
+                            break
+                if text.strip():
+                    if log_buffer is not None:
+                        log_buffer.append(f"  > {text.strip()[:100]}")
+            elif evt_type == "function_call_output":
+                output = str(payload.get("output", ""))[:120]
+                if output and log_buffer is not None:
+                    log_buffer.append(f"    ← {output.split(chr(10))[0]}")
+
     import threading
-    stream_thread = threading.Thread(target=_stream_progress, daemon=True)
+    stream_fn = _stream_progress_codex if agent_type == "codex" else _stream_progress_claude
+    stream_thread = threading.Thread(target=stream_fn, daemon=True)
     stream_thread.start()
 
     # Poll the inner Lab for experiment count — kill agent when budget reached
@@ -521,30 +570,108 @@ def collect_lab_state(port: int) -> dict:
     return {"ideas": ideas, "experiments": experiments, "graph": graph}
 
 
-def find_session_jsonl(project_dir: Path, start_time: float) -> list[Path]:
-    """Find Claude session JSONL files for the inner agent's project dir.
+def find_session_jsonl(project_dir: Path, start_time: float, agent: str = "claude") -> list[Path]:
+    """Find session JSONL files for the inner agent.
 
-    Claude stores sessions under ~/.claude/projects/<mangled-path>/.
-    The mangled path replaces all non-alphanumeric chars with - and prepends -.
-    Only returns files modified after start_time (to avoid stale sessions).
+    Claude: ~/.claude/projects/<mangled-path>/*.jsonl
+    Codex:  ~/.codex/sessions/YYYY/MM/DD/*.jsonl
     """
-    import re
-    resolved = str(project_dir.resolve()).lstrip("/")
-    mangled = "-" + re.sub(r"[^a-zA-Z0-9]", "-", resolved)
-    session_dir = Path.home() / ".claude" / "projects" / mangled
     files = []
-    if session_dir.exists():
-        for f in sorted(session_dir.glob("*.jsonl")):
-            if f.stat().st_mtime >= start_time:
-                files.append(f)
-    if files:
-        print(f"  Found {len(files)} session file(s) in {session_dir.name}", file=sys.stderr)
+    if agent == "codex":
+        sessions_dir = Path.home() / ".codex" / "sessions"
+        if sessions_dir.exists():
+            for f in sorted(sessions_dir.rglob("*.jsonl")):
+                if f.stat().st_mtime >= start_time:
+                    files.append(f)
     else:
-        print(f"  Warning: no session JSONL found in {mangled}", file=sys.stderr)
+        import re
+        resolved = str(project_dir.resolve()).lstrip("/")
+        mangled = "-" + re.sub(r"[^a-zA-Z0-9]", "-", resolved)
+        session_dir = Path.home() / ".claude" / "projects" / mangled
+        if session_dir.exists():
+            for f in sorted(session_dir.glob("*.jsonl")):
+                if f.stat().st_mtime >= start_time:
+                    files.append(f)
+    if files:
+        print(f"  Found {len(files)} {agent} session file(s)", file=sys.stderr)
+    else:
+        print(f"  Warning: no {agent} session JSONL found", file=sys.stderr)
     return files
 
 
-def parse_session_tokens(project_dir: Path, start_time: float = 0) -> dict:
+def _parse_claude_line(obj: dict, categories: dict):
+    """Parse a single Claude session JSONL line into token categories."""
+    msg = obj.get("message") if isinstance(obj, dict) else None
+    if not isinstance(msg, dict):
+        return
+    usage = msg.get("usage")
+    if not usage:
+        return
+    content = msg.get("content", [])
+    has_tool = any(c.get("type") == "tool_use" for c in content if isinstance(c, dict))
+    if has_tool:
+        tool_names = [c.get("name", "?") for c in content
+                      if isinstance(c, dict) and c.get("type") == "tool_use"]
+        if any(n in ("Read", "Grep", "Glob") for n in tool_names):
+            cat = "read_search"
+        elif any(n in ("Edit", "Write") for n in tool_names):
+            cat = "edit_write"
+        elif "Bash" in tool_names:
+            cat = "bash"
+        else:
+            cat = "bash"
+    else:
+        stop = msg.get("stop_reason", "none")
+        cat = "reasoning" if stop == "end_turn" else "context"
+    categories[cat]["calls"] += 1
+    categories[cat]["input"] += usage.get("input_tokens", 0)
+    categories[cat]["output"] += usage.get("output_tokens", 0)
+    categories[cat]["cache_create"] += usage.get("cache_creation_input_tokens", 0)
+    categories[cat]["cache_read"] += usage.get("cache_read_input_tokens", 0)
+
+
+def _parse_codex_line(obj: dict, categories: dict):
+    """Parse a single Codex session JSONL line into token categories."""
+    if not isinstance(obj, dict):
+        return
+    evt_type = obj.get("type", "")
+    payload = obj.get("payload") or obj
+
+    # Codex usage is in response events
+    usage = payload.get("usage") or {}
+    if not usage and isinstance(payload, dict):
+        # Try nested in response
+        resp = payload.get("response") or {}
+        usage = resp.get("usage") or {}
+
+    input_tokens = usage.get("input_tokens", 0) or usage.get("prompt_tokens", 0)
+    output_tokens = usage.get("output_tokens", 0) or usage.get("completion_tokens", 0)
+
+    if not input_tokens and not output_tokens:
+        return
+
+    # Categorize by event type
+    if evt_type in ("function_call", "tool_use"):
+        name = payload.get("name", "")
+        if name in ("read", "grep", "glob", "Read", "Grep", "Glob"):
+            cat = "read_search"
+        elif name in ("edit", "write", "Edit", "Write", "apply_diff", "patch"):
+            cat = "edit_write"
+        elif name in ("bash", "Bash", "shell", "execute"):
+            cat = "bash"
+        else:
+            cat = "bash"
+    elif evt_type in ("response", "message"):
+        cat = "reasoning"
+    else:
+        cat = "context"
+
+    categories[cat]["calls"] += 1
+    categories[cat]["input"] += input_tokens
+    categories[cat]["output"] += output_tokens
+
+
+def parse_session_tokens(project_dir: Path, start_time: float = 0, agent: str = "claude") -> dict:
     """Parse inner agent's session JSONL for token breakdown."""
     categories = {
         "bash": {"input": 0, "output": 0, "cache_create": 0, "cache_read": 0, "calls": 0},
@@ -554,7 +681,7 @@ def parse_session_tokens(project_dir: Path, start_time: float = 0) -> dict:
         "edit_write": {"input": 0, "output": 0, "cache_create": 0, "cache_read": 0, "calls": 0},
     }
 
-    session_files = find_session_jsonl(project_dir, start_time)
+    session_files = find_session_jsonl(project_dir, start_time, agent=agent)
 
     for f in session_files:
         for line in open(f):
@@ -562,36 +689,11 @@ def parse_session_tokens(project_dir: Path, start_time: float = 0) -> dict:
                 obj = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            msg = obj.get("message") if isinstance(obj, dict) else None
-            if not isinstance(msg, dict):
-                continue
-            usage = msg.get("usage")
-            if not usage:
-                continue
 
-            content = msg.get("content", [])
-            has_tool = any(c.get("type") == "tool_use" for c in content if isinstance(c, dict))
-
-            if has_tool:
-                tool_names = [c.get("name", "?") for c in content
-                              if isinstance(c, dict) and c.get("type") == "tool_use"]
-                if any(n in ("Read", "Grep", "Glob") for n in tool_names):
-                    cat = "read_search"
-                elif any(n in ("Edit", "Write") for n in tool_names):
-                    cat = "edit_write"
-                elif "Bash" in tool_names:
-                    cat = "bash"
-                else:
-                    cat = "bash"  # default tool calls to bash
+            if agent == "codex":
+                _parse_codex_line(obj, categories)
             else:
-                stop = msg.get("stop_reason", "none")
-                cat = "reasoning" if stop == "end_turn" else "context"
-
-            categories[cat]["calls"] += 1
-            categories[cat]["input"] += usage.get("input_tokens", 0)
-            categories[cat]["output"] += usage.get("output_tokens", 0)
-            categories[cat]["cache_create"] += usage.get("cache_creation_input_tokens", 0)
-            categories[cat]["cache_read"] += usage.get("cache_read_input_tokens", 0)
+                _parse_claude_line(obj, categories)
 
     # Compute costs and call counts
     result = {}
@@ -876,17 +978,19 @@ def run_single_test(test_id: str, args) -> dict:
 
     try:
         t0 = time.time()
-        print(f"{pfx}Launching agent ({args.model})...", file=sys.stderr)
+        agent_type = getattr(args, "agent", "claude")
+        print(f"{pfx}Launching {agent_type} agent ({args.model})...", file=sys.stderr)
         log_buf: list[str] = []
         launch_agent(str(project_dir), port, args.model, args.timeout, args.budget,
-                     tag=test_id, max_cost=args.max_cost, log_buffer=log_buf)
+                     tag=test_id, max_cost=args.max_cost, log_buffer=log_buf,
+                     agent=agent_type)
         wall_time = time.time() - t0
 
         # Collect standard metrics
         print(f"{pfx}Collecting metrics...", file=sys.stderr)
         api_stats = collect_api_stats(port)
         lab_state = collect_lab_state(port)
-        token_breakdown = parse_session_tokens(project_dir, t0)
+        token_breakdown = parse_session_tokens(project_dir, t0, agent=agent_type)
         ideas = lab_state["ideas"]
         experiments = lab_state["experiments"]
         history = api_stats.get("history", [])
@@ -1048,9 +1152,10 @@ def main():
     try:
         t0 = time.time()
 
-        print(f"Launching inner agent ({args.model})...", file=sys.stderr)
+        agent_type = getattr(args, "agent", "claude")
+        print(f"Launching inner {agent_type} agent ({args.model})...", file=sys.stderr)
         launch_agent(str(project_dir), port, args.model, args.timeout, args.budget,
-                     max_cost=args.max_cost)
+                     max_cost=args.max_cost, agent=agent_type)
 
         wall_time = time.time() - t0
 
@@ -1058,7 +1163,7 @@ def main():
         print("Collecting metrics...", file=sys.stderr)
         api_stats = collect_api_stats(port)
         lab_state = collect_lab_state(port)
-        token_breakdown = parse_session_tokens(project_dir, t0)
+        token_breakdown = parse_session_tokens(project_dir, t0, agent=agent_type)
 
         ideas = lab_state["ideas"]
         experiments = lab_state["experiments"]

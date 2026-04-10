@@ -70,6 +70,7 @@ cmd_baseline() {
     local model="${1:-haiku}"
     local budget="${2:-10}"
     local port="${3:-9000}"
+    local eval_agent="${4:-claude}"
     local api="http://127.0.0.1:$port/api/v1"
     echo "Establishing baseline (model=$model, budget=$budget)..."
     echo "This will launch an agent against the test project (~\$1-3, ~5 min)."
@@ -110,7 +111,7 @@ cmd_baseline() {
 
     # Create experiment
     local run_eval="$SCRIPT_DIR/run_eval.py"
-    local script_content="#!/bin/bash\nset -euo pipefail\npython $run_eval --model $model --budget $budget --tests t1,t2,t3,t4,t5,t6,t7"
+    local script_content="#!/bin/bash\nset -euo pipefail\npython $run_eval --agent $eval_agent --model $model --budget $budget --tests t1,t2,t3,t4,t5,t6,t7"
     local exp_resp
     exp_resp=$(curl -s -X POST "$api/ideas/$idea_id/experiments" \
         -H "Content-Type: application/json" \
@@ -266,7 +267,7 @@ case "${1:-help}" in
         echo "Usage: $0 <command> [args]"
         echo ""
         echo "Commands:"
-        echo "  baseline [eval-model] [budget]                  Establish baseline (default: haiku, 10)"
+        echo "  baseline [model] [budget] [port] [agent]        Establish baseline (agent: claude|codex)"
         echo "  start [port] [--dev]                             Start the Lab dashboard (--dev = auto-reload)"
         echo "  agent [outer-model] [eval-model] [budget]       Launch optimization agent"
         echo "                                                    outer-model: who optimizes the API (default: sonnet)"
