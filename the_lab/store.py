@@ -77,12 +77,10 @@ class Store:
         self._ensure_gitignore()
         self._lock = threading.Lock()
         self._next_idea_id = 1
-        self._next_exp_id = 1
-
-        # In-memory caches
+        # In-memory caches — experiments keyed by label string ("10.1")
         self._ideas: dict[int, dict] = {}
-        self._experiments: dict[int, dict] = {}
-        self._exp_by_idea: dict[int, set[int]] = {}
+        self._experiments: dict[str, dict] = {}
+        self._exp_by_idea: dict[int, set[str]] = {}
         self._notes: dict[int, list[dict]] = {}
 
         self._load_all()
@@ -104,11 +102,16 @@ class Store:
         artifacts_dir.mkdir(parents=True, exist_ok=True)
 
     def _load_all(self):
-        """Scan filesystem once on startup to populate all caches."""
+        """Scan filesystem once on startup to populate all caches.
+
+        Experiments are identified by label "{idea_id}.{file_stem}".
+        Old projects use global IDs as file stems (e.g. 671.json),
+        new projects use per-idea seq (e.g. 1.json). Both work —
+        the file stem IS the seq number in the label.
+        """
         if not self.lab_dir.exists():
             return
         max_idea = 0
-        max_exp = 0
         for d in self.lab_dir.iterdir():
             if not d.is_dir():
                 continue
@@ -128,19 +131,26 @@ class Store:
             if notes_path.exists():
                 self._notes[idea_id] = json.loads(notes_path.read_text())
 
-            # Load experiments
-            exp_ids: set[int] = set()
+            # Load experiments — file stem becomes the seq in the label
+            exp_labels: set[str] = set()
             for f in d.glob("*.json"):
                 if f.stem.isdigit():
-                    exp_id = int(f.stem)
-                    max_exp = max(max_exp, exp_id)
+                    seq = int(f.stem)
+                    label = f"{idea_id}.{seq}"
                     exp = _enrich_experiment(json.loads(f.read_text()))
-                    self._experiments[exp_id] = exp
-                    exp_ids.add(exp_id)
-            self._exp_by_idea[idea_id] = exp_ids
+                    # Overwrite id/seq/label to match the new scheme
+                    exp["id"] = label
+                    exp["seq"] = seq
+                    exp["label"] = label
+                    exp["idea_id"] = idea_id
+                    # Keep the existing script path — files on disk use the stem
+                    if "script" not in exp or not exp["script"]:
+                        exp["script"] = f".the_lab/experiments/{idea_id}/{seq}.sh"
+                    self._experiments[label] = exp
+                    exp_labels.add(label)
+            self._exp_by_idea[idea_id] = exp_labels
 
         self._next_idea_id = max_idea + 1
-        self._next_exp_id = max_exp + 1
 
     def _idea_dir(self, idea_id: int) -> Path:
         return self.lab_dir / str(idea_id)
@@ -246,75 +256,35 @@ class Store:
         return notes
 
     # --- Experiments ---
+    # Experiments are identified by label strings: "{idea_id}.{seq}"
+    # where seq is the file stem (numeric). For new experiments, seq
+    # is max(existing_stems)+1. For old projects, seq may be a legacy
+    # global ID (e.g. "400.671") which is fine.
 
     def _next_seq(self, idea_id: int) -> int:
-        """Next per-idea experiment sequence number (1-based)."""
-        return len(self._exp_by_idea.get(idea_id, set())) + 1
+        """Next per-idea seq number: max existing stem + 1, or 1."""
+        existing = self._exp_by_idea.get(idea_id, set())
+        if not existing:
+            return 1
+        max_seq = max(self._experiments[lbl]["seq"] for lbl in existing
+                      if lbl in self._experiments)
+        return max_seq + 1
 
-    def _label_experiment(self, exp: dict) -> dict:
-        """Ensure experiment has 'seq' and 'label' fields."""
-        if "seq" not in exp or "label" not in exp:
-            idea_exps = sorted(
-                (self._experiments[eid] for eid in self._exp_by_idea.get(exp["idea_id"], set())
-                 if eid in self._experiments),
-                key=lambda e: e.get("created_at", ""),
-            )
-            for i, e in enumerate(idea_exps, 1):
-                if e["id"] == exp["id"]:
-                    exp["seq"] = i
-                    break
-            else:
-                exp["seq"] = 1
-            exp["label"] = f"{exp['idea_id']}.{exp['seq']}"
-        return exp
+    def resolve_experiment(self, ref: str) -> dict | None:
+        """Look up experiment by label (e.g. '10.1' or '400.671').
 
-    def resolve_experiment(self, ref: str) -> dict | None | str:
-        """Resolve experiment by label ('1.2') or legacy global ID ('5').
-
-        Returns experiment dict, None if not found, or raises ValueError
-        if a bare integer matches multiple experiments across ideas.
+        Returns the experiment dict or None.
         """
-        # Label format: idea_id.seq (preferred)
-        if "." in ref:
-            try:
-                idea_str, seq_str = ref.split(".", 1)
-                idea_id, seq = int(idea_str), int(seq_str)
-                idea_exps = sorted(
-                    (self._experiments[eid] for eid in self._exp_by_idea.get(idea_id, set())
-                     if eid in self._experiments),
-                    key=lambda e: e.get("created_at", ""),
-                )
-                if 1 <= seq <= len(idea_exps):
-                    return self._label_experiment(idea_exps[seq - 1])
-            except (ValueError, IndexError):
-                pass
-            return None
-
-        # Bare integer — legacy global ID or ambiguous seq
-        try:
-            num = int(ref)
-        except ValueError:
-            return None
-
-        # First try legacy global ID (exact match in _experiments dict)
-        exp = self._experiments.get(num)
+        # Direct lookup by label
+        ref = str(ref).strip()
+        exp = self._experiments.get(ref)
         if exp:
-            return self._label_experiment(exp)
-
-        # Fallback: search all ideas for experiments with seq == num
-        matches = []
-        for eid, e in self._experiments.items():
-            labeled = self._label_experiment(e)
-            if labeled.get("seq") == num:
-                matches.append(labeled)
-        if len(matches) == 1:
-            return matches[0]
-        if len(matches) > 1:
-            labels = [m["label"] for m in matches]
-            raise ValueError(
-                f"Ambiguous experiment '{ref}': matches {', '.join(labels)}. "
-                f"Use the full label (e.g. '{labels[0]}') to disambiguate."
-            )
+            return exp
+        # If bare integer, could be an old-style global ID — search all
+        if "." not in ref:
+            for lbl, e in self._experiments.items():
+                if str(e.get("seq")) == ref or str(e.get("_legacy_id")) == ref:
+                    return e
         return None
 
     def create_experiment(
@@ -326,17 +296,14 @@ class Store:
     ) -> dict:
         with self._lock:
             seq = self._next_seq(idea_id)
-            # ID = per-idea sequence number (not global counter)
-            # Legacy global ID still stored for backward compat with old data
-            exp_id = self._next_exp_id
-            self._next_exp_id += 1
+        label = f"{idea_id}.{seq}"
 
         script_rel = f".the_lab/experiments/{idea_id}/{seq}.sh"
         exp = {
-            "id": exp_id,
+            "id": label,
             "idea_id": idea_id,
             "seq": seq,
-            "label": f"{idea_id}.{seq}",
+            "label": label,
             "description": description,
             "script": script_rel,
             "status": "pending",
@@ -352,41 +319,42 @@ class Store:
 
         idea_dir = self._idea_dir(idea_id)
         idea_dir.mkdir(parents=True, exist_ok=True)
-        _write_json(idea_dir / f"{exp_id}.json", exp)
+        _write_json(idea_dir / f"{seq}.json", exp)
         # Update cache
         with self._lock:
-            self._experiments[exp_id] = exp
-            self._exp_by_idea.setdefault(idea_id, set()).add(exp_id)
+            self._experiments[label] = exp
+            self._exp_by_idea.setdefault(idea_id, set()).add(label)
         return exp
 
-    def get_experiment(self, exp_id: int) -> dict | None:
-        exp = self._experiments.get(exp_id)
-        if exp:
-            return self._label_experiment(exp)
-        return None
+    def get_experiment(self, exp_ref) -> dict | None:
+        """Get experiment by label string (e.g. '10.1')."""
+        return self._experiments.get(str(exp_ref))
 
-    def update_experiment(self, exp_id: int, **fields) -> dict | None:
-        exp = self._experiments.get(exp_id)
+    def update_experiment(self, exp_ref, **fields) -> dict | None:
+        label = str(exp_ref)
+        exp = self._experiments.get(label)
         if not exp:
             return None
         exp.update(fields)
         exp = _enrich_experiment(exp)
         idea_dir = self._idea_dir(exp["idea_id"])
-        _write_json(idea_dir / f"{exp_id}.json", exp)
+        _write_json(idea_dir / f"{exp['seq']}.json", exp)
         with self._lock:
-            self._experiments[exp_id] = exp
+            self._experiments[label] = exp
         return exp
 
-    def delete_experiment(self, exp_id: int) -> dict | None:
-        exp = self._experiments.get(exp_id)
+    def delete_experiment(self, exp_ref) -> dict | None:
+        label = str(exp_ref)
+        exp = self._experiments.get(label)
         if not exp:
             return None
 
         idea_id = exp["idea_id"]
         idea_dir = self._idea_dir(idea_id)
         script_path = self.repo_dir / exp["script"]
+        seq = exp["seq"]
         cleanup_paths = [
-            idea_dir / f"{exp_id}.json",
+            idea_dir / f"{seq}.json",
             script_path,
             script_path.with_suffix(".log"),
             script_path.with_suffix(".err"),
@@ -413,25 +381,21 @@ class Store:
                 pass
 
         with self._lock:
-            self._experiments.pop(exp_id, None)
-            exp_ids = self._exp_by_idea.get(idea_id)
-            if exp_ids is not None:
-                exp_ids.discard(exp_id)
+            self._experiments.pop(label, None)
+            labels = self._exp_by_idea.get(idea_id)
+            if labels is not None:
+                labels.discard(label)
 
         return exp
 
     def list_experiments(self, idea_id: int) -> list[dict]:
-        exp_ids = self._exp_by_idea.get(idea_id, set())
-        exps = [self._label_experiment(self._experiments[eid])
-                for eid in exp_ids if eid in self._experiments]
+        labels = self._exp_by_idea.get(idea_id, set())
+        exps = [self._experiments[lbl] for lbl in labels if lbl in self._experiments]
         return sorted(exps, key=lambda e: e.get("created_at", ""))
 
     def list_experiments_by_status(self, status: str) -> list[dict]:
         """List all experiments across all ideas with a given status."""
-        return [
-            self._label_experiment(exp) for exp in self._experiments.values()
-            if exp.get("status") == status
-        ]
+        return [exp for exp in self._experiments.values() if exp.get("status") == status]
 
     def find_similar_ideas(self, description: str, threshold: float = 0.4) -> list[dict]:
         """Find existing ideas with overlapping keywords (simple word-overlap)."""

@@ -258,7 +258,7 @@ class ExperimentRunner:
         self._tasks.pop(exp_id, None)
         self._finished_queue.put_nowait(exp_id)
 
-    async def start(self, exp_id: int, timeout: float | None = None) -> dict:
+    async def start(self, exp_id, timeout: float | None = None) -> dict:
         exp = self._store.get_experiment(exp_id)
         if not exp:
             return {"status": "error", "reason": f"experiment {exp_id} not found"}
@@ -292,7 +292,7 @@ class ExperimentRunner:
 
         try:
             commit = resolve_branch_commit(branch, cwd=self._store.repo_dir)
-            worktree_path = self._worktree_dir / str(exp_id)
+            worktree_path = self._worktree_dir / str(exp_id).replace(".", "_")
             if worktree_path.exists():
                 remove_worktree(worktree_path, cwd=self._store.repo_dir)
             if self._git_lock:
@@ -471,7 +471,7 @@ class ExperimentRunner:
                 continue
         return None
 
-    async def cancel(self, exp_id: int) -> dict | None:
+    async def cancel(self, exp_id) -> dict | None:
         exp = self._store.get_experiment(exp_id)
         if not exp:
             return None
@@ -528,7 +528,7 @@ class ExperimentRunner:
     async def wait_any(
         self,
         timeout: float = 3600,
-        experiment_id: int | None = None,
+        experiment_id=None,
         idea_id: int | None = None,
     ) -> dict:
         """Block until an experiment finishes.

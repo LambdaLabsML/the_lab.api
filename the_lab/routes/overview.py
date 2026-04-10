@@ -71,7 +71,7 @@ def _build_leaderboard_response(
         if exp.get("status") != "running":
             continue
         running_experiments.append({
-            "experiment_id": exp["id"], "experiment_label": exp.get("label", str(exp["id"])),
+            "experiment_id": exp["id"],
             "idea_id": exp["idea_id"],
             "idea_description": _idea_desc(exp["idea_id"]),
             "description": exp.get("description"),
@@ -102,7 +102,7 @@ def _build_leaderboard_response(
     leaderboard = []
     for exp in by_value[:top]:
         entry = {
-            "experiment_id": exp["id"], "experiment_label": exp.get("label", str(exp["id"])),
+            "experiment_id": exp["id"],
             "idea_id": exp["idea_id"],
             "idea_description": _idea_desc(exp["idea_id"]),
             "value": exp["metrics"][metric],
@@ -120,7 +120,7 @@ def _build_leaderboard_response(
     recent_out = []
     for exp in by_time_desc[:recent]:
         entry = {
-            "experiment_id": exp["id"], "experiment_label": exp.get("label", str(exp["id"])),
+            "experiment_id": exp["id"],
             "idea_id": exp["idea_id"],
             "idea_description": _idea_desc(exp["idea_id"]),
             "value": exp["metrics"][metric],
@@ -156,7 +156,7 @@ def _build_leaderboard_response(
         if improved:
             running_best = v
             progression.append({
-                "experiment_id": exp["id"], "experiment_label": exp.get("label", str(exp["id"])),
+                "experiment_id": exp["id"],
                 "idea_id": exp["idea_id"],
                 "idea_description": _idea_desc(exp["idea_id"]),
                 "value": v,
