@@ -21,7 +21,7 @@ import {
   allIdeas,
   logEntries,
 } from "./signals";
-import { chartOpen, currentView } from "./settings";
+// chartOpen and currentView no longer needed — dockview manages panel visibility
 import type { IdeaNode, Experiment, LogEntry } from "../lib/types";
 
 // ---------------------------------------------------------------------------
@@ -62,7 +62,6 @@ async function pollGraph(): Promise<void> {
 }
 
 async function pollChartData(): Promise<void> {
-  if (!chartOpen.value) return;
   try {
     const data = await getChartData();
     // Mark running experiments with a synthetic flag (matches dashboard.html behaviour).
@@ -214,8 +213,6 @@ export function startPolling(): void {
   pollBacklog();
   pollGraph();
   pollChartData();
-  // Log is only fetched when the view is active; if someone opens the
-  // dashboard on the log view, this will fire immediately.
   pollLog();
 
   backlogTimer = setInterval(pollBacklog, 10_000);
