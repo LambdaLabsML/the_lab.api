@@ -288,17 +288,18 @@ class ExperimentRunner:
         idea = self._store.get_idea(exp["idea_id"])
         branch = idea["branch"] if idea else get_current_branch(cwd=self._store.repo_dir)
         worktree_path = None
+        worktree_commit = None  # the actual commit the experiment runs on
         run_cwd = str(self._store.repo_dir)  # fallback
 
         try:
-            commit = resolve_branch_commit(branch, cwd=self._store.repo_dir)
+            worktree_commit = resolve_branch_commit(branch, cwd=self._store.repo_dir)
             worktree_path = self._worktree_dir / str(exp_id).replace(".", "_")
             if worktree_path.exists():
                 remove_worktree(worktree_path, cwd=self._store.repo_dir)
             if self._git_lock:
                 await self._git_lock.acquire()
             try:
-                create_worktree(worktree_path, commit, cwd=self._store.repo_dir)
+                create_worktree(worktree_path, worktree_commit, cwd=self._store.repo_dir)
             finally:
                 if self._git_lock:
                     self._git_lock.release()
@@ -312,12 +313,13 @@ class ExperimentRunner:
             worktree_path = None  # fall back to main repo
 
         try:
-            cur_branch = get_current_branch(cwd=self._store.repo_dir)
-            cur_commit = get_head_commit(cwd=self._store.repo_dir)
+            # Log the commit the experiment actually runs on (the worktree's commit),
+            # not the main checkout's HEAD which may differ.
+            actual_commit = worktree_commit if worktree_commit else get_head_commit(cwd=self._store.repo_dir)
             meta = {
                 **exp.get("meta", {}),
                 "git_branch": branch,
-                "git_commit": cur_commit,
+                "git_commit": actual_commit,
             }
             if worktree_path:
                 meta["worktree"] = str(worktree_path)
