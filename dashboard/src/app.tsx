@@ -611,10 +611,12 @@ export function App() {
     updateAvailablePanels();
 
     // ── Feature: double-click tab bar to collapse/expand group ──
-    // Simple approach: no constraints. Re-apply collapsed sizes after
-    // dockview redistributes via a guarded layoutChange handler.
+    // Dockview enforces 100px minimum per group by default. We override
+    // minimumHeight when collapsing (to allow 28px) and restore it on expand.
+    // A guarded layoutChange enforcer re-applies collapsed size if dockview
+    // tries to redistribute space into collapsed groups.
     const collapsedGroups = new Map<string, number>(); // groupId → original height
-    const TAB_BAR_HEIGHT = 35;
+    const TAB_BAR_HEIGHT = 28; // matches --dv-tabs-and-actions-container-height
     let _collapseGuard = false;
 
     // After any layout change, re-enforce collapsed heights
@@ -644,22 +646,24 @@ export function App() {
       if (collapsedGroups.has(group.id)) {
         // ── Expand ──
         const origHeight = collapsedGroups.get(group.id)!;
-        // Find all siblings in same row and uncollapse them together
         const top = Math.round(group.element.getBoundingClientRect().top);
-        const siblings = dv.groups.filter((g) => {
-          return Math.abs(Math.round(g.element.getBoundingClientRect().top) - top) < 5;
-        });
-        for (const g of siblings) collapsedGroups.delete(g.id);
+        const siblings = dv.groups.filter((g) =>
+          Math.abs(Math.round(g.element.getBoundingClientRect().top) - top) < 5);
+        for (const g of siblings) {
+          collapsedGroups.delete(g.id);
+          g.api.setConstraints({ minimumHeight: undefined as any });
+        }
         group.api.setSize({ height: origHeight });
       } else {
         // ── Collapse ──
         const currentHeight = group.height;
         if (currentHeight > TAB_BAR_HEIGHT + 10) {
-          // Also collapse siblings at same Y
           const top = Math.round(group.element.getBoundingClientRect().top);
           for (const g of dv.groups) {
             if (Math.abs(Math.round(g.element.getBoundingClientRect().top) - top) < 5) {
               collapsedGroups.set(g.id, currentHeight);
+              // Override dockview's 100px default minimum
+              g.api.setConstraints({ minimumHeight: TAB_BAR_HEIGHT });
             }
           }
           group.api.setSize({ height: TAB_BAR_HEIGHT });
