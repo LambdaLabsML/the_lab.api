@@ -610,10 +610,9 @@ export function App() {
 
     updateAvailablePanels();
 
-    // ── Feature: click empty tab-bar space to collapse/expand group ──
-    // Keyed by group ID (stable). After every collapse/expand, we re-enforce
-    // TAB_BAR_HEIGHT on all still-collapsed rows so dockview doesn't
-    // redistribute space into them.
+    // ── Feature: click tab-bar area to collapse/expand group ──
+    // Listens on the whole tab header (not just void) so it works even
+    // when collapsed and there's no visible void space.
     const collapsedInfo = new Map<string, { siblingIds: string[]; origHeight: number }>();
     const TAB_BAR_HEIGHT = 35;
 
@@ -625,73 +624,59 @@ export function App() {
       });
     }
 
-    /** Re-enforce collapsed height on all still-collapsed rows. */
-    function reEnforceCollapsed() {
-      // Collect unique rows that are still collapsed (dedupe by siblingIds set)
-      const seen = new Set<string>();
-      for (const [gid, info] of collapsedInfo) {
-        const key = info.siblingIds.sort().join(",");
-        if (seen.has(key)) continue;
-        seen.add(key);
-        const g = dv.groups.find((gg) => gg.id === gid);
-        if (g) {
-          g.api.setConstraints({ minimumHeight: TAB_BAR_HEIGHT, maximumHeight: TAB_BAR_HEIGHT });
-          g.api.setSize({ height: TAB_BAR_HEIGHT });
-        }
-      }
-    }
-
-    /** Clear the max-height lock on collapsed groups (call before expanding). */
-    function unlockCollapsedMaxHeight() {
-      for (const [gid] of collapsedInfo) {
-        const g = dv.groups.find((gg) => gg.id === gid);
-        if (g) g.api.setConstraints({ maximumHeight: undefined as any });
-      }
-    }
-
-    function onVoidClick(e: MouseEvent) {
-      const voidEl = (e.target as HTMLElement).closest(".dv-void-container");
-      if (!voidEl) return;
-      const groupEl = voidEl.closest(".dv-groupview") as HTMLElement | null;
+    function onTabBarDblClick(e: MouseEvent) {
+      // Double-click anywhere on the tab header bar (tabs-and-actions container)
+      const header = (e.target as HTMLElement).closest(".dv-tabs-and-actions-container");
+      if (!header) return;
+      // Don't trigger on action buttons
+      if ((e.target as HTMLElement).closest(".dv-header-actions")) return;
+      const groupEl = header.closest(".dv-groupview") as HTMLElement | null;
       if (!groupEl) return;
       const group = dv.groups.find((g) => g.element === groupEl || g.element.contains(groupEl));
       if (!group) return;
 
+      e.preventDefault();
+
       if (collapsedInfo.has(group.id)) {
-        // Expand: unlock max-height on all collapsed, restore this row
-        unlockCollapsedMaxHeight();
+        // ── Expand ──
         const info = collapsedInfo.get(group.id)!;
+        // Clear ALL constraints first
+        for (const g of dv.groups) {
+          g.api.setConstraints({ minimumHeight: undefined as any, maximumHeight: undefined as any });
+        }
+        // Remove this row from collapsed state
         for (const id of info.siblingIds) {
           collapsedInfo.delete(id);
-          const g = dv.groups.find((gg) => gg.id === id);
-          if (g) g.api.setConstraints({ minimumHeight: undefined as any, maximumHeight: undefined as any });
         }
+        // Restore height
         group.api.setSize({ height: info.origHeight });
-        // Re-lock remaining collapsed rows after layout settles
-        requestAnimationFrame(reEnforceCollapsed);
+        // Re-lock remaining collapsed rows after dockview settles
+        requestAnimationFrame(() => {
+          for (const [gid, gInfo] of collapsedInfo) {
+            const g = dv.groups.find((gg) => gg.id === gid);
+            if (g) {
+              g.api.setConstraints({ minimumHeight: TAB_BAR_HEIGHT, maximumHeight: TAB_BAR_HEIGHT });
+            }
+          }
+        });
       } else {
-        // Collapse: find siblings, store info, shrink, then lock all collapsed
+        // ── Collapse ──
         const siblings = getRowSiblings(group);
         const currentHeight = group.height;
         if (currentHeight > TAB_BAR_HEIGHT + 10) {
           const siblingIds = siblings.map((g) => g.id);
           for (const g of siblings) {
             collapsedInfo.set(g.id, { siblingIds, origHeight: currentHeight });
-          }
-          // Set both min and max to lock collapsed rows at TAB_BAR_HEIGHT
-          for (const g of siblings) {
             g.api.setConstraints({ minimumHeight: TAB_BAR_HEIGHT, maximumHeight: TAB_BAR_HEIGHT });
           }
           group.api.setSize({ height: TAB_BAR_HEIGHT });
-          // Re-enforce on next frame in case dockview redistributed
-          requestAnimationFrame(reEnforceCollapsed);
         }
       }
     }
-    container.addEventListener("click", onVoidClick);
+    container.addEventListener("dblclick", onTabBarDblClick);
 
     return () => {
-      container.removeEventListener("click", onVoidClick);
+      container.removeEventListener("dblclick", onTabBarDblClick);
       layoutDisposable.dispose();
       addDisposable.dispose();
       removeDisposable.dispose();
