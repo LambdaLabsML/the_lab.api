@@ -610,73 +610,69 @@ export function App() {
 
     updateAvailablePanels();
 
-    // ── Feature: click tab-bar area to collapse/expand group ──
-    // Listens on the whole tab header (not just void) so it works even
-    // when collapsed and there's no visible void space.
-    const collapsedInfo = new Map<string, { siblingIds: string[]; origHeight: number }>();
+    // ── Feature: double-click tab bar to collapse/expand group ──
+    // Simple approach: no constraints. Re-apply collapsed sizes after
+    // dockview redistributes via a guarded layoutChange handler.
+    const collapsedGroups = new Map<string, number>(); // groupId → original height
     const TAB_BAR_HEIGHT = 35;
+    let _collapseGuard = false;
 
-    function getRowSiblings(group: any): any[] {
-      const top = Math.round(group.element.getBoundingClientRect().top);
-      return dv.groups.filter((g) => {
-        const gTop = Math.round(g.element.getBoundingClientRect().top);
-        return Math.abs(gTop - top) < 5;
-      });
-    }
+    // After any layout change, re-enforce collapsed heights
+    const collapseEnforcer = dv.onDidLayoutChange(() => {
+      if (_collapseGuard || collapsedGroups.size === 0) return;
+      _collapseGuard = true;
+      for (const [gid] of collapsedGroups) {
+        const g = dv.groups.find((gg) => gg.id === gid);
+        if (g && g.height > TAB_BAR_HEIGHT + 2) {
+          g.api.setSize({ height: TAB_BAR_HEIGHT });
+        }
+      }
+      _collapseGuard = false;
+    });
 
     function onTabBarDblClick(e: MouseEvent) {
-      // Double-click anywhere on the tab header bar (tabs-and-actions container)
       const header = (e.target as HTMLElement).closest(".dv-tabs-and-actions-container");
       if (!header) return;
-      // Don't trigger on action buttons
       if ((e.target as HTMLElement).closest(".dv-header-actions")) return;
       const groupEl = header.closest(".dv-groupview") as HTMLElement | null;
       if (!groupEl) return;
       const group = dv.groups.find((g) => g.element === groupEl || g.element.contains(groupEl));
       if (!group) return;
 
-      e.preventDefault();
+      _collapseGuard = true;
 
-      if (collapsedInfo.has(group.id)) {
+      if (collapsedGroups.has(group.id)) {
         // ── Expand ──
-        const info = collapsedInfo.get(group.id)!;
-        // Clear ALL constraints first
-        for (const g of dv.groups) {
-          g.api.setConstraints({ minimumHeight: undefined as any, maximumHeight: undefined as any });
-        }
-        // Remove this row from collapsed state
-        for (const id of info.siblingIds) {
-          collapsedInfo.delete(id);
-        }
-        // Restore height
-        group.api.setSize({ height: info.origHeight });
-        // Re-lock remaining collapsed rows after dockview settles
-        requestAnimationFrame(() => {
-          for (const [gid, gInfo] of collapsedInfo) {
-            const g = dv.groups.find((gg) => gg.id === gid);
-            if (g) {
-              g.api.setConstraints({ minimumHeight: TAB_BAR_HEIGHT, maximumHeight: TAB_BAR_HEIGHT });
-            }
-          }
+        const origHeight = collapsedGroups.get(group.id)!;
+        // Find all siblings in same row and uncollapse them together
+        const top = Math.round(group.element.getBoundingClientRect().top);
+        const siblings = dv.groups.filter((g) => {
+          return Math.abs(Math.round(g.element.getBoundingClientRect().top) - top) < 5;
         });
+        for (const g of siblings) collapsedGroups.delete(g.id);
+        group.api.setSize({ height: origHeight });
       } else {
         // ── Collapse ──
-        const siblings = getRowSiblings(group);
         const currentHeight = group.height;
         if (currentHeight > TAB_BAR_HEIGHT + 10) {
-          const siblingIds = siblings.map((g) => g.id);
-          for (const g of siblings) {
-            collapsedInfo.set(g.id, { siblingIds, origHeight: currentHeight });
-            g.api.setConstraints({ minimumHeight: TAB_BAR_HEIGHT, maximumHeight: TAB_BAR_HEIGHT });
+          // Also collapse siblings at same Y
+          const top = Math.round(group.element.getBoundingClientRect().top);
+          for (const g of dv.groups) {
+            if (Math.abs(Math.round(g.element.getBoundingClientRect().top) - top) < 5) {
+              collapsedGroups.set(g.id, currentHeight);
+            }
           }
           group.api.setSize({ height: TAB_BAR_HEIGHT });
         }
       }
+
+      requestAnimationFrame(() => { _collapseGuard = false; });
     }
     container.addEventListener("dblclick", onTabBarDblClick);
 
     return () => {
       container.removeEventListener("dblclick", onTabBarDblClick);
+      collapseEnforcer.dispose();
       layoutDisposable.dispose();
       addDisposable.dispose();
       removeDisposable.dispose();
