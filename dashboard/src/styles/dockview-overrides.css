@@ -74,6 +74,14 @@
 .dockview-theme-dark .dv-tab:hover .dv-default-tab-action { opacity: 0.6; }
 .dockview-theme-dark .dv-default-tab-action:hover { opacity: 1; color: #f85149; }
 
+/* ---- Void container (empty tab-bar space) — clickable to collapse ---- */
+.dockview-theme-dark .dv-void-container {
+  cursor: pointer;
+}
+.dockview-theme-dark .dv-void-container:hover {
+  background: #21262d;
+}
+
 /* ---- Floating panels ---- */
 
 .dockview-theme-dark .dv-overlay-render-container .dv-groupview {

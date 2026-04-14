@@ -552,7 +552,55 @@ export function App() {
 
     updateAvailablePanels();
 
+    // ── Feature: click empty tab-bar space to collapse/expand group ──
+    // Collapses group content to tab-bar height while keeping tabs visible.
+    // For side-by-side groups (horizontal split), all groups in the same
+    // row share one height — we relax constraints on all siblings.
+    const collapsedRows = new Map<string, { ids: string[]; origHeight: number }>();
+    const TAB_BAR_HEIGHT = 35;
+
+    function getRowSiblings(group: any): any[] {
+      const top = Math.round(group.element.getBoundingClientRect().top);
+      return dv.groups.filter((g) => {
+        const gTop = Math.round(g.element.getBoundingClientRect().top);
+        return Math.abs(gTop - top) < 5;
+      });
+    }
+
+    function onVoidClick(e: MouseEvent) {
+      const voidEl = (e.target as HTMLElement).closest(".dv-void-container");
+      if (!voidEl) return;
+      const groupEl = voidEl.closest(".dv-groupview") as HTMLElement | null;
+      if (!groupEl) return;
+      const group = dv.groups.find((g) => g.element === groupEl || g.element.contains(groupEl));
+      if (!group) return;
+
+      const rowKey = `row-${Math.round(group.element.getBoundingClientRect().top)}`;
+
+      if (collapsedRows.has(rowKey)) {
+        const info = collapsedRows.get(rowKey)!;
+        collapsedRows.delete(rowKey);
+        for (const id of info.ids) {
+          const g = dv.groups.find((gg) => gg.id === id);
+          if (g) g.api.setConstraints({ minimumHeight: undefined as any });
+        }
+        group.api.setSize({ height: info.origHeight });
+      } else {
+        const siblings = getRowSiblings(group);
+        const currentHeight = group.height;
+        if (currentHeight > TAB_BAR_HEIGHT + 10) {
+          collapsedRows.set(rowKey, { ids: siblings.map((g) => g.id), origHeight: currentHeight });
+          for (const g of siblings) {
+            g.api.setConstraints({ minimumHeight: TAB_BAR_HEIGHT });
+          }
+          group.api.setSize({ height: TAB_BAR_HEIGHT });
+        }
+      }
+    }
+    container.addEventListener("click", onVoidClick);
+
     return () => {
+      container.removeEventListener("click", onVoidClick);
       layoutDisposable.dispose();
       addDisposable.dispose();
       removeDisposable.dispose();
