@@ -146,7 +146,6 @@ export function DetailPanel() {
 
   function close() {
     selectedIdea.value = null;
-    history.pushState(null, "", "/" + (window.location.pathname.split("/")[1] || "graph"));
   }
 
   const notes: Note[] = idea?.notes || [];

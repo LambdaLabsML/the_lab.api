@@ -36,6 +36,8 @@ import {
   currentView, selectedIdea, selectedMetric, colorMode,
   improvementsOnly, activeTagFilters, tagFilterMode, reverseTime,
   showAbandoned, showConcluded, showRunning,
+  clipOutliers, ideaMean,
+  scatterXMetric, scatterYMetric,
   applyServerDefaults,
   dashboardLayout,
 } from "./state/settings";
@@ -322,66 +324,122 @@ function buildDefaultLayout(dv: DockviewComponent) {
 // URL <-> filter sync (preserved from original)
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// URL <-> state sync — compact, shareable URLs
+//
+// Path:   /ideas/13  or  /
+// Params: only non-default values appear (keeps URLs short)
+//   m=score         metric
+//   t=hybrid,poly   tag filters
+//   tm=or           tag filter mode (omit when "and")
+//   cm=lane         color mode (omit when "status+improve")
+//   imp             improvements only (presence = on)
+//   mean            idea mean (presence = on)
+//   hide=ac         hidden statuses: a=abandoned c=concluded r=running
+//   norev           reverse time OFF (omit when ON, which is default)
+//   noclip          clip outliers OFF (omit when ON)
+//   sx=score        scatter X metric
+//   sy=cost         scatter Y metric
+//
+// Also supports legacy params (metric=, tags=, color=, etc.) for back-compat.
+// ---------------------------------------------------------------------------
+
 function readFiltersFromUrl() {
   const path = window.location.pathname;
-  const params = new URLSearchParams(window.location.search);
+  const p = new URLSearchParams(window.location.search);
 
-  const m = path.match(/^\/ideas\/(\d+)/);
-  if (m) {
-    currentView.value = "dag";
-    selectedIdea.value = parseInt(m[1]);
-  } else if (path.match(/^\/experiments\/(\d+)/)) {
-    currentView.value = "dag";
-  } else {
-    const viewMap: Record<string, string> = {
-      "/": "dag", "/dag": "dag", "/graph": "dag",
-      "/timeline": "timeline", "/log": "log", "/api": "api", "/stats": "stats", "/sandbox": "sandbox",
-    };
-    if (viewMap[path]) currentView.value = viewMap[path];
+  // Path: /ideas/13
+  const ideaMatch = path.match(/^\/ideas\/(\d+)/);
+  if (ideaMatch) {
+    selectedIdea.value = parseInt(ideaMatch[1]);
+  } else if (p.has("idea")) {
+    // Legacy: ?idea=13
+    selectedIdea.value = parseInt(p.get("idea")!) || null;
   }
 
-  if (params.has("metric")) selectedMetric.value = params.get("metric")!;
-  if (params.has("color")) colorMode.value = params.get("color")!;
-  if (params.has("improvements")) improvementsOnly.value = params.get("improvements") === "1";
-  if (params.has("tags")) activeTagFilters.value = params.get("tags")!.split(",").filter(Boolean);
-  if (params.has("tagMode")) tagFilterMode.value = params.get("tagMode") as "or" | "and";
-  if (params.has("reverse")) reverseTime.value = params.get("reverse") === "1";
-  if (params.has("abandoned")) showAbandoned.value = params.get("abandoned") === "1";
-  if (params.has("concluded")) showConcluded.value = params.get("concluded") === "1";
-  if (params.has("running")) showRunning.value = params.get("running") === "1";
-  if (params.has("idea")) selectedIdea.value = parseInt(params.get("idea")!) || null;
+  // Metric (short: m, legacy: metric)
+  const metric = p.get("m") || p.get("metric");
+  if (metric) selectedMetric.value = metric;
+
+  // Tag filters (short: t, legacy: tags)
+  const tags = p.get("t") || p.get("tags");
+  if (tags) activeTagFilters.value = tags.split(",").filter(Boolean);
+
+  // Tag filter mode (short: tm, legacy: tagMode)
+  const tm = p.get("tm") || p.get("tagMode");
+  if (tm === "or" || tm === "and") tagFilterMode.value = tm;
+
+  // Color mode (short: cm, legacy: color)
+  const cm = p.get("cm") || p.get("color");
+  if (cm) colorMode.value = cm;
+
+  // Boolean toggles — presence means ON (for imp, mean) or OFF (for norev, noclip)
+  if (p.has("imp") || p.get("improvements") === "1") improvementsOnly.value = true;
+  if (p.has("mean")) ideaMean.value = true;
+  if (p.has("norev") || p.get("reverse") === "0") reverseTime.value = false;
+  if (p.has("noclip")) clipOutliers.value = false;
+
+  // Hidden statuses (short: hide=acr, legacy: abandoned=0 etc.)
+  const hide = p.get("hide") || "";
+  if (hide) {
+    if (hide.includes("a")) showAbandoned.value = false;
+    if (hide.includes("c")) showConcluded.value = false;
+    if (hide.includes("r")) showRunning.value = false;
+  } else {
+    // Legacy format
+    if (p.get("abandoned") === "0") showAbandoned.value = false;
+    if (p.get("concluded") === "0") showConcluded.value = false;
+    if (p.get("running") === "0") showRunning.value = false;
+  }
+
+  // Scatter metrics
+  if (p.has("sx")) scatterXMetric.value = p.get("sx")!;
+  if (p.has("sy")) scatterYMetric.value = p.get("sy")!;
 }
 
 function syncUrlFromSignals() {
-  const _view = currentView.value;
+  const _idea = selectedIdea.value;
   const _metric = selectedMetric.value;
-  const _color = colorMode.value;
-  const _imp = improvementsOnly.value;
   const _tags = activeTagFilters.value;
   const _tagMode = tagFilterMode.value;
+  const _color = colorMode.value;
+  const _imp = improvementsOnly.value;
+  const _mean = ideaMean.value;
   const _rev = reverseTime.value;
+  const _clip = clipOutliers.value;
   const _abn = showAbandoned.value;
   const _con = showConcluded.value;
   const _run = showRunning.value;
-  const _idea = selectedIdea.value;
+  const _sx = scatterXMetric.value;
+  const _sy = scatterYMetric.value;
 
-  const viewPaths: Record<string, string> = {
-    dag: "/graph", timeline: "/timeline", log: "/log", api: "/api", stats: "/stats", sandbox: "/sandbox",
-  };
-  const path = viewPaths[_view] || "/graph";
+  // Path: /ideas/13 or /
+  const path = _idea !== null ? `/ideas/${_idea}` : "/";
 
+  // Only encode non-default values
   const p = new URLSearchParams();
-  if (_metric) p.set("metric", _metric);
-  if (_color !== "status+improve") p.set("color", _color);
-  if (_imp) p.set("improvements", "1");
-  if (_tags.length > 0) p.set("tags", _tags.join(","));
-  if (_tagMode !== "and") p.set("tagMode", _tagMode);
-  if (!_rev) p.set("reverse", "0");
-  if (!_abn) p.set("abandoned", "0");
-  if (!_con) p.set("concluded", "0");
-  if (!_run) p.set("running", "0");
-  if (_idea !== null) p.set("idea", String(_idea));
-  const qs = p.toString();
+  if (_metric) p.set("m", _metric);
+  if (_tags.length > 0) p.set("t", _tags.join(","));
+  if (_tagMode !== "and") p.set("tm", _tagMode);
+  if (_color !== "status+improve") p.set("cm", _color);
+  if (_imp) p.set("imp", "");
+  if (_mean) p.set("mean", "");
+  if (!_rev) p.set("norev", "");
+  if (!_clip) p.set("noclip", "");
+
+  // Hidden statuses: compact "hide=ac" format
+  let hide = "";
+  if (!_abn) hide += "a";
+  if (!_con) hide += "c";
+  if (!_run) hide += "r";
+  if (hide) p.set("hide", hide);
+
+  if (_sx) p.set("sx", _sx);
+  if (_sy) p.set("sy", _sy);
+
+  const qs = p.toString()
+    .replace(/=(&|$)/g, "$1")  // strip trailing = for valueless params (imp, mean, norev, noclip)
+    .replace(/&$/, "");
   const url = path + (qs ? "?" + qs : "");
 
   if (url !== window.location.pathname + window.location.search) {
