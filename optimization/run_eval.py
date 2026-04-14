@@ -17,6 +17,7 @@ Metrics output (Lab-compatible JSON on stdout):
 from __future__ import annotations
 
 import argparse
+import atexit
 import glob
 import json
 import os
@@ -34,6 +35,50 @@ if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(line_buffering=True)
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(line_buffering=True)
+
+# ---------------------------------------------------------------------------
+# Child process tracking — ensure all sub-agents and Lab instances are killed
+# when the parent script exits (normally, via signal, or via exception).
+# ---------------------------------------------------------------------------
+_child_procs: list[subprocess.Popen] = []
+_child_lock = threading.Lock()
+
+
+def _track_child(proc: subprocess.Popen):
+    with _child_lock:
+        _child_procs.append(proc)
+
+
+def _kill_all_children():
+    with _child_lock:
+        procs = list(_child_procs)
+    for proc in procs:
+        if proc.poll() is None:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+            except (OSError, ProcessLookupError):
+                pass
+    # Give them a moment, then force-kill
+    for proc in procs:
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except (OSError, ProcessLookupError):
+                pass
+
+
+atexit.register(_kill_all_children)
+
+
+def _signal_handler(signum, frame):
+    _kill_all_children()
+    sys.exit(128 + signum)
+
+
+signal.signal(signal.SIGTERM, _signal_handler)
+signal.signal(signal.SIGINT, _signal_handler)
 import time
 from pathlib import Path
 
@@ -312,7 +357,9 @@ def start_lab(repo_dir: str, port: int) -> subprocess.Popen:
         env=env,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
+        start_new_session=True,
     )
+    _track_child(proc)
     # Wait for it to be ready (up to 30s)
     import urllib.request
     host = _get_host()
@@ -398,7 +445,9 @@ def launch_agent(
     proc = subprocess.Popen(
         cmd, cwd=prompt_path, env=env,
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        start_new_session=True,  # own process group for clean killpg
     )
+    _track_child(proc)
 
     # Buffer detailed log for post-hoc replay
     log_buffer = kwargs.get("log_buffer")
