@@ -553,8 +553,9 @@ export function App() {
     updateAvailablePanels();
 
     // ── Feature: click empty tab-bar space to collapse/expand group ──
-    // Keyed by group ID (stable) instead of Y position (shifts when rows collapse).
-    // Each group in a row stores the same info so clicking any sibling can expand.
+    // Keyed by group ID (stable). After every collapse/expand, we re-enforce
+    // TAB_BAR_HEIGHT on all still-collapsed rows so dockview doesn't
+    // redistribute space into them.
     const collapsedInfo = new Map<string, { siblingIds: string[]; origHeight: number }>();
     const TAB_BAR_HEIGHT = 35;
 
@@ -566,6 +567,30 @@ export function App() {
       });
     }
 
+    /** Re-enforce collapsed height on all still-collapsed rows. */
+    function reEnforceCollapsed() {
+      // Collect unique rows that are still collapsed (dedupe by siblingIds set)
+      const seen = new Set<string>();
+      for (const [gid, info] of collapsedInfo) {
+        const key = info.siblingIds.sort().join(",");
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const g = dv.groups.find((gg) => gg.id === gid);
+        if (g) {
+          g.api.setConstraints({ minimumHeight: TAB_BAR_HEIGHT, maximumHeight: TAB_BAR_HEIGHT });
+          g.api.setSize({ height: TAB_BAR_HEIGHT });
+        }
+      }
+    }
+
+    /** Clear the max-height lock on collapsed groups (call before expanding). */
+    function unlockCollapsedMaxHeight() {
+      for (const [gid] of collapsedInfo) {
+        const g = dv.groups.find((gg) => gg.id === gid);
+        if (g) g.api.setConstraints({ maximumHeight: undefined as any });
+      }
+    }
+
     function onVoidClick(e: MouseEvent) {
       const voidEl = (e.target as HTMLElement).closest(".dv-void-container");
       if (!voidEl) return;
@@ -575,39 +600,33 @@ export function App() {
       if (!group) return;
 
       if (collapsedInfo.has(group.id)) {
-        // Expand: restore height and clear constraints on all siblings
+        // Expand: unlock max-height on all collapsed, restore this row
+        unlockCollapsedMaxHeight();
         const info = collapsedInfo.get(group.id)!;
         for (const id of info.siblingIds) {
           collapsedInfo.delete(id);
           const g = dv.groups.find((gg) => gg.id === id);
-          if (g) g.api.setConstraints({ minimumHeight: undefined as any });
-        }
-        // Temporarily relax ALL other groups so dockview can find room
-        for (const g of dv.groups) {
-          if (!info.siblingIds.includes(g.id)) {
-            g.api.setConstraints({ minimumHeight: 0 });
-          }
+          if (g) g.api.setConstraints({ minimumHeight: undefined as any, maximumHeight: undefined as any });
         }
         group.api.setSize({ height: info.origHeight });
-        // Restore default constraints on the other groups after layout settles
-        requestAnimationFrame(() => {
-          for (const g of dv.groups) {
-            if (!info.siblingIds.includes(g.id) && !collapsedInfo.has(g.id)) {
-              g.api.setConstraints({ minimumHeight: undefined as any });
-            }
-          }
-        });
+        // Re-lock remaining collapsed rows after layout settles
+        requestAnimationFrame(reEnforceCollapsed);
       } else {
-        // Collapse: find siblings, store info on each, shrink
+        // Collapse: find siblings, store info, shrink, then lock all collapsed
         const siblings = getRowSiblings(group);
         const currentHeight = group.height;
         if (currentHeight > TAB_BAR_HEIGHT + 10) {
           const siblingIds = siblings.map((g) => g.id);
           for (const g of siblings) {
             collapsedInfo.set(g.id, { siblingIds, origHeight: currentHeight });
-            g.api.setConstraints({ minimumHeight: TAB_BAR_HEIGHT });
+          }
+          // Set both min and max to lock collapsed rows at TAB_BAR_HEIGHT
+          for (const g of siblings) {
+            g.api.setConstraints({ minimumHeight: TAB_BAR_HEIGHT, maximumHeight: TAB_BAR_HEIGHT });
           }
           group.api.setSize({ height: TAB_BAR_HEIGHT });
+          // Re-enforce on next frame in case dockview redistributed
+          requestAnimationFrame(reEnforceCollapsed);
         }
       }
     }
