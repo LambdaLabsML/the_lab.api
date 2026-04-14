@@ -43,7 +43,7 @@ def _build_launch_command(
             cmd.append("--dangerously-skip-permissions")
         if model:
             cmd.extend(["--model", model])
-        cmd.append(loop_prompt)
+        cmd.extend(["-p", loop_prompt])
         return cmd
 
     cmd = [agent_bin, "--yolo"]
