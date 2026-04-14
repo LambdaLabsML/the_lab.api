@@ -25,6 +25,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import urllib.request
 
 # Force unbuffered output — critical when stdout/stderr are redirected to log files
@@ -67,6 +68,78 @@ def _lab_get(url: str, timeout: float = 5):
     return urllib.request.urlopen(req, timeout=timeout)
 
 
+def _lab_post(url: str, data: dict, timeout: float = 5):
+    """POST JSON to a Lab API URL with the dashboard header so it's excluded from stats."""
+    body = json.dumps(data).encode()
+    req = urllib.request.Request(
+        url, data=body,
+        headers={"X-The-Lab-Source": "dashboard", "Content-Type": "application/json"},
+        method="POST",
+    )
+    return urllib.request.urlopen(req, timeout=timeout)
+
+
+def start_t1_suggestion_injector(port: int, initial_completed: int) -> threading.Thread:
+    """Background thread that injects suggestions at experiment milestones for T1.
+
+    - After the agent's 1st new experiment completes: inject a LOW-priority suggestion
+    - After the agent's 2nd new experiment completes: inject a HIGH-priority suggestion
+
+    Both calls use the dashboard header so they are excluded from API stats.
+    """
+    host = _get_host()
+    base = f"http://{host}:{port}/api/v1"
+
+    def _inject():
+        low_injected = False
+        high_injected = False
+
+        while not (low_injected and high_injected):
+            time.sleep(3)
+            try:
+                resp = _lab_get(f"{base}/chart-data", timeout=2)
+                data = json.loads(resp.read())
+                new_completed = len(data.get("experiments", [])) - initial_completed
+            except Exception:
+                continue
+
+            if new_completed >= 1 and not low_injected:
+                try:
+                    _lab_post(f"{base}/ideas/suggest", {
+                        "description": (
+                            "When you have time, add observation notes documenting "
+                            "the memory usage patterns across the table-heavy, "
+                            "polynomial, and hybrid approaches"
+                        ),
+                        "priority": "normal",
+                    })
+                    print("  [t1-inject] Low-priority suggestion injected", file=sys.stderr)
+                    low_injected = True
+                except Exception as e:
+                    print(f"  [t1-inject] Failed to inject low-priority: {e}", file=sys.stderr)
+
+            if new_completed >= 2 and not high_injected:
+                try:
+                    _lab_post(f"{base}/ideas/suggest", {
+                        "description": (
+                            "URGENT: The polynomial approach (ideas 6-10) has a known "
+                            "numerical instability in the exp kernel. Investigate idea 8 "
+                            "and fix the Padé approximation coefficients — this is "
+                            "blocking other work"
+                        ),
+                        "parent_ids": [8],
+                        "priority": "high",
+                    })
+                    print("  [t1-inject] High-priority suggestion injected", file=sys.stderr)
+                    high_injected = True
+                except Exception as e:
+                    print(f"  [t1-inject] Failed to inject high-priority: {e}", file=sys.stderr)
+
+    t = threading.Thread(target=_inject, daemon=True)
+    t.start()
+    return t
+
+
 PRICE_INPUT = 15.0
 PRICE_OUTPUT = 75.0
 PRICE_CACHE_WRITE = 18.75
@@ -85,8 +158,8 @@ def parse_args():
                    help="Path to baseline.json for score normalization")
     p.add_argument("--output", default=None,
                    help="Write metrics JSON to this file (default: stdout)")
-    p.add_argument("--tests", default="t1,t2,t3,t4,t5,t6,t7",
-                   help="Comma-separated test IDs to run (default: t1,t2,t3,t4,t5,t6,t7)")
+    p.add_argument("--tests", default="t1,t2,t3,t4,t5,t6,t7,t8",
+                   help="Comma-separated test IDs to run (default: t1,t2,t3,t4,t5,t6,t7,t8)")
     p.add_argument("--single-test", default=None,
                    help="Run a single test fixture dir (for internal use by the multi-test runner)")
     return p.parse_args()
@@ -107,6 +180,7 @@ def copy_test_fixture(test_id: str, dest: Path):
         "t5": "t5_discovery",
         "t6": "t6_multi_branch",
         "t7": "t7_analytics",
+        "t8": "t8_metadata",
     }
     test_name = test_names.get(test_id, test_id)
     fixture_src = TESTS_DIR / test_name / "fixture"
@@ -978,6 +1052,18 @@ def run_single_test(test_id: str, args) -> dict:
 
     try:
         t0 = time.time()
+
+        # T1: start background suggestion injector before launching the agent
+        if test_id == "t1":
+            initial_exp_count = 0
+            try:
+                resp = _lab_get(f"http://{host}:{port}/api/v1/chart-data", timeout=5)
+                data = json.loads(resp.read())
+                initial_exp_count = len(data.get("experiments", []))
+            except Exception:
+                pass
+            start_t1_suggestion_injector(port, initial_exp_count)
+
         agent_type = getattr(args, "agent", "claude")
         print(f"{pfx}Launching {agent_type} agent ({args.model})...", file=sys.stderr)
         log_buf: list[str] = []

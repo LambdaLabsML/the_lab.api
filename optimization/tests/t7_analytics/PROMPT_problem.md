@@ -2,11 +2,21 @@
 
 ## Goal
 
-The experiment tags are messy and inconsistent. Clean them up and analyze:
-1. Normalize the tags (rename duplicates like "Table"→"table", "poly"→"polynomial")
-2. Find the mean score for each tag group (table, polynomial, hybrid)
-3. Determine which approach has the best average performance
-4. Continue the most promising approach
+Analyze the experimental data across all 15 ideas and answer these questions. Document each answer as a note on the most relevant idea.
+
+### Questions
+
+1. **Per-approach mean score**: What is the mean composite score for each approach (table-heavy, polynomial, hybrid)? For approaches with multiple experiments per idea, average within each idea first, then average across ideas.
+
+2. **Memory vs score**: Among completed experiments, which approach achieves the best score-to-memory ratio? (i.e., score per byte of memory used)
+
+3. **Best exp-kernel accuracy**: Which specific idea achieved the highest accuracy for the `exp` kernel?
+
+4. **Over-budget experiments**: List all experiments that used more than 4000 bytes of memory.
+
+5. **Most promising idea to continue**: Which single idea is the most promising to continue working on? Consider not just peak scores but also consistency across repeated experiments — a reliable 0.70 is more promising than a one-time 0.85 that doesn't reproduce.
+
+After answering, continue from the most promising idea and run one more experiment to improve the score.
 
 ## Background
 
@@ -16,10 +26,8 @@ The composite score is a geometric mean of per-kernel scores. Each kernel must a
 
 Three strategies have been explored so far:
 - **Table-heavy** (ideas 1-5): lookup tables with interpolation
-- **Polynomial** (ideas 6-10): Chebyshev/Pade approximations, no tables
+- **Polynomial** (ideas 6-10): Chebyshev/Padé approximations, no tables
 - **Hybrid** (ideas 11-15): small tables + polynomial corrections
-
-The current best score is 0.75 from the hybrid approach. There is room to improve.
 
 ## Setup
 

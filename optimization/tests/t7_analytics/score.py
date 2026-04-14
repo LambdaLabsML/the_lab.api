@@ -1,4 +1,13 @@
-"""Score T7: Analytics & Tag Management — did the agent organize tags and analyze?"""
+"""Score T7: Analytics — can the agent answer data questions efficiently?
+
+Tests multi-step data analysis: grouping, filtering, hierarchical aggregation,
+and statistical reasoning (fluke vs reliable results).
+
+Fixture properties:
+- Ideas 5, 10, 12, 13 have 3 experiments each
+- Idea 12 is the "fluke": one high score (0.85) + two low repeats (0.30, 0.28)
+- Idea 13 is the "reliable": consistent scores (0.72, 0.74, 0.71)
+"""
 import json
 import sys
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent.parent))
@@ -6,6 +15,30 @@ from score_common import LabClient, api_call_count, endpoint_was_called, new_ide
 
 SEED_IDEAS = 15
 SEED_BEST_SCORE = 0.75
+
+# Pre-computed correct answers from the fixture
+# Q1: hierarchical per-approach means (average within idea, then across ideas)
+CORRECT_TABLE_MEAN = 0.3793    # ideas 1-5
+CORRECT_POLY_MEAN = 0.3593     # ideas 6-10
+CORRECT_HYBRID_MEAN = 0.5333   # ideas 11-13 (excl 14 over-budget, 15 no exp)
+
+# Q5: Most promising idea is 13 (reliable: 0.72, 0.74, 0.71)
+# NOT idea 12 (fluke: 0.85, 0.30, 0.28)
+RELIABLE_IDEA = 13
+FLUKE_IDEA = 12
+
+
+def _notes_text(client: LabClient, ideas: list[dict]) -> str:
+    """Collect all note text for keyword analysis."""
+    all_text = []
+    for idea in ideas:
+        try:
+            notes = client.get(f"/ideas/{idea['id']}/notes")
+            for note in notes:
+                all_text.append(note.get("text", "").lower())
+        except Exception:
+            pass
+    return " ".join(all_text)
 
 
 def score(api_url: str) -> dict:
@@ -16,99 +49,120 @@ def score(api_url: str) -> dict:
     call_list = stats.get("calls", [])
 
     new_ideas = new_ideas_after(ideas, SEED_IDEAS)
+    notes_text = _notes_text(client, ideas)
     checks = {}
 
-    # Did the agent list tags?
-    checks["listed_tags"] = 1.0 if endpoint_was_called(stats, "/experiments/tags") else 0.0
+    # ── Q1: Per-approach means documented ──────────────────────────────
+    # Check if the agent wrote notes with per-approach averages
+    has_approach_analysis = (
+        any(kw in notes_text for kw in ["table-heavy", "table heavy", "table approach"])
+        and any(kw in notes_text for kw in ["polynomial", "poly approach"])
+        and any(kw in notes_text for kw in ["hybrid"])
+        and any(kw in notes_text for kw in ["mean", "average", "avg"])
+    )
+    checks["approach_means_documented"] = 1.0 if has_approach_analysis else 0.0
 
-    # Did the agent rename tags?
-    rename_calls = sum(1 for c in call_list if "/tags/rename" in c.get("endpoint", ""))
-    checks["renamed_tags"] = min(rename_calls / 1, 1.0)
+    # ── Q1b: Hierarchical mean correct (not flat) ─────────────────────
+    # Check if the reported hybrid mean is closer to 0.53 (hierarchical)
+    # than to 0.57 (flat). We look for numbers in notes near the correct values.
+    import re
+    numbers_in_notes = [float(m) for m in re.findall(r"0\.\d{2,4}", notes_text)]
+    # Check if any reported number is close to the hierarchical hybrid mean
+    hierarchical_close = any(abs(n - CORRECT_HYBRID_MEAN) < 0.03 for n in numbers_in_notes)
+    flat_close = any(abs(n - 0.5714) < 0.03 for n in numbers_in_notes)
+    if hierarchical_close and not flat_close:
+        checks["hierarchical_mean_correct"] = 1.0
+    elif hierarchical_close:
+        checks["hierarchical_mean_correct"] = 0.7  # got it right but maybe also reported flat
+    elif flat_close:
+        checks["hierarchical_mean_correct"] = 0.3  # used flat mean (wrong methodology)
+    else:
+        checks["hierarchical_mean_correct"] = 0.0
 
-    # Are tags normalized after the agent's work?
-    # Check for duplicate variants being reduced
-    try:
-        tags_data = client.get("/experiments/tags")
-        # tags_data should be a list of tag strings or a dict with tag info
-        if isinstance(tags_data, list):
-            all_tags = set(t.lower() if isinstance(t, str) else str(t).lower() for t in tags_data)
-        elif isinstance(tags_data, dict):
-            all_tags = set(k.lower() for k in tags_data.keys()) if tags_data else set()
-        else:
-            all_tags = set()
+    # ── Q4: Identified over-budget experiments ─────────────────────────
+    over_budget_noted = any(
+        kw in notes_text
+        for kw in ["4608", "over budget", "over-budget", "exceeds budget",
+                    "above budget", "memory exceeded"]
+    )
+    checks["identified_over_budget"] = 1.0 if over_budget_noted else 0.0
 
-        # The messy fixture has variants like: table, Table, table-v1, polynomial, poly, Polynomial,
-        # hybrid, Hybrid, hybrid-approach, over-budget, failed, merge
-        # After normalization, we'd expect fewer distinct tag groups
-        # Count how many "similar" tag groups exist
-        messy_variants = {"table", "table-v1", "polynomial", "poly", "hybrid", "hybrid-approach"}
-        remaining_variants = messy_variants & all_tags
-        # Good normalization: 3 or fewer variant tags remain (table, polynomial, hybrid)
-        # Bad: all 6+ variants still exist
-        if len(remaining_variants) <= 3:
-            checks["tags_normalized"] = 1.0
-        elif len(remaining_variants) <= 4:
-            checks["tags_normalized"] = 0.7
-        else:
-            checks["tags_normalized"] = max(0.0, 1.0 - (len(remaining_variants) - 3) / 3)
-    except Exception:
-        checks["tags_normalized"] = 0.0
+    # ── Q5: Chose reliable idea over fluke ─────────────────────────────
+    # Check if agent identified idea 13 as most promising (not idea 12)
+    chose_reliable = False
+    chose_fluke = False
+    # Check notes for recommendation
+    if any(kw in notes_text for kw in ["idea 13", "idea/13", "#13"]):
+        if any(kw in notes_text for kw in ["promising", "continue", "best", "reliable",
+                                            "consistent", "recommend", "most stable"]):
+            chose_reliable = True
+    if any(kw in notes_text for kw in ["idea 12", "idea/12", "#12"]):
+        if any(kw in notes_text for kw in ["promising", "continue", "best"]):
+            chose_fluke = True
 
-    # Did the agent use tag filtering?
+    # Also check if agent branched from idea 13 (action speaks louder)
+    for idea in new_ideas:
+        if RELIABLE_IDEA in idea.get("parent_ids", []):
+            chose_reliable = True
+        if FLUKE_IDEA in idea.get("parent_ids", []) and RELIABLE_IDEA not in idea.get("parent_ids", []):
+            chose_fluke = True
+
+    if chose_reliable and not chose_fluke:
+        checks["chose_reliable_over_fluke"] = 1.0
+    elif chose_reliable:
+        checks["chose_reliable_over_fluke"] = 0.7  # mentioned both but favored reliable
+    elif chose_fluke:
+        checks["chose_reliable_over_fluke"] = 0.0  # fell for the fluke
+    else:
+        checks["chose_reliable_over_fluke"] = 0.0
+
+    # ── Q5b: Recognized variance/reproducibility issue ────────────────
+    variance_noted = any(
+        kw in notes_text
+        for kw in ["variance", "reproducib", "inconsisten", "outlier", "fluke",
+                    "cannot reproduce", "not reproducible", "one-time", "unreliable",
+                    "spread", "standard deviation", "std"]
+    )
+    checks["recognized_variance"] = 1.0 if variance_noted else 0.0
+
+    # ── Query efficiency ──────────────────────────────────────────────
+    # Penalize reading ideas one-by-one when bulk endpoints exist
+    individual_idea_gets = sum(
+        1 for c in call_list
+        if "GET /api/v1/ideas/" in c.get("endpoint", "")
+        and "/search" not in c.get("endpoint", "")
+        and "/experiments" not in c.get("endpoint", "")
+        and "/notes" not in c.get("endpoint", "")
+    )
+    checks["query_efficiency"] = max(0.0, 1.0 - individual_idea_gets / 15)
+
+    # ── Used tag filtering ────────────────────────────────────────────
     checks["used_tag_filter"] = 1.0 if (
-        any("tags=" in c.get("endpoint", "") for c in call_list if
-            "/leaderboard" in c.get("endpoint", "") or "/orient" in c.get("endpoint", ""))
+        any("tags=" in c.get("endpoint", "") for c in call_list
+            if "/leaderboard" in c.get("endpoint", "") or "/orient" in c.get("endpoint", ""))
     ) else 0.0
 
-    # Did the agent understand metric direction?
-    checks["understood_metric_direction"] = 1.0 if endpoint_was_called(stats, "/metric-direction") else 0.0
-
-    # Did the agent document analysis (mean scores, comparisons)?
-    analysis_notes = 0
-    total_new_notes = 0
-    for idea in ideas:
-        try:
-            notes = client.get(f"/ideas/{idea['id']}/notes")
-            for note in notes:
-                text = note.get("text", "").lower()
-                if any(kw in text for kw in ["mean", "average", "avg", "analysis", "best approach",
-                                              "highest", "lowest", "performance", "comparison"]):
-                    analysis_notes += 1
-                total_new_notes += 1
-        except Exception:
-            pass
-    seed_notes = 20
-    new_notes = max(total_new_notes - seed_notes, 0)
-    checks["documented_analysis"] = min(analysis_notes / 1, 1.0)
-
-    # Score improved: created new experiment beating 0.75
+    # ── Score improved ────────────────────────────────────────────────
     best_new_score = 0.0
     for idea in new_ideas:
         for exp in client.experiments(idea["id"]):
             if exp.get("status") == "completed":
                 s = (exp.get("metrics") or {}).get("score", 0)
                 best_new_score = max(best_new_score, s)
-    checks["score_improved"] = min(best_new_score / SEED_BEST_SCORE, 1.0) if best_new_score > 0 else 0.0
+    checks["score_improved"] = (
+        min(best_new_score / SEED_BEST_SCORE, 1.0) if best_new_score > 0 else 0.0
+    )
 
-    # Wait efficiency: no repeated /wait calls for the same experiment
-    wait_calls = [c for c in call_list if "/wait" in c.get("endpoint", "")]
-    wait_exp_ids = []
-    for c in wait_calls:
-        ep = c.get("endpoint", "")
-        # Extract experiment_id from query like "/wait?experiment_id=5"
-        if "experiment_id=" in ep:
-            try:
-                eid = ep.split("experiment_id=")[1].split("&")[0]
-                wait_exp_ids.append(eid)
-            except (IndexError, ValueError):
-                pass
-    # Check for duplicate wait calls on the same experiment
-    if wait_exp_ids:
-        unique_waits = len(set(wait_exp_ids))
-        total_waits = len(wait_exp_ids)
-        checks["wait_efficiency"] = unique_waits / total_waits if total_waits > 0 else 1.0
-    else:
-        checks["wait_efficiency"] = 1.0  # No wait calls is fine (maybe they didn't need to)
+    # ── Documented analysis (wrote notes with answers) ────────────────
+    seed_notes = 20
+    total_notes = 0
+    for idea in ideas:
+        try:
+            total_notes += len(client.get(f"/ideas/{idea['id']}/notes"))
+        except Exception:
+            pass
+    new_notes = max(total_notes - seed_notes, 0)
+    checks["documented_analysis"] = min(new_notes / 3, 1.0)
 
     return score_result("t7_analytics", checks, calls, max_calls=25)
 

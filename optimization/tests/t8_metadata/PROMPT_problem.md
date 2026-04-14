@@ -2,13 +2,12 @@
 
 ## Goal
 
-Systematically explore 4 different optimization approaches for the math kernels. For each approach:
-1. Create a new idea branching from a promising parent
-2. Edit benchmark/kernels.py with your approach
-3. Run an experiment and wait for results
-4. Check /orient or /backlog before starting the next idea — the user may submit suggestions
+The experiment tags are messy and inconsistent. The project also lacks documentation about what tags and metrics mean. Clean this up for future researchers:
 
-**Important:** Between ideas, always check for suggestions via /orient or /backlog. If a **high-priority** suggestion appears, adopt and work on it immediately — before continuing your planned ideas. Low-priority suggestions can wait until you finish your current batch of work.
+1. **Normalize tags**: Rename duplicates (e.g., "Table"→"table", "poly"→"polynomial") so each approach has exactly one tag.
+2. **Understand tag purposes**: For each tag, figure out what it represents and which experiments use it. Document this as notes.
+3. **Understand metrics**: Determine which metrics should be maximized vs minimized, and what they measure. Document this.
+4. **Continue the best approach**: Branch from the most promising idea and run one experiment to improve the score. Tag the new experiment clearly, and document what the tag means for anyone who comes after you.
 
 ## Background
 

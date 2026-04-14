@@ -111,7 +111,7 @@ cmd_baseline() {
 
     # Create experiment
     local run_eval="$SCRIPT_DIR/run_eval.py"
-    local script_content="#!/bin/bash\nset -euo pipefail\npython $run_eval --agent $eval_agent --model $model --budget $budget --tests t1,t2,t3,t4,t5,t6,t7"
+    local script_content="#!/bin/bash\nset -euo pipefail\npython $run_eval --agent $eval_agent --model $model --budget $budget --tests t1,t2,t3,t4,t5,t6,t7,t8"
     local exp_resp
     exp_resp=$(curl -s -X POST "$api/ideas/$idea_id/experiments" \
         -H "Content-Type: application/json" \

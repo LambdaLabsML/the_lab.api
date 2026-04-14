@@ -2741,19 +2741,102 @@ _T7_MESSY_TAGS = {
 
 
 def build_t7_analytics(dest: Path):
-    """15 ideas with messy/inconsistent tags. Agent must normalize and analyze."""
+    """15 ideas with multi-experiment data for analytics queries.
+
+    Key fixture properties:
+    - Ideas 5, 10, 12, 13 have 3 experiments each (for hierarchical means)
+    - Idea 12 is the "fluke": one high score (0.85) + two low repeats (0.30, 0.28)
+    - Idea 13 is the "reliable": consistent scores (0.72, 0.74, 0.71)
+    - Idea 14 has a failed + over-budget experiment
+    - Tags are consistent (not messy — analytics is about querying, not cleanup)
+    """
+    fb = FixtureBuilder(dest)
+    fb.init_project(BASELINE_KERNELS)
+
+    # Multi-experiment score overrides:
+    # {idea_id: [(score, mem_bytes, description_suffix), ...]}
+    _MULTI_EXPS = {
+        5: [
+            (0.48, 1280, "run 1: baseline"),
+            (0.45, 1280, "run 2: slightly worse"),
+            (0.50, 1280, "run 3: minor tuning"),
+        ],
+        10: [
+            (0.55, 0, "run 1: baseline"),
+            (0.53, 0, "run 2: variance check"),
+            (0.56, 0, "run 3: stable result"),
+        ],
+        12: [
+            (0.85, 384, "run 1: surprisingly high (fluke)"),
+            (0.30, 384, "run 2: cannot reproduce"),
+            (0.28, 384, "run 3: confirms run 1 was an outlier"),
+        ],
+        13: [
+            (0.72, 768, "run 1: solid result"),
+            (0.74, 768, "run 2: consistent"),
+            (0.71, 768, "run 3: reliable range"),
+        ],
+    }
+
+    for (idea_id, desc, parents, status, conclusion, kernels,
+         score, mem_bytes, tags, notes) in SEED_IDEAS:
+
+        fb.add_idea(idea_id, desc, parents, status, conclusion, kernels)
+
+        if idea_id in _MULTI_EXPS:
+            for exp_score, exp_mem, exp_suffix in _MULTI_EXPS[idea_id]:
+                fb.add_experiment(
+                    idea_id, f"{desc[:30]}... — {exp_suffix}",
+                    status="completed",
+                    metrics=_metrics(exp_score, exp_mem),
+                    log_content=_log_json(exp_score, exp_mem),
+                    tags=tags,
+                )
+        elif idea_id == 14:
+            fb.add_experiment(
+                idea_id, "Initial run with aggressive tables",
+                status="failed",
+                error="MemoryError: table allocation exceeded system limits",
+                script_content="#!/bin/bash\nset -euo pipefail\ncd \"$(dirname \"$0\")/../..\"\npython benchmark/eval_harness.py",
+                log_content="Allocating tables...\nsin: 256 entries (2048 bytes)\nexp: 128 entries (1024 bytes)\nlog: 64 entries (512 bytes)\nsqrt: 128 entries (1024 bytes)\nTotal: 4608 bytes\nMemoryError: table pre-allocation check failed",
+                err_content="exit code 1\n\nMemoryError: table allocation exceeded system limits",
+                tags=tags,
+            )
+            fb.add_experiment(
+                idea_id, "Re-run with budget check disabled (still over budget)",
+                status="completed",
+                metrics=_metrics(0.08, 4608),
+                log_content=_log_json(0.08, 4608),
+                tags=tags,
+            )
+        elif score is not None:
+            fb.add_experiment(
+                idea_id, f"Evaluate: {desc[:40]}",
+                status="completed",
+                metrics=_metrics(score, mem_bytes),
+                log_content=_log_json(score, mem_bytes),
+                tags=tags,
+            )
+
+        for note_text, note_level in notes:
+            fb.add_note(idea_id, note_text, note_level)
+
+    fb.finalize()
+
+
+def build_t8_metadata(dest: Path):
+    """15 ideas with messy tags. Agent must understand tag/metric semantics."""
     fb = FixtureBuilder(dest)
     fb.init_project(BASELINE_KERNELS)
 
     for (idea_id, desc, parents, status, conclusion, kernels,
          score, mem_bytes, _original_tags, notes) in SEED_IDEAS:
 
-        # Use messy tags for T7
+        # Use messy tags for T8
         tags = _T7_MESSY_TAGS.get(idea_id, _original_tags)
 
         fb.add_idea(idea_id, desc, parents, status, conclusion, kernels)
 
-        # Add experiment(s) — same logic as _build_full_fixture
         if idea_id == 14:
             fb.add_experiment(
                 idea_id, "Initial run with aggressive tables",
@@ -2798,6 +2881,7 @@ BUILDERS = {
     "t5": ("t5_discovery/fixture", build_t5_discovery),
     "t6": ("t6_multi_branch/fixture", build_t6_multi_branch),
     "t7": ("t7_analytics/fixture", build_t7_analytics),
+    "t8": ("t8_metadata/fixture", build_t8_metadata),
 }
 
 
