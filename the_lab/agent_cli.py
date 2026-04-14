@@ -43,7 +43,7 @@ def _build_launch_command(
             cmd.append("--dangerously-skip-permissions")
         if model:
             cmd.extend(["--model", model])
-        cmd.extend(["-p", loop_prompt])
+        cmd.append(loop_prompt)
         return cmd
 
     cmd = [agent_bin, "--yolo"]
@@ -129,8 +129,9 @@ def main():
         print(f"Error: '{agent_bin}' not found in PATH.", file=sys.stderr)
         sys.exit(1)
 
-    content = prompt_path.read_text().strip()
-    loop_prompt = f"/loop {args.duration} {content}"
+    # Pass the file path to Claude — it reads the file content itself.
+    # The /loop command references the file so Claude re-reads it each iteration.
+    loop_prompt = f"/loop {args.duration} {prompt_path.resolve()}"
     cmd = _build_launch_command(
         args.agent,
         agent_bin,
