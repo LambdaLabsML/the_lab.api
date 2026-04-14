@@ -140,10 +140,17 @@ def start_t1_suggestion_injector(port: int, initial_completed: int) -> threading
     return t
 
 
-PRICE_INPUT = 15.0
-PRICE_OUTPUT = 75.0
-PRICE_CACHE_WRITE = 18.75
-PRICE_CACHE_READ = 1.50
+MODEL_PRICING = {
+    # (input, output, cache_write, cache_read) per million tokens
+    "haiku":  (0.80,  4.00,  1.00, 0.08),
+    "sonnet": (3.00, 15.00,  3.75, 0.30),
+    "opus":   (15.0, 75.00, 18.75, 1.50),
+}
+# Defaults (set by main() based on --model, fallback to haiku)
+PRICE_INPUT = 0.80
+PRICE_OUTPUT = 4.00
+PRICE_CACHE_WRITE = 1.00
+PRICE_CACHE_READ = 0.08
 
 
 def parse_args():
@@ -1125,7 +1132,15 @@ def _test_dir_name(test_id: str) -> str:
 
 
 def main():
+    global PRICE_INPUT, PRICE_OUTPUT, PRICE_CACHE_WRITE, PRICE_CACHE_READ
     args = parse_args()
+
+    # Set pricing based on model
+    model_key = args.model.lower().split("-")[0]  # "haiku", "sonnet", "opus"
+    if model_key in MODEL_PRICING:
+        PRICE_INPUT, PRICE_OUTPUT, PRICE_CACHE_WRITE, PRICE_CACHE_READ = MODEL_PRICING[model_key]
+        print(f"Pricing: {model_key} (${PRICE_INPUT}/{PRICE_OUTPUT}/{PRICE_CACHE_WRITE}/{PRICE_CACHE_READ} per M tokens)", file=sys.stderr)
+
     test_ids = [t.strip() for t in args.tests.split(",") if t.strip()]
 
     # If running multi-test mode (default)
