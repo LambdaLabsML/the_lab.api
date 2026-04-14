@@ -40,7 +40,7 @@ import {
   dashboardLayout,
 } from "./state/settings";
 import { startPolling, stopPolling } from "./state/polling";
-import { setActivatePanel } from "./state/signals";
+import { setActivatePanel, setCloneChartPanel, setUpdatePanelTitle } from "./state/signals";
 import { initTouchMoveMenu } from "./lib/touch-move-menu";
 
 // ---------------------------------------------------------------------------
@@ -56,15 +56,15 @@ const PANEL_NAMES: Record<string, string> = {
 
 const ALL_PANEL_IDS = Object.keys(PANEL_NAMES);
 
-const PANEL_MAP: Record<string, () => preact.JSX.Element> = {
+const PANEL_MAP: Record<string, (params?: any) => preact.JSX.Element> = {
   graph: () => <DagView />,
   timeline: () => <TimelineView />,
   log: () => <LogView />,
   api: () => <ApiView />,
   stats: () => <StatsView />,
   sandbox: () => <SandboxView />,
-  metrics: () => <MetricsChart />,
-  scatter: () => <ScatterChart />,
+  metrics: (p?: any) => <MetricsChart instanceId={p?.instanceId} initialMetric={p?.metric} />,
+  scatter: (p?: any) => <ScatterChart instanceId={p?.instanceId} initialXMetric={p?.xMetric} initialYMetric={p?.yMetric} />,
   detail: () => <DetailPanel />,
   filters: () => <FilterBar />,
   suggest: () => <SuggestPanel />,
@@ -86,10 +86,13 @@ class PreactPanelRenderer implements IContentRenderer {
     this.element.style.cssText = "width:100%;height:100%;overflow:auto;";
   }
 
-  init(_params: GroupPanelPartInitParameters) {
-    const factory = PANEL_MAP[this._componentId];
+  init(params: GroupPanelPartInitParameters) {
+    // Resolve component type: "metrics-3" → "metrics", "scatter-2" → "scatter"
+    const baseType = this._componentId.replace(/-\d+$/, "");
+    const factory = PANEL_MAP[baseType] || PANEL_MAP[this._componentId];
+    const extraParams = params?.params as Record<string, any> | undefined;
     if (factory) {
-      render(factory(), this.element);
+      render(factory(extraParams), this.element);
     } else {
       this.element.textContent = `Unknown panel: ${this._componentId}`;
     }
@@ -423,6 +426,33 @@ export function App() {
       const panel = dv.panels.find((p) => p.id === panelId);
       if (panel) {
         panel.api.setActive();
+      }
+    });
+
+    // Expose chart cloning globally
+    let cloneCounter = 0;
+    setCloneChartPanel((type, metric, xMetric, yMetric) => {
+      cloneCounter++;
+      const id = `${type}-${cloneCounter}`;
+      const title = type === "metrics"
+        ? `Metrics: ${metric || "?"}`
+        : `Scatter: ${xMetric || "?"} vs ${yMetric || "?"}`;
+      const params = type === "metrics"
+        ? { instanceId: id, metric }
+        : { instanceId: id, xMetric, yMetric };
+      // Find the active group of the source panel to add as a sibling tab
+      const sourcePanel = dv.panels.find((p) => p.id === type || p.id.startsWith(type + "-"));
+      const position = sourcePanel
+        ? { referencePanel: sourcePanel }
+        : undefined;
+      dv.addPanel({ id, component: "default", title, params, position });
+    });
+
+    // Expose panel title updates globally
+    setUpdatePanelTitle((panelId, title) => {
+      const panel = dv.panels.find((p) => p.id === panelId);
+      if (panel) {
+        panel.api.setTitle(title);
       }
     });
 

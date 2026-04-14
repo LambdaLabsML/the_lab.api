@@ -118,6 +118,13 @@
 .diff-hunk { color: #58a6ff; }
 .diff-file { color: #d29922; font-weight: 600; }
 
+/* Script syntax coloring */
+.sh-shebang { color: #d29922; font-weight: 600; }
+.sh-comment { color: #484f58; font-style: italic; }
+.sh-directive { color: #ff7b72; }
+.sh-var { color: #79c0ff; }
+.sh-builtin { color: #d2a8ff; }
+
 /* Lightbox overlay */
 .lightbox-backdrop {
   position: fixed; top: 0; left: 0; right: 0; bottom: 0;

@@ -1,6 +1,6 @@
-import { useRef, useEffect, useMemo } from "preact/hooks";
+import { useRef, useEffect, useMemo, useState } from "preact/hooks";
 import { Chart } from "chart.js/auto";
-import { allExperiments, allIdeas, currentLayout, highlightedIdea } from "../../state/signals";
+import { allExperiments, allIdeas, currentLayout, highlightedIdea, cloneChartPanel, updatePanelTitle } from "../../state/signals";
 import {
   selectedMetric,
   colorMode,
@@ -18,7 +18,10 @@ import { buildChartData, collectChartKeys } from "../../lib/chart-data";
 import { navigateToIdea } from "../../lib/navigate";
 import type { ChartDataResult } from "../../lib/chart-data";
 
-export function MetricsChart() {
+export function MetricsChart({ instanceId, initialMetric }: { instanceId?: string; initialMetric?: string } = {}) {
+  // Cloned instances use local state; the original uses the global signal
+  const isClone = !!instanceId;
+  const [localMetric, setLocalMetric] = useState(initialMetric || "");
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const chartRef = useRef<Chart | null>(null);
   const innerRef = useRef<HTMLDivElement>(null);
@@ -26,7 +29,7 @@ export function MetricsChart() {
   const experiments = allExperiments.value;
   const ideas = allIdeas.value;
   const layout = currentLayout.value;
-  const metric = selectedMetric.value;
+  const metric = isClone ? localMetric : selectedMetric.value;
   const mode = colorMode.value;
   const impOnly = improvementsOnly.value;
   const tags = activeTagFilters.value;
@@ -131,10 +134,14 @@ export function MetricsChart() {
   const grouped = useMemo(() => collectChartKeys(experiments), [experiments]);
   const allKeys = [...grouped.metrics, ...grouped.meta, ...grouped.timing];
 
+  const setMetric = isClone
+    ? (v: string) => { setLocalMetric(v); if (instanceId && updatePanelTitle) updatePanelTitle(instanceId, `Metrics: ${v}`); }
+    : (v: string) => { selectedMetric.value = v; };
+
   if (!metric && allKeys.length > 0) {
     const preferred = ["accuracy_per_mtoken", "agent_accuracy", "accuracy"];
     const match = preferred.find((k) => allKeys.includes(k));
-    selectedMetric.value = match || allKeys[0];
+    setMetric(match || allKeys[0]);
   }
 
   return (
@@ -142,7 +149,7 @@ export function MetricsChart() {
       <div class="chart-toolbar">
         <span>
           Metric:{" "}
-          <select value={metric} onChange={(e) => { selectedMetric.value = (e.target as HTMLSelectElement).value; }}>
+          <select value={metric} onChange={(e) => { setMetric((e.target as HTMLSelectElement).value); }}>
             {grouped.metrics.length > 0 && <optgroup label="Metrics">{grouped.metrics.map((k) => <option key={k} value={k}>{k}</option>)}</optgroup>}
             {grouped.timing.length > 0 && <optgroup label="Timing">{grouped.timing.map((k) => <option key={k} value={k}>{k}</option>)}</optgroup>}
             {grouped.meta.length > 0 && <optgroup label="Meta">{grouped.meta.map((k) => <option key={k} value={k}>{k}</option>)}</optgroup>}
@@ -156,6 +163,9 @@ export function MetricsChart() {
         </button>
         <button type="button" class={`chart-toggle-btn${clip ? " active" : ""}`} onClick={() => { clipOutliers.value = !clip; }} title="Hide outliers">
           ⤢ Outliers
+        </button>
+        <button type="button" class="chart-toggle-btn" onClick={() => { if (cloneChartPanel) cloneChartPanel("metrics", metric); }} title="Clone this chart as a new tab">
+          + Clone
         </button>
       </div>
       <div id="chart-wrap" style={{ flex: 1, minHeight: 0 }}>

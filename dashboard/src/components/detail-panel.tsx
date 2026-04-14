@@ -79,15 +79,6 @@ export function DetailPanel() {
           if (data.progress) {
             setProgressData((prev) => ({ ...prev, [String(exp.id)]: data.progress as Record<string, any> }));
           }
-
-          // Legacy: also update DOM directly for the progress bar
-          const el = document.getElementById(`progress-${exp.id}`);
-          if (!el || !data.progress) return;
-          const p = data.progress;
-          const pct = (p as any).pct ?? (p as any).percent ?? (p as any).progress;
-          if (typeof pct === "number") {
-            el.innerHTML = `<div class="progress-bar"><div class="progress-fill" style="width:${Math.min(100, pct)}%"></div></div>`;
-          }
         });
       });
     }
@@ -277,7 +268,9 @@ export function DetailPanel() {
           onClose={() => setScriptExp(null)}
         >
           {scriptLoading && <div style={{ color: "#8b949e" }}>Loading...</div>}
-          {scriptContent !== null && <pre>{scriptContent || "(empty)"}</pre>}
+          {scriptContent !== null && (
+            <pre dangerouslySetInnerHTML={{ __html: colorizeScript(scriptContent || "(empty)") }} />
+          )}
         </Lightbox>
       )}
 
@@ -322,6 +315,27 @@ function colorizeDiff(diff: string): string {
     .join("\n");
 }
 
+function colorizeScript(script: string): string {
+  return script
+    .split("\n")
+    .map((line) => {
+      const esc = escapeHtml(line);
+      // Shebang
+      if (line.startsWith("#!")) return `<span class="sh-shebang">${esc}</span>`;
+      // Comments
+      const trimmed = line.trimStart();
+      if (trimmed.startsWith("#")) return `<span class="sh-comment">${esc}</span>`;
+      // set directives
+      if (trimmed.startsWith("set ")) return `<span class="sh-directive">${esc}</span>`;
+      // Variable assignments (KEY=value)
+      if (/^\s*[A-Z_][A-Z0-9_]*=/.test(line)) return `<span class="sh-var">${esc}</span>`;
+      // export/source/cd
+      if (/^\s*(export|source|cd)\s/.test(line)) return `<span class="sh-builtin">${esc}</span>`;
+      return esc;
+    })
+    .join("\n");
+}
+
 /** Color for running experiment status sub-headline */
 const STATUS_COLORS: Record<string, string> = {
   running: "#d29922",
@@ -356,13 +370,12 @@ function ExperimentItem({
       {exp.tags && exp.tags.length > 0 && (
         <div>{exp.tags.map((t) => <span key={t} class="tag-pill">{t}</span>)}</div>
       )}
-      {exp.status === "running" && (
-        <div class="exp-progress" id={`progress-${exp.id}`}>loading progress...</div>
-      )}
-      {/* Progress data as formatted JSON (with colored sub-headline for running) */}
-      {progress && Object.keys(progress).length > 0 && (
+      {/* Progress: show JsonView when data is available, otherwise a loading placeholder for running exps */}
+      {progress && Object.keys(progress).length > 0 ? (
         <JsonView data={progress} label="progress" labelColor={statusColor} />
-      )}
+      ) : exp.status === "running" ? (
+        <div class="exp-progress">loading progress...</div>
+      ) : null}
       <JsonView data={exp.metrics} label="metrics" />
       <JsonView data={exp.meta} label="meta" />
       <div class="exp-timestamps">

@@ -1,6 +1,6 @@
-import { useRef, useEffect, useMemo } from "preact/hooks";
+import { useRef, useEffect, useMemo, useState } from "preact/hooks";
 import { Chart } from "chart.js/auto";
-import { allExperiments, allIdeas, currentLayout, highlightedIdea } from "../../state/signals";
+import { allExperiments, allIdeas, currentLayout, highlightedIdea, cloneChartPanel, updatePanelTitle } from "../../state/signals";
 import { navigateToIdea } from "../../lib/navigate";
 import {
   selectedMetric,
@@ -81,19 +81,18 @@ function computeBounds(values: number[]): { min?: number; max?: number } {
   return { min: lo - pad, max: hi + pad };
 }
 
-export function ScatterChart({ metricKeys: metricKeysProp }: { metricKeys?: string[] } = {}) {
+export function ScatterChart({ instanceId, initialXMetric, initialYMetric }: { instanceId?: string; initialXMetric?: string; initialYMetric?: string } = {}) {
+  const isClone = !!instanceId;
+  const [localX, setLocalX] = useState(initialXMetric || "");
+  const [localY, setLocalY] = useState(initialYMetric || "");
+
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const chartRef = useRef<Chart | null>(null);
 
   const experiments = allExperiments.value;
 
   // Compute chartable keys grouped by source
-  const grouped = useMemo(() => {
-    if (metricKeysProp && metricKeysProp.length > 0) {
-      return { metrics: metricKeysProp, meta: [] as string[], timing: [] as string[] };
-    }
-    return collectChartKeys(experiments);
-  }, [metricKeysProp, experiments]);
+  const grouped = useMemo(() => collectChartKeys(experiments), [experiments]);
   const metricKeys = [...grouped.metrics, ...grouped.meta, ...grouped.timing];
   const ideas = allIdeas.value;
   const layout = currentLayout.value;
@@ -105,8 +104,15 @@ export function ScatterChart({ metricKeys: metricKeysProp }: { metricKeys?: stri
   const mean = ideaMean.value;
   const highlighted = highlightedIdea.value;
 
-  const xMetric = scatterXMetric.value;
-  const yMetric = scatterYMetric.value;
+  const xMetric = isClone ? localX : scatterXMetric.value;
+  const yMetric = isClone ? localY : scatterYMetric.value;
+
+  const setX = isClone
+    ? (v: string) => { setLocalX(v); if (instanceId && updatePanelTitle) updatePanelTitle(instanceId, `Scatter: ${v} vs ${yMetric || "?"}`); }
+    : (v: string) => { scatterXMetric.value = v; };
+  const setY = isClone
+    ? (v: string) => { setLocalY(v); if (instanceId && updatePanelTitle) updatePanelTitle(instanceId, `Scatter: ${xMetric || "?"} vs ${v}`); }
+    : (v: string) => { scatterYMetric.value = v; };
 
   // Build set of hidden idea statuses
   const hiddenStatuses = new Set<string>();
@@ -116,10 +122,10 @@ export function ScatterChart({ metricKeys: metricKeysProp }: { metricKeys?: stri
 
   // Auto-select metrics if not set
   if (!xMetric && metricKeys.length > 0) {
-    scatterXMetric.value = metricKeys[0];
+    setX(metricKeys[0]);
   }
   if (!yMetric && metricKeys.length > 1) {
-    scatterYMetric.value = metricKeys.length > 1 ? metricKeys[1] : metricKeys[0];
+    setY(metricKeys.length > 1 ? metricKeys[1] : metricKeys[0]);
   }
 
   // Destroy chart on unmount
@@ -344,27 +350,21 @@ export function ScatterChart({ metricKeys: metricKeysProp }: { metricKeys?: stri
     <div class="chart-col" style={{ height: "100%", display: "flex", flexDirection: "column" }}>
       <div class="chart-col-toolbar">
         X:{" "}
-        <select
-          value={xMetric}
-          onChange={(e) => {
-            scatterXMetric.value = (e.target as HTMLSelectElement).value;
-          }}
-        >
+        <select value={xMetric} onChange={(e) => { setX((e.target as HTMLSelectElement).value); }}>
           {grouped.metrics.length > 0 && <optgroup label="Metrics">{grouped.metrics.map((k) => <option key={k} value={k}>{k}</option>)}</optgroup>}
           {grouped.timing.length > 0 && <optgroup label="Timing">{grouped.timing.map((k) => <option key={k} value={k}>{k}</option>)}</optgroup>}
           {grouped.meta.length > 0 && <optgroup label="Meta">{grouped.meta.map((k) => <option key={k} value={k}>{k}</option>)}</optgroup>}
         </select>
         {" "}Y:{" "}
-        <select
-          value={yMetric}
-          onChange={(e) => {
-            scatterYMetric.value = (e.target as HTMLSelectElement).value;
-          }}
-        >
+        <select value={yMetric} onChange={(e) => { setY((e.target as HTMLSelectElement).value); }}>
           {grouped.metrics.length > 0 && <optgroup label="Metrics">{grouped.metrics.map((k) => <option key={k} value={k}>{k}</option>)}</optgroup>}
           {grouped.timing.length > 0 && <optgroup label="Timing">{grouped.timing.map((k) => <option key={k} value={k}>{k}</option>)}</optgroup>}
           {grouped.meta.length > 0 && <optgroup label="Meta">{grouped.meta.map((k) => <option key={k} value={k}>{k}</option>)}</optgroup>}
         </select>
+        {" "}
+        <button type="button" class="chart-toggle-btn" onClick={() => { if (cloneChartPanel) cloneChartPanel("scatter", undefined, xMetric, yMetric); }} title="Clone this chart as a new tab">
+          + Clone
+        </button>
       </div>
       <div class="chart-col-canvas">
         <canvas ref={canvasRef} />

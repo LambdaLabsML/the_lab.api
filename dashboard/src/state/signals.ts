@@ -66,6 +66,14 @@ export const scrollToExperiment = signal<string | null>(null);
 export let activatePanel: ((panelId: string) => void) | null = null;
 export function setActivatePanel(fn: (panelId: string) => void) { activatePanel = fn; }
 
+/** Global ref to clone a chart panel with given settings. */
+export let cloneChartPanel: ((type: "metrics" | "scatter", metric?: string, xMetric?: string, yMetric?: string) => void) | null = null;
+export function setCloneChartPanel(fn: typeof cloneChartPanel) { cloneChartPanel = fn; }
+
+/** Global ref to update a dockview panel's tab title. */
+export let updatePanelTitle: ((panelId: string, title: string) => void) | null = null;
+export function setUpdatePanelTitle(fn: typeof updatePanelTitle) { updatePanelTitle = fn; }
+
 /** Parsed OpenAPI spec (loaded lazily when the API view opens). */
 export const apiSpec = signal<OpenAPISpec | null>(null);
 
