@@ -553,10 +553,9 @@ export function App() {
     updateAvailablePanels();
 
     // ── Feature: click empty tab-bar space to collapse/expand group ──
-    // Collapses group content to tab-bar height while keeping tabs visible.
-    // For side-by-side groups (horizontal split), all groups in the same
-    // row share one height — we relax constraints on all siblings.
-    const collapsedRows = new Map<string, { ids: string[]; origHeight: number }>();
+    // Keyed by group ID (stable) instead of Y position (shifts when rows collapse).
+    // Each group in a row stores the same info so clicking any sibling can expand.
+    const collapsedInfo = new Map<string, { siblingIds: string[]; origHeight: number }>();
     const TAB_BAR_HEIGHT = 35;
 
     function getRowSiblings(group: any): any[] {
@@ -575,22 +574,37 @@ export function App() {
       const group = dv.groups.find((g) => g.element === groupEl || g.element.contains(groupEl));
       if (!group) return;
 
-      const rowKey = `row-${Math.round(group.element.getBoundingClientRect().top)}`;
-
-      if (collapsedRows.has(rowKey)) {
-        const info = collapsedRows.get(rowKey)!;
-        collapsedRows.delete(rowKey);
-        for (const id of info.ids) {
+      if (collapsedInfo.has(group.id)) {
+        // Expand: restore height and clear constraints on all siblings
+        const info = collapsedInfo.get(group.id)!;
+        for (const id of info.siblingIds) {
+          collapsedInfo.delete(id);
           const g = dv.groups.find((gg) => gg.id === id);
           if (g) g.api.setConstraints({ minimumHeight: undefined as any });
         }
+        // Temporarily relax ALL other groups so dockview can find room
+        for (const g of dv.groups) {
+          if (!info.siblingIds.includes(g.id)) {
+            g.api.setConstraints({ minimumHeight: 0 });
+          }
+        }
         group.api.setSize({ height: info.origHeight });
+        // Restore default constraints on the other groups after layout settles
+        requestAnimationFrame(() => {
+          for (const g of dv.groups) {
+            if (!info.siblingIds.includes(g.id) && !collapsedInfo.has(g.id)) {
+              g.api.setConstraints({ minimumHeight: undefined as any });
+            }
+          }
+        });
       } else {
+        // Collapse: find siblings, store info on each, shrink
         const siblings = getRowSiblings(group);
         const currentHeight = group.height;
         if (currentHeight > TAB_BAR_HEIGHT + 10) {
-          collapsedRows.set(rowKey, { ids: siblings.map((g) => g.id), origHeight: currentHeight });
+          const siblingIds = siblings.map((g) => g.id);
           for (const g of siblings) {
+            collapsedInfo.set(g.id, { siblingIds, origHeight: currentHeight });
             g.api.setConstraints({ minimumHeight: TAB_BAR_HEIGHT });
           }
           group.api.setSize({ height: TAB_BAR_HEIGHT });
