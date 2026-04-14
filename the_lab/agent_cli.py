@@ -94,6 +94,12 @@ def main():
         help="Path to the git repository (must match the repo the server was started with). "
              "Defaults to auto-detect from CWD.",
     )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=9000,
+        help="Port of the Lab API server (default: 9000)",
+    )
     args = parser.parse_args()
 
     prompt_path = Path(args.prompt_file)
@@ -108,10 +114,12 @@ def main():
     if problem_path.exists():
         problem_content = problem_path.read_text().strip()
         api_content = _PROMPT_API.read_text().strip() if _PROMPT_API.exists() else ""
-        generated = problem_content + "\n\n" + api_content + "\n"
+        api_base = f"http://localhost:{args.port}/api/v1"
+        api_header = f"**Lab API base URL:** `{api_base}`\n\nAll API endpoints below are relative to this base URL. Use `curl {api_base}/orient` to get started.\n\n"
+        generated = problem_content + "\n\n" + api_header + api_content + "\n"
         generated_path.write_text(generated)
         prompt_path = generated_path
-        print(f"Generated {generated_path.name} from PROMPT_problem.md + PROMPT_api.md", file=sys.stderr)
+        print(f"Generated {generated_path.name} (API at {api_base})", file=sys.stderr)
     elif not prompt_path.exists():
         print(f"Error: neither PROMPT_problem.md nor {prompt_path} found", file=sys.stderr)
         sys.exit(1)
