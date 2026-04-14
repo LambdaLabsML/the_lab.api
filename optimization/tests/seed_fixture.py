@@ -2433,6 +2433,7 @@ def _metrics(score: float, mem_bytes: int, budget: int = 4096) -> dict:
     """Build a plausible metrics dict for a kernel experiment."""
     return {
         "score": score,
+        "convergence_gap": round(1.0 - score, 4),
         "memory_used_bytes": mem_bytes,
         "memory_budget_bytes": budget,
         "memory_within_budget": mem_bytes <= budget,

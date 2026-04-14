@@ -4,12 +4,20 @@ All state lives in {repo}/.the_lab/experiments/{idea_id}/ — a fixed location
 at the repo root, outside of any git worktree. This data is not subject to
 branch switches or worktree operations.
 
-  {idea_id}/idea.json       — idea metadata
-  {idea_id}/notes.json      — append-only list of notes
-  {idea_id}/{exp_id}.json   — experiment metadata + results
-  {idea_id}/{exp_id}.sh     — experiment script
-  {idea_id}/{exp_id}.log    — stdout+stderr capture
-  {idea_id}/{exp_id}.err    — error details
+New layout (subfolder per experiment):
+  {idea_id}/idea.json               — idea metadata
+  {idea_id}/notes.json              — append-only list of notes
+  {idea_id}/{seq}/experiment.json   — experiment metadata + results
+  {idea_id}/{seq}/script.sh         — experiment script
+  {idea_id}/{seq}/script.log        — stdout+stderr capture (runner writes via .with_suffix)
+  {idea_id}/{seq}/script.err        — error details
+
+Old layout (backwards compatible, read-only):
+  {idea_id}/{seq}.json   — experiment metadata
+  {idea_id}/{seq}.sh     — script
+  {idea_id}/{seq}.log    — log
+
+Both layouts are auto-detected on startup. New experiments always use subfolders.
 
 Performance: all reads are served from in-memory caches populated on startup.
 Writes go to disk first, then update the cache. This makes list/get operations
@@ -131,12 +139,30 @@ class Store:
             if notes_path.exists():
                 self._notes[idea_id] = json.loads(notes_path.read_text())
 
-            # Load experiments — file stem IS the seq (the per-idea ID)
+            # Load experiments — supports both old flat layout and new subfolder layout
             exp_labels: set[str] = set()
+            # New layout: {seq}/experiment.json (subfolder per experiment)
+            for sub in d.iterdir():
+                if sub.is_dir() and sub.name.isdigit():
+                    exp_json = sub / "experiment.json"
+                    if exp_json.exists():
+                        seq = int(sub.name)
+                        label = f"{idea_id}.{seq}"
+                        exp = _enrich_experiment(json.loads(exp_json.read_text()))
+                        exp["id"] = label
+                        exp["seq"] = seq
+                        exp["label"] = label
+                        exp["idea_id"] = idea_id
+                        exp["script"] = f".the_lab/experiments/{idea_id}/{seq}/script.sh"
+                        self._experiments[label] = exp
+                        exp_labels.add(label)
+            # Old layout: {seq}.json (flat files in idea dir)
             for f in d.glob("*.json"):
                 if f.stem.isdigit():
                     seq = int(f.stem)
                     label = f"{idea_id}.{seq}"
+                    if label in exp_labels:
+                        continue  # already loaded from subfolder
                     exp = _enrich_experiment(json.loads(f.read_text()))
                     exp["id"] = label
                     exp["seq"] = seq
@@ -151,6 +177,33 @@ class Store:
 
     def _idea_dir(self, idea_id: int) -> Path:
         return self.lab_dir / str(idea_id)
+
+    def _exp_json_path(self, idea_id: int, seq: int) -> Path:
+        """Return the experiment JSON path, detecting old vs new layout.
+
+        New layout: {idea_id}/{seq}/experiment.json  (subfolder per experiment)
+        Old layout: {idea_id}/{seq}.json             (flat files in idea dir)
+        """
+        idea_dir = self._idea_dir(idea_id)
+        new_path = idea_dir / str(seq) / "experiment.json"
+        if new_path.exists():
+            return new_path
+        old_path = idea_dir / f"{seq}.json"
+        if old_path.exists():
+            return old_path
+        # Default to new layout for new experiments
+        return new_path
+
+    @staticmethod
+    def _exp_script_rel(idea_id: int, seq: int, subfolder: bool = True) -> str:
+        """Return the relative script path for an experiment.
+
+        New layout: .the_lab/experiments/{idea_id}/{seq}/script.sh
+        Old layout: .the_lab/experiments/{idea_id}/{seq}.sh
+        """
+        if subfolder:
+            return f".the_lab/experiments/{idea_id}/{seq}/script.sh"
+        return f".the_lab/experiments/{idea_id}/{seq}.sh"
 
     # --- Ideas ---
 
@@ -295,7 +348,7 @@ class Store:
             seq = self._next_seq(idea_id)
         label = f"{idea_id}.{seq}"
 
-        script_rel = f".the_lab/experiments/{idea_id}/{seq}.sh"
+        script_rel = self._exp_script_rel(idea_id, seq, subfolder=True)
         exp = {
             "id": label,
             "idea_id": idea_id,
@@ -314,9 +367,9 @@ class Store:
             "finished_at": None,
         }
 
-        idea_dir = self._idea_dir(idea_id)
-        idea_dir.mkdir(parents=True, exist_ok=True)
-        _write_json(idea_dir / f"{seq}.json", exp)
+        exp_dir = self._idea_dir(idea_id) / str(seq)
+        exp_dir.mkdir(parents=True, exist_ok=True)
+        _write_json(exp_dir / "experiment.json", exp)
         # Update cache
         with self._lock:
             self._experiments[label] = exp
@@ -334,8 +387,9 @@ class Store:
             return None
         exp.update(fields)
         exp = _enrich_experiment(exp)
-        idea_dir = self._idea_dir(exp["idea_id"])
-        _write_json(idea_dir / f"{exp['seq']}.json", exp)
+        json_path = self._exp_json_path(exp["idea_id"], exp["seq"])
+        json_path.parent.mkdir(parents=True, exist_ok=True)
+        _write_json(json_path, exp)
         with self._lock:
             self._experiments[label] = exp
         return exp
@@ -350,14 +404,21 @@ class Store:
         idea_dir = self._idea_dir(idea_id)
         script_path = self.repo_dir / exp["script"]
         seq = exp["seq"]
+
+        # New layout: entire subfolder
+        exp_subdir = idea_dir / str(seq)
+        if exp_subdir.is_dir():
+            shutil.rmtree(exp_subdir, ignore_errors=True)
+
+        # Old layout: flat files
         cleanup_paths = [
             idea_dir / f"{seq}.json",
-            script_path,
-            script_path.with_suffix(".log"),
-            script_path.with_suffix(".err"),
-            script_path.with_suffix(".progress"),
-            script_path.with_suffix(".metrics"),
-            script_path.with_suffix(".metrics.jsonl"),
+            idea_dir / f"{seq}.sh",
+            idea_dir / f"{seq}.log",
+            idea_dir / f"{seq}.err",
+            idea_dir / f"{seq}.progress",
+            idea_dir / f"{seq}.metrics",
+            idea_dir / f"{seq}.metrics.jsonl",
         ]
 
         outdir = (exp.get("meta") or {}).get("outdir")

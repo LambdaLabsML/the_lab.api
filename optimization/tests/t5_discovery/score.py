@@ -26,9 +26,6 @@ def score(api_url: str) -> dict:
     # Did the agent discover GET /experiments/tags (not in stripped docs)?
     checks["discovered_tags"] = 1.0 if endpoint_was_called(stats, "/experiments/tags") else 0.0
 
-    # Did the agent discover GET /metric-direction (not in stripped docs)?
-    checks["discovered_metric_direction"] = 1.0 if endpoint_was_called(stats, "/metric-direction") else 0.0
-
     # Did the agent discover GET /leaderboard/search (not in stripped docs)?
     checks["discovered_leaderboard_search"] = 1.0 if endpoint_was_called(stats, "/leaderboard/search") else 0.0
 
@@ -50,15 +47,14 @@ def score(api_url: str) -> dict:
             used_meaningfully = 1.0
             break
 
-    # Also count it if they called /metric-direction and then treated score correctly
+    # Also count it if they used /experiments/tags and then ran experiments
     if used_meaningfully < 1.0:
-        saw_metric_dir = False
+        saw_tags = False
         for c in call_list:
             ep = c.get("endpoint", "")
-            if "/metric-direction" in ep:
-                saw_metric_dir = True
-            # If they checked metric direction and then ran experiments, that counts
-            if saw_metric_dir and "POST" in ep and "/experiments" in ep:
+            if "/experiments/tags" in ep:
+                saw_tags = True
+            if saw_tags and "POST" in ep and "/experiments" in ep:
                 used_meaningfully = 1.0
                 break
 

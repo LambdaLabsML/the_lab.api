@@ -12,7 +12,6 @@ from ..deps import (
     _idea_context,
     _branch_diff_summary,
     _read_task,
-    metric_direction,
 )
 from ..git_ops import get_current_branch
 
@@ -23,6 +22,7 @@ router = APIRouter(prefix="/api/v1")
 
 def _build_leaderboard_response(
     metric: str, top: int, recent: int, tags: str | None, include_details: bool,
+    descending: bool = True,
 ) -> dict:
     """Shared implementation for /leaderboard and /digest endpoints."""
     all_ideas = store.list_ideas()
@@ -96,9 +96,7 @@ def _build_leaderboard_response(
         if metric in e["metrics"] and isinstance(e["metrics"][metric], (int, float))
     ]
 
-    direction = metric_direction(metric)
-    minimize = direction == "minimize"
-    by_value = sorted(with_metric, key=lambda e: e["metrics"][metric], reverse=not minimize)
+    by_value = sorted(with_metric, key=lambda e: e["metrics"][metric], reverse=descending)
     leaderboard = []
     for exp in by_value[:top]:
         entry = {
@@ -221,13 +219,17 @@ def get_leaderboard(
     recent: int = Query(default=10, description="Number of most recent experiments to show"),
     tags: str | None = Query(default=None, description="Comma-separated tags — experiments must have ALL of them (AND filter)"),
     include_details: bool = Query(default=False, description="Include per-problem metrics and experiment settings/meta"),
+    sort: str = Query(default="desc", description="Sort order: 'desc' (highest first) or 'asc' (lowest first)"),
 ):
     """Get a compact, metric-focused research leaderboard.
 
     Returns three sections ranked by the given metric:
-    1. **Leaderboard** -- top N experiments by metric value (descending)
+    1. **Leaderboard** -- top N experiments sorted by metric value
     2. **Recent** -- most recent N experiments with their metric value
     3. **Progression** -- timeline of when the global best was beaten
+
+    Use ``sort=desc`` (default) for metrics where higher is better (e.g. score),
+    or ``sort=asc`` for metrics where lower is better (e.g. convergence_gap).
 
     Plus: open ideas, running experiments, key insights, and the best idea
     for this metric. Use ``tags=`` to scope to a subset of experiments.
@@ -235,10 +237,11 @@ def get_leaderboard(
     experiment descriptions for each leaderboard and recent entry.
 
     Example:
-        GET /api/v1/leaderboard?metric=accuracy&top=10&recent=5
-        GET /api/v1/leaderboard?metric=accuracy_per_mtoken&top=5&tags=held-out&include_details=true
+        GET /api/v1/leaderboard?metric=score&sort=desc
+        GET /api/v1/leaderboard?metric=convergence_gap&sort=asc&top=5
     """
-    return _build_leaderboard_response(metric, top, recent, tags, include_details)
+    descending = sort.lower() != "asc"
+    return _build_leaderboard_response(metric, top, recent, tags, include_details, descending=descending)
 
 
 @router.get("/leaderboard/search")
@@ -246,6 +249,7 @@ def leaderboard_with_search(
     metric: str = Query(default="score", description="Metric to rank by"),
     q: str = Query(default="", description="Comma-separated keywords to search for in idea descriptions"),
     top: int = Query(default=10, description="Number of top experiments to show"),
+    sort: str = Query(default="desc", description="Sort order: 'desc' (highest first) or 'asc' (lowest first)"),
 ):
     """Combined leaderboard + search: see rankings and find related ideas in one call.
 
@@ -254,9 +258,10 @@ def leaderboard_with_search(
     /leaderboard and /ideas/search separately.
 
     Example:
-        GET /api/v1/leaderboard/search?metric=score
+        GET /api/v1/leaderboard/search?metric=score&sort=desc
     """
-    leaderboard = _build_leaderboard_response(metric, top, 5, None, False)
+    descending = sort.lower() != "asc"
+    leaderboard = _build_leaderboard_response(metric, top, 5, None, False, descending=descending)
     searched_keywords = set()
     if q.strip():
         keywords = [k.strip() for k in q.split(",") if k.strip()]

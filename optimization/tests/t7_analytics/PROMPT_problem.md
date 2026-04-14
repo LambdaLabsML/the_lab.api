@@ -16,6 +16,8 @@ Analyze the experimental data across all 15 ideas and answer these questions. Do
 
 5. **Most promising idea to continue**: Which single idea is the most promising to continue working on? Consider not just peak scores but also consistency across repeated experiments — a reliable 0.70 is more promising than a one-time 0.85 that doesn't reproduce.
 
+6. **Metric interpretation**: The experiments track a metric called `convergence_gap`. Should this be minimized or maximized? How does the leaderboard rank experiments by this metric?
+
 After answering, continue from the most promising idea and run one more experiment to improve the score.
 
 ## Background

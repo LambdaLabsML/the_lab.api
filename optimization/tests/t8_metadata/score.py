@@ -56,8 +56,22 @@ def score(api_url: str) -> dict:
     except Exception:
         checks["tags_normalized"] = 0.0
 
-    # ── 4. Understood metric direction ────────────────────────────────
-    checks["understood_metric_direction"] = 1.0 if endpoint_was_called(stats, "/metric-direction") else 0.0
+    # ── 4. Understood metric direction ──────────────────────────────
+    # Check via leaderboard usage: did the agent use the correct sort order?
+    # sort=asc for convergence_gap (lower is better) proves understanding.
+    used_correct_sort = any(
+        "convergence_gap" in c.get("endpoint", "") and "sort=asc" in c.get("endpoint", "")
+        for c in call_list
+        if "/leaderboard" in c.get("endpoint", "")
+    )
+    # Also accept sort=desc for score (higher is better) — but since desc is
+    # the default, only count it if they explicitly passed sort=desc
+    explicit_desc_score = any(
+        "metric=score" in c.get("endpoint", "") and "sort=desc" in c.get("endpoint", "")
+        for c in call_list
+        if "/leaderboard" in c.get("endpoint", "")
+    )
+    checks["understood_metric_direction"] = 1.0 if (used_correct_sort or explicit_desc_score) else 0.0
 
     # ── 5. Described tag purposes (notes explaining what tags mean) ───
     # Collect all notes text

@@ -1,4 +1,4 @@
-"""Operational endpoints: task, config, sandbox, stats, chat, debug, metric-direction."""
+"""Operational endpoints: task, config, sandbox, stats, chat, debug."""
 from __future__ import annotations
 
 import json
@@ -13,7 +13,6 @@ from ..deps import (
     api_stats,
     REPO_DIR,
     _INTERNAL_META_KEYS,
-    metric_direction,
     _read_task,
     _write_task,
 )
@@ -207,16 +206,6 @@ fetch('/api/v1/chart-data').then(r=>r.json()).then(d=>{
 def chart_test_page():
     """Minimal Chart.js test page -- for debugging chart rendering issues."""
     return _CHART_TEST_HTML
-
-
-# --- Metric direction endpoint ---
-
-@router.get("/api/v1/metric-direction")
-def get_metric_direction(
-    metric: str = Query(..., description="Metric name to infer direction for"),
-):
-    """Infer whether a metric should be minimized or maximized."""
-    return {"metric": metric, "direction": metric_direction(metric)}
 
 
 # --- Chat ---

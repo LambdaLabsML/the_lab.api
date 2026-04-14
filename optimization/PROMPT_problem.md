@@ -29,9 +29,9 @@ The optimization target is both:
 | **T2 Experiment Mgmt** | Iterate with /wait, auto_start | experiments_created, used_wait, efficient_start, score_improved, documented_findings | 25 calls |
 | **T3 Error Recovery** | Read logs, diagnose, fix failures | read_logs, checked_status, experiments_fixed, score_improved, documented_errors | 20 calls |
 | **T4 Leaderboard & Search** | Navigate using /leaderboard, /search | used_leaderboard, used_search, used_orient, chose_best_direction, branched_from_best, score_improved, searched_related, navigation_efficiency | 15 calls |
-| **T5 API Discovery** | Find undocumented endpoints via /openapi.json | explored_openapi, discovered_tags, discovered_metric_direction, discovered_leaderboard_search, discovered_failed_logs, used_discovered_feature, score_improved | 20 calls |
+| **T5 API Discovery** | Find undocumented endpoints via /openapi.json | explored_openapi, discovered_tags, discovered_leaderboard_search, discovered_failed_logs, used_discovered_feature, score_improved | 20 calls |
 | **T6 Multi-Branch** | Work across multiple idea branches | checked_out_multiple, experiments_on_different_ideas, correct_branch_context, no_cross_branch_confusion, used_orient_or_backlog, compared_results, score_improved | 30 calls |
-| **T7 Analytics** | Answer data questions efficiently (grouping, filtering, hierarchical means, fluke vs reliable) | approach_means_documented, hierarchical_mean_correct, identified_over_budget, chose_reliable_over_fluke, recognized_variance, query_efficiency, used_tag_filter, score_improved, documented_analysis | 25 calls |
+| **T7 Analytics** | Answer data questions efficiently (grouping, filtering, hierarchical means, fluke vs reliable) | approach_means_documented, hierarchical_mean_correct, identified_over_budget, chose_reliable_over_fluke, recognized_variance, understood_convergence_gap, query_efficiency, used_tag_filter, score_improved, documented_analysis | 25 calls |
 | **T8 Metadata Comprehension** | Understand tag/metric semantics, normalize tags, document new tags | listed_tags, renamed_tags, tags_normalized, understood_metric_direction, described_tag_purposes, mapped_tags_to_experiments, described_metric_semantics, documented_new_tag, score_improved | 25 calls |
 
 **Scoring per test**: `task_score = avg(checks) × min(1.0, budget / actual_calls)`

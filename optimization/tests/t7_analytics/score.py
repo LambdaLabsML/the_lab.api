@@ -125,6 +125,27 @@ def score(api_url: str) -> dict:
     )
     checks["recognized_variance"] = 1.0 if variance_noted else 0.0
 
+    # ── Q6: Understood convergence_gap direction ───────────────────────
+    # convergence_gap = 1.0 - score, so it should be MINIMIZED (sort=asc).
+    # Primary signal: did the agent use sort=asc when querying the leaderboard
+    # for convergence_gap? That proves they understood the direction.
+    used_asc = any(
+        "convergence_gap" in c.get("endpoint", "") and "sort=asc" in c.get("endpoint", "")
+        for c in call_list
+        if "/leaderboard" in c.get("endpoint", "")
+    )
+    queried_gap = any(
+        "convergence_gap" in c.get("endpoint", "")
+        for c in call_list
+        if "/leaderboard" in c.get("endpoint", "")
+    )
+    if used_asc:
+        checks["understood_convergence_gap"] = 1.0
+    elif queried_gap:
+        checks["understood_convergence_gap"] = 0.3  # queried but wrong sort direction
+    else:
+        checks["understood_convergence_gap"] = 0.0
+
     # ── Query efficiency ──────────────────────────────────────────────
     # Penalize reading ideas one-by-one when bulk endpoints exist
     individual_idea_gets = sum(

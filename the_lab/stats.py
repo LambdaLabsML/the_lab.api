@@ -14,12 +14,12 @@ from pathlib import Path
 
 MAX_NGRAM = 5
 
-# Normalize paths like /api/v1/ideas/42 → /api/v1/ideas/{id}
-_ID_RE = re.compile(r"/(\d+)(?=/|$)")
+# Normalize paths like /api/v1/ideas/42 or /experiments/408.11 → {id}
+_ID_RE = re.compile(r"/(\d+(?:\.\d+)?)(?=/|$)")
 
 
 def normalize_path(path: str) -> str:
-    """Replace numeric path segments with {id} for grouping."""
+    """Replace numeric path segments (including dotted labels) with {id} for grouping."""
     return _ID_RE.sub("/{id}", path)
 
 

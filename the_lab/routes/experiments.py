@@ -530,30 +530,56 @@ async def start_experiment(exp_ref: str, req: StartExperimentRequest | None = No
     return result
 
 
-@router.post("/experiments/{exp_ref}/restart")
-async def restart_experiment(exp_ref: str):
-    """Re-run a failed or cancelled experiment.
 
-    Restarts the experiment using the same script and configuration. Only
-    experiments in ``failed`` or ``cancelled`` status can be restarted;
-    attempting to restart an experiment in any other state returns a 400 error.
-    The experiment transitions back to ``running`` and a new worktree/process
-    is created.
+@router.post("/experiments/{exp_ref}/rerun", status_code=201)
+async def rerun_experiment(exp_ref: str):
+    """Create and start a new experiment cloned from an existing one's script.
+
+    Reads the script file of the referenced experiment and creates a brand-new
+    experiment on the same idea with the same script content, description
+    (prefixed with "rerun: "), tags, and meta. The new experiment is auto-started
+    immediately. Works on experiments in any status — useful for re-running a
+    completed experiment to check reproducibility.
 
     Example:
-        POST /api/v1/experiments/4/restart
-        -> {"status": "running", "experiment": {"id": 4, ...}, "current_branch": "idea/1", ...}
+        POST /api/v1/experiments/1.2/rerun
+        -> {"id": "1.3", "label": "1.3", "idea_id": 1, "status": "running", ...}
     """
-    exp = _resolve_exp(exp_ref)
-    exp_id = exp["id"]
-    if exp["status"] not in ("failed", "cancelled"):
-        raise HTTPException(400, f"experiment is {exp['status']}, can only restart failed or cancelled experiments")
-    result = await runner.start(exp_id)
+    source = _resolve_exp(exp_ref)
+    idea_id = source["idea_id"]
+
+    idea = store.get_idea(idea_id)
+    if not idea:
+        raise HTTPException(404, "parent idea not found")
+    if idea["status"] != "active":
+        raise HTTPException(400, f"idea is {idea['status']}, reopen it before rerunning experiments")
+
+    # Read the source experiment's script
+    script_path = REPO_DIR / source["script"]
+    if not script_path.exists():
+        raise HTTPException(400, f"script file not found: {source['script']}")
+    script_content = script_path.read_text()
+
+    # Create the new experiment
+    desc = f"rerun: {source['description']}"
+    new_exp = store.create_experiment(
+        idea_id, desc, meta=source.get("meta"), tags=source.get("tags"),
+    )
+
+    # Write the script (reuse content as-is — it's already wrapped)
+    new_script_path = REPO_DIR / new_exp["script"]
+    new_script_path.parent.mkdir(parents=True, exist_ok=True)
+    new_script_path.write_text(script_content)
+    os.chmod(new_script_path, 0o644)
+
+    # Auto-start
+    result = await runner.start(new_exp["id"])
     if result["status"] == "error":
-        raise HTTPException(400, result.get("error", "experiment failed to restart"))
-    result["current_branch"] = get_current_branch(cwd=REPO_DIR)
-    result.update(_idea_context(exp.get("idea_id")))
-    return result
+        raise HTTPException(400, result.get("error", "experiment failed to start"))
+
+    exp_out = result.get("experiment", new_exp)
+    exp_out["rerun_of"] = source.get("label", str(source["id"]))
+    return exp_out
 
 
 @router.post("/experiments/{exp_ref}/cancel")
@@ -690,10 +716,11 @@ async def cancel_experiment_via_idea(idea_id: int, exp_ref: str):
     return await cancel_experiment(exp_ref)
 
 
-@router.post("/ideas/{idea_id}/experiments/{exp_ref}/restart")
-async def restart_experiment_via_idea(idea_id: int, exp_ref: str):
-    """Convenience alias — redirects to POST /experiments/{exp_ref}/restart."""
-    return await restart_experiment(exp_ref)
+
+@router.post("/ideas/{idea_id}/experiments/{exp_ref}/rerun", status_code=201)
+async def rerun_experiment_via_idea(idea_id: int, exp_ref: str):
+    """Convenience alias — redirects to POST /experiments/{exp_ref}/rerun."""
+    return await rerun_experiment(exp_ref)
 
 
 @router.get("/ideas/{idea_id}/experiments/{exp_ref}/progress")
