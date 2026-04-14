@@ -1,9 +1,9 @@
 import { useEffect, useState, useRef } from "preact/hooks";
 import { selectedIdea } from "../state/settings";
 import { scrollToExperiment } from "../state/signals";
-import { getIdea, getExperimentProgress, getExperimentLog, getIdeaDiff } from "../state/api";
+import { getIdea, getExperimentProgress, getExperimentLog, getExperimentScript, getIdeaDiff } from "../state/api";
 import { formatTime, badgeHtml, escapeHtml } from "../lib/format";
-import { navigateFromExperiment } from "../lib/navigate";
+import { navigateToIdea, navigateFromExperiment } from "../lib/navigate";
 import { Lightbox } from "./lightbox";
 import { JsonView } from "./json-view";
 import type { IdeaDetail, Experiment, Note } from "../lib/types";
@@ -19,10 +19,16 @@ export function DetailPanel() {
   const [logExp, setLogExp] = useState<Experiment | null>(null);
   const [logContent, setLogContent] = useState<string | null>(null);
   const [logLoading, setLogLoading] = useState(false);
+  const [scriptExp, setScriptExp] = useState<Experiment | null>(null);
+  const [scriptContent, setScriptContent] = useState<string | null>(null);
+  const [scriptLoading, setScriptLoading] = useState(false);
   const [diffOpen, setDiffOpen] = useState(false);
   const [diffUseMain, setDiffUseMain] = useState(false);
   const [diffData, setDiffData] = useState<{ stat: string; diff: string } | null>(null);
   const [diffLoading, setDiffLoading] = useState(false);
+
+  // Progress data per experiment (keyed by exp id)
+  const [progressData, setProgressData] = useState<Record<string, Record<string, any>>>({});
 
   // Fetch idea data on selection change + poll every 10s for updates
   useEffect(() => {
@@ -70,15 +76,18 @@ export function DetailPanel() {
     function pollProgress() {
       running.forEach((exp) => {
         getExperimentProgress(exp.label || exp.id).then((data) => {
+          if (data.progress) {
+            setProgressData((prev) => ({ ...prev, [String(exp.id)]: data.progress as Record<string, any> }));
+          }
+
+          // Legacy: also update DOM directly for the progress bar
           const el = document.getElementById(`progress-${exp.id}`);
           if (!el || !data.progress) return;
           const p = data.progress;
-          let html = Object.entries(p).map(([k, v]) => `${k}: ${v}`).join(", ");
           const pct = (p as any).pct ?? (p as any).percent ?? (p as any).progress;
           if (typeof pct === "number") {
-            html += `<div class="progress-bar"><div class="progress-fill" style="width:${Math.min(100, pct)}%"></div></div>`;
+            el.innerHTML = `<div class="progress-bar"><div class="progress-fill" style="width:${Math.min(100, pct)}%"></div></div>`;
           }
-          el.innerHTML = html;
         });
       });
     }
@@ -96,6 +105,17 @@ export function DetailPanel() {
       .then((data) => setLogContent(data.log))
       .catch(() => setLogContent("Failed to load log"))
       .finally(() => setLogLoading(false));
+  }
+
+  // Script lightbox
+  function openScript(exp: Experiment) {
+    setScriptExp(exp);
+    setScriptContent(null);
+    setScriptLoading(true);
+    getExperimentScript(exp.label || exp.id)
+      .then((data) => setScriptContent(data.script))
+      .catch(() => setScriptContent("Failed to load script"))
+      .finally(() => setScriptLoading(false));
   }
 
   // Diff lightbox
@@ -172,6 +192,27 @@ export function DetailPanel() {
                 </div>
               )}
 
+              {idea.parent_ids && idea.parent_ids.length > 0 && (
+                <div class="detail-section">
+                  <div class="label">Parents</div>
+                  <div class="value">
+                    {idea.parent_ids.map((pid, i) => (
+                      <span key={pid}>
+                        {i > 0 && ", "}
+                        <a
+                          class="parent-link"
+                          href="#"
+                          onClick={(e) => { e.preventDefault(); navigateToIdea(pid); }}
+                          title={`Jump to idea #${pid}`}
+                        >
+                          #{pid}
+                        </a>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {idea.conclusion && (
                 <div class="detail-section">
                   <div class="label">Conclusion</div>
@@ -203,7 +244,13 @@ export function DetailPanel() {
                 <div class="detail-section">
                   <div class="label">Experiments ({experiments.length})</div>
                   {experiments.map((exp) => (
-                    <ExperimentItem key={exp.id} exp={exp} onShowLog={() => openLog(exp)} />
+                    <ExperimentItem
+                      key={exp.id}
+                      exp={exp}
+                      progress={progressData[String(exp.id)]}
+                      onShowLog={() => openLog(exp)}
+                      onShowScript={() => openScript(exp)}
+                    />
                   ))}
                 </div>
               )}
@@ -220,6 +267,17 @@ export function DetailPanel() {
         >
           {logLoading && <div style={{ color: "#8b949e" }}>Loading...</div>}
           {logContent !== null && <pre>{logContent || "(empty)"}</pre>}
+        </Lightbox>
+      )}
+
+      {/* Script Lightbox */}
+      {scriptExp && (
+        <Lightbox
+          title={`Script — exp/${scriptExp.label || scriptExp.id}`}
+          onClose={() => setScriptExp(null)}
+        >
+          {scriptLoading && <div style={{ color: "#8b949e" }}>Loading...</div>}
+          {scriptContent !== null && <pre>{scriptContent || "(empty)"}</pre>}
         </Lightbox>
       )}
 
@@ -264,7 +322,28 @@ function colorizeDiff(diff: string): string {
     .join("\n");
 }
 
-function ExperimentItem({ exp, onShowLog }: { exp: Experiment; onShowLog: () => void }) {
+/** Color for running experiment status sub-headline */
+const STATUS_COLORS: Record<string, string> = {
+  running: "#d29922",
+  completed: "#3fb950",
+  failed: "#f85149",
+  cancelled: "#8b949e",
+  pending: "#58a6ff",
+};
+
+function ExperimentItem({
+  exp,
+  progress,
+  onShowLog,
+  onShowScript,
+}: {
+  exp: Experiment;
+  progress?: Record<string, any>;
+  onShowLog: () => void;
+  onShowScript: () => void;
+}) {
+  const statusColor = STATUS_COLORS[exp.status] || "#8b949e";
+
   return (
     <div class="exp-item" data-exp-label={exp.label || exp.id}>
       <div class="exp-header">
@@ -280,6 +359,10 @@ function ExperimentItem({ exp, onShowLog }: { exp: Experiment; onShowLog: () => 
       {exp.status === "running" && (
         <div class="exp-progress" id={`progress-${exp.id}`}>loading progress...</div>
       )}
+      {/* Progress data as formatted JSON (with colored sub-headline for running) */}
+      {progress && Object.keys(progress).length > 0 && (
+        <JsonView data={progress} label="progress" labelColor={statusColor} />
+      )}
       <JsonView data={exp.metrics} label="metrics" />
       <JsonView data={exp.meta} label="meta" />
       <div class="exp-timestamps">
@@ -288,7 +371,10 @@ function ExperimentItem({ exp, onShowLog }: { exp: Experiment; onShowLog: () => 
         {exp.finished_at && <> | finished: {formatTime(exp.finished_at)}</>}
         {exp.runtime && <> | runtime: {exp.runtime}</>}
       </div>
-      <button class="detail-expand-btn" onClick={onShowLog}>Show log</button>
+      <div class="exp-actions">
+        <button class="detail-expand-btn" onClick={onShowLog}>Show log</button>
+        <button class="detail-expand-btn" onClick={onShowScript}>Show script</button>
+      </div>
     </div>
   );
 }

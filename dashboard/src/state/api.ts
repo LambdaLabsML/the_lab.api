@@ -109,6 +109,13 @@ export async function getIdeaDiff(
   return fetchJson(`/api/v1/ideas/${ideaId}/diff${qs}`);
 }
 
+/** GET /api/v1/experiments/:expRef/script */
+export async function getExperimentScript(
+  expRef: string | number,
+): Promise<{ script: string }> {
+  return fetchJson<{ script: string }>(`/api/v1/experiments/${expRef}/script`);
+}
+
 /** GET /api/v1/experiments/:expRef/progress */
 export async function getExperimentProgress(
   expRef: string | number,

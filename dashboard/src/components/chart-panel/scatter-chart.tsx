@@ -17,7 +17,7 @@ import {
   scatterXMetric,
   scatterYMetric,
 } from "../../state/settings";
-import { filterMetricExperiments } from "../../lib/chart-data";
+import { filterMetricExperiments, collectChartKeys, resolveNumericValue } from "../../lib/chart-data";
 import { IDEA_PALETTE, _colorForExp, isLowerBetter } from "../../lib/colors";
 import type { Experiment, IdeaNode, SubwayLayout } from "../../lib/types";
 
@@ -33,9 +33,9 @@ function aggregateScatterByIdeaMean(
   const groups: Record<number, { exps: Experiment[]; sumX: number; sumY: number; count: number }> = {};
   for (const e of experiments) {
     if (e._running) continue;
-    const vx = e.metrics?.[xKey];
-    const vy = e.metrics?.[yKey];
-    if (typeof vx !== "number" || typeof vy !== "number") continue;
+    const vx = resolveNumericValue(e, xKey);
+    const vy = resolveNumericValue(e, yKey);
+    if (vx === undefined || vy === undefined) continue;
     if (!groups[e.idea_id]) groups[e.idea_id] = { exps: [], sumX: 0, sumY: 0, count: 0 };
     groups[e.idea_id].exps.push(e);
     groups[e.idea_id].sumX += vx;
@@ -87,17 +87,14 @@ export function ScatterChart({ metricKeys: metricKeysProp }: { metricKeys?: stri
 
   const experiments = allExperiments.value;
 
-  // Compute metric keys from experiments if not provided as prop
-  const metricKeys = useMemo(() => {
-    if (metricKeysProp && metricKeysProp.length > 0) return metricKeysProp;
-    const keys = new Set<string>();
-    for (const exp of experiments) {
-      if (exp.metrics) {
-        for (const k of Object.keys(exp.metrics)) keys.add(k);
-      }
+  // Compute chartable keys grouped by source
+  const grouped = useMemo(() => {
+    if (metricKeysProp && metricKeysProp.length > 0) {
+      return { metrics: metricKeysProp, meta: [] as string[], timing: [] as string[] };
     }
-    return [...keys].sort();
+    return collectChartKeys(experiments);
   }, [metricKeysProp, experiments]);
+  const metricKeys = [...grouped.metrics, ...grouped.meta, ...grouped.timing];
   const ideas = allIdeas.value;
   const layout = currentLayout.value;
   const mode = colorMode.value;
@@ -144,7 +141,7 @@ export function ScatterChart({ metricKeys: metricKeysProp }: { metricKeys?: stri
       const xFiltered = filterMetricExperiments(xMetric, experiments, tags, tagMode, hiddenStatuses);
       // Further filter to only those that also have y metric
       const bothFiltered = xFiltered.filter(
-        (e) => e.metrics && typeof e.metrics[yMetric] === "number",
+        (e) => resolveNumericValue(e, yMetric) !== undefined,
       );
       filtered = aggregateScatterByIdeaMean(bothFiltered, xMetric, yMetric);
     } else {
@@ -152,7 +149,7 @@ export function ScatterChart({ metricKeys: metricKeysProp }: { metricKeys?: stri
       const xFiltered = filterMetricExperiments(xMetric, experiments, tags, tagMode, hiddenStatuses);
       // Further filter to only those that also have y metric
       filtered = xFiltered.filter(
-        (e) => e.metrics && typeof e.metrics[yMetric] === "number",
+        (e) => resolveNumericValue(e, yMetric) !== undefined,
       );
     }
 
@@ -162,7 +159,7 @@ export function ScatterChart({ metricKeys: metricKeysProp }: { metricKeys?: stri
       let best = lower ? Infinity : -Infinity;
       filtered = filtered.filter((e) => {
         if (e._running) return true;
-        const v = e.metrics![yMetric];
+        const v = resolveNumericValue(e, yMetric) ?? 0;
         if (lower ? v < best : v > best) {
           best = v;
           return true;
@@ -191,8 +188,8 @@ export function ScatterChart({ metricKeys: metricKeysProp }: { metricKeys?: stri
     }
 
     const scatterData = filtered.map((e) => ({
-      x: e.metrics![xMetric],
-      y: e.metrics![yMetric],
+      x: resolveNumericValue(e, xMetric) ?? 0,
+      y: resolveNumericValue(e, yMetric) ?? 0,
     }));
     const bgColors = filtered.map((e) => (e._running ? "transparent" : getColor(e)));
     const borderColors = filtered.map((e) => getColor(e));
@@ -353,9 +350,9 @@ export function ScatterChart({ metricKeys: metricKeysProp }: { metricKeys?: stri
             scatterXMetric.value = (e.target as HTMLSelectElement).value;
           }}
         >
-          {metricKeys.map((k) => (
-            <option key={k} value={k}>{k}</option>
-          ))}
+          {grouped.metrics.length > 0 && <optgroup label="Metrics">{grouped.metrics.map((k) => <option key={k} value={k}>{k}</option>)}</optgroup>}
+          {grouped.timing.length > 0 && <optgroup label="Timing">{grouped.timing.map((k) => <option key={k} value={k}>{k}</option>)}</optgroup>}
+          {grouped.meta.length > 0 && <optgroup label="Meta">{grouped.meta.map((k) => <option key={k} value={k}>{k}</option>)}</optgroup>}
         </select>
         {" "}Y:{" "}
         <select
@@ -364,9 +361,9 @@ export function ScatterChart({ metricKeys: metricKeysProp }: { metricKeys?: stri
             scatterYMetric.value = (e.target as HTMLSelectElement).value;
           }}
         >
-          {metricKeys.map((k) => (
-            <option key={k} value={k}>{k}</option>
-          ))}
+          {grouped.metrics.length > 0 && <optgroup label="Metrics">{grouped.metrics.map((k) => <option key={k} value={k}>{k}</option>)}</optgroup>}
+          {grouped.timing.length > 0 && <optgroup label="Timing">{grouped.timing.map((k) => <option key={k} value={k}>{k}</option>)}</optgroup>}
+          {grouped.meta.length > 0 && <optgroup label="Meta">{grouped.meta.map((k) => <option key={k} value={k}>{k}</option>)}</optgroup>}
         </select>
       </div>
       <div class="chart-col-canvas">

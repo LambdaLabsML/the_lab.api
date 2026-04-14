@@ -8,14 +8,14 @@ import { useState } from "preact/hooks";
 
 const MAX_STRING_LEN = 60;
 
-export function JsonView({ data, label }: { data: any; label?: string }) {
+export function JsonView({ data, label, labelColor }: { data: any; label?: string; labelColor?: string }) {
   if (data == null || (typeof data === "object" && Object.keys(data).length === 0)) {
     return null;
   }
 
   return (
     <div class="json-view">
-      {label && <span class="json-label">{label}</span>}
+      {label && <span class="json-label" style={labelColor ? { color: labelColor } : undefined}>{label}</span>}
       <div class="json-tree">
         <JsonNode value={data} depth={0} />
       </div>

@@ -622,6 +622,24 @@ def get_experiment_log(exp_ref: str, tail: int | None = None):
     return {"log": log}
 
 
+@router.get("/experiments/{exp_ref}/script")
+def get_experiment_script(exp_ref: str):
+    """Read the launch script for an experiment.
+
+    Returns the shell script content that was used (or will be used) to run
+    the experiment.
+
+    Example:
+        GET /api/v1/experiments/1.2/script
+        -> {"script": "#!/bin/bash\\nset -euo pipefail\\npython train.py"}
+    """
+    exp = _resolve_exp(exp_ref)
+    script_path = REPO_DIR / exp["script"]
+    if not script_path.exists():
+        raise HTTPException(404, "script file not found")
+    return {"script": script_path.read_text()}
+
+
 @router.get("/experiments/{exp_ref}/progress")
 def get_experiment_progress(exp_ref: str):
     """Read script-reported progress for an experiment.

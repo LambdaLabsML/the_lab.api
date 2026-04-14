@@ -17,6 +17,7 @@ import { MetricsChart } from "./metrics-chart";
 import { ScatterChart } from "./scatter-chart";
 import { TagFilter } from "./tag-filter";
 import { useMemo } from "preact/hooks";
+import { collectChartKeys } from "../../lib/chart-data";
 
 export function ChartPanel() {
   const open = chartOpen.value;
@@ -25,22 +26,15 @@ export function ChartPanel() {
   const scatter = scatterOpen.value;
   const filterOpen = filterBarOpen.value;
 
-  // Collect all metric keys from experiments
-  const metricKeys = useMemo(() => {
-    const keys = new Set<string>();
-    for (const exp of experiments) {
-      if (exp.metrics) {
-        for (const k of Object.keys(exp.metrics)) keys.add(k);
-      }
-    }
-    return [...keys].sort();
-  }, [experiments]);
+  // Collect all chartable keys grouped by source
+  const grouped = useMemo(() => collectChartKeys(experiments), [experiments]);
+  const allKeys = [...grouped.metrics, ...grouped.meta, ...grouped.timing];
 
   // Auto-select a preferred metric if none selected
-  if (!metric && metricKeys.length > 0) {
+  if (!metric && allKeys.length > 0) {
     const preferred = ["accuracy_per_mtoken", "agent_accuracy", "accuracy"];
-    const match = preferred.find((k) => metricKeys.includes(k));
-    selectedMetric.value = match || metricKeys[0];
+    const match = preferred.find((k) => allKeys.includes(k));
+    selectedMetric.value = match || allKeys[0];
   }
 
   function toggle() {
@@ -63,11 +57,21 @@ export function ChartPanel() {
               selectedMetric.value = (e.target as HTMLSelectElement).value;
             }}
           >
-            {metricKeys.map((k) => (
-              <option key={k} value={k}>
-                {k}
-              </option>
-            ))}
+            {grouped.metrics.length > 0 && (
+              <optgroup label="Metrics">
+                {grouped.metrics.map((k) => <option key={k} value={k}>{k}</option>)}
+              </optgroup>
+            )}
+            {grouped.timing.length > 0 && (
+              <optgroup label="Timing">
+                {grouped.timing.map((k) => <option key={k} value={k}>{k}</option>)}
+              </optgroup>
+            )}
+            {grouped.meta.length > 0 && (
+              <optgroup label="Meta">
+                {grouped.meta.map((k) => <option key={k} value={k}>{k}</option>)}
+              </optgroup>
+            )}
           </select>
           {" "}Color:{" "}
           <select
@@ -147,7 +151,7 @@ export function ChartPanel() {
           <div class={`chart-col${scatter ? "" : " full"}`}>
             <MetricsChart />
           </div>
-          {scatter && <ScatterChart metricKeys={metricKeys} />}
+          {scatter && <ScatterChart />}
         </div>
       </div>
     </>

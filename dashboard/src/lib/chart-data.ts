@@ -7,6 +7,67 @@ import type { Experiment, IdeaNode, SubwayLayout } from './types';
 export type { ChartDataResult } from './types';
 import { IDEA_PALETTE, _colorForExp, isLowerBetter } from './colors';
 
+/** Internal meta keys that should not appear in the dropdown. */
+const HIDDEN_META_KEYS = new Set(["git_branch", "git_commit", "worktree", "outdir"]);
+
+/**
+ * Resolve a chart key to a numeric value from an experiment.
+ * Checks metrics first, then meta, then computed timing fields.
+ */
+export function resolveNumericValue(exp: Experiment, key: string): number | undefined {
+  // 1. Metrics
+  if (exp.metrics && typeof exp.metrics[key] === 'number') return exp.metrics[key];
+  // 2. Meta (numeric values only)
+  if (exp.meta && typeof exp.meta[key] === 'number') return exp.meta[key] as number;
+  // 3. Timing fields (converted to epoch seconds for charting)
+  if (key === 'runtime_seconds' && exp.started_at && exp.finished_at) {
+    const ms = new Date(exp.finished_at).getTime() - new Date(exp.started_at).getTime();
+    return ms > 0 ? ms / 1000 : undefined;
+  }
+  if (key === 'started_at' && exp.started_at) return new Date(exp.started_at).getTime() / 1000;
+  if (key === 'finished_at' && exp.finished_at) return new Date(exp.finished_at).getTime() / 1000;
+  if (key === 'created_at' && exp.created_at) return new Date(exp.created_at).getTime() / 1000;
+  return undefined;
+}
+
+export interface GroupedKeys {
+  metrics: string[];
+  meta: string[];
+  timing: string[];
+}
+
+/** Collect all chartable keys from experiments, grouped by source. */
+export function collectChartKeys(experiments: Experiment[]): GroupedKeys {
+  const metricSet = new Set<string>();
+  const metaSet = new Set<string>();
+
+  for (const exp of experiments) {
+    if (exp.metrics) for (const k of Object.keys(exp.metrics)) {
+      if (typeof exp.metrics[k] === 'number') metricSet.add(k);
+    }
+    if (exp.meta) for (const [k, v] of Object.entries(exp.meta)) {
+      if (typeof v === 'number' && !HIDDEN_META_KEYS.has(k)) metaSet.add(k);
+    }
+  }
+
+  // Remove meta keys that collide with metric keys
+  for (const k of metricSet) metaSet.delete(k);
+
+  const timing: string[] = [];
+  const hasStarted = experiments.some((e) => e.started_at);
+  const hasFinished = experiments.some((e) => e.finished_at);
+  if (hasStarted && hasFinished) timing.push("runtime_seconds");
+  if (hasStarted) timing.push("started_at");
+  if (hasFinished) timing.push("finished_at");
+  if (experiments.some((e) => e.created_at)) timing.push("created_at");
+
+  return {
+    metrics: [...metricSet].sort(),
+    meta: [...metaSet].sort(),
+    timing,
+  };
+}
+
 export function filterMetricExperiments(
   metricKey: string,
   allExperiments: Experiment[],
@@ -15,7 +76,7 @@ export function filterMetricExperiments(
   hiddenStatuses?: Set<string>,
 ): Experiment[] {
   let filtered = allExperiments.filter(
-    (e) => e.metrics && typeof e.metrics[metricKey] === 'number',
+    (e) => resolveNumericValue(e, metricKey) !== undefined,
   );
 
   // Filter by idea status visibility
@@ -59,7 +120,7 @@ export function filterVisibleChartExperiments(
   let best = lower ? Infinity : -Infinity;
   return filtered.filter((e) => {
     if (e._running) return true;
-    const v = e.metrics![metricKey];
+    const v = resolveNumericValue(e, metricKey) ?? 0;
     if (lower ? v < best : v > best) {
       best = v;
       return true;
@@ -80,8 +141,8 @@ function aggregateByIdeaMean(
   const groups: Record<number, { exps: Experiment[]; sum: number; count: number }> = {};
   for (const e of experiments) {
     if (e._running) continue;
-    const v = e.metrics?.[metricKey];
-    if (typeof v !== 'number') continue;
+    const v = resolveNumericValue(e, metricKey);
+    if (v === undefined) continue;
     if (!groups[e.idea_id]) groups[e.idea_id] = { exps: [], sum: 0, count: 0 };
     groups[e.idea_id].exps.push(e);
     groups[e.idea_id].sum += v;
@@ -171,7 +232,7 @@ export function buildChartData(
       const lower = isLowerBetter(metricKey);
       let best = lower ? Infinity : -Infinity;
       filtered = allMeans.filter((e) => {
-        const v = e.metrics![metricKey];
+        const v = resolveNumericValue(e, metricKey) ?? 0;
         if (lower ? v < best : v > best) {
           best = v;
           return true;
@@ -219,7 +280,7 @@ export function buildChartData(
     pointStyles: filtered.map((e) => (e._running ? 'triangle' : 'circle')),
     pointRadii: filtered.map((e) => (e._running ? 8 : 6)),
     pointBorderWidths: filtered.map((e) => (e._running ? 2.5 : 1)),
-    values: filtered.map((e) => e.metrics![metricKey]),
+    values: filtered.map((e) => resolveNumericValue(e, metricKey) ?? 0),
     expData: filtered,
   };
 }

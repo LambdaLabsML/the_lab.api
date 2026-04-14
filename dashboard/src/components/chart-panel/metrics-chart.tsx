@@ -14,7 +14,7 @@ import {
   clipOutliers,
   ideaMean,
 } from "../../state/settings";
-import { buildChartData } from "../../lib/chart-data";
+import { buildChartData, collectChartKeys } from "../../lib/chart-data";
 import { navigateToIdea } from "../../lib/navigate";
 import type { ChartDataResult } from "../../lib/chart-data";
 
@@ -127,19 +127,14 @@ export function MetricsChart() {
     chart.update("none");
   }, [highlighted]);
 
-  // Collect metric keys for the selector
-  const metricKeys = useMemo(() => {
-    const keys = new Set<string>();
-    for (const exp of experiments) {
-      if (exp.metrics) for (const k of Object.keys(exp.metrics)) keys.add(k);
-    }
-    return [...keys].sort();
-  }, [experiments]);
+  // Collect chartable keys grouped by source
+  const grouped = useMemo(() => collectChartKeys(experiments), [experiments]);
+  const allKeys = [...grouped.metrics, ...grouped.meta, ...grouped.timing];
 
-  if (!metric && metricKeys.length > 0) {
+  if (!metric && allKeys.length > 0) {
     const preferred = ["accuracy_per_mtoken", "agent_accuracy", "accuracy"];
-    const match = preferred.find((k) => metricKeys.includes(k));
-    selectedMetric.value = match || metricKeys[0];
+    const match = preferred.find((k) => allKeys.includes(k));
+    selectedMetric.value = match || allKeys[0];
   }
 
   return (
@@ -148,7 +143,9 @@ export function MetricsChart() {
         <span>
           Metric:{" "}
           <select value={metric} onChange={(e) => { selectedMetric.value = (e.target as HTMLSelectElement).value; }}>
-            {metricKeys.map((k) => <option key={k} value={k}>{k}</option>)}
+            {grouped.metrics.length > 0 && <optgroup label="Metrics">{grouped.metrics.map((k) => <option key={k} value={k}>{k}</option>)}</optgroup>}
+            {grouped.timing.length > 0 && <optgroup label="Timing">{grouped.timing.map((k) => <option key={k} value={k}>{k}</option>)}</optgroup>}
+            {grouped.meta.length > 0 && <optgroup label="Meta">{grouped.meta.map((k) => <option key={k} value={k}>{k}</option>)}</optgroup>}
           </select>
         </span>
         <button type="button" class={`chart-toggle-btn${impOnly ? " active" : ""}`} onClick={() => { improvementsOnly.value = !impOnly; }} title="Show only improvements">
