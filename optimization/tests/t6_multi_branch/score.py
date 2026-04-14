@@ -56,7 +56,7 @@ def score(api_url: str) -> dict:
         seed_exp_count[14] = 2
         seed_exp_count[15] = 0
         seed_count = seed_exp_count.get(idea["id"], 0)
-        new_exps = [e for e in exps if e["id"] > 16]  # 16 total seed experiments
+        new_exps = exps[seed_count:]  # experiments after the seeded ones
         if new_exps:
             experiment_idea_ids.add(idea["id"])
     checks["experiments_on_different_ideas"] = min(len(experiment_idea_ids) / 2, 1.0)

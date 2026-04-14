@@ -25,11 +25,17 @@ def score(api_url: str) -> dict:
     checks["checked_status"] = 1.0 if endpoint_was_called(stats, "GET /api/v1/experiments/") else 0.0
 
     # Count new successful experiments (after all seeded ones)
+    # Seeded experiments have seq <= seed count per idea
+    seed_exp_counts = {i: 1 for i in range(1, 16)}
+    seed_exp_counts[14] = 2
+    seed_exp_counts[15] = 0
     new_successes = 0
     best_new_score = 0.0
     for idea in ideas:
-        for exp in client.experiments(idea["id"]):
-            if exp["id"] > SEED_TOTAL_EXPS and exp.get("status") == "completed":
+        exps = client.experiments(idea["id"])
+        seed_count = seed_exp_counts.get(idea["id"], 0)
+        for exp in exps[seed_count:]:
+            if exp.get("status") == "completed":
                 new_successes += 1
                 s = (exp.get("metrics") or {}).get("score", 0)
                 best_new_score = max(best_new_score, s)
