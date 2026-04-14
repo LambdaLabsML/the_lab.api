@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=64"]
+requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -18,6 +18,9 @@ dependencies = [
 
 [tool.setuptools.packages.find]
 include = ["the_lab*"]
+
+[tool.setuptools.package-data]
+the_lab = ["static/**/*", "static/*"]
 
 [project.scripts]
 the-lab = "the_lab.cli:main"
