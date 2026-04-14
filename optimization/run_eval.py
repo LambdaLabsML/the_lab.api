@@ -1177,6 +1177,7 @@ def main():
         metrics = {
             "api_effectiveness": round(aggregate, 4),
             **{f"{t}_score": results[t]["test_score"].get("score", 0) for t in test_ids if t in results},
+            **{f"{t}_cost": round(results[t].get("cost_total", 0), 4) for t in test_ids if t in results},
             "total_api_calls": total_calls,
             "total_cost": round(total_cost, 4),
             "total_wall_time_s": round(total_time, 1),
