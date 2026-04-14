@@ -79,6 +79,36 @@ def _signal_handler(signum, frame):
 
 signal.signal(signal.SIGTERM, _signal_handler)
 signal.signal(signal.SIGINT, _signal_handler)
+
+
+# ---------------------------------------------------------------------------
+# Aggregated progress — each test writes its own entry; the aggregator
+# combines them into a single $THE_LAB_PROGRESS file for the outer Lab.
+# ---------------------------------------------------------------------------
+_test_progress: dict[str, dict] = {}
+_progress_lock = threading.Lock()
+
+
+def _update_test_progress(test_id: str, data: dict):
+    """Update one test's progress and write the combined file."""
+    progress_file = os.environ.get("THE_LAB_PROGRESS")
+    if not progress_file or not test_id:
+        return
+    with _progress_lock:
+        _test_progress[test_id] = data
+        # Aggregate
+        total_tests = len(_test_progress)
+        done = sum(1 for v in _test_progress.values() if v.get("status") == "done")
+        avg_pct = sum(v.get("pct_complete", 0) for v in _test_progress.values()) / max(total_tests, 1)
+        combined = {
+            "pct_complete": round(avg_pct, 1),
+            "status": f"{done}/{total_tests} tests done",
+            "tests": dict(_test_progress),
+        }
+        try:
+            Path(progress_file).write_text(json.dumps(combined))
+        except OSError:
+            pass
 import time
 from pathlib import Path
 
@@ -543,9 +573,7 @@ def launch_agent(
     stream_thread.start()
 
     # Poll the inner Lab for experiment count — kill agent when budget reached
-    # Write progress to $THE_LAB_PROGRESS if set (for the outer Lab's UI)
     import urllib.request
-    progress_file = os.environ.get("THE_LAB_PROGRESS")
     start = time.time()
     deadline = start + timeout
 
@@ -559,13 +587,8 @@ def launch_agent(
     except Exception:
         pass
 
-    # Write initial progress immediately
-    if progress_file:
-        Path(progress_file).write_text(json.dumps({
-            "pct_complete": 0, "experiments_completed": 0,
-            "experiments_running": 0, "budget": budget, "elapsed_s": 0,
-            "status": "inner agent running",
-        }))
+    # Write per-test progress to the shared aggregator (if set by main)
+    _update_test_progress(tag, {"status": "starting", "pct_complete": 0})
 
     while proc.poll() is None and time.time() < deadline:
         time.sleep(5)
@@ -621,27 +644,13 @@ def launch_agent(
                   f"{n_running} running | best: {best_score:.4f}",
                   file=sys.stderr)
 
-        if progress_file:
-            progress = {
-                "pct_complete": round(pct * 100, 1),
-                "status": "inner agent running",
-                "elapsed_s": round(elapsed, 0),
-                "budget": budget,
-                "experiments_completed": n_completed,
-                "experiments_running": n_running,
-                "ideas_total": n_ideas,
-                "ideas_concluded": n_concluded,
-                "ideas_abandoned": n_abandoned,
-                "best_score": round(best_score, 6),
-                "best_experiment_id": best_exp_id,
-                "best_experiment_label": best_exp_label,
-            }
-            # Include per-kernel breakdown from best experiment
-            if best_metrics:
-                for k, v in best_metrics.items():
-                    if k.endswith("_accuracy") or k.endswith("_ns") or k.startswith("memory"):
-                        progress[k] = v
-            Path(progress_file).write_text(json.dumps(progress))
+        _update_test_progress(tag, {
+            "pct_complete": round(pct * 100, 1),
+            "status": "running",
+            "elapsed_s": round(elapsed, 0),
+            "experiments": n_completed,
+            "best_score": round(best_score, 6),
+        })
 
         if n_completed >= budget:
             print(f"{pfx}Budget reached ({n_completed}/{budget}). Stopping.",
@@ -659,6 +668,7 @@ def launch_agent(
         proc.kill()
         proc.wait()
 
+    _update_test_progress(tag, {"pct_complete": 100, "status": "done"})
     return
 
 
