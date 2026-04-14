@@ -1120,7 +1120,7 @@ def _test_dir_name(test_id: str) -> str:
     names = {"t1": "t1_branching", "t2": "t2_experiment_mgmt",
              "t3": "t3_error_recovery", "t4": "t4_leaderboard_search",
              "t5": "t5_discovery", "t6": "t6_multi_branch",
-             "t7": "t7_analytics"}
+             "t7": "t7_analytics", "t8": "t8_metadata"}
     return names.get(test_id, test_id)
 
 
@@ -1129,7 +1129,7 @@ def main():
     test_ids = [t.strip() for t in args.tests.split(",") if t.strip()]
 
     # If running multi-test mode (default)
-    if len(test_ids) > 1 or (len(test_ids) == 1 and test_ids[0] in ("t1", "t2", "t3", "t4", "t5", "t6", "t7")):
+    if len(test_ids) > 1 or (len(test_ids) == 1 and test_ids[0] in ("t1", "t2", "t3", "t4", "t5", "t6", "t7", "t8")):
         import math
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -1137,7 +1137,7 @@ def main():
         results = {}
 
         # Run tests concurrently (each gets its own Lab instance + agent)
-        with ThreadPoolExecutor(max_workers=min(len(test_ids), 4)) as pool:
+        with ThreadPoolExecutor(max_workers=min(len(test_ids), 8)) as pool:
             futures = {pool.submit(run_single_test, tid, args): tid for tid in test_ids}
             for future in as_completed(futures):
                 tid = futures[future]
