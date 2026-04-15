@@ -22,6 +22,7 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
   // Cloned instances use local state; the original uses the global signal
   const isClone = !!instanceId;
   const [localMetric, setLocalMetric] = useState(initialMetric || "");
+  const [logScale, setLogScale] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const chartRef = useRef<Chart | null>(null);
   const innerRef = useRef<HTMLDivElement>(null);
@@ -100,13 +101,14 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
       yScale.title = { display: true, text: metric, color: "#8b949e", font: { size: 10 } };
       yScale.min = yBounds.min;
       yScale.max = yBounds.max;
+      (yScale as any).type = logScale ? "logarithmic" : "linear";
       chartRef.current.resize();
       chartRef.current.update("none");
       return;
     }
 
     chartRef.current = createChart(canvasRef.current, metric, chartData);
-  }, [metric, mode, impOnly, tags, tagMode, experiments, reversed, showAbandoned.value, showConcluded.value, showRunning.value, clip, mean]);
+  }, [metric, mode, impOnly, tags, tagMode, experiments, reversed, showAbandoned.value, showConcluded.value, showRunning.value, clip, mean, logScale]);
 
   // Handle highlight changes separately (just update point sizes)
   useEffect(() => {
@@ -163,6 +165,9 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
         </button>
         <button type="button" class={`chart-toggle-btn${clip ? " active" : ""}`} onClick={() => { clipOutliers.value = !clip; }} title="Hide outliers">
           ⤢ Outliers
+        </button>
+        <button type="button" class={`chart-toggle-btn${logScale ? " active" : ""}`} onClick={() => { setLogScale(!logScale); }} title="Logarithmic Y axis">
+          log
         </button>
         <button type="button" class="chart-toggle-btn" onClick={() => { if (cloneChartPanel) cloneChartPanel("metrics", metric); }} title="Clone this chart as a new tab">
           + Clone
