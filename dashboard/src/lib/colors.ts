@@ -54,7 +54,7 @@ const _STATUS_COLORS: Record<string, string> = {
 const _LOWER_IS_BETTER_PATTERNS = [
   "loss", "bpb", "perplexity", "error", "mse", "mae", "rmse",
   "cost", "latency", "time", "bytes", "regret", "cer", "wer",
-  "fid", "distance", "penalty",
+  "fid", "distance", "penalty", "ttft", "_ms",
 ];
 
 /** Infer whether lower values are better for a given metric name. */
