@@ -1233,14 +1233,14 @@ def main():
         total_calls = sum(results[t].get("total_api_calls", 0) for t in test_ids if t in results)
         total_time = sum(results[t].get("wall_time_s", 0) for t in test_ids if t in results)
 
-        # Per-test check scores: t1.created_4_ideas, t1.adopted_high_priority, etc.
+        # Per-test check scores: t1.detail.created_4_ideas, etc.
         per_check_metrics = {}
         for t in test_ids:
             if t not in results:
                 continue
             checks = results[t].get("test_score", {}).get("checks", {})
             for check_name, check_val in checks.items():
-                per_check_metrics[f"{t}.{check_name}"] = round(check_val, 4)
+                per_check_metrics[f"{t}.detail.{check_name}"] = round(check_val, 4)
 
         metrics = {
             "api_effectiveness": round(aggregate, 4),
