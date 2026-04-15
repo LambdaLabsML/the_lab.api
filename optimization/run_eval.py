@@ -302,6 +302,19 @@ def copy_test_fixture(test_id: str, dest: Path):
     prompt_dst.write_text("\n\n".join(parts) + "\n")
     print(f"  Built PROMPT.md for {test_id}", file=sys.stderr)
 
+    # Copy agent skills (CLAUDE.md + .claude/skills/) into the fixture
+    agent_skills_dir = REPO_ROOT / "agent_skills"
+    if agent_skills_dir.exists():
+        claude_dir = dest / ".claude"
+        claude_dir.mkdir(exist_ok=True)
+        claude_md = agent_skills_dir / "CLAUDE.md"
+        if claude_md.exists():
+            shutil.copy2(claude_md, dest / "CLAUDE.md")
+        skills_src = agent_skills_dir / "skills"
+        if skills_src.exists():
+            shutil.copytree(skills_src, claude_dir / "skills", dirs_exist_ok=True)
+        print(f"  Injected agent skills for {test_id}", file=sys.stderr)
+
 
 def _copy_fixture(src: Path, dest: Path):
     """Copy a fixture dir and append PROMPT_api.md."""

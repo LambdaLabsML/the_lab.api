@@ -103,13 +103,14 @@ class ExperimentRunner:
         startup time grow with every historical worktree.
         """
         repo = self._store.repo_dir
-        candidates = [repo / ".venv"]
+        candidates = [repo / ".venv", repo / ".vllm"]
         for child in repo.iterdir():
             if not child.is_dir():
                 continue
             if child.name in {".git", ".the_lab"}:
                 continue
             candidates.append(child / ".venv")
+            candidates.append(child / ".vllm")
 
         for venv_dir in candidates:
             if not venv_dir.is_dir():

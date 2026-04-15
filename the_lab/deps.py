@@ -46,7 +46,7 @@ PREAMBLE_SOURCE = 'source .the_lab/preamble.sh 2>/dev/null || true\n'
 _LOWER_IS_BETTER_PATTERNS = (
     "loss", "bpb", "perplexity", "error", "mse", "mae", "rmse",
     "cost", "latency", "time", "bytes", "regret", "cer", "wer",
-    "fid", "distance", "penalty",
+    "fid", "distance", "penalty", "ttft", "_ms",
 )
 
 _INTERNAL_META_KEYS = {"git_branch", "git_commit", "worktree"}
