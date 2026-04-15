@@ -28,6 +28,7 @@ import { LogView } from "./views/log-view";
 import { ApiView } from "./views/api-view";
 import { StatsView } from "./views/stats-view";
 import { SandboxView } from "./views/sandbox-view";
+import { MetricsNotesView } from "./views/metrics-notes-view";
 import { DetailPanel } from "./components/detail-panel";
 import { MetricsChart } from "./components/chart-panel/metrics-chart";
 import { ScatterChart } from "./components/chart-panel/scatter-chart";
@@ -54,6 +55,7 @@ const PANEL_NAMES: Record<string, string> = {
   api: "API", stats: "Stats", sandbox: "Sandbox",
   metrics: "Metrics", scatter: "Scatter", detail: "Detail",
   filters: "Filters", suggest: "Suggest", task: "Task",
+  "metrics-notes": "Metrics & Notes",
 };
 
 const ALL_PANEL_IDS = Object.keys(PANEL_NAMES);
@@ -71,6 +73,7 @@ const PANEL_MAP: Record<string, (params?: any) => preact.JSX.Element> = {
   filters: () => <FilterBar />,
   suggest: () => <SuggestPanel />,
   task: () => <TaskBanner />,
+  "metrics-notes": () => <MetricsNotesView />,
 };
 
 // ---------------------------------------------------------------------------
