@@ -15,6 +15,7 @@ from ..deps import (
     _INTERNAL_META_KEYS,
     _read_task,
     _write_task,
+    _read_metric_directions,
 )
 from ..sandbox import (
     list_observed_accesses,
@@ -93,6 +94,44 @@ def get_dashboard_config():
         except (json.JSONDecodeError, OSError):
             pass
     return {}
+
+
+# --- Metric directions ---
+
+@router.get("/api/v1/config/metric-directions")
+def get_metric_directions():
+    """Get custom metric direction overrides.
+
+    Returns a dict mapping metric key → "minimize" | "maximize".
+    These override the default pattern-based inference.
+    Missing file returns an empty dict (all defaults apply).
+
+    Example:
+        GET /api/v1/config/metric-directions
+        -> {"my_custom_score": "maximize", "some_loss": "minimize"}
+    """
+    return _read_metric_directions()
+
+
+@router.post("/api/v1/config/metric-directions")
+def set_metric_directions(directions: dict):
+    """Set custom metric direction overrides.
+
+    Keys are metric names, values must be "minimize" or "maximize".
+    Overwrites the full config (use GET first to merge with existing).
+
+    Example:
+        POST /api/v1/config/metric-directions
+        {"ttft_p50_ms": "minimize", "custom_accuracy": "maximize"}
+        -> {"ttft_p50_ms": "minimize", "custom_accuracy": "maximize"}
+    """
+    for k, v in directions.items():
+        if v not in ("minimize", "maximize"):
+            raise HTTPException(400, f"Invalid direction '{v}' for key '{k}': must be 'minimize' or 'maximize'")
+    path = REPO_DIR / ".the_lab" / "metric_directions.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(directions, indent=2) + "\n")
+    return directions
 
 
 # --- Sandbox ---

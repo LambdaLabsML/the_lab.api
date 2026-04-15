@@ -125,8 +125,26 @@ def _branch_diff_summary(idea_id: int) -> dict | None:
     return summary
 
 
+def _read_metric_directions() -> dict:
+    """Read custom metric direction overrides from .the_lab/metric_directions.json."""
+    path = REPO_DIR / ".the_lab" / "metric_directions.json"
+    if path.exists():
+        try:
+            return json.loads(path.read_text())
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {}
+
+
 def metric_direction(key: str) -> str:
-    """Infer whether a metric should be minimized or maximized from its name."""
+    """Infer whether a metric should be minimized or maximized from its name.
+
+    Checks custom overrides in .the_lab/metric_directions.json first,
+    then falls back to pattern matching.
+    """
+    overrides = _read_metric_directions()
+    if key in overrides:
+        return overrides[key]
     k = key.lower()
     if any(p in k for p in _LOWER_IS_BETTER_PATTERNS):
         return "minimize"
