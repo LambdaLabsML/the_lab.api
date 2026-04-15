@@ -1244,8 +1244,9 @@ def main():
 
         metrics = {
             "api_effectiveness": round(aggregate, 4),
-            **{f"{t}_score": results[t]["test_score"].get("score", 0) for t in test_ids if t in results},
-            **{f"{t}_cost": round(results[t].get("cost_total", 0), 4) for t in test_ids if t in results},
+            **{f"{t}.score": results[t]["test_score"].get("score", 0) for t in test_ids if t in results},
+            **{f"{t}.cost": round(results[t].get("cost_total", 0), 4) for t in test_ids if t in results},
+            **{f"{t}.api_calls": results[t].get("total_api_calls", 0) for t in test_ids if t in results},
             **per_check_metrics,
             "total_api_calls": total_calls,
             "total_cost": round(total_cost, 4),

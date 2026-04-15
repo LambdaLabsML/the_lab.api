@@ -147,7 +147,8 @@ if metrics:
     json.dump(metrics, open('.the_lab/artifacts/baseline.json', 'w'), indent=2)
     print()
     print(f'  api_effectiveness: {metrics.get(\"api_effectiveness\", \"n/a\")}')
-    for k in ('t1_score', 't2_score', 't3_score', 't4_score', 't5_score', 't6_score', 't7_score'):
+    for i in range(1, 9):
+        k = f't{i}.score'
         print(f'  {k}:' + ' ' * (17-len(k)) + f'{metrics.get(k, \"n/a\")}')
     print(f'  total_api_calls:   {metrics.get(\"total_api_calls\", \"n/a\")}')
     print(f'  total_cost:        \${metrics.get(\"total_cost\", 0)}')
