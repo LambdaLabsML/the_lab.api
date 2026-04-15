@@ -95,7 +95,59 @@ def list_experiments(idea_id: int):
         if exp.get("status") == "failed":
             label = exp.get("label", str(exp["id"]))
             exp["read_log"] = f"GET /api/v1/experiments/{label}/log"
+        # Strip tags to encourage ?tags= filtering on /orient or /leaderboard
+        if exp.get("tags"):
+            del exp["tags"]
     return exps
+
+
+# --- Bulk listing (must come before parameterized) ---
+
+@router.get("/experiments")
+def list_all_experiments(
+    status: str | None = Query(default=None, description="Filter by status: completed, failed, running, pending"),
+    tags: str | None = Query(default=None, description="Comma-separated tags — experiments must have ALL (AND filter)"),
+    metric: str | None = Query(default=None, description="Only return experiments that have this metric"),
+):
+    """List all experiments across all ideas.
+
+    Returns every experiment with its metrics, tags, and parent idea description.
+    Use filters to narrow results. This is more efficient than fetching
+    experiments per-idea when you need data across the whole project.
+
+    Example:
+        GET /api/v1/experiments
+        GET /api/v1/experiments?status=completed&metric=score
+        GET /api/v1/experiments?tags=baseline
+    """
+    all_exps = store.list_all_experiments()
+    idea_cache: dict[int, dict] = {}
+
+    tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
+
+    results = []
+    for exp in all_exps:
+        if status and exp.get("status") != status:
+            continue
+        if tag_list and not all(t in (exp.get("tags") or []) for t in tag_list):
+            continue
+        if metric and metric not in (exp.get("metrics") or {}):
+            continue
+        idea_id = exp["idea_id"]
+        if idea_id not in idea_cache:
+            idea = store.get_idea(idea_id)
+            idea_cache[idea_id] = idea
+        idea = idea_cache[idea_id]
+        exp["idea_description"] = idea["description"] if idea else None
+        # Strip tags from bulk response to encourage ?tags= filtering
+        if not tag_list and exp.get("tags"):
+            del exp["tags"]
+        results.append(exp)
+
+    resp = {"experiments": results, "count": len(results)}
+    if not tag_list:
+        resp["tag_hint"] = "Tags hidden in bulk listing. Use GET /experiments/tags to list tags, then GET /experiments?tags=<tag> to filter by approach."
+    return resp
 
 
 # --- Aggregate log endpoint (must come before parameterized) ---

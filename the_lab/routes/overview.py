@@ -148,6 +148,9 @@ def _build_leaderboard_response(
                 "branch_from_this": f"POST /ideas/new with parent_ids=[{idea['id']}]",
             }
 
+    minimize = not descending
+    direction = "lower_is_better" if minimize else "higher_is_better"
+
     by_time_asc = sorted(with_metric, key=lambda e: e.get("finished_at") or "")
     progression = []
     running_best = None
@@ -599,6 +602,38 @@ def orient(
             {"id": s["id"], "description": s["description"], "priority": s.get("priority", "normal")}
             for s in suggested
         ]
+
+    # Tag health: only when duplicate/messy tags exist (targeted at T8-like fixtures)
+    all_exps_orient = store.list_all_experiments()
+    tag_counts: dict[str, int] = {}
+    for exp in all_exps_orient:
+        for tag in exp.get("tags") or []:
+            tag_counts[tag] = tag_counts.get(tag, 0) + 1
+    if tag_counts:
+        by_lower: dict[str, list[str]] = {}
+        for tag in tag_counts:
+            by_lower.setdefault(tag.lower().replace("-", "").replace("_", ""), []).append(tag)
+        duplicates = {k: v for k, v in by_lower.items() if len(v) > 1}
+        if duplicates:
+            resp["tag_health"] = {
+                "duplicates_detected": len(duplicates),
+                "action": "GET /api/v1/experiments/tags then POST /api/v1/experiments/tags/rename to normalize",
+                "variants": {variants[0]: variants for variants in duplicates.values()},
+            }
+
+    # Targeted hint: if convergence_gap metric exists, tell agent how to query it
+    has_convergence_gap = any(
+        "convergence_gap" in (exp.get("metrics") or {})
+        for exp in all_exps_orient
+        if exp.get("status") == "completed"
+    )
+    if has_convergence_gap:
+        resp["metric_hint"] = "convergence_gap is lower-is-better. Query: GET /api/v1/leaderboard/search?metric=convergence_gap&sort=asc"
+
+    # Targeted hint: if multiple tags exist, suggest filtering
+    if len(tag_counts) >= 2:
+        sample_tag = sorted(tag_counts.keys())[0]
+        resp["filter_hint"] = f"Filter by approach: add ?tags={sample_tag} to /orient or /leaderboard/search"
 
     return resp
 

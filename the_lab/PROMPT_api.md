@@ -35,6 +35,20 @@ If experiments have failed, `GET /experiments/log` returns all failed experiment
 - **Don't GET individual experiments** — `/wait` returns the full result. `/experiments/log` returns all failed logs at once.
 - Use `/orient` → `/leaderboard/search` → act. Two calls give you everything you need to decide.
 
+### Tag & metric management
+
+Tags categorize experiments by approach. Messy or duplicate tags hurt analysis — normalize them early.
+
+- **List all tags** → `GET /experiments/tags` — returns every tag with its usage count. Start here to see what exists.
+- **Rename / normalize tags** → `POST /experiments/tags/rename {"old": "basline", "new": "baseline"}` — fixes typos and consolidates variants across all experiments in one call.
+- **Filter by tag** → pass `tags=...` to `/orient` or `/leaderboard/search` to scope results to a specific approach.
+
+Metrics have direction — know which way is better:
+- `score` → **higher is better** (default sort is descending, so `/leaderboard/search?metric=score` already does the right thing)
+- `convergence_gap` → **lower is better** — use `sort=asc`: `/leaderboard/search?metric=convergence_gap&sort=asc`
+
+When documenting findings, always note what each tag represents (e.g., "table-heavy = lookup-table approach") and which direction each metric optimizes.
+
 ### Script contract
 
 Scripts must print `{"metrics": {...}}` as their **last stdout line** (or omit for setup tasks). Optional extras:
