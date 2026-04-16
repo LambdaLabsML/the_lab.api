@@ -54,11 +54,13 @@ async def track_api_stats(request, call_next):
             and not path.startswith("/api/v1/stats")
             and not is_dashboard):
         client = request.client.host if request.client else ""
+        is_mcp = request.headers.get("x-mcp-proxy") == "true"
         api_stats.record(
             request.method, path, client_ip=client,
             query=str(request.url.query) if request.url.query else "",
             body_preview=body_preview,
             status_code=response.status_code,
+            mcp=is_mcp,
         )
     return response
 

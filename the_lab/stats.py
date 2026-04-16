@@ -72,18 +72,22 @@ class ApiStats:
         self._path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
 
     def record(self, method: str, path: str, client_ip: str = "",
-               query: str = "", body_preview: str = "", status_code: int = 0):
+               query: str = "", body_preview: str = "", status_code: int = 0,
+               mcp: bool = False):
         """Record an API call and update n-gram pattern tracking."""
         key = f"{method} {normalize_path(path)}"
         import datetime as _dt
-        self._recent.append({
+        entry = {
             "t": _dt.datetime.now(_dt.timezone.utc).isoformat(),
             "method": method,
             "path": path,
             "query": query,
             "body": body_preview[:200] if body_preview else "",
             "status": status_code,
-        })
+        }
+        if mcp:
+            entry["mcp"] = True
+        self._recent.append(entry)
         with self._lock:
             self._calls[key] += 1
             # Maintain sliding window per client
@@ -114,12 +118,17 @@ class ApiStats:
             patterns = dict(self._patterns.get(n, {}))
         sorted_calls = sorted(calls.items(), key=lambda x: x[1], reverse=True)
         sorted_patterns = sorted(patterns.items(), key=lambda x: x[1], reverse=True)
-        return {
+        total = sum(calls.values())
+        mcp_calls = sum(1 for r in self._recent if r.get("mcp"))
+        result = {
             "calls": [{"endpoint": k, "count": v} for k, v in sorted_calls],
             "patterns": [{"sequence": k, "count": v} for k, v in sorted_patterns],
             "pattern_length": n,
-            "total_calls": sum(calls.values()),
+            "total_calls": total,
+            "mcp_calls": mcp_calls,
+            "curl_calls": total - mcp_calls,
         }
+        return result
 
     def get_history(self, limit: int = 50) -> list[dict]:
         """Return the most recent API calls (newest first)."""
