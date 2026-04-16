@@ -83,3 +83,6 @@ export const apiSpec = signal<OpenAPISpec | null>(null);
 
 /** Log entries built from all ideas + experiments + notes. */
 export const logEntries = signal<LogEntry[]>([]);
+
+/** Progress pct_complete for running experiments, keyed by label. */
+export const runningProgress = signal<Record<string, number>>({});

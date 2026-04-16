@@ -12,7 +12,7 @@
 //   Log       — every 15 s  (only when the log view is active)
 // ------------------------------------------------------------
 
-import { getBacklog, getGraph, getChartData, getAllIdeas, getIdea } from "./api";
+import { getBacklog, getGraph, getChartData, getAllIdeas, getIdea, getExperimentProgress } from "./api";
 import { resetGlobalBestBeforeCache } from "../lib/colors";
 import {
   backlogData,
@@ -20,6 +20,7 @@ import {
   allExperiments,
   allIdeas,
   logEntries,
+  runningProgress,
 } from "./signals";
 // chartOpen and currentView no longer needed — dockview manages panel visibility
 import type { IdeaNode, Experiment, LogEntry } from "../lib/types";
@@ -80,6 +81,24 @@ async function pollChartData(): Promise<void> {
     });
     resetGlobalBestBeforeCache();
     allExperiments.value = merged;
+
+    // Fetch progress for running experiments
+    const runningLabels = running.map((e) => e.label || String(e.id)).filter(Boolean);
+    if (runningLabels.length > 0) {
+      const progress: Record<string, number> = {};
+      await Promise.all(
+        runningLabels.map(async (label) => {
+          try {
+            const resp = await getExperimentProgress(label);
+            const pct = resp.progress?.pct_complete ?? resp.progress?.pct;
+            if (typeof pct === "number") progress[label] = pct;
+          } catch { /* ignore */ }
+        }),
+      );
+      runningProgress.value = progress;
+    } else {
+      runningProgress.value = {};
+    }
   } catch {
     // Network error — keep stale data.
   }

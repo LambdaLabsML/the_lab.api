@@ -1,5 +1,6 @@
 import { useMemo, useState } from "preact/hooks";
-import { allExperiments, allIdeas, currentLayout, highlightedIdea } from "../state/signals";
+import { allExperiments, allIdeas, currentLayout, highlightedIdea, runningProgress } from "../state/signals";
+import { RunningBadge } from "./progress-ring";
 import {
   selectedMetric, colorMode, activeTagFilters, tagFilterMode,
   showAbandoned, showConcluded, showRunning,
@@ -269,12 +270,16 @@ export function TablePanel() {
                     </span>
                   </td>
                   <td>
-                    <span
-                      class="status-badge"
-                      style={`background: ${STATUS_BADGE_COLORS[exp.idea_status || "active"] || "#333"}`}
-                    >
-                      {exp.idea_status || "active"}
-                    </span>
+                    {exp._running ? (
+                      <RunningBadge pct={runningProgress.value[exp.label || String(exp.id)]} />
+                    ) : (
+                      <span
+                        class="status-badge"
+                        style={`background: ${STATUS_BADGE_COLORS[exp.idea_status || "active"] || "#333"}`}
+                      >
+                        {exp.idea_status || "active"}
+                      </span>
+                    )}
                   </td>
                   {orderedMetrics.map((mk) => {
                     const v = resolveNumericValue(exp, mk);
