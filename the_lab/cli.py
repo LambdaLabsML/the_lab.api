@@ -201,17 +201,24 @@ def cmd_init(target: str | None = None):
     import shutil as _shutil
     claude_bin = _shutil.which("claude")
     if claude_bin and prompt_path.exists():
-        if _ask_yn("  Have Claude analyze this repo and pre-fill PROMPT_problem.md?"):
+        print(f"\n  {_blue('?')} Describe your research goal so Claude can pre-fill PROMPT_problem.md.")
+        print(f"    {_dim('Leave blank to skip and edit the file yourself.')}")
+        try:
+            user_goal = input(f"    {_dim('>')} ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            user_goal = ""
+        if user_goal:
             print(f"  {_dim('...')} Claude is analyzing the repo...\n")
             prefill_prompt = (
                 "You are helping set up a research project for The Lab, an experiment "
-                "management system. Analyze this repository — look at the README, code, "
-                "scripts, data directories, configs — and fill in PROMPT_problem.md with "
-                "a real problem description based on what you find.\n\n"
+                "management system. The user described their goal as:\n\n"
+                f"  \"{user_goal}\"\n\n"
+                "Analyze this repository — look at the README, code, scripts, data "
+                "directories, configs — and fill in PROMPT_problem.md with a real "
+                "problem description based on what you find and the user's goal.\n\n"
                 "Keep the existing Goal / Background / Setup structure. Replace the "
-                "placeholder text with concrete details about this project's actual "
-                "research goal, prior work, hardware, data locations, and how to run "
-                "experiments. Be specific and concise.\n\n"
+                "placeholder text with concrete details. Be specific and concise.\n\n"
                 "If you can't determine something, leave a [TODO: ...] marker.\n\n"
                 f"Edit the file: {prompt_path}"
             )
