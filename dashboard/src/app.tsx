@@ -129,8 +129,6 @@ let _preMaximizeLayout: any = null;
 // so re-entering fullscreen on the same panel restores it
 const FULLSCREEN_LAYOUTS_KEY = "the-lab:fullscreenLayouts";
 
-// Default graph fullscreen workspace for new users
-const DEFAULT_GRAPH_FULLSCREEN = {"grid":{"root":{"type":"branch","data":[{"type":"leaf","data":{"views":["graph","timeline","log","sandbox"],"activeView":"graph","id":"4"},"size":825},{"type":"leaf","data":{"views":["api","stats","suggest"],"activeView":"suggest","id":"3"},"size":826}],"size":994},"width":1651,"height":994,"orientation":"HORIZONTAL","maximizedNode":{"location":[0]}},"panels":{"graph":{"id":"graph","contentComponent":"default","title":"Graph"},"timeline":{"id":"timeline","contentComponent":"default","title":"Timeline"},"log":{"id":"log","contentComponent":"default","title":"Log"},"sandbox":{"id":"sandbox","contentComponent":"default","title":"Sandbox"},"api":{"id":"api","contentComponent":"default","title":"API"},"stats":{"id":"stats","contentComponent":"default","title":"Stats"},"suggest":{"id":"suggest","contentComponent":"default","title":"Suggest"},"detail":{"id":"detail","contentComponent":"default","title":"Detail"},"metrics":{"id":"metrics","contentComponent":"default","title":"Metrics"},"scatter":{"id":"scatter","contentComponent":"default","title":"Scatter"},"filters":{"id":"filters","contentComponent":"default","title":"Filters"}},"activeGroup":"4","floatingGroups":[{"data":{"views":["detail"],"activeView":"detail","id":"2"},"position":{"bottom":278.672,"right":40,"width":500,"height":368.390625}},{"data":{"views":["metrics","scatter"],"activeView":"metrics","id":"7"},"position":{"bottom":14.2031,"left":40.2031,"width":1059.75,"height":312.703125}},{"data":{"views":["filters"],"activeView":"filters","id":"1"},"position":{"bottom":11.9531,"right":38.6562,"width":500.0625,"height":255.671875}}]};
 
 class PanelHeaderActions implements IHeaderActionsRenderer {
   element: HTMLElement;
@@ -255,7 +253,7 @@ class PanelHeaderActions implements IHeaderActionsRenderer {
         let restored = false;
         try {
           const layouts = JSON.parse(localStorage.getItem(FULLSCREEN_LAYOUTS_KEY) || "{}");
-          const savedLayout = layouts[panelId] || (panelId === "graph" ? DEFAULT_GRAPH_FULLSCREEN : null);
+          const savedLayout = layouts[panelId];
           if (savedLayout) {
             dv.fromJSON(savedLayout);
             restored = true;
@@ -707,31 +705,6 @@ export function App() {
     }
     container.addEventListener("dblclick", onTabBarDblClick);
 
-    // ── Feature: tray panel click-outside auto-dismiss ──
-    // Transient floating panels (spawned from the tray) are dismissed when
-    // the user clicks anywhere outside them.
-    function onTrayClickOutside(e: MouseEvent) {
-      if (trayOpen.value.size === 0) return;
-      const target = e.target as HTMLElement;
-      // Don't dismiss if clicking the tray bar itself (toggle handled separately)
-      if (target.closest(".panel-tray")) return;
-      // Don't dismiss if clicking inside a transient floating panel
-      for (const panelId of trayOpen.value) {
-        const panel = dv.panels.find((p) => p.id === panelId);
-        if (panel && panel.group.api.location.type === "floating") {
-          if (panel.group.element.contains(target)) return;
-        }
-      }
-      // Dismiss all transient floating panels
-      const toClose = [...trayOpen.value];
-      for (const panelId of toClose) {
-        const panel = dv.panels.find((p) => p.id === panelId);
-        if (panel) dv.removePanel(panel);
-      }
-      trayOpen.value = new Set();
-    }
-    document.addEventListener("mousedown", onTrayClickOutside);
-
     // ── Feature: drag tab to tray to hide it ──
     let _draggedPanelId: string | null = null;
     const dragPanelDisposable = dv.onWillDragPanel((e) => {
@@ -791,7 +764,6 @@ export function App() {
     });
 
     return () => {
-      document.removeEventListener("mousedown", onTrayClickOutside);
       document.removeEventListener("dragend", onDragEnd);
       dragPanelDisposable.dispose();
       container.removeEventListener("dblclick", onTabBarDblClick);
