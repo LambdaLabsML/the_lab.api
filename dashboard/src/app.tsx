@@ -5,6 +5,11 @@ import { render } from "preact";
 // Tracks which panels are available to add — closed panels + overlay candidates when maximized
 const availablePanels = signal<string[]>([]);
 const isMaximized = signal(false);
+
+// Tray: panels that live in a bottom bar and pop up as dismissable floating lightboxes
+const TRAY_PANEL_IDS = ["api", "stats", "sandbox"];
+// Set of panel IDs currently shown as transient floats (auto-dismiss on click-outside)
+const trayOpen = signal<Set<string>>(new Set());
 import {
   DockviewComponent,
   themeDark,
@@ -282,7 +287,7 @@ class PanelHeaderActions implements IHeaderActionsRenderer {
 // Top row: Task | Suggest | Filters
 // Middle row: Metrics + Scatter (tabbed)
 // Bottom row: Graph/Timeline/Log | Detail/API/Stats/Sandbox
-const DEFAULT_LAYOUT: SerializedDockview = {"grid":{"root":{"type":"branch","data":[{"type":"branch","data":[{"type":"leaf","data":{"views":["task"],"activeView":"task","id":"11"},"size":559},{"type":"leaf","data":{"views":["suggest"],"activeView":"suggest","id":"13"},"size":541},{"type":"leaf","data":{"views":["filters"],"activeView":"filters","id":"12"},"size":551}],"size":153},{"type":"leaf","data":{"views":["metrics","scatter"],"activeView":"metrics","id":"9"},"size":249},{"type":"branch","data":[{"type":"leaf","data":{"views":["table","graph","timeline","log"],"activeView":"table","id":"5"},"size":928},{"type":"leaf","data":{"views":["detail","api","stats","sandbox"],"activeView":"detail","id":"7"},"size":723}],"size":592}],"size":1651},"width":1651,"height":994,"orientation":"VERTICAL"},"panels":{"task":{"id":"task","contentComponent":"default","title":"Task"},"suggest":{"id":"suggest","contentComponent":"default","title":"Suggest"},"filters":{"id":"filters","contentComponent":"default","title":"Filters"},"metrics":{"id":"metrics","contentComponent":"default","title":"Metrics"},"scatter":{"id":"scatter","contentComponent":"default","title":"Scatter"},"table":{"id":"table","contentComponent":"default","title":"Table"},"graph":{"id":"graph","contentComponent":"default","title":"Graph"},"timeline":{"id":"timeline","contentComponent":"default","title":"Timeline"},"log":{"id":"log","contentComponent":"default","title":"Log"},"detail":{"id":"detail","contentComponent":"default","title":"Detail"},"api":{"id":"api","contentComponent":"default","title":"API"},"stats":{"id":"stats","contentComponent":"default","title":"Stats"},"sandbox":{"id":"sandbox","contentComponent":"default","title":"Sandbox"}},"activeGroup":"5"} as any;
+const DEFAULT_LAYOUT: SerializedDockview = {"grid":{"root":{"type":"branch","data":[{"type":"branch","data":[{"type":"leaf","data":{"views":["task"],"activeView":"task","id":"11"},"size":559},{"type":"leaf","data":{"views":["suggest"],"activeView":"suggest","id":"13"},"size":541},{"type":"leaf","data":{"views":["filters"],"activeView":"filters","id":"12"},"size":551}],"size":153},{"type":"leaf","data":{"views":["metrics","scatter"],"activeView":"metrics","id":"9"},"size":249},{"type":"branch","data":[{"type":"leaf","data":{"views":["table","graph","timeline","log"],"activeView":"table","id":"5"},"size":928},{"type":"leaf","data":{"views":["detail"],"activeView":"detail","id":"7"},"size":723}],"size":592}],"size":1651},"width":1651,"height":994,"orientation":"VERTICAL"},"panels":{"task":{"id":"task","contentComponent":"default","title":"Task"},"suggest":{"id":"suggest","contentComponent":"default","title":"Suggest"},"filters":{"id":"filters","contentComponent":"default","title":"Filters"},"metrics":{"id":"metrics","contentComponent":"default","title":"Metrics"},"scatter":{"id":"scatter","contentComponent":"default","title":"Scatter"},"table":{"id":"table","contentComponent":"default","title":"Table"},"graph":{"id":"graph","contentComponent":"default","title":"Graph"},"timeline":{"id":"timeline","contentComponent":"default","title":"Timeline"},"log":{"id":"log","contentComponent":"default","title":"Log"},"detail":{"id":"detail","contentComponent":"default","title":"Detail"}},"activeGroup":"5"} as any;
 
 // Mobile/narrow layout: all panels stacked vertically in two groups
 function buildMobileLayout(dv: DockviewComponent) {
@@ -678,8 +683,51 @@ export function App() {
     }
     container.addEventListener("dblclick", onTabBarDblClick);
 
+    // ── Feature: tray panel click-outside auto-dismiss ──
+    // Transient floating panels (spawned from the tray) are dismissed when
+    // the user clicks anywhere outside them.
+    function onTrayClickOutside(e: MouseEvent) {
+      if (trayOpen.value.size === 0) return;
+      const target = e.target as HTMLElement;
+      // Don't dismiss if clicking the tray bar itself (toggle handled separately)
+      if (target.closest(".panel-tray")) return;
+      // Don't dismiss if clicking inside a transient floating panel
+      for (const panelId of trayOpen.value) {
+        const panel = dv.panels.find((p) => p.id === panelId);
+        if (panel && panel.group.api.location.type === "floating") {
+          if (panel.group.element.contains(target)) return;
+        }
+      }
+      // Dismiss all transient floating panels
+      const toClose = [...trayOpen.value];
+      for (const panelId of toClose) {
+        const panel = dv.panels.find((p) => p.id === panelId);
+        if (panel) dv.removePanel(panel);
+      }
+      trayOpen.value = new Set();
+    }
+    document.addEventListener("mousedown", onTrayClickOutside);
+
+    // When a tray panel is docked (moved from floating to grid), remove
+    // it from transient tracking so it becomes permanent.
+    const trayDockCheck = dv.onDidLayoutChange(() => {
+      if (trayOpen.value.size === 0) return;
+      const next = new Set(trayOpen.value);
+      let changed = false;
+      for (const panelId of trayOpen.value) {
+        const panel = dv.panels.find((p) => p.id === panelId);
+        if (!panel || panel.group.api.location.type !== "floating") {
+          next.delete(panelId);
+          changed = true;
+        }
+      }
+      if (changed) trayOpen.value = next;
+    });
+
     return () => {
+      document.removeEventListener("mousedown", onTrayClickOutside);
       container.removeEventListener("dblclick", onTabBarDblClick);
+      trayDockCheck.dispose();
       collapseEnforcer.dispose();
       layoutDisposable.dispose();
       addDisposable.dispose();
@@ -755,6 +803,32 @@ export function App() {
     return availablePanels.value;
   }, []);
 
+  const handleToggleTrayPanel = useCallback((id: string) => {
+    const dv = dockviewRef.current;
+    if (!dv) return;
+    const existing = dv.panels.find((p) => p.id === id);
+    if (existing) {
+      // Close it — return to tray
+      dv.removePanel(existing);
+      const next = new Set(trayOpen.value);
+      next.delete(id);
+      trayOpen.value = next;
+    } else {
+      // Open as floating lightbox
+      const title = PANEL_NAMES[id] || id;
+      const w = Math.min(600, window.innerWidth * 0.5);
+      const h = Math.min(500, window.innerHeight * 0.5);
+      const x = (window.innerWidth - w) / 2;
+      const y = (window.innerHeight - h) / 2 - 30;
+      const floatGroup = dv.addGroup();
+      dv.addFloatingGroup(floatGroup, { x, y, width: w, height: h });
+      dv.addPanel({ id, component: "default", title, position: { referenceGroup: floatGroup } });
+      const next = new Set(trayOpen.value);
+      next.add(id);
+      trayOpen.value = next;
+    }
+  }, []);
+
   const handleAddPanel = useCallback((id: string) => {
     const dv = dockviewRef.current;
     if (!dv) return;
@@ -826,6 +900,22 @@ export function App() {
         id="dockview-container"
         ref={containerRef}
       />
+      <div class="panel-tray">
+        {TRAY_PANEL_IDS.map((id) => {
+          const isOpen = trayOpen.value.has(id);
+          const isDocked = !isOpen && dockviewRef.current?.panels.some((p) => p.id === id);
+          return (
+            <button
+              key={id}
+              class={isOpen ? "active" : isDocked ? "docked" : ""}
+              onClick={() => handleToggleTrayPanel(id)}
+              title={isDocked ? `${PANEL_NAMES[id]} (docked)` : PANEL_NAMES[id]}
+            >
+              {PANEL_NAMES[id]}
+            </button>
+          );
+        })}
+      </div>
       <ChatPanel />
     </>
   );
