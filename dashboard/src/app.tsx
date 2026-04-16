@@ -917,26 +917,27 @@ export function App() {
       />
       <div class="panel-tray">
         {(() => {
-          // Merge tray panels + any other closed panels into one list
           const open = openPanelIds.value;
+          const floating = trayOpen.value;
           const tray = trayPanels.value;
+          // "Docked" = open in grid (not floating via tray)
+          const dockedInGrid = new Set(
+            ALL_PANEL_IDS.filter((id) => open.has(id) && !floating.has(id))
+          );
+          // Show: explicit tray panels + any closed panels (but not grid-docked ones)
           const closed = ALL_PANEL_IDS.filter((id) => !open.has(id) && !tray.includes(id));
           const allTray = [...tray, ...closed];
           if (allTray.length === 0) return null;
-          return allTray.map((id) => {
-            const isFloating = trayOpen.value.has(id);
-            const isDocked = !isFloating && open.has(id);
-            return (
-              <button
-                key={id}
-                class={isFloating ? "active" : isDocked ? "docked" : ""}
-                onClick={() => handleToggleTrayPanel(id)}
-                title={PANEL_NAMES[id] || id}
-              >
-                {PANEL_NAMES[id] || id}
-              </button>
-            );
-          });
+          return allTray.map((id) => (
+            <button
+              key={id}
+              class={floating.has(id) ? "active" : ""}
+              onClick={() => handleToggleTrayPanel(id)}
+              title={PANEL_NAMES[id] || id}
+            >
+              {PANEL_NAMES[id] || id}
+            </button>
+          ));
         })()}
       </div>
       <ChatPanel />
