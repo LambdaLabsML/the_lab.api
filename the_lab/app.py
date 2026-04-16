@@ -123,7 +123,12 @@ async def inject_notifications(request, call_next):
         pass
     if notifications:
         data["_notifications"] = notifications
-        new_body = _json.dumps(data).encode()
+        try:
+            new_body = _json.dumps(data, allow_nan=True).encode()
+        except (ValueError, TypeError):
+            # If re-serialization fails, return the original body unchanged
+            return Response(content=body, status_code=response.status_code,
+                            headers=dict(response.headers), media_type=response.media_type)
         return Response(content=new_body, status_code=response.status_code,
                         media_type="application/json")
     return Response(content=body, status_code=response.status_code,
