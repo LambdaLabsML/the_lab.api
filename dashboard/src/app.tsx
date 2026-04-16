@@ -720,6 +720,44 @@ export function App() {
     }
     document.addEventListener("mousedown", onTrayClickOutside);
 
+    // ── Feature: drag tab to tray to hide it ──
+    let _draggedPanelId: string | null = null;
+    const dragPanelDisposable = dv.onWillDragPanel((e) => {
+      _draggedPanelId = e.panel.id;
+    });
+    // Clear on dragend (fires on the document when any drag ends)
+    function onDragEnd() { _draggedPanelId = null; }
+    document.addEventListener("dragend", onDragEnd);
+
+    // The tray element gets dragover/drop listeners after mount
+    requestAnimationFrame(() => {
+      const trayEl = document.querySelector(".panel-tray");
+      if (!trayEl) return;
+      trayEl.addEventListener("dragover", (e: Event) => {
+        if (!_draggedPanelId) return;
+        (e as DragEvent).preventDefault();
+        (e as DragEvent).dataTransfer!.dropEffect = "move";
+        (trayEl as HTMLElement).classList.add("drag-over");
+      });
+      trayEl.addEventListener("dragleave", () => {
+        (trayEl as HTMLElement).classList.remove("drag-over");
+      });
+      trayEl.addEventListener("drop", (e: Event) => {
+        (e as DragEvent).preventDefault();
+        (trayEl as HTMLElement).classList.remove("drag-over");
+        if (_draggedPanelId) {
+          const panelId = _draggedPanelId;
+          _draggedPanelId = null;
+          // Remove from dockview and add to tray
+          const panel = dv.panels.find((p) => p.id === panelId);
+          if (panel) dv.removePanel(panel);
+          if (!trayPanels.value.includes(panelId)) {
+            trayPanels.value = [...trayPanels.value, panelId];
+          }
+        }
+      });
+    });
+
     // When a tray panel is docked (moved from floating to grid), remove
     // it from transient tracking so it becomes permanent.
     const trayDockCheck = dv.onDidLayoutChange(() => {
@@ -742,6 +780,8 @@ export function App() {
 
     return () => {
       document.removeEventListener("mousedown", onTrayClickOutside);
+      document.removeEventListener("dragend", onDragEnd);
+      dragPanelDisposable.dispose();
       container.removeEventListener("dblclick", onTabBarDblClick);
       trayDockCheck.dispose();
       collapseEnforcer.dispose();

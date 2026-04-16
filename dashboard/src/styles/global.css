@@ -89,6 +89,7 @@ body {
 .panel-tray button:hover { color: #c9d1d9; border-color: #8b949e; }
 .panel-tray button.active { color: #58a6ff; border-color: #58a6ff; background: #58a6ff11; }
 .panel-tray button.docked { color: #8b949e; border-color: #8b949e44; border-style: dashed; }
+.panel-tray.drag-over { background: #161b22; border-top-color: #58a6ff; }
 
 /* Mobile: general */
 @media (max-width: 800px) {
