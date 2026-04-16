@@ -47,7 +47,23 @@ export function ideaTitle(s: string): string {
   return m ? m[0].trim() : s;
 }
 
-/** Return a badge `<span>` HTML string for a given status. */
-export function badgeHtml(status: string): string {
+/** Return a badge `<span>` HTML string for a given status.
+ *  When status is "running" and pct is provided, includes a small SVG progress ring. */
+export function badgeHtml(status: string, pct?: number): string {
+  if (status === "running" && typeof pct === "number") {
+    const size = 12;
+    const sw = 2;
+    const r = (size - sw) / 2;
+    const c = 2 * Math.PI * r;
+    const offset = c * (1 - Math.min(pct, 100) / 100);
+    const center = size / 2;
+    const ring =
+      '<svg width="' + size + '" height="' + size + '" style="vertical-align:middle;margin-right:3px">' +
+      '<circle cx="' + center + '" cy="' + center + '" r="' + r + '" fill="none" stroke="#30363d" stroke-width="' + sw + '"/>' +
+      '<circle cx="' + center + '" cy="' + center + '" r="' + r + '" fill="none" stroke="#d29922" stroke-width="' + sw + '"' +
+      ' stroke-dasharray="' + c + '" stroke-dashoffset="' + offset + '" stroke-linecap="round"' +
+      ' transform="rotate(-90 ' + center + ' ' + center + ')"/></svg>';
+    return '<span class="badge badge-running">' + ring + 'running ' + Math.round(pct) + '%</span>';
+  }
   return '<span class="badge badge-' + status + '">' + status + '</span>';
 }

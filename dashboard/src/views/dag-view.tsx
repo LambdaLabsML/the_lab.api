@@ -10,7 +10,7 @@
 import { useRef, useEffect } from "preact/hooks";
 import { navigateToIdea } from "../lib/navigate";
 import type { IdeaNode, StationPos, SubwayLayout } from "../lib/types";
-import { graphData, currentLayout, highlightedIdea, allIdeas, allExperiments } from "../state/signals";
+import { graphData, currentLayout, highlightedIdea, allIdeas, allExperiments, runningProgress } from "../state/signals";
 import { colorMode, selectedIdea, selectedMetric, improvementsOnly, activeTagFilters, tagFilterMode, reverseTime, showAbandoned, showConcluded, showRunning } from "../state/settings";
 import { useSetting } from "../state/settings";
 import { _ideaHasGlobalImprovement, resetGlobalBestBeforeCache } from "../lib/colors";
@@ -43,6 +43,18 @@ export function DagView() {
   const metric = selectedMetric.value;
   const ideas = allIdeas.value;
   const experiments = allExperiments.value;
+  const progress = runningProgress.value;
+
+  // Build per-idea progress: max pct across running experiments for each idea
+  const ideaProgress: Record<number, number> = {};
+  for (const exp of experiments) {
+    if (!exp._running) continue;
+    const label = exp.label || String(exp.id);
+    const pct = progress[label];
+    if (typeof pct === "number") {
+      ideaProgress[exp.idea_id] = Math.max(ideaProgress[exp.idea_id] || 0, pct);
+    }
+  }
   const compactMode = improvementsOnly.value;
   const reversed = reverseTime.value;
 
@@ -125,7 +137,7 @@ export function DagView() {
           ';border-left:4px solid ' + lc +
           (n.status === "suggested" ? ";border-style:dashed" : "") +
           '"><div class="subway-header"><span class="subway-id">#' +
-          n.id + "</span>" + badgeHtml(ds) +
+          n.id + "</span>" + badgeHtml(ds, ideaProgress[n.id]) +
           '<span class="subway-desc">' +
           escapeHtml(ideaTitle(n.description)) +
           "</span></div></div>";
@@ -487,7 +499,7 @@ export function DagView() {
           ";border-color:" + nodeColor +
           '">' +
           '<div class="subway-header"><span class="subway-id">#' +
-          n.id + "</span>" + badgeHtml(ds) +
+          n.id + "</span>" + badgeHtml(ds, ideaProgress[n.id]) +
           '<span class="subway-desc">' +
           escapeHtml(ideaTitle(n.description)) +
           "</span></div></div>";

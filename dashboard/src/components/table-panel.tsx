@@ -1,14 +1,14 @@
 import { useMemo, useState } from "preact/hooks";
 import { allExperiments, allIdeas, currentLayout, highlightedIdea, runningProgress } from "../state/signals";
-import { RunningBadge } from "./progress-ring";
 import {
   selectedMetric, colorMode, activeTagFilters, tagFilterMode,
   showAbandoned, showConcluded, showRunning,
   improvementsOnly, ideaMean, clipOutliers,
 } from "../state/settings";
-import { collectChartKeys, resolveNumericValue, filterVisibleChartExperiments } from "../lib/chart-data";
+import { collectChartKeys, resolveNumericValue } from "../lib/chart-data";
 import { _colorForExp, isLowerBetter } from "../lib/colors";
 import { navigateToIdea } from "../lib/navigate";
+import { badgeHtml } from "../lib/format";
 import type { Experiment } from "../lib/types";
 
 // ---------------------------------------------------------------------------
@@ -63,31 +63,40 @@ export function TablePanel() {
     return s;
   }, [showAbandoned.value, showConcluded.value, showRunning.value]);
 
-  // Filter experiments — use the same filterVisibleChartExperiments logic
-  // so improvements-only and idea-mean match the chart exactly.
+  // Filter experiments by tags + status. When improvements-only is on and a
+  // metric is selected, further filter to only improvement points.
   const filtered = useMemo(() => {
-    // When no metric is selected, fall back to tag+status filtering only
-    if (!metric) {
-      return experiments.filter((e) => {
-        if (hiddenStatuses.has(e.idea_status || "active")) return false;
-        if (tags.length > 0) {
-          const expTags = e.tags || [];
-          if (expTags.length === 0) return false;
-          const tagSet = new Set(tags);
-          if (tagMode === "and") {
-            if (!tags.every((t) => expTags.includes(t))) return false;
-          } else {
-            if (!expTags.some((t) => tagSet.has(t))) return false;
-          }
+    // Base filter: tags + status (always applied)
+    let result = experiments.filter((e) => {
+      if (hiddenStatuses.has(e.idea_status || "active")) return false;
+      if (tags.length > 0) {
+        const expTags = e.tags || [];
+        if (expTags.length === 0) return false;
+        const tagSet = new Set(tags);
+        if (tagMode === "and") {
+          if (!tags.every((t) => expTags.includes(t))) return false;
+        } else {
+          if (!expTags.some((t) => tagSet.has(t))) return false;
         }
-        return true;
+      }
+      return true;
+    });
+
+    // Improvements-only: keep only experiments that beat the previous best
+    if (impOnly && metric) {
+      const lower = isLowerBetter(metric);
+      let best = lower ? Infinity : -Infinity;
+      result = result.filter((e) => {
+        if (e._running) return true;
+        const v = resolveNumericValue(e, metric);
+        if (v === undefined) return true; // keep experiments without the metric
+        if (lower ? v < best : v > best) {
+          best = v;
+          return true;
+        }
+        return false;
       });
     }
-
-    // Use the chart's filtering (respects improvements-only)
-    let result = filterVisibleChartExperiments(
-      metric, experiments, tags, tagMode, impOnly, hiddenStatuses,
-    );
 
     // Idea mean: aggregate to one row per idea
     if (mean) {
@@ -271,7 +280,7 @@ export function TablePanel() {
                   </td>
                   <td>
                     {exp._running ? (
-                      <RunningBadge pct={runningProgress.value[exp.label || String(exp.id)]} />
+                      <span dangerouslySetInnerHTML={{ __html: badgeHtml("running", runningProgress.value[exp.label || String(exp.id)]) }} />
                     ) : (
                       <span
                         class="status-badge"

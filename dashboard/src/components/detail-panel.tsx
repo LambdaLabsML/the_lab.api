@@ -6,7 +6,6 @@ import { formatTime, badgeHtml, escapeHtml } from "../lib/format";
 import { navigateToIdea, navigateFromExperiment } from "../lib/navigate";
 import { Lightbox } from "./lightbox";
 import { JsonView } from "./json-view";
-import { RunningBadge } from "./progress-ring";
 import type { IdeaDetail, Experiment, Note } from "../lib/types";
 
 export function DetailPanel() {
@@ -366,11 +365,7 @@ function ExperimentItem({
         <span class="exp-id" style={{ cursor: "pointer" }} onClick={() => navigateFromExperiment(exp.idea_id)} title="Scroll to this idea in graph + highlight in charts">
           exp/{exp.label || exp.id}{exp.label && exp.id !== exp.seq ? ` (legacy: #${exp.id})` : ""}
         </span>
-        {exp.status === "running" ? (
-          <RunningBadge pct={progress?.pct_complete ?? progress?.pct} />
-        ) : (
-          <span dangerouslySetInnerHTML={{ __html: badgeHtml(exp.status) }} />
-        )}
+        <span dangerouslySetInnerHTML={{ __html: badgeHtml(exp.status, progress?.pct_complete ?? progress?.pct) }} />
       </div>
       <div class="exp-desc">{exp.description}</div>
       {exp.tags && exp.tags.length > 0 && (
