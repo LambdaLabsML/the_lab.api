@@ -913,9 +913,9 @@ export function App() {
       if (!trayPanels.value.includes(id)) {
         trayPanels.value = [...trayPanels.value, id];
       }
-      const floatGroup = dv.addGroup();
-      dv.addFloatingGroup(floatGroup, pos);
-      dv.addPanel({ id, component: "default", title, position: { referenceGroup: floatGroup } });
+      // Use addPanel with floating option — avoids creating an intermediate
+      // grid group which would redistribute space and reset docked pane sizes.
+      dv.addPanel({ id, component: "default", title, floating: pos } as any);
       const next = new Set(trayOpen.value);
       next.add(id);
       trayOpen.value = next;
