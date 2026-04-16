@@ -880,14 +880,19 @@ export function App() {
     if (!dv) return;
     const existing = dv.panels.find((p) => p.id === id);
     if (existing) {
-      // Save float position relative to the dockview container
+      // Save float position relative to the dockview container.
+      // Read from the floatingGroup wrapper (parent of group element) which
+      // is what dockview positions — avoids border offset accumulation.
       if (existing.group.api.location.type === "floating") {
-        const rect = existing.group.element.getBoundingClientRect();
+        const floatWrapper = existing.group.element.parentElement;
+        const el = floatWrapper || existing.group.element;
         const container = dv.element.getBoundingClientRect();
+        const rect = el.getBoundingClientRect();
         trayPositions[id] = {
-          x: rect.left - container.left,
-          y: rect.top - container.top,
-          width: rect.width, height: rect.height,
+          x: Math.round(rect.left - container.left),
+          y: Math.round(rect.top - container.top),
+          width: Math.round(rect.width),
+          height: Math.round(rect.height),
         };
       }
       dv.removePanel(existing);
