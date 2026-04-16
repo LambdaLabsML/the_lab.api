@@ -312,7 +312,7 @@ def _start_vite(dashboard_dir: Path, api_port: int) -> subprocess.Popen | None:
         print("  Install via nvm: nvm install 24\n")
         return None
 
-    cmd = [node, str(vite_js), "--clearScreen", "false"]
+    cmd = [node, str(vite_js), "--clearScreen", "false", "--host", "0.0.0.0"]
     env = {**os.environ, "VITE_API_PORT": str(api_port)}
     proc = subprocess.Popen(
         cmd,
