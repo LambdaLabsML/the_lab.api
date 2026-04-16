@@ -238,9 +238,9 @@ def cmd_init(target: str | None = None):
     print(f"\n{_bold('Next steps:')}\n")
     print(f"  1. Review {_blue('PROMPT_problem.md')}")
     print(f"  2. Start the server:")
-    print(f"     {_dim('$')} {_green('the-lab')} {repo}")
+    print(f"     {_dim('$')} {_green('the-lab .')}")
     print(f"  3. Launch an agent:")
-    print(f"     {_dim('$')} {_green('the-lab-agent')} PROMPT_problem.md")
+    print(f"     {_dim('$')} {_green('the-lab-agent')}")
     print(f"  4. Open the dashboard at {_blue('http://localhost:8000')}")
     print()
 

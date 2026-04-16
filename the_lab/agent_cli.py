@@ -69,8 +69,8 @@ def main():
     parser.add_argument(
         "prompt_file",
         nargs="?",
-        default="LOOP.md",
-        help="Path to the loop prompt file (default: LOOP.md)",
+        default="PROMPT_problem.md",
+        help="Path to the prompt file (default: PROMPT_problem.md)",
     )
     parser.add_argument(
         "-d",
