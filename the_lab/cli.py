@@ -94,7 +94,7 @@ def cmd_init(target: str | None = None):
     lines = existing.splitlines()
 
     entries_to_add = []
-    for entry in [".the_lab/", ".claude/"]:
+    for entry in [".the_lab/", ".claude/", "PROMPT_generated.md"]:
         if not any(line.strip() == entry or line.strip() == entry.rstrip("/") for line in lines):
             entries_to_add.append(entry)
 
