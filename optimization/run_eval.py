@@ -510,11 +510,8 @@ def launch_agent(
         ]
         if max_cost > 0:
             cmd.extend(["--max-budget-usd", str(max_cost)])
-        # Inject MCP config from agent_skills/ — check REPO_ROOT first, then
-        # fall back to the parent of SCRIPT_DIR (the real repo root via symlink)
+        # Inject MCP config from agent_skills/ in the project being tested
         mcp_script = REPO_ROOT / "agent_skills" / "skills" / "lab_api_mcp.py"
-        if not mcp_script.exists():
-            mcp_script = SCRIPT_DIR.parent / "agent_skills" / "skills" / "lab_api_mcp.py"
         if mcp_script.exists():
             mcp_json = json.dumps({"mcpServers": {"labapi": {
                 "command": "python3",

@@ -32,11 +32,14 @@ ensure_proj() {
     cd "$PROJ"
     git checkout -b optim 2>/dev/null || git checkout optim
 
-    # Copy API code
+    # Copy API code + agent skills (editable by the optimization agent)
     cp -r "$REPO_ROOT/the_lab" the_lab
     rm -rf the_lab/static the_lab/__pycache__
     find the_lab -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
     cp "$REPO_ROOT/pyproject.toml" pyproject.toml
+    if [ -d "$REPO_ROOT/agent_skills" ]; then
+        cp -r "$REPO_ROOT/agent_skills" agent_skills
+    fi
 
     # Symlinks to committed static files
     ln -sf ../test_project/PROMPT_problem.md PROMPT_problem.md
