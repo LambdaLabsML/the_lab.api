@@ -74,7 +74,14 @@ body {
   background: #0d1117;
   border-top: 1px solid #21262d;
   flex-shrink: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: #30363d transparent;
 }
+.panel-tray:empty { display: none; }
+.panel-tray::-webkit-scrollbar { height: 3px; }
+.panel-tray::-webkit-scrollbar-thumb { background: #30363d; border-radius: 2px; }
 .panel-tray button {
   background: none;
   border: 1px solid #30363d;

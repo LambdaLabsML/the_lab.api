@@ -855,10 +855,6 @@ export function App() {
     } catch { return []; }
   }, []);
 
-  const getClosedPanels = useCallback((): string[] => {
-    return availablePanels.value;
-  }, []);
-
   const handleToggleTrayPanel = useCallback((id: string) => {
     const dv = dockviewRef.current;
     if (!dv) return;
@@ -885,62 +881,6 @@ export function App() {
     }
   }, []);
 
-  const handleAddPanel = useCallback((id: string) => {
-    const dv = dockviewRef.current;
-    if (!dv) return;
-    const title = PANEL_NAMES[id] || id;
-    const maxGroup = dv.groups.find((g) => dv.isMaximizedGroup(g));
-
-    if (maxGroup) {
-      // Maximized mode: add as floating on top.
-      // Dockview exits maximize whenever a non-maximized group activates,
-      // so we re-maximize after the operation.
-      const w = Math.min(500, window.innerWidth * 0.4);
-      const h = Math.min(400, window.innerHeight * 0.4);
-      const floatCount = dv.groups.filter((g) => g.api.location.type === "floating").length;
-      const offset = floatCount * 30;
-      const pos = { x: 60 + offset, y: 60 + offset, width: w, height: h };
-
-      const existingPanel = dv.panels.find((p) => p.id === id);
-      if (existingPanel && existingPanel.group.api.location.type === "floating") {
-        existingPanel.api.setActive();
-        return;
-      }
-
-      const floatGroup = dv.addGroup();
-      dv.addFloatingGroup(floatGroup, pos);
-
-      if (existingPanel) {
-        dv.moveGroupOrPanel({
-          from: { groupId: existingPanel.group.id, panelId: existingPanel.id },
-          to: { group: floatGroup, position: "center" },
-        });
-      } else {
-        dv.addPanel({
-          id, component: "default", title,
-          position: { referenceGroup: floatGroup },
-        });
-      }
-
-      // Re-maximize — dockview exited it during addGroup/addPanel
-      requestAnimationFrame(() => {
-        if (!dv.hasMaximizedGroup()) {
-          dv.maximizeGroup(maxGroup);
-        }
-      });
-      return;
-    }
-
-    // Normal mode: only add if closed
-    if (dv.panels.some((p) => p.id === id)) return;
-    const activeGroup = dv.activeGroup;
-    if (activeGroup) {
-      dv.addPanel({ id, component: "default", title, position: { referenceGroup: activeGroup } });
-    } else {
-      dv.addPanel({ id, component: "default", title });
-    }
-  }, []);
-
   return (
     <>
       <Topbar
@@ -949,28 +889,33 @@ export function App() {
         onLoadLayout={handleLoadLayout}
         onDeleteLayout={handleDeleteLayout}
         getSavedLayouts={getSavedLayouts}
-        onAddPanel={handleAddPanel}
-        getClosedPanels={getClosedPanels}
       />
       <div
         id="dockview-container"
         ref={containerRef}
       />
       <div class="panel-tray">
-        {trayPanels.value.map((id) => {
-          const isOpen = trayOpen.value.has(id);
-          const isDocked = !isOpen && dockviewRef.current?.panels.some((p) => p.id === id);
-          return (
-            <button
-              key={id}
-              class={isOpen ? "active" : isDocked ? "docked" : ""}
-              onClick={() => handleToggleTrayPanel(id)}
-              title={isDocked ? `${PANEL_NAMES[id]} (docked)` : PANEL_NAMES[id]}
-            >
-              {PANEL_NAMES[id]}
-            </button>
-          );
-        })}
+        {(() => {
+          // Merge tray panels + any other closed panels into one list
+          const openIds = new Set(dockviewRef.current?.panels.map((p) => p.id) || []);
+          const tray = trayPanels.value;
+          const closed = ALL_PANEL_IDS.filter((id) => !openIds.has(id) && !tray.includes(id));
+          const allTray = [...tray, ...closed];
+          if (allTray.length === 0) return null;
+          return allTray.map((id) => {
+            const isOpen = trayOpen.value.has(id);
+            return (
+              <button
+                key={id}
+                class={isOpen ? "active" : ""}
+                onClick={() => handleToggleTrayPanel(id)}
+                title={PANEL_NAMES[id] || id}
+              >
+                {PANEL_NAMES[id] || id}
+              </button>
+            );
+          });
+        })()}
       </div>
       <ChatPanel />
     </>

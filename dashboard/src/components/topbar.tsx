@@ -8,8 +8,6 @@ interface LayoutActions {
   onLoadLayout?: (name: string) => void;
   onDeleteLayout?: (name: string) => void;
   getSavedLayouts?: () => string[];
-  onAddPanel?: (id: string) => void;
-  getClosedPanels?: () => string[];
 }
 
 export function Topbar(props: LayoutActions) {
@@ -44,42 +42,6 @@ export function Topbar(props: LayoutActions) {
       >
         {reversed ? "\u2190 newest" : "oldest \u2192"}
       </button>
-
-      {/* Add closed panels back — always render so signal subscription stays active */}
-      {(() => {
-        const closed = props.getClosedPanels?.() || [];
-        if (closed.length === 0) return null;
-        return (
-          <div class="layout-menu-container">
-            <button
-              class="time-direction-btn"
-              onClick={(e) => {
-                const btn = e.currentTarget as HTMLElement;
-                const menu = btn.nextElementSibling as HTMLElement;
-                if (menu) menu.style.display = menu.style.display === "block" ? "none" : "block";
-              }}
-              title={closed.length > 0 ? "Re-open closed panels or float over maximized" : "Float panels over maximized view"}
-            >
-              + Panel
-            </button>
-            <div class="layout-menu" style={{ display: "none" }}>
-              {closed.map((id) => (
-                <button
-                  key={id}
-                  class="layout-menu-btn"
-                  onClick={(e) => {
-                    props.onAddPanel?.(id);
-                    const menu = (e.currentTarget as HTMLElement).parentElement!;
-                    menu.style.display = "none";
-                  }}
-                >
-                  {id.charAt(0).toUpperCase() + id.slice(1)}
-                </button>
-              ))}
-            </div>
-          </div>
-        );
-      })()}
 
       {/* Layout management */}
       <div class="layout-menu-container">
