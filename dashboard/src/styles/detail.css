@@ -68,6 +68,7 @@
 .json-collapsed { cursor: pointer; }
 .json-collapsed:hover { background: #21262d; border-radius: 3px; }
 .json-ellipsis { color: #484f58; font-style: italic; font-size: 10px; margin: 0 4px; }
+.json-entry.json-inline { display: inline; }
 .json-toggle { cursor: pointer; }
 .json-toggle:hover { color: #58a6ff; }
 .json-block { display: inline; }

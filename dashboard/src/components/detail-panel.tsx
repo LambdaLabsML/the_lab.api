@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from "preact/hooks";
-import { selectedIdea } from "../state/settings";
+import { selectedIdea, selectedMetric } from "../state/settings";
 import { scrollToExperiment } from "../state/signals";
 import { getIdea, getExperimentProgress, getExperimentLog, getExperimentScript, getIdeaDiff } from "../state/api";
 import { formatTime, badgeHtml, escapeHtml } from "../lib/format";
@@ -356,6 +356,8 @@ function ExperimentItem({
   onShowScript: () => void;
 }) {
   const statusColor = STATUS_COLORS[exp.status] || "#8b949e";
+  const metricKey = selectedMetric.value;
+  const highlights = metricKey ? [metricKey] : [];
 
   return (
     <div class="exp-item" data-exp-label={exp.label || exp.id}>
@@ -371,12 +373,12 @@ function ExperimentItem({
       )}
       {/* Progress: show JsonView when data is available, otherwise a loading placeholder for running exps */}
       {progress && Object.keys(progress).length > 0 ? (
-        <JsonView data={progress} label="progress" labelColor={statusColor} />
+        <JsonView data={progress} label="progress" labelColor={statusColor} startCollapsed />
       ) : exp.status === "running" ? (
         <div class="exp-progress">loading progress...</div>
       ) : null}
-      <JsonView data={exp.metrics} label="metrics" />
-      <JsonView data={exp.meta} label="meta" />
+      <JsonView data={exp.metrics} label="metrics" highlightKeys={highlights} />
+      <JsonView data={exp.meta} label="meta" startCollapsed />
       <div class="exp-timestamps">
         created: {formatTime(exp.created_at)}
         {exp.started_at && <> | started: {formatTime(exp.started_at)}</>}
