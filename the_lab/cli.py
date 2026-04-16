@@ -8,6 +8,120 @@ from pathlib import Path
 
 from .sandbox import save_runtime_info
 
+# ---------------------------------------------------------------------------
+# Color helpers (ANSI, auto-disabled when stdout is not a TTY)
+# ---------------------------------------------------------------------------
+
+def _color(text: str, code: str) -> str:
+    if not sys.stdout.isatty():
+        return text
+    return f"\033[{code}m{text}\033[0m"
+
+def _green(text: str) -> str: return _color(text, "32")
+def _yellow(text: str) -> str: return _color(text, "33")
+def _blue(text: str) -> str: return _color(text, "34")
+def _bold(text: str) -> str: return _color(text, "1")
+def _dim(text: str) -> str: return _color(text, "2")
+
+# ---------------------------------------------------------------------------
+# Interactive helpers
+# ---------------------------------------------------------------------------
+
+def _ask_yn(question: str, default: bool = True) -> bool:
+    suffix = "[Y/n]" if default else "[y/N]"
+    try:
+        answer = input(f"{_blue('?')} {question} {_dim(suffix)} ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return default
+    if not answer:
+        return default
+    return answer in ("y", "yes")
+
+# ---------------------------------------------------------------------------
+# Template for PROMPT_problem.md
+# ---------------------------------------------------------------------------
+
+TEMPLATE_PROMPT = """\
+# [Your Research Goal]
+
+## Goal
+Describe what you're optimizing and the success criteria.
+Example: Maximize accuracy on held-out evaluation set while minimizing compute cost.
+
+## Background
+Prior work, constraints, relevant context.
+Example: We have a baseline model achieving 10% accuracy. The framework supports N-agent collaboration.
+
+## Setup
+- Hardware: [describe your setup, e.g. 8xH100 node]
+- Data: [where is your data, e.g. /data/heldout/*.json]
+- Run: [how to run experiments, e.g. python run.py --config <path>]
+"""
+
+# ---------------------------------------------------------------------------
+# init subcommand
+# ---------------------------------------------------------------------------
+
+def cmd_init(target: str | None = None):
+    """Walk users through setting up a new project for The Lab."""
+    repo = Path(target or ".").resolve()
+
+    print(f"\n{_bold('The Lab')} -- Project Setup\n")
+
+    # 1. Git check -----------------------------------------------------------
+    if not (repo / ".git").exists():
+        if _ask_yn(f"  {repo} is not a git repository. Initialize one?"):
+            subprocess.run(["git", "init"], cwd=str(repo), check=True)
+            print(f"  {_green(chr(10003))} Initialized git repository")
+        else:
+            print(f"  {_yellow('!')} Skipping -- The Lab requires a git repository")
+            return
+    else:
+        print(f"  {_green(chr(10003))} Git repository found: {repo}")
+
+    # 2. PROMPT_problem.md ---------------------------------------------------
+    prompt_path = repo / "PROMPT_problem.md"
+    if prompt_path.exists():
+        print(f"  {_green(chr(10003))} PROMPT_problem.md already exists")
+    else:
+        prompt_path.write_text(TEMPLATE_PROMPT)
+        print(f"  {_green(chr(10003))} Created PROMPT_problem.md -- edit this with your research problem")
+
+    # 3. .gitignore ----------------------------------------------------------
+    gitignore = repo / ".gitignore"
+    existing = gitignore.read_text() if gitignore.exists() else ""
+    lines = existing.splitlines()
+
+    entries_to_add = []
+    for entry in [".the_lab/", ".claude/"]:
+        if not any(line.strip() == entry or line.strip() == entry.rstrip("/") for line in lines):
+            entries_to_add.append(entry)
+
+    if entries_to_add:
+        if _ask_yn(f"  Add {', '.join(entries_to_add)} to .gitignore?"):
+            with open(gitignore, "a") as f:
+                if existing and not existing.endswith("\n"):
+                    f.write("\n")
+                f.write("\n# The Lab (generated data)\n")
+                for entry in entries_to_add:
+                    f.write(entry + "\n")
+            print(f"  {_green(chr(10003))} Updated .gitignore")
+        else:
+            print(f"  {_yellow('!')} Skipped -- remember to gitignore .the_lab/ and .claude/ manually")
+    else:
+        print(f"  {_green(chr(10003))} .gitignore already includes .the_lab/ and .claude/")
+
+    # 4. Next steps ----------------------------------------------------------
+    print(f"\n{_bold('Next steps:')}\n")
+    print(f"  1. Edit {_blue('PROMPT_problem.md')} with your research problem")
+    print(f"  2. Start the server:")
+    print(f"     {_dim('$')} {_green('the-lab')} {repo}")
+    print(f"  3. Launch an agent:")
+    print(f"     {_dim('$')} {_green('the-lab-agent')} PROMPT_problem.md")
+    print(f"  4. Open the dashboard at {_blue('http://localhost:8000')}")
+    print()
+
 
 def _find_dashboard_dir() -> Path | None:
     """Find the dashboard/ source directory (for Vite dev server)."""
@@ -150,6 +264,12 @@ def _ensure_self_signed_cert(repo_dir: Path) -> tuple[str, str]:
 
 
 def main():
+    # Handle 'init' subcommand before argparse (server mode)
+    if len(sys.argv) >= 2 and sys.argv[1] == "init":
+        target = sys.argv[2] if len(sys.argv) >= 3 else None
+        cmd_init(target)
+        return
+
     parser = argparse.ArgumentParser(description="The Lab — Experiment Management API")
     parser.add_argument(
         "repo",
