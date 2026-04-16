@@ -106,8 +106,8 @@ def main():
     parser.add_argument(
         "--port",
         type=int,
-        default=9000,
-        help="Port of the Lab API server (default: 9000)",
+        default=8000,
+        help="Port of the Lab API server (default: 8000)",
     )
     args = parser.parse_args()
 
