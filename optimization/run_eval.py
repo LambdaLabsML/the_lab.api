@@ -302,7 +302,7 @@ def copy_test_fixture(test_id: str, dest: Path):
     prompt_dst.write_text("\n\n".join(parts) + "\n")
     print(f"  Built PROMPT_generated.md for {test_id}", file=sys.stderr)
 
-    # Copy agent skills (CLAUDE.md + .claude/skills/ + hooks) into the fixture
+    # Copy agent skills (CLAUDE.md + .claude/skills/ + hooks + MCP) into the fixture
     agent_skills_dir = REPO_ROOT / "agent_skills"
     if agent_skills_dir.exists():
         claude_dir = dest / ".claude"
@@ -321,7 +321,19 @@ def copy_test_fixture(test_id: str, dest: Path):
         settings_src = agent_skills_dir / "settings.json"
         if settings_src.exists():
             shutil.copy2(settings_src, claude_dir / "settings.json")
-        print(f"  Injected agent skills for {test_id}", file=sys.stderr)
+        # Inject MCP config: mcp.json → .mcp.json (project-root MCP config)
+        mcp_src = agent_skills_dir / "mcp.json"
+        if mcp_src.exists():
+            shutil.copy2(mcp_src, dest / ".mcp.json")
+        # Debug: verify injection
+        _injected = []
+        if (claude_dir / "skills").exists():
+            _injected.append(f"skills={list((claude_dir / 'skills').iterdir())}")
+        if (dest / ".mcp.json").exists():
+            _injected.append(".mcp.json")
+        if (claude_dir / "settings.json").exists():
+            _injected.append("settings.json")
+        print(f"  Injected agent skills for {test_id}: {', '.join(_injected) or 'NOTHING'}", file=sys.stderr)
 
 
 def _copy_fixture(src: Path, dest: Path):
@@ -478,6 +490,7 @@ def launch_agent(
     )
 
     env = {**os.environ}
+    env["THE_LAB_API_URL"] = f"http://localhost:{api_port}/api/v1"
     max_cost = kwargs.get("max_cost", 0)
 
     # Build agent-specific command
@@ -497,6 +510,15 @@ def launch_agent(
         ]
         if max_cost > 0:
             cmd.extend(["--max-budget-usd", str(max_cost)])
+        # Inject MCP config from agent_skills/ (absolute path, avoids fixture issues)
+        mcp_script = REPO_ROOT / "agent_skills" / "skills" / "lab_api_mcp.py"
+        if mcp_script.exists():
+            mcp_json = json.dumps({"mcpServers": {"lab-api": {
+                "command": "python3",
+                "args": [str(mcp_script.resolve())],
+                "env": {"PYTHONUNBUFFERED": "1"},
+            }}})
+            cmd.extend(["--mcp-config", mcp_json])
         cmd.extend(["-p", instruction])
 
     proc = subprocess.Popen(
