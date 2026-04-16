@@ -88,13 +88,35 @@ def cmd_init(target: str | None = None):
         prompt_path.write_text(TEMPLATE_PROMPT)
         print(f"  {_green(chr(10003))} Created PROMPT_problem.md -- edit this with your research problem")
 
-    # 3. .gitignore ----------------------------------------------------------
+    # 3. MCP bridge ----------------------------------------------------------
+    _pkg_skills = Path(__file__).parent.parent / "agent_skills"
+    mcp_script_src = _pkg_skills / "skills" / "lab_api_mcp.py"
+    mcp_json_src = _pkg_skills / "mcp.json"
+
+    if mcp_script_src.exists():
+        mcp_dst = repo / ".claude" / "skills" / "lab_api_mcp.py"
+        mcp_json_dst = repo / ".mcp.json"
+        if mcp_dst.exists() and mcp_json_dst.exists():
+            print(f"  {_green(chr(10003))} MCP bridge already installed")
+        elif _ask_yn("  Install MCP bridge? (lets agents use typed tool calls instead of curl)"):
+            mcp_dst.parent.mkdir(parents=True, exist_ok=True)
+            import shutil
+            shutil.copy2(mcp_script_src, mcp_dst)
+            if mcp_json_src.exists():
+                shutil.copy2(mcp_json_src, mcp_json_dst)
+            print(f"  {_green(chr(10003))} Installed MCP bridge (.mcp.json + .claude/skills/lab_api_mcp.py)")
+        else:
+            print(f"  {_dim('-')} Skipped MCP bridge")
+    else:
+        print(f"  {_dim('-')} MCP bridge not found in package (agent_skills/ missing)")
+
+    # 4. .gitignore ----------------------------------------------------------
     gitignore = repo / ".gitignore"
     existing = gitignore.read_text() if gitignore.exists() else ""
     lines = existing.splitlines()
 
     entries_to_add = []
-    for entry in [".the_lab/", ".claude/", "PROMPT_problem.md", "PROMPT_generated.md"]:
+    for entry in [".the_lab/", ".claude/", ".mcp.json", "PROMPT_problem.md", "PROMPT_generated.md"]:
         if not any(line.strip() == entry or line.strip() == entry.rstrip("/") for line in lines):
             entries_to_add.append(entry)
 
@@ -112,7 +134,7 @@ def cmd_init(target: str | None = None):
     else:
         print(f"  {_green(chr(10003))} .gitignore already includes .the_lab/ and .claude/")
 
-    # 4. Next steps ----------------------------------------------------------
+    # 5. Next steps ----------------------------------------------------------
     print(f"\n{_bold('Next steps:')}\n")
     print(f"  1. Edit {_blue('PROMPT_problem.md')} with your research problem")
     print(f"  2. Start the server:")
