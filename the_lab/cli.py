@@ -94,19 +94,49 @@ def cmd_init(target: str | None = None):
     mcp_json_src = _pkg_skills / "mcp.json"
 
     if mcp_script_src.exists():
+        import json as _json
+        import shutil as _shutil
+
         mcp_dst = repo / ".claude" / "skills" / "lab_api_mcp.py"
         mcp_json_dst = repo / ".mcp.json"
-        if mcp_dst.exists() and mcp_json_dst.exists():
-            print(f"  {_green(chr(10003))} MCP bridge already installed")
+
+        # -- Bridge script (.claude/skills/lab_api_mcp.py) --
+        if mcp_dst.exists():
+            if _ask_yn("  .claude/skills/lab_api_mcp.py exists. Overwrite with latest?", default=False):
+                _shutil.copy2(mcp_script_src, mcp_dst)
+                print(f"  {_green(chr(10003))} Updated lab_api_mcp.py")
+            else:
+                print(f"  {_dim('-')} Kept existing lab_api_mcp.py")
         elif _ask_yn("  Install MCP bridge? (lets agents use typed tool calls instead of curl)"):
             mcp_dst.parent.mkdir(parents=True, exist_ok=True)
-            import shutil
-            shutil.copy2(mcp_script_src, mcp_dst)
-            if mcp_json_src.exists():
-                shutil.copy2(mcp_json_src, mcp_json_dst)
-            print(f"  {_green(chr(10003))} Installed MCP bridge (.mcp.json + .claude/skills/lab_api_mcp.py)")
+            _shutil.copy2(mcp_script_src, mcp_dst)
+            print(f"  {_green(chr(10003))} Installed .claude/skills/lab_api_mcp.py")
         else:
             print(f"  {_dim('-')} Skipped MCP bridge")
+
+        # -- MCP config (.mcp.json) --
+        if mcp_json_src.exists():
+            new_servers = _json.loads(mcp_json_src.read_text()).get("mcpServers", {})
+            if mcp_json_dst.exists():
+                try:
+                    existing_cfg = _json.loads(mcp_json_dst.read_text())
+                except (ValueError, OSError):
+                    existing_cfg = {}
+                existing_servers = existing_cfg.get("mcpServers", {})
+                # Check which of our servers are missing
+                missing = {k: v for k, v in new_servers.items() if k not in existing_servers}
+                if not missing:
+                    print(f"  {_green(chr(10003))} .mcp.json already has labapi server")
+                elif _ask_yn(f"  .mcp.json exists. Add {', '.join(missing.keys())} server(s) to it?"):
+                    existing_servers.update(missing)
+                    existing_cfg["mcpServers"] = existing_servers
+                    mcp_json_dst.write_text(_json.dumps(existing_cfg, indent=2) + "\n")
+                    print(f"  {_green(chr(10003))} Merged {', '.join(missing.keys())} into .mcp.json")
+                else:
+                    print(f"  {_dim('-')} Kept existing .mcp.json")
+            else:
+                _shutil.copy2(mcp_json_src, mcp_json_dst)
+                print(f"  {_green(chr(10003))} Created .mcp.json")
     else:
         print(f"  {_dim('-')} MCP bridge not found in package (agent_skills/ missing)")
 
