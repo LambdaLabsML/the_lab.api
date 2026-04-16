@@ -3,9 +3,10 @@ import { allExperiments, allIdeas, currentLayout, highlightedIdea } from "../sta
 import {
   selectedMetric, colorMode, activeTagFilters, tagFilterMode,
   showAbandoned, showConcluded, showRunning,
+  improvementsOnly, ideaMean, clipOutliers,
 } from "../state/settings";
-import { collectChartKeys, resolveNumericValue } from "../lib/chart-data";
-import { _colorForExp } from "../lib/colors";
+import { collectChartKeys, resolveNumericValue, filterVisibleChartExperiments } from "../lib/chart-data";
+import { _colorForExp, isLowerBetter } from "../lib/colors";
 import { navigateToIdea } from "../lib/navigate";
 import type { Experiment } from "../lib/types";
 
@@ -49,6 +50,8 @@ export function TablePanel() {
   const tags = activeTagFilters.value;
   const tagMode = tagFilterMode.value;
   const highlighted = highlightedIdea.value;
+  const impOnly = improvementsOnly.value;
+  const mean = ideaMean.value;
 
   // Build hidden statuses set (same logic as metrics chart)
   const hiddenStatuses = useMemo(() => {
@@ -59,25 +62,69 @@ export function TablePanel() {
     return s;
   }, [showAbandoned.value, showConcluded.value, showRunning.value]);
 
-  // Filter experiments by tags + status (mirrors chart logic)
+  // Filter experiments — use the same filterVisibleChartExperiments logic
+  // so improvements-only and idea-mean match the chart exactly.
   const filtered = useMemo(() => {
-    return experiments.filter((e) => {
-      // Status filter
-      if (hiddenStatuses.has(e.idea_status || "active")) return false;
-      // Tag filter
-      if (tags.length > 0) {
-        const expTags = e.tags || [];
-        if (expTags.length === 0) return false;
-        const tagSet = new Set(tags);
-        if (tagMode === "and") {
-          if (!tags.every((t) => expTags.includes(t))) return false;
-        } else {
-          if (!expTags.some((t) => tagSet.has(t))) return false;
+    // When no metric is selected, fall back to tag+status filtering only
+    if (!metric) {
+      return experiments.filter((e) => {
+        if (hiddenStatuses.has(e.idea_status || "active")) return false;
+        if (tags.length > 0) {
+          const expTags = e.tags || [];
+          if (expTags.length === 0) return false;
+          const tagSet = new Set(tags);
+          if (tagMode === "and") {
+            if (!tags.every((t) => expTags.includes(t))) return false;
+          } else {
+            if (!expTags.some((t) => tagSet.has(t))) return false;
+          }
+        }
+        return true;
+      });
+    }
+
+    // Use the chart's filtering (respects improvements-only)
+    let result = filterVisibleChartExperiments(
+      metric, experiments, tags, tagMode, impOnly, hiddenStatuses,
+    );
+
+    // Idea mean: aggregate to one row per idea
+    if (mean) {
+      const groups: Record<number, { exps: Experiment[]; sums: Record<string, number>; counts: Record<string, number> }> = {};
+      for (const e of result) {
+        if (e._running) continue;
+        if (!groups[e.idea_id]) groups[e.idea_id] = { exps: [], sums: {}, counts: {} };
+        const g = groups[e.idea_id];
+        g.exps.push(e);
+        if (e.metrics) {
+          for (const [k, v] of Object.entries(e.metrics)) {
+            if (typeof v === "number") {
+              g.sums[k] = (g.sums[k] || 0) + v;
+              g.counts[k] = (g.counts[k] || 0) + 1;
+            }
+          }
         }
       }
-      return true;
-    });
-  }, [experiments, hiddenStatuses, tags, tagMode]);
+      result = Object.keys(groups).map(Number).sort((a, b) => a - b).map((ideaId) => {
+        const g = groups[ideaId];
+        const last = g.exps[g.exps.length - 1];
+        const meanMetrics: Record<string, number> = {};
+        for (const k of Object.keys(g.sums)) {
+          meanMetrics[k] = g.sums[k] / g.counts[k];
+        }
+        return {
+          ...last,
+          metrics: meanMetrics,
+          label: `idea/${ideaId}`,
+          description: `mean of ${g.exps.length} exp${g.exps.length > 1 ? "s" : ""}`,
+          _ideaMean: true,
+          _meanCount: g.exps.length,
+        } as Experiment;
+      });
+    }
+
+    return result;
+  }, [experiments, hiddenStatuses, tags, tagMode, metric, impOnly, mean]);
 
   // Collect all metric keys from the filtered set
   const allMetricKeys = useMemo(() => {

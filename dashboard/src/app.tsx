@@ -28,7 +28,6 @@ import { LogView } from "./views/log-view";
 import { ApiView } from "./views/api-view";
 import { StatsView } from "./views/stats-view";
 import { SandboxView } from "./views/sandbox-view";
-import { MetricsNotesView } from "./views/metrics-notes-view";
 import { TablePanel } from "./components/table-panel";
 import { DetailPanel } from "./components/detail-panel";
 import { MetricsChart } from "./components/chart-panel/metrics-chart";
@@ -56,7 +55,6 @@ const PANEL_NAMES: Record<string, string> = {
   api: "API", stats: "Stats", sandbox: "Sandbox",
   metrics: "Metrics", scatter: "Scatter", detail: "Detail",
   filters: "Filters", suggest: "Suggest", task: "Task",
-  "metrics-notes": "Metrics & Notes",
   table: "Table",
 };
 
@@ -75,7 +73,6 @@ const PANEL_MAP: Record<string, (params?: any) => preact.JSX.Element> = {
   filters: () => <FilterBar />,
   suggest: () => <SuggestPanel />,
   task: () => <TaskBanner />,
-  "metrics-notes": () => <MetricsNotesView />,
   table: () => <TablePanel />,
 };
 
@@ -285,7 +282,7 @@ class PanelHeaderActions implements IHeaderActionsRenderer {
 // Top row: Task | Suggest | Filters
 // Middle row: Metrics + Scatter (tabbed)
 // Bottom row: Graph/Timeline/Log | Detail/API/Stats/Sandbox
-const DEFAULT_LAYOUT: SerializedDockview = {"grid":{"root":{"type":"branch","data":[{"type":"branch","data":[{"type":"leaf","data":{"views":["task"],"activeView":"task","id":"11"},"size":559},{"type":"leaf","data":{"views":["suggest"],"activeView":"suggest","id":"13"},"size":541},{"type":"leaf","data":{"views":["filters"],"activeView":"filters","id":"12"},"size":551}],"size":153},{"type":"leaf","data":{"views":["metrics","scatter"],"activeView":"metrics","id":"9"},"size":249},{"type":"branch","data":[{"type":"leaf","data":{"views":["graph","timeline","log"],"activeView":"graph","id":"5"},"size":928},{"type":"leaf","data":{"views":["detail","api","stats","sandbox"],"activeView":"detail","id":"7"},"size":723}],"size":592}],"size":1651},"width":1651,"height":994,"orientation":"VERTICAL"},"panels":{"task":{"id":"task","contentComponent":"default","title":"Task"},"suggest":{"id":"suggest","contentComponent":"default","title":"Suggest"},"filters":{"id":"filters","contentComponent":"default","title":"Filters"},"metrics":{"id":"metrics","contentComponent":"default","title":"Metrics"},"scatter":{"id":"scatter","contentComponent":"default","title":"Scatter"},"graph":{"id":"graph","contentComponent":"default","title":"Graph"},"timeline":{"id":"timeline","contentComponent":"default","title":"Timeline"},"log":{"id":"log","contentComponent":"default","title":"Log"},"detail":{"id":"detail","contentComponent":"default","title":"Detail"},"api":{"id":"api","contentComponent":"default","title":"API"},"stats":{"id":"stats","contentComponent":"default","title":"Stats"},"sandbox":{"id":"sandbox","contentComponent":"default","title":"Sandbox"}},"activeGroup":"5"} as any;
+const DEFAULT_LAYOUT: SerializedDockview = {"grid":{"root":{"type":"branch","data":[{"type":"branch","data":[{"type":"leaf","data":{"views":["task"],"activeView":"task","id":"11"},"size":559},{"type":"leaf","data":{"views":["suggest"],"activeView":"suggest","id":"13"},"size":541},{"type":"leaf","data":{"views":["filters"],"activeView":"filters","id":"12"},"size":551}],"size":153},{"type":"leaf","data":{"views":["metrics","scatter"],"activeView":"metrics","id":"9"},"size":249},{"type":"branch","data":[{"type":"leaf","data":{"views":["table","graph","timeline","log"],"activeView":"table","id":"5"},"size":928},{"type":"leaf","data":{"views":["detail","api","stats","sandbox"],"activeView":"detail","id":"7"},"size":723}],"size":592}],"size":1651},"width":1651,"height":994,"orientation":"VERTICAL"},"panels":{"task":{"id":"task","contentComponent":"default","title":"Task"},"suggest":{"id":"suggest","contentComponent":"default","title":"Suggest"},"filters":{"id":"filters","contentComponent":"default","title":"Filters"},"metrics":{"id":"metrics","contentComponent":"default","title":"Metrics"},"scatter":{"id":"scatter","contentComponent":"default","title":"Scatter"},"table":{"id":"table","contentComponent":"default","title":"Table"},"graph":{"id":"graph","contentComponent":"default","title":"Graph"},"timeline":{"id":"timeline","contentComponent":"default","title":"Timeline"},"log":{"id":"log","contentComponent":"default","title":"Log"},"detail":{"id":"detail","contentComponent":"default","title":"Detail"},"api":{"id":"api","contentComponent":"default","title":"API"},"stats":{"id":"stats","contentComponent":"default","title":"Stats"},"sandbox":{"id":"sandbox","contentComponent":"default","title":"Sandbox"}},"activeGroup":"5"} as any;
 
 // Mobile/narrow layout: all panels stacked vertically in two groups
 function buildMobileLayout(dv: DockviewComponent) {
