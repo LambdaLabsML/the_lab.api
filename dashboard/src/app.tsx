@@ -902,6 +902,10 @@ export function App() {
         width: Math.min(600, window.innerWidth * 0.5),
         height: Math.min(500, window.innerHeight * 0.5),
       };
+      // Ensure panel is tracked in trayPanels so it stays visible while floating
+      if (!trayPanels.value.includes(id)) {
+        trayPanels.value = [...trayPanels.value, id];
+      }
       const floatGroup = dv.addGroup();
       dv.addFloatingGroup(floatGroup, pos);
       dv.addPanel({ id, component: "default", title, position: { referenceGroup: floatGroup } });
