@@ -880,11 +880,13 @@ export function App() {
     if (!dv) return;
     const existing = dv.panels.find((p) => p.id === id);
     if (existing) {
-      // Save float position before closing
+      // Save float position relative to the dockview container
       if (existing.group.api.location.type === "floating") {
         const rect = existing.group.element.getBoundingClientRect();
+        const container = dv.element.getBoundingClientRect();
         trayPositions[id] = {
-          x: rect.left, y: rect.top,
+          x: rect.left - container.left,
+          y: rect.top - container.top,
           width: rect.width, height: rect.height,
         };
       }
