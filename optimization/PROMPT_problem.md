@@ -2,13 +2,13 @@
 
 ## Goal
 
-Maximize **`api_effectiveness`** while minimizing **`total_cost`**.
+Maximize **`score_sum`** while minimizing **`total_cost`**.
 
 ```
-api_effectiveness = geometric_mean(t1, t2, t3, t4, t5, t6, t7, t8)
+score_sum = t1 + t2 + t3 + t4 + t5 + t6 + t7 + t8
 ```
 
-Primary objective: `api_effectiveness` ≥ 0.78 (higher is better).
+Primary objective: maximize `score_sum` (higher is better; max 8.0).
 Secondary objective: minimize `total_cost` (token cost across all 8 tests).
 
 ## Background
@@ -73,7 +73,7 @@ python "$(dirname "$0")/../../artifacts/run_eval.py" --model haiku --budget 4 --
 
 | Metric | Meaning |
 |---|---|
-| `api_effectiveness` | **PRIMARY** — geometric mean of T1-T8 (higher = better) |
+| `score_sum` | **PRIMARY** — sum of T1-T8 scores (higher = better, max 8.0) |
 | `total_cost` | **SECONDARY** — token cost across all 8 tests (lower = better) |
 | `t1_score` .. `t8_score` | Per-test scores (0-1) |
 | `total_api_calls` | Total API calls across all 8 tests |

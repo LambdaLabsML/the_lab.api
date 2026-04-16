@@ -302,7 +302,7 @@ def copy_test_fixture(test_id: str, dest: Path):
     prompt_dst.write_text("\n\n".join(parts) + "\n")
     print(f"  Built PROMPT.md for {test_id}", file=sys.stderr)
 
-    # Copy agent skills (CLAUDE.md + .claude/skills/) into the fixture
+    # Copy agent skills (CLAUDE.md + .claude/skills/ + hooks) into the fixture
     agent_skills_dir = REPO_ROOT / "agent_skills"
     if agent_skills_dir.exists():
         claude_dir = dest / ".claude"
@@ -313,6 +313,14 @@ def copy_test_fixture(test_id: str, dest: Path):
         skills_src = agent_skills_dir / "skills"
         if skills_src.exists():
             shutil.copytree(skills_src, claude_dir / "skills", dirs_exist_ok=True)
+        # Inject hooks: settings.json → .claude/settings.json, hooks/ → .claude/hooks/
+        hooks_src = agent_skills_dir / "hooks"
+        if hooks_src.exists():
+            hooks_dst = claude_dir / "hooks"
+            shutil.copytree(hooks_src, hooks_dst, dirs_exist_ok=True)
+        settings_src = agent_skills_dir / "settings.json"
+        if settings_src.exists():
+            shutil.copy2(settings_src, claude_dir / "settings.json")
         print(f"  Injected agent skills for {test_id}", file=sys.stderr)
 
 
@@ -1255,8 +1263,11 @@ def main():
             for check_name, check_val in checks.items():
                 per_check_metrics[f"{t}.detail.{check_name}"] = round(check_val, 4)
 
+        score_sum = sum(results[t]["test_score"].get("score", 0) for t in test_ids if t in results)
+
         metrics = {
             "api_effectiveness": round(aggregate, 4),
+            "score_sum": round(score_sum, 4),
             **{f"{t}.score": results[t]["test_score"].get("score", 0) for t in test_ids if t in results},
             **{f"{t}.cost": round(results[t].get("cost_total", 0), 4) for t in test_ids if t in results},
             **{f"{t}.api_calls": results[t].get("total_api_calls", 0) for t in test_ids if t in results},

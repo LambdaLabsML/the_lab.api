@@ -39,7 +39,7 @@ ensure_proj() {
     cp "$REPO_ROOT/pyproject.toml" pyproject.toml
 
     # Symlinks to committed static files
-    ln -sf ../PROMPT.md PROMPT.md
+    ln -sf ../PROMPT_problem.md PROMPT_problem.md
     ln -sf ../../../run_eval.py .the_lab/artifacts/run_eval.py
     ln -sf ../../../test_project .the_lab/artifacts/test_project
 
@@ -202,10 +202,10 @@ cmd_agent() {
     echo "  Working directory:           $PROJ"
     echo ""
     cd "$PROJ"
-    # Patch PROMPT.md so the agent uses the right eval model and budget
-    sed -i "s/--model [a-z]*/--model $eval_model/g" "$SCRIPT_DIR/PROMPT.md"
-    sed -i "s/--budget [0-9]*/--budget $budget/g" "$SCRIPT_DIR/PROMPT.md"
-    exec the-lab-agent PROMPT.md --model "$outer_model" --no-sandbox
+    # Patch PROMPT_problem.md so the agent uses the right eval model and budget
+    sed -i "s/--model [a-z]*/--model $eval_model/g" "$SCRIPT_DIR/PROMPT_problem.md"
+    sed -i "s/--budget [0-9]*/--budget $budget/g" "$SCRIPT_DIR/PROMPT_problem.md"
+    exec the-lab-agent PROMPT_problem.md --model "$outer_model" --no-sandbox
 }
 
 cmd_reset() {
@@ -224,7 +224,7 @@ cmd_reset() {
             echo "Warning: could not fully remove proj/ (NFS stale handles)."
             echo "Cleaning what we can..."
             find "$PROJ" -not -name '.nfs*' -delete 2>/dev/null || true
-            rm -rf "$PROJ/.git" "$PROJ/the_lab" "$PROJ/.the_lab" "$PROJ/PROMPT.md" "$PROJ/pyproject.toml" 2>/dev/null || true
+            rm -rf "$PROJ/.git" "$PROJ/the_lab" "$PROJ/.the_lab" "$PROJ/PROMPT_problem.md" "$PROJ/pyproject.toml" 2>/dev/null || true
         fi
     fi
     ensure_proj
