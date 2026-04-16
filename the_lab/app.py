@@ -6,6 +6,8 @@ import logging
 import os
 from pathlib import Path
 
+import math
+
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -28,7 +30,29 @@ api_stats = ApiStats(REPO_DIR / ".the_lab" / "api_stats.json")
 # Initialise shared state so route modules can import from deps
 deps.init(store, runner, api_stats, REPO_DIR)
 
-app = FastAPI(title="The Lab", version="0.1.0")
+
+def _sanitize_floats(obj):
+    """Replace NaN/Infinity with None so JSON serialization doesn't crash."""
+    if isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+        return obj
+    if isinstance(obj, dict):
+        return {k: _sanitize_floats(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_sanitize_floats(v) for v in obj]
+    return obj
+
+
+class SafeJSONResponse(HTMLResponse):
+    """JSONResponse that replaces NaN/Infinity with null instead of crashing."""
+    media_type = "application/json"
+
+    def render(self, content) -> bytes:
+        return _json.dumps(_sanitize_floats(content)).encode("utf-8")
+
+
+app = FastAPI(title="The Lab", version="0.1.0", default_response_class=SafeJSONResponse)
 
 
 # --- Middleware ---
