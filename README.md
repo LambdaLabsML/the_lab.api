@@ -118,6 +118,34 @@ curl -X POST http://localhost:8000/api/v1/ideas/suggest \
 
 The agent sees suggestions via `_notifications` in every API response.
 
+## Data & Config
+
+All state lives in `.the_lab/` (gitignored, created automatically):
+
+```
+.the_lab/
+  preamble.sh             # sourced before every experiment (optional)
+  artifacts/              # shared datasets, checkpoints
+  experiments/{idea_id}/  # idea metadata, experiment results, scripts, logs
+```
+
+**Preamble** — if `.the_lab/preamble.sh` exists, it's sourced before every experiment script. Use it for shared setup:
+
+```bash
+# .the_lab/preamble.sh
+source venv/bin/activate
+export CUDA_VISIBLE_DEVICES=0
+```
+
+**Environment variables** available in every experiment script:
+
+| Variable | Example | Purpose |
+|---|---|---|
+| `THE_LAB_EXP_ID` | `"5.3"` | Experiment label |
+| `THE_LAB_IDEA_ID` | `"5"` | Parent idea ID |
+| `THE_LAB_PROGRESS` | path | Write progress JSON here |
+| `THE_LAB_METRICS` | path | Append per-step JSONL here |
+
 ## Architecture
 
 ```
