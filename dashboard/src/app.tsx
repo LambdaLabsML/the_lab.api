@@ -7,7 +7,9 @@ const availablePanels = signal<string[]>([]);
 const isMaximized = signal(false);
 
 // Tray: panels that live in a bottom bar and pop up as dismissable floating lightboxes
-const TRAY_PANEL_IDS = ["api", "stats", "sandbox"];
+const DEFAULT_TRAY_IDS = ["api", "stats", "sandbox"];
+// Which panels are currently in the tray (can grow when user sends panels to tray)
+const trayPanels = signal<string[]>([...DEFAULT_TRAY_IDS]);
 // Set of panel IDs currently shown as transient floats (auto-dismiss on click-outside)
 const trayOpen = signal<Set<string>>(new Set());
 import {
@@ -48,7 +50,7 @@ import {
   dashboardLayout,
 } from "./state/settings";
 import { startPolling, stopPolling } from "./state/polling";
-import { setActivatePanel, setCloneChartPanel, setUpdatePanelTitle } from "./state/signals";
+import { setActivatePanel, setCloneChartPanel, setUpdatePanelTitle, setSendToTray } from "./state/signals";
 import { initTouchMoveMenu } from "./lib/touch-move-menu";
 
 // ---------------------------------------------------------------------------
@@ -523,6 +525,16 @@ export function App() {
       }
     });
 
+    // Expose "send to tray" globally for the tab context menu
+    setSendToTray((panelId) => {
+      const panel = dv.panels.find((p) => p.id === panelId);
+      if (panel) dv.removePanel(panel);
+      // Add to tray if not already there
+      if (!trayPanels.value.includes(panelId)) {
+        trayPanels.value = [...trayPanels.value, panelId];
+      }
+    });
+
     // On narrow screens, always use mobile layout (ignore saved)
     const isNarrow = typeof window !== "undefined" && window.innerWidth <= NARROW_BREAKPOINT;
     if (isNarrow) {
@@ -712,16 +724,20 @@ export function App() {
     // it from transient tracking so it becomes permanent.
     const trayDockCheck = dv.onDidLayoutChange(() => {
       if (trayOpen.value.size === 0) return;
-      const next = new Set(trayOpen.value);
+      const nextOpen = new Set(trayOpen.value);
       let changed = false;
       for (const panelId of trayOpen.value) {
         const panel = dv.panels.find((p) => p.id === panelId);
         if (!panel || panel.group.api.location.type !== "floating") {
-          next.delete(panelId);
+          nextOpen.delete(panelId);
           changed = true;
+          // Non-default panels leave the tray entirely when docked
+          if (!DEFAULT_TRAY_IDS.includes(panelId)) {
+            trayPanels.value = trayPanels.value.filter((id) => id !== panelId);
+          }
         }
       }
-      if (changed) trayOpen.value = next;
+      if (changed) trayOpen.value = nextOpen;
     });
 
     return () => {
@@ -901,7 +917,7 @@ export function App() {
         ref={containerRef}
       />
       <div class="panel-tray">
-        {TRAY_PANEL_IDS.map((id) => {
+        {trayPanels.value.map((id) => {
           const isOpen = trayOpen.value.has(id);
           const isDocked = !isOpen && dockviewRef.current?.panels.some((p) => p.id === id);
           return (

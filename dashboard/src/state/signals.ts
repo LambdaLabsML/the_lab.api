@@ -74,6 +74,10 @@ export function setCloneChartPanel(fn: typeof cloneChartPanel) { cloneChartPanel
 export let updatePanelTitle: ((panelId: string, title: string) => void) | null = null;
 export function setUpdatePanelTitle(fn: typeof updatePanelTitle) { updatePanelTitle = fn; }
 
+/** Global ref to send a panel to the tray (removes from layout, adds to tray bar). */
+export let sendToTray: ((panelId: string) => void) | null = null;
+export function setSendToTray(fn: typeof sendToTray) { sendToTray = fn; }
+
 /** Parsed OpenAPI spec (loaded lazily when the API view opens). */
 export const apiSpec = signal<OpenAPISpec | null>(null);
 

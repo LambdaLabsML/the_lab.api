@@ -9,6 +9,7 @@
  * Works on both touch and mouse (right-click also triggers).
  */
 import type { DockviewComponent } from "dockview-core";
+import { sendToTray } from "../state/signals";
 
 const LONG_PRESS_MS = 500;
 
@@ -208,6 +209,18 @@ function showMenu(tabEl: HTMLElement, x: number, y: number) {
     dismissMenu();
   });
   menu.appendChild(belowBtn);
+
+  // Send to tray
+  if (sendToTray) {
+    const trayBtn = document.createElement("div");
+    trayBtn.className = "dv-move-menu-item";
+    trayBtn.textContent = "\u2913 Send to tray";
+    trayBtn.addEventListener("click", () => {
+      sendToTray!(info.panelId);
+      dismissMenu();
+    });
+    menu.appendChild(trayBtn);
+  }
 
   document.body.appendChild(menu);
   _menuEl = menu;
