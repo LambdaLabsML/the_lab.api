@@ -1,6 +1,7 @@
 """The Lab — Experiment Management API."""
 from __future__ import annotations
 
+import json as _json
 import logging
 import os
 from pathlib import Path
@@ -8,6 +9,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.responses import Response
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +65,69 @@ async def track_api_stats(request, call_next):
             mcp=is_mcp,
         )
     return response
+
+
+@app.middleware("http")
+async def inject_notifications(request, call_next):
+    """Append _notifications to JSON API responses when there's something actionable."""
+    response = await call_next(request)
+    path = request.url.path
+    # Only enrich /api/v1/ JSON responses (skip openapi, docs, stats, dashboard)
+    if (not path.startswith("/api/v1/")
+            or path in ("/api/v1/openapi.json", "/api/v1/docs", "/api/v1/redoc")
+            or path.startswith("/api/v1/stats")
+            or response.status_code >= 400):
+        return response
+    content_type = response.headers.get("content-type", "")
+    if "application/json" not in content_type:
+        return response
+    # Read the response body
+    body_parts = []
+    async for chunk in response.body_iterator:
+        body_parts.append(chunk if isinstance(chunk, bytes) else chunk.encode())
+    body = b"".join(body_parts)
+    try:
+        data = _json.loads(body)
+    except (ValueError, TypeError):
+        return Response(content=body, status_code=response.status_code,
+                        headers=dict(response.headers), media_type=response.media_type)
+    # Only enrich dict responses (not lists)
+    if not isinstance(data, dict):
+        return Response(content=body, status_code=response.status_code,
+                        headers=dict(response.headers), media_type=response.media_type)
+    # Build notifications
+    notifications = []
+    try:
+        suggested = store.list_ideas(status="suggested")
+        for idea in suggested:
+            p = idea.get("priority", "normal")
+            notifications.append({
+                "type": "suggestion",
+                "priority": p,
+                "message": f"Suggested idea #{idea['id']}: {idea.get('description', '')}",
+                "action": f"POST /api/v1/ideas/{idea['id']}/adopt" if p == "high"
+                          else f"POST /api/v1/ideas/{idea['id']}/abandon",
+            })
+    except Exception:
+        pass
+    try:
+        failed = store.list_experiments_by_status("failed")
+        if failed:
+            labels = [e.get("label", str(e["id"])) for e in failed[:3]]
+            notifications.append({
+                "type": "failure",
+                "message": f"{len(failed)} experiment(s) failed: {', '.join(labels)}",
+                "action": "GET /api/v1/experiments/log",
+            })
+    except Exception:
+        pass
+    if notifications:
+        data["_notifications"] = notifications
+        new_body = _json.dumps(data).encode()
+        return Response(content=new_body, status_code=response.status_code,
+                        media_type="application/json")
+    return Response(content=body, status_code=response.status_code,
+                    headers=dict(response.headers), media_type=response.media_type)
 
 
 # --- Lifecycle ---

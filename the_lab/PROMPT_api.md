@@ -94,3 +94,26 @@ All endpoints are documented with descriptions, parameters, and examples in the 
 - **Dashboard** → API tab (interactive explorer with Send button)
 - **Spec** → `GET /openapi.json`
 - **Docs** → `GET /docs` (Swagger UI)
+
+### MCP tools (when available)
+
+If MCP tools are available (tool names like `orient`, `create_idea`, `wait_for_experiment`),
+use them directly instead of curl. The tools map 1:1 to API endpoints.
+
+**Recommended MCP workflow** (aim for 5-7 tool calls per iteration):
+
+1. **orient** → current state + recommended next action
+2. **leaderboard_search** → rankings + related ideas in one call
+3. **create_idea** → creates branch + auto-checkout
+4. **create_experiment** → provide `script_content` to auto-start
+5. **wait_for_experiment** → blocks until done, returns full result
+6. **add_note** → record findings
+7. **conclude_idea** → then branch into next idea
+
+### Notifications
+
+Every API response includes a `_notifications` key when there are actionable items:
+- **Suggestions**: human-submitted ideas awaiting adopt/abandon
+- **Failures**: experiments that failed (with link to aggregate logs)
+
+Always check `_notifications` in responses — it surfaces urgent items you should not miss.

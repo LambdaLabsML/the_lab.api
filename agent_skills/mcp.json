@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "labapi": {
+      "command": "python3",
+      "args": [".claude/skills/lab_api_mcp.py"],
+      "env": {
+        "PYTHONUNBUFFERED": "1"
+      }
+    }
+  }
+}

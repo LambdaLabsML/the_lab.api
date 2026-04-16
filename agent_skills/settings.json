@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(*)",
+      "Read(*)",
+      "Write(*)",
+      "Edit(*)",
+      "mcp__labapi__*"
+    ]
+  },
+  "mcpServers": {
+    "labapi": {
+      "command": "python3",
+      "args": [".claude/skills/lab_api_mcp.py"]
+    }
+  }
+}
