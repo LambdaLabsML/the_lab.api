@@ -36,6 +36,7 @@ def _build_launch_command(
     loop_prompt: str,
     model: str | None,
     no_skip_permissions: bool,
+    mcp_config: str | None = None,
 ) -> list[str]:
     if agent == "claude":
         cmd = [agent_bin]
@@ -43,6 +44,8 @@ def _build_launch_command(
             cmd.append("--dangerously-skip-permissions")
         if model:
             cmd.extend(["--model", model])
+        if mcp_config:
+            cmd.extend(["--mcp-config", mcp_config])
         cmd.append(loop_prompt)
         return cmd
 
@@ -129,6 +132,22 @@ def main():
         print(f"Error: '{agent_bin}' not found in PATH.", file=sys.stderr)
         sys.exit(1)
 
+    # Build MCP config if the bridge script exists
+    import json as _json
+    mcp_config = None
+    mcp_script = project_dir / ".claude" / "skills" / "lab_api_mcp.py"
+    if not mcp_script.exists():
+        # Fall back to package source
+        mcp_script = Path(__file__).parent / "agent_skills" / "skills" / "lab_api_mcp.py"
+    if mcp_script.exists():
+        api_base = f"http://localhost:{args.port}/api/v1"
+        mcp_config = _json.dumps({"mcpServers": {"labapi": {
+            "command": "python3",
+            "args": [str(mcp_script.resolve())],
+            "env": {"PYTHONUNBUFFERED": "1", "THE_LAB_API_URL": api_base},
+        }}})
+        print(f"MCP bridge: labapi → {api_base}", file=sys.stderr)
+
     # Pass the file path to Claude — it reads the file content itself.
     # The /loop command references the file so Claude re-reads it each iteration.
     loop_prompt = f"/loop {args.duration} {prompt_path.resolve()}"
@@ -138,6 +157,7 @@ def main():
         loop_prompt,
         args.model,
         args.no_skip_permissions,
+        mcp_config=mcp_config,
     )
 
     env = dict(os.environ)
