@@ -38,6 +38,14 @@ ensure_proj() {
     find the_lab -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
     cp "$REPO_ROOT/pyproject.toml" pyproject.toml
 
+    # Install agent skills (MCP bridge, settings, permissions) for the outer agent
+    if [ -d "the_lab/agent_skills" ]; then
+        mkdir -p .claude/skills
+        cp the_lab/agent_skills/skills/lab_api_mcp.py .claude/skills/ 2>/dev/null || true
+        cp the_lab/agent_skills/mcp.json .mcp.json 2>/dev/null || true
+        cp the_lab/agent_skills/settings.json .claude/settings.json 2>/dev/null || true
+    fi
+
     # Symlinks to committed static files
     ln -sf ../test_project/PROMPT_problem.md PROMPT_problem.md
     ln -sf ../../../run_eval.py .the_lab/artifacts/run_eval.py
