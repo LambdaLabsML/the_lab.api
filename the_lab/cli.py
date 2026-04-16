@@ -114,6 +114,39 @@ def cmd_init(target: str | None = None):
         else:
             print(f"  {_dim('-')} Skipped MCP bridge")
 
+        # -- Claude settings (.claude/settings.json — permissions + MCP registration) --
+        settings_src = _pkg_skills / "settings.json"
+        settings_dst = repo / ".claude" / "settings.json"
+        if settings_src.exists():
+            if settings_dst.exists():
+                # Merge: add missing mcpServers and permissions
+                try:
+                    existing_settings = _json.loads(settings_dst.read_text())
+                except (ValueError, OSError):
+                    existing_settings = {}
+                new_settings = _json.loads(settings_src.read_text())
+                merged = False
+                # Merge mcpServers
+                for k, v in new_settings.get("mcpServers", {}).items():
+                    if k not in existing_settings.get("mcpServers", {}):
+                        existing_settings.setdefault("mcpServers", {})[k] = v
+                        merged = True
+                # Merge permissions.allow
+                existing_allow = set(existing_settings.get("permissions", {}).get("allow", []))
+                for perm in new_settings.get("permissions", {}).get("allow", []):
+                    if perm not in existing_allow:
+                        existing_settings.setdefault("permissions", {}).setdefault("allow", []).append(perm)
+                        merged = True
+                if merged:
+                    settings_dst.write_text(_json.dumps(existing_settings, indent=2) + "\n")
+                    print(f"  {_green(chr(10003))} Merged Lab permissions into .claude/settings.json")
+                else:
+                    print(f"  {_green(chr(10003))} .claude/settings.json already configured")
+            else:
+                settings_dst.parent.mkdir(parents=True, exist_ok=True)
+                _shutil.copy2(settings_src, settings_dst)
+                print(f"  {_green(chr(10003))} Created .claude/settings.json")
+
         # -- MCP config (.mcp.json) --
         if mcp_json_src.exists():
             new_servers = _json.loads(mcp_json_src.read_text()).get("mcpServers", {})
