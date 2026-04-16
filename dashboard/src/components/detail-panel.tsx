@@ -389,25 +389,25 @@ function ExperimentItem({
         {exp.started_at && <> | started: {formatTime(exp.started_at)}</>}
         {exp.finished_at && <> | finished: {formatTime(exp.finished_at)}</>}
         {exp.runtime && <> | runtime: {exp.runtime}</>}
-        {exp.status === "running" && exp.started_at && (() => {
-          const pct = progress?.pct_complete ?? progress?.pct;
-          if (typeof pct !== "number" || pct <= 0) return null;
-          const elapsed = (Date.now() - new Date(exp.started_at).getTime()) / 1000;
-          const total = elapsed / (pct / 100);
-          const remaining = Math.max(0, total - elapsed);
-          const eta = new Date(Date.now() + remaining * 1000);
-          const fmtRemaining = remaining < 60
-            ? `${Math.round(remaining)}s`
-            : remaining < 3600
-            ? `${Math.round(remaining / 60)}m`
-            : `${(remaining / 3600).toFixed(1)}h`;
-          return (
-            <span class="exp-eta">
-              {" "}| ETA: {fmtRemaining} remaining ({eta.toLocaleTimeString()})
-            </span>
-          );
-        })()}
       </div>
+      {exp.status === "running" && exp.started_at && (() => {
+        const pct = progress?.pct_complete ?? progress?.pct;
+        if (typeof pct !== "number" || pct <= 0) return null;
+        const elapsed = (Date.now() - new Date(exp.started_at).getTime()) / 1000;
+        const total = elapsed / (pct / 100);
+        const remaining = Math.max(0, total - elapsed);
+        const eta = new Date(Date.now() + remaining * 1000);
+        const fmtRemaining = remaining < 60
+          ? `${Math.round(remaining)}s`
+          : remaining < 3600
+          ? `${Math.round(remaining / 60)}m`
+          : `${(remaining / 3600).toFixed(1)}h`;
+        return (
+          <div class="exp-eta">
+            ETA: {fmtRemaining} remaining ({eta.toLocaleTimeString()})
+          </div>
+        );
+      })()}
       <div class="exp-actions">
         <button class="detail-expand-btn" onClick={onShowLog}>Show log</button>
         <button class="detail-expand-btn" onClick={onShowScript}>Show script</button>
