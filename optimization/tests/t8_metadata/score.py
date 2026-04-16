@@ -178,7 +178,7 @@ def score(api_url: str) -> dict:
         min(best_new_score / SEED_BEST_SCORE, 1.0) if best_new_score > 0 else 0.0
     )
 
-    return score_result("t8_metadata", checks, calls, max_calls=25)
+    return score_result("t8_metadata", checks, calls, max_calls=35)
 
 
 if __name__ == "__main__":

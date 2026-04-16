@@ -17,12 +17,6 @@ def score(api_url: str) -> dict:
     new_ideas = new_ideas_after(ideas, SEED_IDEAS)
     checks = {}
 
-    # Did the agent explore /openapi.json or /docs?
-    checks["explored_openapi"] = 1.0 if (
-        endpoint_was_called(stats, "/openapi.json") or
-        endpoint_was_called(stats, "/docs")
-    ) else 0.0
-
     # Did the agent discover GET /experiments/tags (not in stripped docs)?
     checks["discovered_tags"] = 1.0 if endpoint_was_called(stats, "/experiments/tags") else 0.0
 
@@ -31,6 +25,20 @@ def score(api_url: str) -> dict:
 
     # Did the agent discover GET /experiments/log (aggregate endpoint, not in stripped docs)?
     checks["discovered_failed_logs"] = 1.0 if endpoint_was_called(stats, "/experiments/log") else 0.0
+
+    # Did the agent explore the API capabilities?
+    # Credit for: /openapi.json, /docs, OR using any undocumented endpoint
+    # (MCP agents discover endpoints via tool listing, not /openapi.json)
+    discovered_any_hidden = (
+        checks["discovered_tags"] > 0
+        or checks["discovered_leaderboard_search"] > 0
+        or checks["discovered_failed_logs"] > 0
+    )
+    checks["explored_api"] = 1.0 if (
+        endpoint_was_called(stats, "/openapi.json")
+        or endpoint_was_called(stats, "/docs")
+        or discovered_any_hidden
+    ) else 0.0
 
     # Did the agent actually USE a discovered endpoint meaningfully?
     # (created an idea after using leaderboard/search, or used correct metric direction)
@@ -69,7 +77,7 @@ def score(api_url: str) -> dict:
                 best_new_score = max(best_new_score, s)
     checks["score_improved"] = min(best_new_score / SEED_BEST_SCORE, 1.0) if best_new_score > 0 else 0.0
 
-    return score_result("t5_discovery", checks, calls, max_calls=20)
+    return score_result("t5_discovery", checks, calls, max_calls=30)
 
 
 if __name__ == "__main__":

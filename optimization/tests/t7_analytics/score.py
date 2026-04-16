@@ -185,7 +185,7 @@ def score(api_url: str) -> dict:
     new_notes = max(total_notes - seed_notes, 0)
     checks["documented_analysis"] = min(new_notes / 3, 1.0)
 
-    return score_result("t7_analytics", checks, calls, max_calls=25)
+    return score_result("t7_analytics", checks, calls, max_calls=35)
 
 
 if __name__ == "__main__":

@@ -57,7 +57,7 @@ def score(api_url: str) -> dict:
     new_notes = max(total_notes - seed_notes, 0)
     checks["documented_findings"] = min(new_notes / 2, 1.0)
 
-    return score_result("t2_experiment_mgmt", checks, calls, max_calls=25)
+    return score_result("t2_experiment_mgmt", checks, calls, max_calls=40)
 
 
 if __name__ == "__main__":

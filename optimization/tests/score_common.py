@@ -76,22 +76,28 @@ def score_result(
     """Compute a test score from individual checks.
 
     Each check is 0.0-1.0. The total is an average of all checks,
-    penalized only if API calls exceed max_calls (no reward for frugality).
-    Under budget = no effect. Over budget = proportional penalty.
+    with an efficiency factor:
+    - Under budget: up to 10% bonus (rewards frugal API usage)
+    - Over budget: proportional penalty (same as before)
     """
     if not checks:
         return {"test": name, "score": 0.0, "checks": {}, "api_calls": api_calls}
 
     raw = sum(checks.values()) / len(checks)
-    # Only penalize excess — under budget has no effect (multiplier = 1.0)
-    waste_penalty = min(1.0, max_calls / max(api_calls, 1))
-    final = raw * waste_penalty
+    efficiency = max_calls / max(api_calls, 1)
+    if efficiency >= 1.0:
+        # Under budget: small bonus, scales linearly up to 10%
+        efficiency_factor = 1.0 + min(0.1, (efficiency - 1.0) * 0.1)
+    else:
+        # Over budget: proportional penalty
+        efficiency_factor = efficiency
+    final = raw * efficiency_factor
 
     return {
         "test": name,
         "score": round(final, 4),
         "raw_score": round(raw, 4),
-        "waste_penalty": round(waste_penalty, 4),
+        "efficiency_factor": round(efficiency_factor, 4),
         "checks": {k: round(v, 4) for k, v in checks.items()},
         "api_calls": api_calls,
         "max_calls": max_calls,
