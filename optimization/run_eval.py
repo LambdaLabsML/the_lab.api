@@ -303,7 +303,7 @@ def copy_test_fixture(test_id: str, dest: Path):
     print(f"  Built PROMPT_generated.md for {test_id}", file=sys.stderr)
 
     # Copy agent skills (CLAUDE.md + .claude/skills/ + hooks + MCP) into the fixture
-    agent_skills_dir = REPO_ROOT / "agent_skills"
+    agent_skills_dir = REPO_ROOT / "the_lab" / "agent_skills"
     if agent_skills_dir.exists():
         claude_dir = dest / ".claude"
         claude_dir.mkdir(exist_ok=True)
@@ -511,7 +511,7 @@ def launch_agent(
         if max_cost > 0:
             cmd.extend(["--max-budget-usd", str(max_cost)])
         # Inject MCP config from agent_skills/ in the project being tested
-        mcp_script = REPO_ROOT / "agent_skills" / "skills" / "lab_api_mcp.py"
+        mcp_script = REPO_ROOT / "the_lab" / "agent_skills" / "skills" / "lab_api_mcp.py"
         if mcp_script.exists():
             mcp_json = json.dumps({"mcpServers": {"labapi": {
                 "command": "python3",

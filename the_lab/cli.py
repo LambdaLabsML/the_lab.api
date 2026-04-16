@@ -89,7 +89,7 @@ def cmd_init(target: str | None = None):
         print(f"  {_green(chr(10003))} Created PROMPT_problem.md -- edit this with your research problem")
 
     # 3. MCP bridge ----------------------------------------------------------
-    _pkg_skills = Path(__file__).parent.parent / "agent_skills"
+    _pkg_skills = Path(__file__).parent / "agent_skills"
     mcp_script_src = _pkg_skills / "skills" / "lab_api_mcp.py"
     mcp_json_src = _pkg_skills / "mcp.json"
 
