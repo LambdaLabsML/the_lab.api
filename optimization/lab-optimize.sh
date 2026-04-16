@@ -73,22 +73,15 @@ cmd_baseline() {
     local eval_agent="${4:-claude}"
     local api="http://127.0.0.1:$port/api/v1"
     echo "Establishing baseline (model=$model, budget=$budget)..."
-    echo "This will launch an agent against the test project (~\$1-3, ~5 min)."
     echo ""
     cd "$PROJ"
     local output_file="$SCRIPT_DIR/baseline_full.json"
 
-    # Start outer Lab temporarily if not already running
-    local lab_started=false
+    # Require Lab to be running (use 'lab-optimize.sh start' first)
     if ! curl -s "$api/backlog" > /dev/null 2>&1; then
-        echo "Starting outer Lab on port $port..."
-        cd "$REPO_ROOT"
-        THE_LAB_REPO="$PROJ" THE_LAB_NO_SANDBOX=1 \
-            python3 -m uvicorn the_lab.app:app --host 0.0.0.0 --port "$port" --log-level warning &
-        local lab_pid=$!
-        lab_started=true
-        sleep 2
-        cd "$PROJ"
+        echo "Error: Lab is not running on port $port."
+        echo "Start it first:  $0 start $port"
+        exit 1
     fi
 
     # Create baseline idea via the API
@@ -102,7 +95,6 @@ cmd_baseline() {
 
     if [ -z "$idea_id" ]; then
         echo "Error: failed to create baseline idea. Response: $idea_resp"
-        [ "$lab_started" = true ] && kill "$lab_pid" 2>/dev/null
         exit 1
     fi
 
@@ -121,7 +113,6 @@ cmd_baseline() {
 
     if [ -z "$exp_id" ]; then
         echo "Error: failed to create experiment. Response: $exp_resp"
-        [ "$lab_started" = true ] && kill "$lab_pid" 2>/dev/null
         exit 1
     fi
 
@@ -165,8 +156,6 @@ else:
         -H "Content-Type: application/json" \
         -d '{"conclusion": "Baseline established. All future scores are relative to this."}' > /dev/null
     echo "Baseline idea #$idea_id concluded."
-
-    [ "$lab_started" = true ] && kill "$lab_pid" 2>/dev/null
 }
 
 cmd_start() {
