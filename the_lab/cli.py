@@ -134,9 +134,39 @@ def cmd_init(target: str | None = None):
     else:
         print(f"  {_green(chr(10003))} .gitignore already includes .the_lab/ and .claude/")
 
-    # 5. Next steps ----------------------------------------------------------
+    # 5. Pre-fill PROMPT_problem.md with Claude --------------------------------
+    import shutil as _shutil
+    claude_bin = _shutil.which("claude")
+    if claude_bin and prompt_path.exists():
+        if _ask_yn("  Have Claude analyze this repo and pre-fill PROMPT_problem.md?"):
+            print(f"  {_dim('...')} Claude is analyzing the repo...\n")
+            prefill_prompt = (
+                "You are helping set up a research project for The Lab, an experiment "
+                "management system. Analyze this repository — look at the README, code, "
+                "scripts, data directories, configs — and fill in PROMPT_problem.md with "
+                "a real problem description based on what you find.\n\n"
+                "Keep the existing Goal / Background / Setup structure. Replace the "
+                "placeholder text with concrete details about this project's actual "
+                "research goal, prior work, hardware, data locations, and how to run "
+                "experiments. Be specific and concise.\n\n"
+                "If you can't determine something, leave a [TODO: ...] marker.\n\n"
+                f"Edit the file: {prompt_path}"
+            )
+            result = subprocess.run(
+                [claude_bin, "--dangerously-skip-permissions", "-p", prefill_prompt],
+                cwd=str(repo),
+                timeout=120,
+            )
+            if result.returncode == 0:
+                print(f"\n  {_green(chr(10003))} Claude pre-filled PROMPT_problem.md — review and adjust as needed")
+            else:
+                print(f"\n  {_yellow('!')} Claude exited with code {result.returncode} — check PROMPT_problem.md manually")
+        else:
+            print(f"  {_dim('-')} Skipped — edit PROMPT_problem.md manually")
+
+    # 6. Next steps ----------------------------------------------------------
     print(f"\n{_bold('Next steps:')}\n")
-    print(f"  1. Edit {_blue('PROMPT_problem.md')} with your research problem")
+    print(f"  1. Review {_blue('PROMPT_problem.md')}")
     print(f"  2. Start the server:")
     print(f"     {_dim('$')} {_green('the-lab')} {repo}")
     print(f"  3. Launch an agent:")
