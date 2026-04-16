@@ -45,12 +45,13 @@ def _build_launch_command(
         if model:
             cmd.extend(["--model", model])
         if mcp_config:
-            # Write to temp file — --mcp-config is variadic and would
-            # consume the next positional arg if we passed inline JSON.
+            # Write to temp file — --mcp-config is variadic and consumes
+            # subsequent args. Use "--" to terminate named args before the
+            # positional prompt.
             import tempfile
             mcp_file = Path(tempfile.gettempdir()) / "the-lab-mcp.json"
             mcp_file.write_text(mcp_config)
-            cmd.extend(["--mcp-config", str(mcp_file)])
+            cmd.extend(["--mcp-config", str(mcp_file), "--"])
         cmd.append(loop_prompt)
         return cmd
 
