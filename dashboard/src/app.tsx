@@ -866,6 +866,15 @@ export function App() {
     } catch { return []; }
   }, []);
 
+  // Read tray signals at component level so Preact subscribes to changes
+  const _open = openPanelIds.value;
+  const _floating = trayOpen.value;
+  const _tray = trayPanels.value;
+  // Panels in the tray: explicit tray panels + closed panels not docked in grid
+  const _dockedInGrid = ALL_PANEL_IDS.filter((id) => _open.has(id) && !_floating.has(id));
+  const _closed = ALL_PANEL_IDS.filter((id) => !_open.has(id) && !_tray.includes(id));
+  const trayItems = [..._tray, ..._closed].filter((id) => !_dockedInGrid.includes(id));
+
   const handleToggleTrayPanel = useCallback((id: string) => {
     const dv = dockviewRef.current;
     if (!dv) return;
@@ -916,29 +925,16 @@ export function App() {
         ref={containerRef}
       />
       <div class="panel-tray">
-        {(() => {
-          const open = openPanelIds.value;
-          const floating = trayOpen.value;
-          const tray = trayPanels.value;
-          // "Docked" = open in grid (not floating via tray)
-          const dockedInGrid = new Set(
-            ALL_PANEL_IDS.filter((id) => open.has(id) && !floating.has(id))
-          );
-          // Show: explicit tray panels + any closed panels (but not grid-docked ones)
-          const closed = ALL_PANEL_IDS.filter((id) => !open.has(id) && !tray.includes(id));
-          const allTray = [...tray, ...closed];
-          if (allTray.length === 0) return null;
-          return allTray.map((id) => (
-            <button
-              key={id}
-              class={floating.has(id) ? "active" : ""}
-              onClick={() => handleToggleTrayPanel(id)}
-              title={PANEL_NAMES[id] || id}
-            >
-              {PANEL_NAMES[id] || id}
-            </button>
-          ));
-        })()}
+        {trayItems.map((id) => (
+          <button
+            key={id}
+            class={_floating.has(id) ? "active" : ""}
+            onClick={() => handleToggleTrayPanel(id)}
+            title={PANEL_NAMES[id] || id}
+          >
+            {PANEL_NAMES[id] || id}
+          </button>
+        ))}
       </div>
       <ChatPanel />
     </>
