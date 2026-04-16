@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from "preact/hooks";
 import { selectedIdea, selectedMetric } from "../state/settings";
-import { scrollToExperiment } from "../state/signals";
+import { scrollToExperiment, runningProgress } from "../state/signals";
 import { getIdea, getExperimentProgress, getExperimentLog, getExperimentScript, getIdeaDiff } from "../state/api";
 import { formatTime, badgeHtml, escapeHtml } from "../lib/format";
 import { navigateToIdea, navigateFromExperiment } from "../lib/navigate";
@@ -75,9 +75,15 @@ export function DetailPanel() {
     if (running.length === 0) return;
     function pollProgress() {
       running.forEach((exp) => {
-        getExperimentProgress(exp.label || exp.id).then((data) => {
+        const label = exp.label || String(exp.id);
+        getExperimentProgress(label).then((data) => {
           if (data.progress) {
             setProgressData((prev) => ({ ...prev, [String(exp.id)]: data.progress as Record<string, any> }));
+            // Update global signal so graph + table stay in sync
+            const pct = (data.progress as any).pct_complete ?? (data.progress as any).pct;
+            if (typeof pct === "number") {
+              runningProgress.value = { ...runningProgress.value, [label]: pct };
+            }
           }
         });
       });
