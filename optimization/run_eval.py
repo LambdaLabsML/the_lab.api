@@ -274,8 +274,8 @@ def copy_test_fixture(test_id: str, dest: Path):
     # Copy the pre-seeded fixture (includes .git, .the_lab, benchmark/)
     shutil.copytree(fixture_src, dest, dirs_exist_ok=True)
 
-    # Build PROMPT.md = PROMPT_problem.md + PROMPT_api.md
-    prompt_dst = dest / "PROMPT.md"
+    # Build PROMPT_generated.md = PROMPT_problem.md + PROMPT_api.md
+    prompt_dst = dest / "PROMPT_generated.md"
     parts = []
     if prompt_src.exists():
         parts.append(prompt_src.read_text().strip())
@@ -300,7 +300,7 @@ def copy_test_fixture(test_id: str, dest: Path):
             if pkg_api.exists():
                 parts.append(pkg_api.read_text().strip())
     prompt_dst.write_text("\n\n".join(parts) + "\n")
-    print(f"  Built PROMPT.md for {test_id}", file=sys.stderr)
+    print(f"  Built PROMPT_generated.md for {test_id}", file=sys.stderr)
 
     # Copy agent skills (CLAUDE.md + .claude/skills/ + hooks) into the fixture
     agent_skills_dir = REPO_ROOT / "agent_skills"
@@ -325,15 +325,21 @@ def copy_test_fixture(test_id: str, dest: Path):
 
 
 def _copy_fixture(src: Path, dest: Path):
-    """Copy a fixture dir and append PROMPT_api.md."""
+    """Copy a fixture dir and build PROMPT_generated.md."""
     shutil.copytree(src, dest, dirs_exist_ok=True)
     prompt_api = REPO_ROOT / "PROMPT_api.md"
     if prompt_api.exists():
-        prompt_dst = dest / "PROMPT.md"
-        with open(prompt_dst, "a") as f:
-            f.write("\n")
-            f.write(prompt_api.read_text())
-        print(f"  Appended PROMPT_api.md", file=sys.stderr)
+        prompt_dst = dest / "PROMPT_generated.md"
+        # Start from PROMPT_problem.md if present, else PROMPT.md (legacy)
+        base = dest / "PROMPT_problem.md"
+        if not base.exists():
+            base = dest / "PROMPT.md"
+        parts = []
+        if base.exists():
+            parts.append(base.read_text().strip())
+        parts.append(prompt_api.read_text().strip())
+        prompt_dst.write_text("\n\n".join(parts) + "\n")
+        print(f"  Built PROMPT_generated.md", file=sys.stderr)
     # Init git if not already a repo
     if not (dest / ".git").exists():
         subprocess.run(["git", "init"], cwd=str(dest), capture_output=True)
@@ -464,7 +470,7 @@ def launch_agent(
 
     instruction = (
         f"You have access to a local experiment management API at http://localhost:{api_port}/api/v1. "
-        f"Read PROMPT.md for your task and the API workflow. "
+        f"Read PROMPT_generated.md for your task and the API workflow. "
         f"Follow the workflow: create idea, checkout, edit benchmark/kernels.py, "
         f"create experiment with script_content='#!/bin/bash\\nset -euo pipefail\\npython benchmark/eval_harness.py', "
         f"start it, wait, check results. Iterate to maximize the composite score. "
