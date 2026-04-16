@@ -513,10 +513,13 @@ def launch_agent(
         # Inject MCP config from agent_skills/ (absolute path, avoids fixture issues)
         mcp_script = REPO_ROOT / "agent_skills" / "skills" / "lab_api_mcp.py"
         if mcp_script.exists():
-            mcp_json = json.dumps({"mcpServers": {"lab-api": {
+            mcp_json = json.dumps({"mcpServers": {"labapi": {
                 "command": "python3",
                 "args": [str(mcp_script.resolve())],
-                "env": {"PYTHONUNBUFFERED": "1"},
+                "env": {
+                    "PYTHONUNBUFFERED": "1",
+                    "THE_LAB_API_URL": f"http://localhost:{api_port}/api/v1",
+                },
             }}})
             cmd.extend(["--mcp-config", mcp_json])
         cmd.extend(["-p", instruction])
@@ -1211,6 +1214,21 @@ def run_single_test(test_id: str, args) -> dict:
             except Exception as e:
                 print(f"{pfx}Scoring failed: {e}", file=sys.stderr)
                 test_score = {"test": test_id, "score": 0.0, "error": str(e)}
+
+        # Apply speed and confusion multipliers to the test score.
+        # Speed: reward finishing well under the timeout (up to 15% bonus).
+        # Confusion: penalize high confusion (up to 10% penalty).
+        base_score = test_score.get("score", 0)
+        speed_ratio = max(0, 1.0 - wall_time / args.timeout)
+        speed_mult = 1.0 + speed_ratio * 0.15
+        conf_score = confusion["confusion_score"]
+        confusion_mult = max(0.9, 1.0 - conf_score * 0.5)
+        adjusted = base_score * speed_mult * confusion_mult
+        test_score["score"] = round(adjusted, 4)
+        test_score["speed_multiplier"] = round(speed_mult, 4)
+        test_score["confusion_multiplier"] = round(confusion_mult, 4)
+        test_score["base_score"] = round(base_score, 4)
+        print(f"{pfx}Adjusted: {adjusted:.4f} (base={base_score:.4f} × speed={speed_mult:.3f} × confusion={confusion_mult:.3f})", file=sys.stderr)
 
         return {
             "test_id": test_id,
