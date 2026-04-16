@@ -12,6 +12,10 @@ const DEFAULT_TRAY_IDS = ["api", "stats", "sandbox"];
 const trayPanels = signal<string[]>([...DEFAULT_TRAY_IDS]);
 // Set of panel IDs currently shown as transient floats (auto-dismiss on click-outside)
 const trayOpen = signal<Set<string>>(new Set());
+// Tracks open panel IDs reactively — drives tray re-renders when panels open/close
+const openPanelIds = signal<Set<string>>(new Set());
+// Remembered float positions per panel ID
+const trayPositions: Record<string, { x: number; y: number; width: number; height: number }> = {};
 import {
   DockviewComponent,
   themeDark,
@@ -584,14 +588,20 @@ export function App() {
       }
     }
 
+    function syncOpenPanelIds() {
+      openPanelIds.value = new Set(dv.panels.map((p) => p.id));
+    }
+
     const addDisposable = dv.onDidAddPanel(() => {
       try { dashboardLayout.value = dv.toJSON(); } catch { /* ignore */ }
       updateAvailablePanels();
+      syncOpenPanelIds();
     });
 
     const removeDisposable = dv.onDidRemovePanel(() => {
       try { dashboardLayout.value = dv.toJSON(); } catch { /* ignore */ }
       updateAvailablePanels();
+      syncOpenPanelIds();
     });
 
     // Track the user's intended maximized group so we can restore it
@@ -630,6 +640,7 @@ export function App() {
     });
 
     updateAvailablePanels();
+    syncOpenPanelIds();
 
     // ── Feature: double-click tab bar to collapse/expand group ──
     // Dockview enforces 100px minimum per group by default. We override
@@ -860,20 +871,30 @@ export function App() {
     if (!dv) return;
     const existing = dv.panels.find((p) => p.id === id);
     if (existing) {
-      // Close it — return to tray
+      // Save float position before closing
+      if (existing.group.api.location.type === "floating") {
+        const rect = existing.group.element.getBoundingClientRect();
+        trayPositions[id] = {
+          x: rect.left, y: rect.top,
+          width: rect.width, height: rect.height,
+        };
+      }
       dv.removePanel(existing);
       const next = new Set(trayOpen.value);
       next.delete(id);
       trayOpen.value = next;
     } else {
-      // Open as floating lightbox
+      // Open as floating — restore saved position or center
       const title = PANEL_NAMES[id] || id;
-      const w = Math.min(600, window.innerWidth * 0.5);
-      const h = Math.min(500, window.innerHeight * 0.5);
-      const x = (window.innerWidth - w) / 2;
-      const y = (window.innerHeight - h) / 2 - 30;
+      const saved = trayPositions[id];
+      const pos = saved || {
+        x: (window.innerWidth - Math.min(600, window.innerWidth * 0.5)) / 2,
+        y: (window.innerHeight - Math.min(500, window.innerHeight * 0.5)) / 2 - 30,
+        width: Math.min(600, window.innerWidth * 0.5),
+        height: Math.min(500, window.innerHeight * 0.5),
+      };
       const floatGroup = dv.addGroup();
-      dv.addFloatingGroup(floatGroup, { x, y, width: w, height: h });
+      dv.addFloatingGroup(floatGroup, pos);
       dv.addPanel({ id, component: "default", title, position: { referenceGroup: floatGroup } });
       const next = new Set(trayOpen.value);
       next.add(id);
@@ -897,17 +918,18 @@ export function App() {
       <div class="panel-tray">
         {(() => {
           // Merge tray panels + any other closed panels into one list
-          const openIds = new Set(dockviewRef.current?.panels.map((p) => p.id) || []);
+          const open = openPanelIds.value;
           const tray = trayPanels.value;
-          const closed = ALL_PANEL_IDS.filter((id) => !openIds.has(id) && !tray.includes(id));
+          const closed = ALL_PANEL_IDS.filter((id) => !open.has(id) && !tray.includes(id));
           const allTray = [...tray, ...closed];
           if (allTray.length === 0) return null;
           return allTray.map((id) => {
-            const isOpen = trayOpen.value.has(id);
+            const isFloating = trayOpen.value.has(id);
+            const isDocked = !isFloating && open.has(id);
             return (
               <button
                 key={id}
-                class={isOpen ? "active" : ""}
+                class={isFloating ? "active" : isDocked ? "docked" : ""}
                 onClick={() => handleToggleTrayPanel(id)}
                 title={PANEL_NAMES[id] || id}
               >
