@@ -208,6 +208,13 @@ cmd_agent() {
 cmd_reset() {
     echo "Resetting optimization/proj/..."
 
+    # Regenerate test fixtures if seed_fixture.py exists
+    local seed="$SCRIPT_DIR/tests/seed_fixture.py"
+    if [ -f "$seed" ]; then
+        echo "Regenerating test fixtures..."
+        python3 "$seed"
+    fi
+
     if [ -d "$PROJ" ]; then
         # Git objects can have read-only permissions
         chmod -R u+w "$PROJ/.git" 2>/dev/null || true
