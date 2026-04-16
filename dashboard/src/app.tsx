@@ -7,7 +7,7 @@ const availablePanels = signal<string[]>([]);
 const isMaximized = signal(false);
 
 // Tray: panels that live in a bottom bar and pop up as dismissable floating lightboxes
-const DEFAULT_TRAY_IDS = ["api", "stats", "sandbox"];
+const DEFAULT_TRAY_IDS = ["api", "stats", "sandbox", "task", "suggest"];
 // Which panels are currently in the tray (can grow when user sends panels to tray)
 const trayPanels = signal<string[]>([...DEFAULT_TRAY_IDS]);
 // Set of panel IDs currently shown as transient floats (auto-dismiss on click-outside)
@@ -289,11 +289,12 @@ class PanelHeaderActions implements IHeaderActionsRenderer {
 // Default layout builder
 // ---------------------------------------------------------------------------
 
-// Default layout JSON — captured from the user's preferred arrangement:
-// Top row: Task | Suggest | Filters
-// Middle row: Metrics + Scatter (tabbed)
-// Bottom row: Graph/Timeline/Log | Detail/API/Stats/Sandbox
-const DEFAULT_LAYOUT: SerializedDockview = {"grid":{"root":{"type":"branch","data":[{"type":"branch","data":[{"type":"leaf","data":{"views":["task"],"activeView":"task","id":"11"},"size":559},{"type":"leaf","data":{"views":["suggest"],"activeView":"suggest","id":"13"},"size":541},{"type":"leaf","data":{"views":["filters"],"activeView":"filters","id":"12"},"size":551}],"size":153},{"type":"leaf","data":{"views":["metrics","scatter"],"activeView":"metrics","id":"9"},"size":249},{"type":"branch","data":[{"type":"leaf","data":{"views":["table","graph","timeline","log"],"activeView":"table","id":"5"},"size":928},{"type":"leaf","data":{"views":["detail"],"activeView":"detail","id":"7"},"size":723}],"size":592}],"size":1651},"width":1651,"height":994,"orientation":"VERTICAL"},"panels":{"task":{"id":"task","contentComponent":"default","title":"Task"},"suggest":{"id":"suggest","contentComponent":"default","title":"Suggest"},"filters":{"id":"filters","contentComponent":"default","title":"Filters"},"metrics":{"id":"metrics","contentComponent":"default","title":"Metrics"},"scatter":{"id":"scatter","contentComponent":"default","title":"Scatter"},"table":{"id":"table","contentComponent":"default","title":"Table"},"graph":{"id":"graph","contentComponent":"default","title":"Graph"},"timeline":{"id":"timeline","contentComponent":"default","title":"Timeline"},"log":{"id":"log","contentComponent":"default","title":"Log"},"detail":{"id":"detail","contentComponent":"default","title":"Detail"}},"activeGroup":"5"} as any;
+// Default layout:
+// Row 1: Filters (full width, compact)
+// Row 2: Metrics (75% left) | Scatter (25% right)
+// Row 3: Table/Graph/Timeline/Log (50% left) | Detail (50% right)
+// Task, Suggest, API, Stats, Sandbox → tray
+const DEFAULT_LAYOUT: SerializedDockview = {"grid":{"root":{"type":"branch","data":[{"type":"leaf","data":{"views":["filters"],"activeView":"filters","id":"1"},"size":80},{"type":"branch","data":[{"type":"leaf","data":{"views":["metrics"],"activeView":"metrics","id":"2"},"size":1200},{"type":"leaf","data":{"views":["scatter"],"activeView":"scatter","id":"3"},"size":400}],"size":250},{"type":"branch","data":[{"type":"leaf","data":{"views":["table","graph","timeline","log"],"activeView":"table","id":"4"},"size":800},{"type":"leaf","data":{"views":["detail"],"activeView":"detail","id":"5"},"size":800}],"size":670}],"size":1600},"width":1600,"height":1000,"orientation":"VERTICAL"},"panels":{"filters":{"id":"filters","contentComponent":"default","title":"Filters"},"metrics":{"id":"metrics","contentComponent":"default","title":"Metrics"},"scatter":{"id":"scatter","contentComponent":"default","title":"Scatter"},"table":{"id":"table","contentComponent":"default","title":"Table"},"graph":{"id":"graph","contentComponent":"default","title":"Graph"},"timeline":{"id":"timeline","contentComponent":"default","title":"Timeline"},"log":{"id":"log","contentComponent":"default","title":"Log"},"detail":{"id":"detail","contentComponent":"default","title":"Detail"}},"activeGroup":"4"} as any;
 
 // Mobile/narrow layout: all panels stacked vertically in two groups
 function buildMobileLayout(dv: DockviewComponent) {
