@@ -29,6 +29,7 @@ import { ApiView } from "./views/api-view";
 import { StatsView } from "./views/stats-view";
 import { SandboxView } from "./views/sandbox-view";
 import { MetricsNotesView } from "./views/metrics-notes-view";
+import { TablePanel } from "./components/table-panel";
 import { DetailPanel } from "./components/detail-panel";
 import { MetricsChart } from "./components/chart-panel/metrics-chart";
 import { ScatterChart } from "./components/chart-panel/scatter-chart";
@@ -56,6 +57,7 @@ const PANEL_NAMES: Record<string, string> = {
   metrics: "Metrics", scatter: "Scatter", detail: "Detail",
   filters: "Filters", suggest: "Suggest", task: "Task",
   "metrics-notes": "Metrics & Notes",
+  table: "Table",
 };
 
 const ALL_PANEL_IDS = Object.keys(PANEL_NAMES);
@@ -74,6 +76,7 @@ const PANEL_MAP: Record<string, (params?: any) => preact.JSX.Element> = {
   suggest: () => <SuggestPanel />,
   task: () => <TaskBanner />,
   "metrics-notes": () => <MetricsNotesView />,
+  table: () => <TablePanel />,
 };
 
 // ---------------------------------------------------------------------------
@@ -291,6 +294,7 @@ function buildMobileLayout(dv: DockviewComponent) {
   dv.addPanel({ id: "scatter", component: "default", title: "Scatter", position: { referencePanel: top } });
   dv.addPanel({ id: "timeline", component: "default", title: "Timeline", position: { referencePanel: top } });
   dv.addPanel({ id: "log", component: "default", title: "Log", position: { referencePanel: top } });
+  dv.addPanel({ id: "table", component: "default", title: "Table", position: { referencePanel: top } });
 
   const bottom = dv.addPanel({
     id: "detail", component: "default", title: "Detail",

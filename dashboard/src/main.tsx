@@ -16,5 +16,6 @@ import "./styles/task.css";
 import "./styles/stats.css";
 import "./styles/chat.css";
 import "./styles/metrics-notes.css";
+import "./styles/table.css";
 
 render(<App />, document.getElementById("app")!);
