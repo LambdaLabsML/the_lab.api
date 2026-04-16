@@ -45,7 +45,12 @@ def _build_launch_command(
         if model:
             cmd.extend(["--model", model])
         if mcp_config:
-            cmd.extend(["--mcp-config", mcp_config])
+            # Write to temp file — --mcp-config is variadic and would
+            # consume the next positional arg if we passed inline JSON.
+            import tempfile
+            mcp_file = Path(tempfile.gettempdir()) / "the-lab-mcp.json"
+            mcp_file.write_text(mcp_config)
+            cmd.extend(["--mcp-config", str(mcp_file)])
         cmd.append(loop_prompt)
         return cmd
 
