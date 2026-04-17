@@ -172,14 +172,14 @@ export function TablePanel() {
       if (sortKey === "label") {
         const la = a.label || String(a.id);
         const lb = b.label || String(b.id);
-        // Try numeric comparison on labels like "5.3"
-        const na = parseFloat(la);
-        const nb = parseFloat(lb);
-        if (!isNaN(na) && !isNaN(nb)) {
-          cmp = na - nb;
-        } else {
-          cmp = la.localeCompare(lb);
+        // Natural sort: "1.10" > "1.4" (compare idea then seq as integers)
+        const pa = la.split(".").map(Number);
+        const pb = lb.split(".").map(Number);
+        for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+          const va = pa[i] ?? 0, vb = pb[i] ?? 0;
+          if (va !== vb) { cmp = va - vb; break; }
         }
+        if (cmp === 0) cmp = la.localeCompare(lb);
       } else if (sortKey === "idea") {
         const da = (a.idea_description || "").toLowerCase();
         const db = (b.idea_description || "").toLowerCase();
