@@ -64,7 +64,13 @@ def _build_launch_command(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Launch Claude Code or Codex in loop mode using a prompt file",
+        description="Launch Claude Code or Codex using a prompt file",
+    )
+    parser.add_argument(
+        "command",
+        nargs="?",
+        default=None,
+        help="Use 'loop' to run in loop mode. Omit for a single run.",
     )
     parser.add_argument(
         "prompt_file",
@@ -76,7 +82,7 @@ def main():
         "-d",
         "--duration",
         default="15m",
-        help="Loop interval (default: 15m). Supports: 30s, 5m, 2h, 1d",
+        help="Loop interval when using 'loop' (default: 15m). Supports: 30s, 5m, 2h, 1d",
     )
     parser.add_argument(
         "--agent",
@@ -110,6 +116,18 @@ def main():
         help="Port of the Lab API server (default: 8000)",
     )
     args = parser.parse_args()
+
+    # Handle 'loop' subcommand: "the-lab-agent loop [file]" vs "the-lab-agent [file]"
+    use_loop = False
+    if args.command == "loop":
+        use_loop = True
+    elif args.command is not None:
+        # First positional arg wasn't "loop" — treat it as the prompt file
+        # and shift: command becomes prompt_file
+        if args.prompt_file != "PROMPT.md":
+            # Both positional args were given but first wasn't "loop" — error
+            parser.error(f"Unknown command: {args.command}. Use 'loop' or omit for single run.")
+        args.prompt_file = args.command
 
     prompt_path = Path(args.prompt_file)
 
@@ -153,13 +171,19 @@ def main():
         }}})
         print(f"MCP bridge: labapi → {api_base}", file=sys.stderr)
 
-    # Pass the file path to Claude — it reads the file content itself.
-    # The /loop command references the file so Claude re-reads it each iteration.
-    loop_prompt = f"/loop {args.duration} {prompt_path.resolve()}"
+    # Build the prompt argument for Claude
+    if use_loop:
+        # /loop references the file so Claude re-reads it each iteration
+        agent_prompt = f"/loop {args.duration} {prompt_path.resolve()}"
+        print(f"Mode: loop (every {args.duration})", file=sys.stderr)
+    else:
+        agent_prompt = str(prompt_path.resolve())
+        print(f"Mode: single run", file=sys.stderr)
+
     cmd = _build_launch_command(
         args.agent,
         agent_bin,
-        loop_prompt,
+        agent_prompt,
         args.model,
         args.no_skip_permissions,
         mcp_config=mcp_config,
