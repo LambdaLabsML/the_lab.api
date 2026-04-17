@@ -4,6 +4,11 @@
 
 You have access to a local experiment management API. Use it to structure your work.
 
+### Important habits
+
+- **Before concluding an idea, check whether your metric actually improved.** Use `leaderboard_search(metric="...", sort="desc")` or `GET /leaderboard/search?metric=...&sort=desc`. If your idea isn't at the top, say so in the conclusion.
+- **Do not delegate API work to sub-agents.** Call the MCP tools or curl yourself. Sub-agents don't receive these instructions.
+
 ### Core concepts
 
 - **Idea** — a research direction with its own **git branch** (`idea/<id>`). Ideas form a DAG: branch from parents, or merge multiple. Status: `active` → `concluded`/`abandoned`. Concluded ideas can be reopened.
