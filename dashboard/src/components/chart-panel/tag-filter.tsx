@@ -1,5 +1,5 @@
 import { useState } from "preact/hooks";
-import { activeTagFilters, tagFilterMode } from "../../state/settings";
+import { activeTagFilters, tagFilterMode, filterText } from "../../state/settings";
 import { allExperiments } from "../../state/signals";
 import { renameTag } from "../../state/api";
 import { refreshChartData } from "../../state/polling";
@@ -14,7 +14,8 @@ export function TagFilter() {
   for (const exp of experiments) {
     if (exp.tags) for (const t of exp.tags) tagSet.add(t);
   }
-  const tags = [...tagSet].sort();
+  const filter = filterText.value.toLowerCase();
+  const tags = [...tagSet].sort().filter((t) => !filter || t.toLowerCase().includes(filter));
 
   function toggle(tag: string) {
     const current = new Set(activeTagFilters.value);
