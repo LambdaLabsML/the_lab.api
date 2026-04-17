@@ -3,6 +3,7 @@
  * Metric/color selectors and chart toggles moved to MetricsChart.
  */
 
+import { useRef, useState } from "preact/hooks";
 import type { Signal } from "@preact/signals";
 import {
   showAbandoned,
@@ -13,29 +14,43 @@ import {
 } from "../state/settings";
 import { TagFilter } from "./chart-panel/tag-filter";
 
+/** Isolated input — uses useState to avoid signal reads in render path. */
+function FilterInput() {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [hasText, setHasText] = useState(!!filterText.value);
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: "2px" }}>
+      <input
+        ref={inputRef}
+        type="text"
+        placeholder="Filter..."
+        defaultValue={filterText.value}
+        onInput={(e) => {
+          const v = (e.target as HTMLInputElement).value;
+          filterText.value = v;
+          setHasText(!!v);
+        }}
+        style={{ background: "#161b22", color: "#c9d1d9", border: "1px solid #30363d", borderRadius: "3px", padding: "2px 6px", fontSize: "10px", fontFamily: "inherit", width: "120px", outline: "none" }}
+      />
+      {hasText && (
+        <span
+          style={{ color: "#8b949e", cursor: "pointer", fontSize: "12px", lineHeight: "1" }}
+          onClick={() => {
+            filterText.value = "";
+            if (inputRef.current) inputRef.current.value = "";
+            setHasText(false);
+          }}
+          title="Clear filter"
+        >&times;</span>
+      )}
+    </span>
+  );
+}
+
 export function FilterBar() {
   return (
     <div class="filter-bar-standalone">
-      <span style={{ display: "inline-flex", alignItems: "center", gap: "2px" }}>
-        <input
-          type="text"
-          placeholder="Filter..."
-          ref={(el) => { if (el && el.value !== filterText.value) el.value = filterText.value; }}
-          onInput={(e) => { filterText.value = (e.target as HTMLInputElement).value; }}
-          style={{ background: "#161b22", color: "#c9d1d9", border: "1px solid #30363d", borderRadius: "3px", padding: "2px 6px", fontSize: "10px", fontFamily: "inherit", width: "120px", outline: "none" }}
-        />
-        {filterText.value && (
-          <span
-            style={{ color: "#8b949e", cursor: "pointer", fontSize: "12px", lineHeight: "1" }}
-            onClick={(e) => {
-              filterText.value = "";
-              const input = (e.target as HTMLElement).parentElement?.querySelector("input");
-              if (input) input.value = "";
-            }}
-            title="Clear filter"
-          >&times;</span>
-        )}
-      </span>
+      <FilterInput />
       <span style={{ width: "1px", height: "18px", background: "#30363d", margin: "0 4px" }} />
       <span>
         Color:{" "}
