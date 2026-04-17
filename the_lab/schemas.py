@@ -81,3 +81,8 @@ class TaskRequest(BaseModel):
 class RenameTagRequest(BaseModel):
     old: str
     new: str
+
+
+class UpdateTagsRequest(BaseModel):
+    add: list[str] = []
+    remove: list[str] = []

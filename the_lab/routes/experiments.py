@@ -20,6 +20,7 @@ from ..schemas import (
     NewExperimentRequest,
     StartExperimentRequest,
     RenameTagRequest,
+    UpdateTagsRequest,
     AnalyzeRequest,
 )
 
@@ -226,6 +227,56 @@ def rename_tag(req: RenameTagRequest):
             store.update_experiment(exp["id"], tags=deduped)
             updated += 1
     return {"old": req.old, "new": req.new, "updated": updated}
+
+
+@router.patch("/experiments/{exp_ref}/tags")
+def update_experiment_tags(exp_ref: str, req: UpdateTagsRequest):
+    """Add or remove tags on a single experiment.
+
+    Provide ``add`` and/or ``remove`` lists. Tags are deduplicated
+    automatically. Returns the experiment's updated tag list.
+
+    Examples:
+        PATCH /api/v1/experiments/5.3/tags {"add": ["baseline", "v2"]}
+        PATCH /api/v1/experiments/5.3/tags {"remove": ["draft"]}
+        PATCH /api/v1/experiments/5.3/tags {"add": ["final"], "remove": ["draft"]}
+    """
+    exp = _resolve_exp(exp_ref)
+    tags = list(exp.get("tags") or [])
+    # Remove first, then add (so add wins if same tag appears in both)
+    for t in req.remove:
+        if t in tags:
+            tags.remove(t)
+    for t in req.add:
+        if t not in tags:
+            tags.append(t)
+    store.update_experiment(exp["id"], tags=tags)
+    return {"label": exp.get("label", exp["id"]), "tags": tags}
+
+
+@router.post("/experiments/tags/batch")
+def batch_update_tags(req: UpdateTagsRequest, experiments: str = Query(..., description="Comma-separated experiment labels (e.g. '5.3,5.4,6.1')")):
+    """Add or remove tags on multiple experiments at once.
+
+    Example:
+        POST /api/v1/experiments/tags/batch?experiments=5.3,5.4 {"add": ["reviewed"]}
+    """
+    labels = [l.strip() for l in experiments.split(",") if l.strip()]
+    updated = []
+    for label in labels:
+        exp = store.resolve_experiment(label)
+        if not exp:
+            continue
+        tags = list(exp.get("tags") or [])
+        for t in req.remove:
+            if t in tags:
+                tags.remove(t)
+        for t in req.add:
+            if t not in tags:
+                tags.append(t)
+        store.update_experiment(exp["id"], tags=tags)
+        updated.append({"label": exp.get("label", exp["id"]), "tags": tags})
+    return {"updated": len(updated), "experiments": updated}
 
 
 @router.get("/experiments/compare")
