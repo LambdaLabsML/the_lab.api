@@ -94,9 +94,9 @@ def main():
         help="Claude only: don't pass --dangerously-skip-permissions (it is on by default)",
     )
     parser.add_argument(
-        "--no-sandbox",
+        "--sandbox",
         action="store_true",
-        help="Launch the agent directly without the network sandbox",
+        help="Launch the agent inside a network sandbox (default: off)",
     )
     parser.add_argument(
         "--repo",
@@ -167,7 +167,7 @@ def main():
     )
 
     env = dict(os.environ)
-    if not args.no_sandbox:
+    if args.sandbox:
         if args.repo:
             repo_root = Path(args.repo).resolve()
             if not (repo_root / ".git").exists():

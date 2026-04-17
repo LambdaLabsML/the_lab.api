@@ -101,7 +101,7 @@ the-lab-agent PROMPT_problem.md                  # Claude, 15m loop
 the-lab-agent PROMPT_problem.md --model opus     # specific model
 the-lab-agent PROMPT_problem.md --agent codex    # Codex instead
 the-lab-agent PROMPT_problem.md -d 5m            # 5 minute loop
-the-lab-agent PROMPT_problem.md --no-sandbox     # skip network sandbox
+the-lab-agent --sandbox                          # enable network sandbox
 ```
 
 The agent gets MCP tools automatically — typed tool calls instead of curl.

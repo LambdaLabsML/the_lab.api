@@ -199,7 +199,7 @@ cmd_agent() {
     echo "  Working directory:           $PROJ"
     echo ""
     cd "$PROJ"
-    exec the-lab-agent PROMPT_problem.md --model "$outer_model" --no-sandbox
+    exec the-lab-agent PROMPT_problem.md --model "$outer_model"
 }
 
 cmd_reset() {
