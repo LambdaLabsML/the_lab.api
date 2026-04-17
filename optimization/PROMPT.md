@@ -1,88 +1,98 @@
-# Optimizing The Lab API for Agent Comprehension
+# Optimizing an ARC-AGI-3 Solver via Prompt Engineering
 
 ## Goal
 
-Maximize **`score_sum`** while minimizing **`total_cost`**.
+Maximize **`best_score`** — the highest ARC scorecard score achieved by the inner agent across all its experiments.
 
-```
-score_sum = t1 + t2 + t3 + t4 + t5 + t6 + t7 + t8
-```
-
-Primary objective: maximize `score_sum` (higher is better; max 8.0).
-Secondary objective: minimize `total_cost` (token cost across all 8 tests).
+Secondary: maximize **`experiments_completed`** (more successful runs = more data) and minimize **`wall_seconds`**.
 
 ## Background
 
-The Lab is an experiment management API used by AI agents (Claude, Codex) to run research. Agents struggle with branching, experiment management, error recovery, navigation, API discovery, multi-branch workflows, and tag management.
+We have a nested Lab setup:
+- **You (outer agent, Opus)**: optimize what the inner agent sees — its PROMPT.md, conventions, strategy hints, experiment patterns
+- **Inner agent (Gemma 4 31B via Claude Code)**: reads the PROMPT.md you write, uses The Lab to create ideas, writes Python solver code in `agent/arc_agent.py`, runs `evaluate_agent.py` to score it
 
-The optimization target is both:
-1. **API code** (`the_lab/routes/`, `the_lab/deps.py`, `the_lab/schemas.py`) — better endpoints, smarter defaults, richer responses
-2. **API documentation** (`PROMPT_api.md`) — clearer workflow descriptions, better examples
+The inner agent solves ARC-AGI-3 puzzles. Each puzzle is a grid-manipulation game with levels. The agent class `ARCAgent.pick_action(frame)` receives the game state and returns an action. The current baseline is random — your job is to guide the inner agent toward writing an effective solver.
 
-## Test Suite
+**The inner agent writes code, not prompts.** It edits `agent/arc_agent.py` with pure Python logic (heuristics, search, pattern recognition). No LLM calls at runtime.
 
-8 tests run concurrently. Each launches a Lab instance from the current branch's code, runs an inner agent against a pre-seeded project, and scores API usage patterns post-hoc.
+## What you can edit
 
-| Test | What it measures | Checks | Budget |
-|---|---|---|---|
-| **T1 Sequential + Priority** | Create 4 ideas, adapt to suggestions | created_4_ideas, ran_experiments_sequentially, checked_suggestions, adopted_high_priority (2×), adopted_high_priority_quickly (2×), deferred_low_priority (2×), score_improved, used_orient_or_leaderboard | 40 calls |
-| **T2 Experiment Mgmt** | Iterate with /wait, auto_start | experiments_created, used_wait, efficient_start, score_improved, documented_findings | 25 calls |
-| **T3 Error Recovery** | Read logs, diagnose, fix failures | read_logs, checked_status, experiments_fixed, score_improved, documented_errors | 20 calls |
-| **T4 Leaderboard & Search** | Navigate using /leaderboard, /search | used_leaderboard, used_search, used_orient, chose_best_direction, branched_from_best, score_improved, searched_related, navigation_efficiency | 15 calls |
-| **T5 API Discovery** | Find undocumented endpoints via /openapi.json | explored_openapi, discovered_tags, discovered_leaderboard_search, discovered_failed_logs, used_discovered_feature, score_improved | 20 calls |
-| **T6 Multi-Branch** | Work across multiple idea branches | checked_out_multiple, experiments_on_different_ideas, correct_branch_context, no_cross_branch_confusion, used_orient_or_backlog, compared_results, score_improved | 30 calls |
-| **T7 Analytics** | Answer data questions efficiently (grouping, filtering, hierarchical means, fluke vs reliable) | approach_means_documented, hierarchical_mean_correct, identified_over_budget, chose_reliable_over_fluke, recognized_variance, understood_convergence_gap, query_efficiency, used_tag_filter, score_improved, documented_analysis | 25 calls |
-| **T8 Metadata Comprehension** | Understand tag/metric semantics, normalize tags, document new tags | listed_tags, renamed_tags, tags_normalized, understood_metric_direction, described_tag_purposes, mapped_tags_to_experiments, described_metric_semantics, documented_new_tag, score_improved | 25 calls |
+All files in `arc3_autosolver/` are on your idea branches:
 
-**Scoring per test**: `task_score = avg(checks) × min(1.0, budget / actual_calls)`
+| File | Purpose | Impact |
+|---|---|---|
+| `PROMPT.md` | Problem description, strategies, conventions | What the inner agent reads at the start |
+| `agent/arc_agent.py` | Baseline solver code | Starting point the inner agent iterates on |
+| `evaluate_agent.py` | Evaluation harness | How scores are collected (usually leave as-is) |
 
-Under budget = no penalty. Over budget = proportional penalty.
+### Primary lever: PROMPT.md
+
+The inner agent's effectiveness depends heavily on how well PROMPT.md guides it:
+- **Clear problem framing**: what the grid looks like, what actions do, what "solved" means
+- **Strategy suggestions**: concrete algorithmic approaches to try (not vague ideas)
+- **Code patterns**: example snippets showing how to parse frames, analyze grids, pick actions
+- **Anti-patterns**: what NOT to do (no LLM calls, no hardcoded solutions, respect step budget)
+- **Evaluation guidance**: how to interpret scorecard results, which games to focus on
+
+### Secondary lever: baseline agent code
+
+You can also improve the starting `agent/arc_agent.py`:
+- Seed it with a smarter baseline (not random) so the inner agent has something to build on
+- Add utility functions the inner agent can use (grid parsing, pattern detection, etc.)
+- Structure the code so it's easy for the inner agent to modify specific parts
 
 ## Setup
 
-API code lives in `the_lab/` and docs in `PROMPT_api.md` — modify both on idea branches.
-
 **Running an evaluation:**
 ```bash
-python .the_lab/artifacts/run_eval.py --model haiku --budget 4 --tests t1,t2,t3,t4,t5,t6,t7,t8
+python .the_lab/artifacts/run_eval_arc.py --model gemma-4-31b --budget 10 --timeout 7200
 ```
+
+This copies `arc3_autosolver/` to a temp dir, starts an inner Lab, launches the inner agent (Gemma), waits for it to complete experiments, and reports the best score.
 
 **Experiment script pattern:**
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
-python "$(dirname "$0")/../../artifacts/run_eval.py" --model haiku --budget 4 --tests t1,t2,t3,t4,t5,t6,t7,t8
+python .the_lab/artifacts/run_eval_arc.py --model gemma-4-31b --budget 10 --timeout 7200
 ```
-
-## What to optimize
-
-### API code levers
-- Better error messages that tell the agent what to do next
-- Richer responses that include context (branch diff, score comparisons)
-- Convenience endpoints that bundle multiple calls into one
-- Default behaviors that reduce call count (auto_start, auto_checkout)
-- Smaller response payloads (less context overhead per agent turn)
-
-### Documentation levers (PROMPT_api.md)
-- Clearer workflow descriptions with concrete examples
-- Explicit mention of features agents miss (branching semantics, /search, /log)
-- Anti-patterns section ("don't poll, use /wait")
-- Shorter, more scannable format
 
 ## Key metrics
 
 | Metric | Meaning |
 |---|---|
-| `score_sum` | **PRIMARY** — sum of T1-T8 scores (higher = better, max 8.0) |
-| `total_cost` | **SECONDARY** — token cost across all 8 tests (lower = better) |
-| `t1_score` .. `t8_score` | Per-test scores (0-1) |
-| `total_api_calls` | Total API calls across all 8 tests |
+| `best_score` | **PRIMARY** — highest ARC score from inner agent's experiments |
+| `mean_score` | Average score across all inner experiments |
+| `experiments_completed` | How many experiments the inner agent finished |
+| `experiments_failed` | How many experiments crashed (indicates code issues) |
+| `wall_seconds` | Total time for the eval run |
+| `best_levels_completed` | Levels cleared by the best experiment |
+| `best_envs_completed` | Games fully solved by the best experiment |
+
+## Strategies for the outer agent (you)
+
+### Iteration 1: establish a baseline
+- Run the eval with the current random agent to get baseline scores
+- Study the scorecard to understand which games are easy vs hard
+- Note the per-game breakdown in the experiment meta
+
+### Iteration 2: improve the PROMPT.md
+- Add concrete strategy descriptions with code examples
+- Describe the ARC game frame format in detail (what fields exist, what they mean)
+- Suggest a first approach (e.g., grid analysis → action heuristic)
+- Include the baseline scorecard so the inner agent knows what to beat
+
+### Iteration 3+: iterate on strategy
+- Analyze which games the inner agent solves vs fails
+- Adjust PROMPT.md strategies based on failure patterns
+- Consider seeding `agent/arc_agent.py` with utility code
+- Try different levels of guidance (more prescriptive vs more exploratory)
 
 ## Important notes
 
-- **Non-determinism**: Inner agent behavior varies. Run 2-3 times, report median.
-- **One change per idea**: Don't bundle multiple optimizations. Measure each independently.
-- **Two levers**: Always consider whether the improvement should be in the code or the docs.
-- **Don't modify fixtures**: Test fixtures in `optimization/tests/` are static.
-- **Key files**: `the_lab/routes/*.py`, `the_lab/deps.py`, `the_lab/schemas.py`, `PROMPT_api.md`
-- **Cost reduction**: Smaller API responses = less context per turn. Fewer agent turns = less cost. More decisive guidance = faster convergence.
+- **One change per idea**: isolate prompt changes so you can measure their effect
+- **Non-determinism**: Gemma's outputs vary — run 2-3 times for confidence
+- **Read the scorecard**: the meta field has per-game results — use them to guide your next idea
+- **Don't over-prescribe**: the inner agent is good at code — give it strategies, not implementations
+- **Budget awareness**: the inner agent has limited experiments — make each PROMPT.md iteration count
