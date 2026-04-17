@@ -42,6 +42,11 @@ type SortDir = "asc" | "desc";
 export function TablePanel() {
   const [sortKey, setSortKey] = useState<string>("label");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
+  const [hiddenCols, setHiddenCols] = useState<Set<string>>(new Set());
+  const [showColMenu, setShowColMenu] = useState(false);
+  const [colOrder, setColOrder] = useState<string[] | null>(null);
+  const [dragCol, setDragCol] = useState<string | null>(null);
+  const [dragOverCol, setDragOverCol] = useState<string | null>(null);
 
   const experiments = allExperiments.value;
   const ideas = allIdeas.value;
@@ -148,6 +153,17 @@ export function TablePanel() {
     return [metric, ...allMetricKeys.filter((k) => k !== metric)];
   }, [allMetricKeys, metric]);
 
+  // Column ordering + visibility
+  const visibleMetrics = useMemo(() => {
+    const effectiveOrder = colOrder
+      ? colOrder.filter((k) => allMetricKeys.includes(k))
+      : orderedMetrics;
+    const finalOrder = colOrder
+      ? [...effectiveOrder, ...orderedMetrics.filter((k) => !effectiveOrder.includes(k))]
+      : orderedMetrics;
+    return finalOrder.filter((k) => !hiddenCols.has(k));
+  }, [orderedMetrics, allMetricKeys, colOrder, hiddenCols]);
+
   // Sort experiments
   const sorted = useMemo(() => {
     const arr = filtered.slice();
@@ -239,16 +255,80 @@ export function TablePanel() {
               >
                 Status{sortArrow("status")}
               </th>
-              {orderedMetrics.map((mk) => (
+              {visibleMetrics.map((mk) => (
                 <th
                   key={mk}
                   class={`metric-val${thClass(mk, true)}`}
                   onClick={() => handleSort(mk)}
                   title={mk}
+                  draggable
+                  onDragStart={(e) => {
+                    setDragCol(mk);
+                    (e as DragEvent).dataTransfer!.effectAllowed = "move";
+                  }}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setDragOverCol(mk);
+                  }}
+                  onDragEnd={() => {
+                    if (dragCol && dragOverCol && dragCol !== dragOverCol) {
+                      const arr = [...visibleMetrics];
+                      const fromIdx = arr.indexOf(dragCol);
+                      const toIdx = arr.indexOf(dragOverCol);
+                      if (fromIdx >= 0 && toIdx >= 0) {
+                        arr.splice(fromIdx, 1);
+                        arr.splice(toIdx, 0, dragCol);
+                        // Preserve hidden cols at end so they keep their position
+                        setColOrder([...arr, ...[...hiddenCols]]);
+                      }
+                    }
+                    setDragCol(null);
+                    setDragOverCol(null);
+                  }}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setHiddenCols(new Set([...hiddenCols, mk]));
+                  }}
+                  style={`${dragOverCol === mk ? "border-left: 2px solid #58a6ff;" : ""}cursor: grab;`}
                 >
                   {mk}{sortArrow(mk)}
                 </th>
               ))}
+              {hiddenCols.size > 0 && (
+                <th style="width: 24px; position: relative;">
+                  <span
+                    style="cursor: pointer; color: #58a6ff; font-size: 12px;"
+                    onClick={() => setShowColMenu(!showColMenu)}
+                    title="Show hidden columns"
+                  >+</span>
+                  {showColMenu && (
+                    <div style="position: absolute; top: 100%; right: 0; background: #161b22; border: 1px solid #30363d; border-radius: 4px; padding: 4px; z-index: 10; min-width: 120px;">
+                      {[...hiddenCols].sort().map((col) => (
+                        <div
+                          key={col}
+                          style="padding: 2px 8px; cursor: pointer; font-size: 10px; color: #8b949e; white-space: nowrap;"
+                          onClick={() => {
+                            const next = new Set(hiddenCols);
+                            next.delete(col);
+                            setHiddenCols(next);
+                            setShowColMenu(false);
+                          }}
+                          onMouseEnter={(e) => { (e.target as HTMLElement).style.color = '#c9d1d9'; }}
+                          onMouseLeave={(e) => { (e.target as HTMLElement).style.color = '#8b949e'; }}
+                        >
+                          {col}
+                        </div>
+                      ))}
+                      <div
+                        style="padding: 2px 8px; cursor: pointer; font-size: 10px; color: #58a6ff; border-top: 1px solid #30363d; margin-top: 2px; padding-top: 4px;"
+                        onClick={() => { setHiddenCols(new Set()); setShowColMenu(false); }}
+                      >
+                        Show all
+                      </div>
+                    </div>
+                  )}
+                </th>
+              )}
             </tr>
           </thead>
           <tbody>
@@ -290,7 +370,7 @@ export function TablePanel() {
                       </span>
                     )}
                   </td>
-                  {orderedMetrics.map((mk) => {
+                  {visibleMetrics.map((mk) => {
                     const v = resolveNumericValue(exp, mk);
                     const isSelected = mk === metric;
                     return (
@@ -302,13 +382,14 @@ export function TablePanel() {
                       </td>
                     );
                   })}
+                  {hiddenCols.size > 0 && <td />}
                 </tr>
               );
             })}
             {sorted.length === 0 && (
               <tr>
                 <td
-                  colspan={4 + orderedMetrics.length}
+                  colspan={4 + visibleMetrics.length + (hiddenCols.size > 0 ? 1 : 0)}
                   style="text-align: center; color: #8b949e; padding: 20px;"
                 >
                   No experiments match current filters
