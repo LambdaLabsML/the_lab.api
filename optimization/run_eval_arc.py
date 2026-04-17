@@ -199,49 +199,58 @@ def launch_inner_agent(
     api_base = f"http://{host}:{api_port}/api/v1"
 
     instruction = (
-        f"You have access to a local experiment management API at {api_base}. "
-        f"Read PROMPT_generated.md for your task and the API workflow. "
-        f"Follow the workflow: orient, create idea, edit agent/arc_agent.py to implement "
-        f"an intelligent solver using the LLM at http://localhost:8008/v1, "
-        f"create experiment with script_content that runs evaluate_agent.py, "
-        f"wait for results, iterate. Maximize the score."
+        f"You are working on an ARC-AGI-3 puzzle solver. Your job is to edit agent/arc_agent.py to maximize the score.\n\n"
+        f"START NOW — do these steps in order:\n\n"
+        f"Step 1: Read PROMPT_generated.md\n"
+        f"Step 2: Read agent/arc_agent.py\n"
+        f"Step 3: Read evaluate_agent.py\n"
+        f"Step 4: Create an idea using the Lab API:\n"
+        f"  curl -s -X POST {api_base}/ideas/new -H 'Content-Type: application/json' -d '{{\"description\": \"Heuristic solver: analyze grid patterns\"}}'\n"
+        f"Step 5: Edit agent/arc_agent.py with an improved solver\n"
+        f"Step 6: Create and run an experiment:\n"
+        f"  curl -s -X POST {api_base}/ideas/1/experiments -H 'Content-Type: application/json' "
+        f"-d '{{\"description\": \"test heuristic\", \"script_content\": \"#!/bin/bash\\nset -euo pipefail\\ncd {work_dir}\\npython evaluate_agent.py\"}}'\n"
+        f"Step 7: Wait for the experiment to finish:\n"
+        f"  curl -s '{api_base}/wait?experiment_id=1.1&timeout=600'\n"
+        f"Step 8: Read the results and iterate — create new ideas and experiments to improve the score.\n\n"
+        f"IMPORTANT: Do NOT ask questions. Do NOT wait for confirmation. Execute each step immediately."
     )
 
     env = {**os.environ}
     env["THE_LAB_API_URL"] = api_base
-    # Ensure the inner agent uses Gemma via LiteLLM
-    if "ANTHROPIC_BASE_URL" not in env:
-        env["ANTHROPIC_BASE_URL"] = "http://localhost:4000"
-    if "ANTHROPIC_API_KEY" not in env:
-        env["ANTHROPIC_API_KEY"] = "dummy"
+    env["VLLM_BASE"] = os.environ.get("VLLM_BASE", "http://localhost:8008/v1")
+    env["VLLM_MODEL"] = model
+
+    # Use simple_agent.py instead of Claude Code — Gemma doesn't chain tool
+    # calls in Claude Code's --print mode. The simple agent loop calls vLLM
+    # directly via the OpenAI API with proper tool calling.
+    simple_agent = SCRIPT_DIR.parent / "model_inference" / "simple_agent.py"
+    if not simple_agent.exists():
+        simple_agent = Path("/lambda/nfs/architects-us-south-2/model_inference/simple_agent.py")
 
     cmd = [
-        "claude", "--dangerously-skip-permissions",
-        "--model", model,
-        "--print", "--verbose", "--output-format", "stream-json",
+        sys.executable, str(simple_agent),
+        "--cwd", work_dir,
+        "--max-turns", str(budget * 20),  # ~20 turns per experiment
+        "--system-prompt",
+        "You are an autonomous coding agent working on an ARC-AGI-3 puzzle solver. "
+        "Complete the entire task without asking questions. Never ask for confirmation. "
+        "Use bash to call curl for the Lab API. Use read_file, write_file, bash tools. "
+        "Keep working until you have created ideas, edited code, run experiments, and checked results.",
+        "-p", instruction,
     ]
 
-    # MCP config
-    mcp_script = Path(work_dir) / ".claude" / "skills" / "lab_api_mcp.py"
-    if not mcp_script.exists():
-        mcp_script = REPO_ROOT / "the_lab" / "agent_skills" / "skills" / "lab_api_mcp.py"
-    if mcp_script.exists():
-        import tempfile as _tf
-        mcp_json = json.dumps({"mcpServers": {"labapi": {
-            "command": "python3",
-            "args": [str(mcp_script.resolve())],
-            "env": {"PYTHONUNBUFFERED": "1", "THE_LAB_API_URL": api_base},
-        }}})
-        mcp_file = Path(_tf.gettempdir()) / "the-lab-arc-mcp.json"
-        mcp_file.write_text(mcp_json)
-        cmd.extend(["--mcp-config", str(mcp_file), "--"])
-
-    cmd.extend(["-p", instruction])
-
     print(f"  Launching inner agent (model={model})...", file=sys.stderr)
+    print(f"  cmd: {' '.join(cmd[:8])}...", file=sys.stderr)
+    print(f"  cwd: {work_dir}", file=sys.stderr)
+    print(f"  ANTHROPIC_BASE_URL: {env.get('ANTHROPIC_BASE_URL', 'not set')}", file=sys.stderr)
+    # Verify key files exist in work dir
+    for f in ["PROMPT_generated.md", "PROMPT.md", ".claude/skills/lab_api_mcp.py", "agent/arc_agent.py", "evaluate_agent.py"]:
+        exists = (Path(work_dir) / f).exists()
+        print(f"  {f}: {'OK' if exists else 'MISSING'}", file=sys.stderr)
     proc = subprocess.Popen(
         cmd, cwd=work_dir, env=env,
-        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         start_new_session=True,
     )
     _track_child(proc)
@@ -283,6 +292,14 @@ def launch_inner_agent(
             pass
 
     wall_time = time.time() - t_start
+
+    # Dump agent output for debugging
+    rc = proc.poll()
+    print(f"  Agent exited with code {rc} after {wall_time:.0f}s", file=sys.stderr)
+    if proc.stdout:
+        output_tail = proc.stdout.read().decode(errors="replace")[-3000:]
+        if output_tail.strip():
+            print(f"  Agent output (last 3000 chars):\n{output_tail}", file=sys.stderr)
 
     # Collect results from the inner Lab — pull all experiment metrics
     results: dict = {"wall_seconds": round(wall_time, 2)}
