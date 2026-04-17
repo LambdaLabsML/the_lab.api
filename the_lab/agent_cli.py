@@ -225,12 +225,11 @@ def main():
         if repo_root is None:
             print(
                 "Error: could not find the repo root for the sandboxed agent launch. "
-                "Run from your git repo or pass --no-sandbox.",
+                "Run from your git repo.",
                 file=sys.stderr,
             )
             sys.exit(1)
-        # Always sandbox the agent — the config "enabled" flag only controls
-        # experiment sandboxing (server-side).  Use --no-sandbox to skip.
+        # Sandbox the agent when --sandbox is passed.
         capabilities = sandbox_capabilities()
         if not capabilities.get("available"):
             details = capabilities.get("details") or "sandbox runtime unavailable"

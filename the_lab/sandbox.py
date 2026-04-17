@@ -171,7 +171,7 @@ def builtin_allowlist(repo_dir: Path) -> list[str]:
 
 def default_sandbox_config(repo_dir: Path) -> dict:
     return {
-        "enabled": True,
+        "enabled": False,
         "mode": "default-deny",
         "allowlist": [],
         "denylist": [],
@@ -182,7 +182,7 @@ def default_sandbox_config(repo_dir: Path) -> dict:
 def load_sandbox_config(repo_dir: Path) -> dict:
     stored = _read_json(sandbox_config_path(repo_dir), {})
     config = default_sandbox_config(repo_dir)
-    config["enabled"] = bool(stored.get("enabled", True))
+    config["enabled"] = bool(stored.get("enabled", False))
     config["allowlist"] = normalize_rules(stored.get("allowlist", []))
     config["denylist"] = normalize_rules(stored.get("denylist", []))
     return config

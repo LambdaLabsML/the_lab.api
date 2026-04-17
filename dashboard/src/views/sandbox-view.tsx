@@ -136,7 +136,7 @@ export function SandboxView() {
             <span>{enabled ? "Experiments: On" : "Experiments: Off"}</span>
           </label>
           <div class="sandbox-status-note">
-            `the-lab-agent` still uses the sandbox unless launched with `--no-sandbox`.
+            Sandbox is off by default. Use `the-lab-agent --sandbox` to enable for the agent.
           </div>
           <div class={`sandbox-save sandbox-save-${saveState}`}>{saveState === "idle" ? "synced" : saveState}</div>
         </div>
