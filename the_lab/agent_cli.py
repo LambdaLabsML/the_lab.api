@@ -133,36 +133,44 @@ def main():
             # Not a file — treat as inline prompt string
             inline_prompt = args.command
 
+    import tempfile as _tempfile
+
     project_dir = Path.cwd()
     api_base = f"http://localhost:{args.port}/api/v1"
+    api_content = _PROMPT_API.read_text().strip() if _PROMPT_API.exists() else ""
+    api_header = f"**Lab API base URL:** `{api_base}`\n\nAll API endpoints below are relative to this base URL. Use `curl {api_base}/orient` to get started.\n\n"
+
+    # Read PROMPT.md if it exists (used in both file and inline modes)
+    problem_path = project_dir / "PROMPT.md"
+    problem_content = problem_path.read_text().strip() if problem_path.exists() else ""
 
     if inline_prompt:
-        # Inline string mode — prepend API docs context
-        api_content = _PROMPT_API.read_text().strip() if _PROMPT_API.exists() else ""
-        api_header = f"**Lab API base URL:** `{api_base}`\n\n"
-        full_prompt = api_header + api_content + "\n\n---\n\n" + inline_prompt
-        generated_path = project_dir / "PROMPT_generated.md"
-        generated_path.write_text(full_prompt)
-        prompt_path = generated_path
-        print(f"Inline prompt with API docs (API at {api_base})", file=sys.stderr)
+        # Inline mode: PROMPT.md (if exists) + API docs + inline question
+        parts = []
+        if problem_content:
+            parts.append(problem_content)
+        parts.append(api_header + api_content)
+        parts.append("---\n\n**Task:** " + inline_prompt)
+        generated = "\n\n".join(parts) + "\n"
+        fd, tmp_path = _tempfile.mkstemp(prefix="the-lab-prompt-", suffix=".md")
+        os.write(fd, generated.encode())
+        os.close(fd)
+        prompt_path = Path(tmp_path)
+        print(f"Inline prompt (API at {api_base})", file=sys.stderr)
     else:
         prompt_path = Path(args.prompt_file)
-
-        # --- Prompt generation ---
-        # Concatenate PROMPT.md + PROMPT_api.md → PROMPT_generated.md
         if prompt_path.is_file():
             project_dir = prompt_path.parent
-        problem_path = project_dir / "PROMPT.md"
-        generated_path = project_dir / "PROMPT_generated.md"
+            problem_path = project_dir / "PROMPT.md"
+            problem_content = problem_path.read_text().strip() if problem_path.exists() else ""
 
-        if problem_path.exists():
-            problem_content = problem_path.read_text().strip()
-            api_content = _PROMPT_API.read_text().strip() if _PROMPT_API.exists() else ""
-            api_header = f"**Lab API base URL:** `{api_base}`\n\nAll API endpoints below are relative to this base URL. Use `curl {api_base}/orient` to get started.\n\n"
+        if problem_content:
             generated = problem_content + "\n\n" + api_header + api_content + "\n"
-            generated_path.write_text(generated)
-            prompt_path = generated_path
-            print(f"Generated {generated_path.name} (API at {api_base})", file=sys.stderr)
+            fd, tmp_path = _tempfile.mkstemp(prefix="the-lab-prompt-", suffix=".md")
+            os.write(fd, generated.encode())
+            os.close(fd)
+            prompt_path = Path(tmp_path)
+            print(f"Generated prompt (API at {api_base})", file=sys.stderr)
         elif not prompt_path.exists():
             print(f"Error: neither PROMPT.md nor {prompt_path} found", file=sys.stderr)
             sys.exit(1)
