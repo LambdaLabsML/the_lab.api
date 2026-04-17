@@ -106,7 +106,10 @@ def _lab_get(url: str, timeout: float = 5):
 
 def copy_project(dest: Path):
     """Copy arc3_autosolver to a temp dir, build PROMPT_generated.md."""
-    shutil.copytree(ARC_PROJECT_SRC, dest, dirs_exist_ok=True)
+    shutil.copytree(
+        ARC_PROJECT_SRC, dest, dirs_exist_ok=True,
+        ignore=shutil.ignore_patterns(".the_lab", ".git", "__pycache__", ".venv"),
+    )
 
     # Build PROMPT_generated.md = PROMPT.md + PROMPT_api.md
     prompt_src = dest / "PROMPT.md"
