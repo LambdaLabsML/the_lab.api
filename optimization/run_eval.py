@@ -266,7 +266,7 @@ def copy_test_fixture(test_id: str, dest: Path):
     }
     test_name = test_names.get(test_id, test_id)
     fixture_src = TESTS_DIR / test_name / "fixture"
-    prompt_src = TESTS_DIR / test_name / "PROMPT_problem.md"
+    prompt_src = TESTS_DIR / test_name / "PROMPT.md"
 
     if not fixture_src.exists():
         raise RuntimeError(f"Fixture not found: {fixture_src}. Run: python optimization/tests/seed_fixture.py {test_id}")
@@ -274,7 +274,7 @@ def copy_test_fixture(test_id: str, dest: Path):
     # Copy the pre-seeded fixture (includes .git, .the_lab, benchmark/)
     shutil.copytree(fixture_src, dest, dirs_exist_ok=True)
 
-    # Build PROMPT_generated.md = PROMPT_problem.md + PROMPT_api.md
+    # Build PROMPT_generated.md = PROMPT.md + PROMPT_api.md
     prompt_dst = dest / "PROMPT_generated.md"
     parts = []
     if prompt_src.exists():
@@ -342,10 +342,7 @@ def _copy_fixture(src: Path, dest: Path):
     prompt_api = REPO_ROOT / "PROMPT_api.md"
     if prompt_api.exists():
         prompt_dst = dest / "PROMPT_generated.md"
-        # Start from PROMPT_problem.md if present, else PROMPT.md (legacy)
-        base = dest / "PROMPT_problem.md"
-        if not base.exists():
-            base = dest / "PROMPT.md"
+        base = dest / "PROMPT.md"
         parts = []
         if base.exists():
             parts.append(base.read_text().strip())

@@ -62,7 +62,7 @@ python .the_lab/artifacts/run_eval.py --model haiku --budget 6 --tests t1,t2,t3,
 ### Per-test steps
 
 1. **Copy fixture** — `optimization/tests/t1_branching/fixture/` → `/tmp/lab_eval_t1_*/`
-2. **Build prompt** — `tests/t1/PROMPT_problem.md` + `proj/the_lab/PROMPT_api.md` (from the branch being tested) → `PROMPT_generated.md`
+2. **Build prompt** — `tests/t1/PROMPT.md` + `proj/the_lab/PROMPT_api.md` (from the branch being tested) → `PROMPT_generated.md`
 3. **Inject agent skills** — copies `proj/the_lab/agent_skills/` into the temp dir (CLAUDE.md, `.claude/skills/`, hooks, `.mcp.json`)
 4. **Start inner Lab** — launches uvicorn with `the_lab.app` **from `proj/the_lab/`** (the branch's code), pointed at the temp fixture
 5. **Launch inner agent** — `claude --dangerously-skip-permissions --mcp-config '{"mcpServers":{"labapi":{...}}}' -p "Read PROMPT_generated.md..."`. The MCP bridge runs from the branch's `the_lab/agent_skills/`
@@ -80,7 +80,7 @@ The inner Lab runs the **branch's code**, reads the **branch's PROMPT_api.md**, 
 lab-optimize.sh start            → outer Lab on :9000 (manages proj/)
 lab-optimize.sh baseline         → creates idea #1, runs run_eval.py
 
-the-lab-agent PROMPT_problem.md  → outer agent in proj/ (the optimizer)
+the-lab-agent PROMPT.md  → outer agent in proj/ (the optimizer)
   ├─ creates idea branch
   ├─ edits the_lab/*.py, PROMPT_api.md, agent_skills/
   ├─ creates experiment → run_eval.py
@@ -179,17 +179,17 @@ Secondary metric: `total_cost` (token cost across all 8 tests, lower is better).
 ```
 optimization/
 ├── lab-optimize.sh           # CLI: reset, start, baseline, agent, cherry-pick
-├── PROMPT_problem.md         # Optimization meta-instructions (outer agent)
+├── PROMPT.md         # Optimization meta-instructions (outer agent)
 ├── README.md                 # This file
 ├── run_eval.py               # Multi-test eval harness (8 concurrent tests)
 ├── test_project/             # Research problem for inner agents
-│   └── PROMPT_problem.md    # Kernel optimization problem description
+│   └── PROMPT.md    # Kernel optimization problem description
 └── tests/
     ├── seed_fixture.py       # Generate all test fixtures
     ├── score_common.py       # Shared scoring utilities
     ├── shared_project/       # Math kernel project template
     └── t{1-8}_{name}/
-        ├── PROMPT_problem.md # Per-test task instruction
+        ├── PROMPT.md # Per-test task instruction
         ├── score.py          # Post-hoc scoring (checks API usage + Lab state)
         └── fixture/          # Generated git repo (15 ideas, gitignored)
 ```

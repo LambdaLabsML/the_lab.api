@@ -47,7 +47,7 @@ ensure_proj() {
     fi
 
     # Symlinks to committed static files
-    ln -sf ../test_project/PROMPT_problem.md PROMPT_problem.md
+    ln -sf ../test_project/PROMPT.md PROMPT.md
     ln -sf ../../../run_eval.py .the_lab/artifacts/run_eval.py
     ln -sf ../../../test_project .the_lab/artifacts/test_project
 
@@ -199,7 +199,7 @@ cmd_agent() {
     echo "  Working directory:           $PROJ"
     echo ""
     cd "$PROJ"
-    exec the-lab-agent PROMPT_problem.md --model "$outer_model"
+    exec the-lab-agent PROMPT.md --model "$outer_model"
 }
 
 cmd_reset() {
@@ -225,7 +225,7 @@ cmd_reset() {
             echo "Warning: could not fully remove proj/ (NFS stale handles)."
             echo "Cleaning what we can..."
             find "$PROJ" -not -name '.nfs*' -delete 2>/dev/null || true
-            rm -rf "$PROJ/.git" "$PROJ/the_lab" "$PROJ/.the_lab" "$PROJ/PROMPT_problem.md" "$PROJ/pyproject.toml" 2>/dev/null || true
+            rm -rf "$PROJ/.git" "$PROJ/the_lab" "$PROJ/.the_lab" "$PROJ/PROMPT.md" "$PROJ/pyproject.toml" 2>/dev/null || true
         fi
     fi
     ensure_proj

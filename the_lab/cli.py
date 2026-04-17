@@ -39,7 +39,7 @@ def _ask_yn(question: str, default: bool = True) -> bool:
     return answer in ("y", "yes")
 
 # ---------------------------------------------------------------------------
-# Template for PROMPT_problem.md
+# Template for PROMPT.md
 # ---------------------------------------------------------------------------
 
 _PROMPT_TEMPLATE = Path(__file__).parent / "PROMPT_template.md"
@@ -65,13 +65,13 @@ def cmd_init(target: str | None = None):
     else:
         print(f"  {_green(chr(10003))} Git repository found: {repo}")
 
-    # 2. PROMPT_problem.md ---------------------------------------------------
-    prompt_path = repo / "PROMPT_problem.md"
+    # 2. PROMPT.md ---------------------------------------------------
+    prompt_path = repo / "PROMPT.md"
     if prompt_path.exists():
-        print(f"  {_green(chr(10003))} PROMPT_problem.md already exists")
+        print(f"  {_green(chr(10003))} PROMPT.md already exists")
     else:
         prompt_path.write_text(_PROMPT_TEMPLATE.read_text())
-        print(f"  {_green(chr(10003))} Created PROMPT_problem.md -- edit this with your research problem")
+        print(f"  {_green(chr(10003))} Created PROMPT.md -- edit this with your research problem")
 
     # 3. MCP bridge ----------------------------------------------------------
     _pkg_skills = Path(__file__).parent / "agent_skills"
@@ -164,7 +164,7 @@ def cmd_init(target: str | None = None):
     lines = existing.splitlines()
 
     entries_to_add = []
-    for entry in [".the_lab/", ".claude/", ".mcp.json", "PROMPT_problem.md", "PROMPT_generated.md"]:
+    for entry in [".the_lab/", ".claude/", ".mcp.json", "PROMPT.md", "PROMPT_generated.md"]:
         if not any(line.strip() == entry or line.strip() == entry.rstrip("/") for line in lines):
             entries_to_add.append(entry)
 
@@ -182,11 +182,11 @@ def cmd_init(target: str | None = None):
     else:
         print(f"  {_green(chr(10003))} .gitignore already includes .the_lab/ and .claude/")
 
-    # 5. Pre-fill PROMPT_problem.md with Claude --------------------------------
+    # 5. Pre-fill PROMPT.md with Claude --------------------------------
     import shutil as _shutil
     claude_bin = _shutil.which("claude")
     if claude_bin and prompt_path.exists():
-        print(f"\n  {_blue('?')} Describe your research goal so Claude can pre-fill PROMPT_problem.md.")
+        print(f"\n  {_blue('?')} Describe your research goal so Claude can pre-fill PROMPT.md.")
         print(f"    {_dim('Leave blank to skip and edit the file yourself.')}")
         try:
             user_goal = input(f"    {_dim('>')} ").strip()
@@ -200,7 +200,7 @@ def cmd_init(target: str | None = None):
                 "management system. The user described their goal as:\n\n"
                 f"  \"{user_goal}\"\n\n"
                 "Analyze this repository — look at the README, code, scripts, data "
-                "directories, configs — and fill in PROMPT_problem.md with a real "
+                "directories, configs — and fill in PROMPT.md with a real "
                 "problem description based on what you find and the user's goal.\n\n"
                 "Keep the existing Goal / Background / Setup structure. Replace the "
                 "placeholder text with concrete details. Be specific and concise.\n\n"
@@ -213,15 +213,15 @@ def cmd_init(target: str | None = None):
                 timeout=120,
             )
             if result.returncode == 0:
-                print(f"\n  {_green(chr(10003))} Claude pre-filled PROMPT_problem.md — review and adjust as needed")
+                print(f"\n  {_green(chr(10003))} Claude pre-filled PROMPT.md — review and adjust as needed")
             else:
-                print(f"\n  {_yellow('!')} Claude exited with code {result.returncode} — check PROMPT_problem.md manually")
+                print(f"\n  {_yellow('!')} Claude exited with code {result.returncode} — check PROMPT.md manually")
         else:
-            print(f"  {_dim('-')} Skipped — edit PROMPT_problem.md manually")
+            print(f"  {_dim('-')} Skipped — edit PROMPT.md manually")
 
     # 6. Next steps ----------------------------------------------------------
     print(f"\n{_bold('Next steps:')}\n")
-    print(f"  1. Review {_blue('PROMPT_problem.md')}")
+    print(f"  1. Review {_blue('PROMPT.md')}")
     print(f"  2. Start the server:")
     print(f"     {_dim('$')} {_green('the-lab .')}")
     print(f"  3. Launch an agent:")

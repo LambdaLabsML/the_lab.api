@@ -26,14 +26,14 @@ the-lab init
 the-lab .
 
 # Launch an agent
-the-lab-agent PROMPT_problem.md
+the-lab-agent PROMPT.md
 ```
 
 That's it. Open the dashboard URL printed by the server and watch the agent work.
 
 ## How It Works
 
-1. You describe your research problem in `PROMPT_problem.md` (Goal / Background / Setup)
+1. You describe your research problem in `PROMPT.md` (Goal / Background / Setup)
 2. The Lab concatenates it with API workflow docs into `PROMPT_generated.md`
 3. An agent (Claude or Codex) reads the prompt, creates ideas as git branches, runs experiments, and iterates
 4. The dashboard shows progress in real-time: metrics, graphs, tables, experiment logs
@@ -47,7 +47,7 @@ Ideas form a DAG — each idea is a git branch that can fork from parents. Exper
 | Step | What it does |
 |---|---|
 | Git check | Initializes a git repo if needed |
-| PROMPT_problem.md | Creates a template for your research problem |
+| PROMPT.md | Creates a template for your research problem |
 | MCP bridge | Installs tools so agents can call the API directly (no curl) |
 | .gitignore | Adds `.the_lab/`, `.claude/`, `.mcp.json`, prompt files |
 | Claude pre-fill | Optionally has Claude analyze the repo and fill in the prompt |
@@ -97,10 +97,10 @@ Table/Graph/Timeline/Log (50%)  |  Detail (50%)
 ## Launching Agents
 
 ```bash
-the-lab-agent PROMPT_problem.md                  # Claude, 15m loop
-the-lab-agent PROMPT_problem.md --model opus     # specific model
-the-lab-agent PROMPT_problem.md --agent codex    # Codex instead
-the-lab-agent PROMPT_problem.md -d 5m            # 5 minute loop
+the-lab-agent PROMPT.md                  # Claude, 15m loop
+the-lab-agent PROMPT.md --model opus     # specific model
+the-lab-agent PROMPT.md --agent codex    # Codex instead
+the-lab-agent PROMPT.md -d 5m            # 5 minute loop
 the-lab-agent --sandbox                          # enable network sandbox
 ```
 

@@ -69,8 +69,8 @@ def main():
     parser.add_argument(
         "prompt_file",
         nargs="?",
-        default="PROMPT_problem.md",
-        help="Path to the prompt file (default: PROMPT_problem.md)",
+        default="PROMPT.md",
+        help="Path to the prompt file (default: PROMPT.md)",
     )
     parser.add_argument(
         "-d",
@@ -114,10 +114,9 @@ def main():
     prompt_path = Path(args.prompt_file)
 
     # --- Prompt generation ---
-    # If PROMPT_problem.md exists, concatenate with PROMPT_api.md → PROMPT_generated.md
-    # Otherwise fall back to PROMPT.md (legacy)
+    # Concatenate PROMPT.md + PROMPT_api.md → PROMPT_generated.md
     project_dir = prompt_path.parent if prompt_path.is_file() else Path.cwd()
-    problem_path = project_dir / "PROMPT_problem.md"
+    problem_path = project_dir / "PROMPT.md"
     generated_path = project_dir / "PROMPT_generated.md"
 
     if problem_path.exists():
@@ -130,7 +129,7 @@ def main():
         prompt_path = generated_path
         print(f"Generated {generated_path.name} (API at {api_base})", file=sys.stderr)
     elif not prompt_path.exists():
-        print(f"Error: neither PROMPT_problem.md nor {prompt_path} found", file=sys.stderr)
+        print(f"Error: neither PROMPT.md nor {prompt_path} found", file=sys.stderr)
         sys.exit(1)
 
     agent_bin = _agent_binary(args.agent)
