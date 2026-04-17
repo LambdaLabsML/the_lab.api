@@ -9,12 +9,30 @@ import {
   showConcluded,
   showRunning,
   colorMode,
+  filterText,
 } from "../state/settings";
 import { TagFilter } from "./chart-panel/tag-filter";
 
 export function FilterBar() {
   return (
     <div class="filter-bar-standalone">
+      <span style={{ display: "inline-flex", alignItems: "center", gap: "2px" }}>
+        <input
+          type="text"
+          placeholder="Filter..."
+          value={filterText.value}
+          onInput={(e) => { filterText.value = (e.target as HTMLInputElement).value; }}
+          style={{ background: "#161b22", color: "#c9d1d9", border: "1px solid #30363d", borderRadius: "3px", padding: "2px 6px", fontSize: "10px", fontFamily: "inherit", width: "120px", outline: "none" }}
+        />
+        {filterText.value && (
+          <span
+            style={{ color: "#8b949e", cursor: "pointer", fontSize: "12px", lineHeight: "1" }}
+            onClick={() => { filterText.value = ""; }}
+            title="Clear filter"
+          >&times;</span>
+        )}
+      </span>
+      <span style={{ width: "1px", height: "18px", background: "#30363d", margin: "0 4px" }} />
       <span>
         Color:{" "}
         <select

@@ -93,6 +93,8 @@ export const scatterXMetric = useSetting("scatterXMetric", "");
 export const scatterYMetric = useSetting("scatterYMetric", "");
 /** Whether the scatter chart column is visible. */
 export const scatterOpen = useSetting("scatterOpen", true);
+/** Free-text filter for experiment/idea names. */
+export const filterText = useSetting("filterText", "");
 /** Whether the filter bar (tags + status) is expanded. */
 export const filterBarOpen = useSetting("filterBarOpen", true);
 
