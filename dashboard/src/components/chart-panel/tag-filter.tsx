@@ -14,8 +14,11 @@ export function TagFilter() {
   for (const exp of experiments) {
     if (exp.tags) for (const t of exp.tags) tagSet.add(t);
   }
-  const filter = filterText.value.toLowerCase();
-  const tags = [...tagSet].sort().filter((t) => !filter || t.toLowerCase().includes(filter));
+  const filter = filterText.value.toLowerCase().trim();
+  const filterTerms = filter ? filter.split(/\s+/) : [];
+  const tags = [...tagSet].sort().filter((t) =>
+    filterTerms.length === 0 || filterTerms.some((term) => t.toLowerCase().includes(term))
+  );
 
   function toggle(tag: string) {
     const current = new Set(activeTagFilters.value);
