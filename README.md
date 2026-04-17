@@ -25,8 +25,8 @@ the-lab init
 # Start the server + dashboard
 the-lab .
 
-# Launch an agent
-the-lab-agent PROMPT.md
+# Launch an agent (reads PROMPT.md by default)
+the-lab-agent
 ```
 
 That's it. Open the dashboard URL printed by the server and watch the agent work.
@@ -97,11 +97,13 @@ Table/Graph/Timeline/Log (50%)  |  Detail (50%)
 ## Launching Agents
 
 ```bash
-the-lab-agent PROMPT.md                  # Claude, 15m loop
-the-lab-agent PROMPT.md --model opus     # specific model
-the-lab-agent PROMPT.md --agent codex    # Codex instead
-the-lab-agent PROMPT.md -d 5m            # 5 minute loop
-the-lab-agent --sandbox                          # enable network sandbox
+the-lab-agent                            # single run (reads PROMPT.md)
+the-lab-agent "try a lower learning rate" # single run with inline prompt
+the-lab-agent loop                       # loop every 15m
+the-lab-agent loop -d 5m                 # loop every 5m
+the-lab-agent --model opus               # specific model
+the-lab-agent --agent codex              # Codex instead
+the-lab-agent --sandbox                  # enable network sandbox
 ```
 
 The agent gets MCP tools automatically — typed tool calls instead of curl.
