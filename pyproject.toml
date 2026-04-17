@@ -20,7 +20,7 @@ dependencies = [
 include = ["the_lab*"]
 
 [tool.setuptools.package-data]
-the_lab = ["static/**/*", "static/*", "agent_skills/**/*", "agent_skills/*"]
+the_lab = ["static/**/*", "static/*", "agent_skills/**/*", "agent_skills/*", "*.md"]
 
 [project.scripts]
 the-lab = "the_lab.cli:main"

@@ -42,22 +42,7 @@ def _ask_yn(question: str, default: bool = True) -> bool:
 # Template for PROMPT_problem.md
 # ---------------------------------------------------------------------------
 
-TEMPLATE_PROMPT = """\
-# [Your Research Goal]
-
-## Goal
-Describe what you're optimizing and the success criteria.
-Example: Maximize accuracy on held-out evaluation set while minimizing compute cost.
-
-## Background
-Prior work, constraints, relevant context.
-Example: We have a baseline model achieving 10% accuracy. The framework supports N-agent collaboration.
-
-## Setup
-- Hardware: [describe your setup, e.g. 8xH100 node]
-- Data: [where is your data, e.g. /data/heldout/*.json]
-- Run: [how to run experiments, e.g. python run.py --config <path>]
-"""
+_PROMPT_TEMPLATE = Path(__file__).parent / "PROMPT_template.md"
 
 # ---------------------------------------------------------------------------
 # init subcommand
@@ -85,7 +70,7 @@ def cmd_init(target: str | None = None):
     if prompt_path.exists():
         print(f"  {_green(chr(10003))} PROMPT_problem.md already exists")
     else:
-        prompt_path.write_text(TEMPLATE_PROMPT)
+        prompt_path.write_text(_PROMPT_TEMPLATE.read_text())
         print(f"  {_green(chr(10003))} Created PROMPT_problem.md -- edit this with your research problem")
 
     # 3. MCP bridge ----------------------------------------------------------
