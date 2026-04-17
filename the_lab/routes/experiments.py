@@ -92,14 +92,16 @@ def list_experiments(idea_id: int):
         -> [{"id": 4, "idea_id": 1, "status": "completed", "metrics": {"acc": 0.91}, ...}, ...]
     """
     exps = store.list_experiments(idea_id)
+    results = []
     for exp in exps:
-        if exp.get("status") == "failed":
-            label = exp.get("label", str(exp["id"]))
-            exp["read_log"] = f"GET /api/v1/experiments/{label}/log"
+        out = {**exp}
+        if out.get("status") == "failed":
+            label = out.get("label", str(out["id"]))
+            out["read_log"] = f"GET /api/v1/experiments/{label}/log"
         # Strip tags to encourage ?tags= filtering on /orient or /leaderboard
-        if exp.get("tags"):
-            del exp["tags"]
-    return exps
+        out.pop("tags", None)
+        results.append(out)
+    return results
 
 
 # --- Bulk listing (must come before parameterized) ---
@@ -134,16 +136,17 @@ def list_all_experiments(
             continue
         if metric and metric not in (exp.get("metrics") or {}):
             continue
-        idea_id = exp["idea_id"]
+        out = {**exp}
+        idea_id = out["idea_id"]
         if idea_id not in idea_cache:
             idea = store.get_idea(idea_id)
             idea_cache[idea_id] = idea
         idea = idea_cache[idea_id]
-        exp["idea_description"] = idea["description"] if idea else None
+        out["idea_description"] = idea["description"] if idea else None
         # Strip tags from bulk response to encourage ?tags= filtering
-        if not tag_list and exp.get("tags"):
-            del exp["tags"]
-        results.append(exp)
+        if not tag_list:
+            out.pop("tags", None)
+        results.append(out)
 
     resp = {"experiments": results, "count": len(results)}
     if not tag_list:
