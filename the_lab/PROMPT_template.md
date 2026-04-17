@@ -12,6 +12,9 @@ Example: We have a baseline model achieving 10% accuracy. The framework supports
 - Hardware: [describe your setup, e.g. 8xH100 node]
 - Data: [where is your data, e.g. /data/heldout/*.json]
 - Run: [how to run experiments, e.g. python run.py --config <path>]
+- Concurrency: [how many experiments can run at once, e.g. 1 (GPU-bound), 4 (CPU tasks), unlimited]
+- Scheduler: [e.g. none (local), slurm, PBS, kubernetes — describe how to submit jobs if applicable]
+- Runtime: [typical experiment duration, e.g. ~5 min per run, ~2 hours for full training]
 
 ## Conventions
 
