@@ -11,7 +11,7 @@ Fixture properties:
 import json
 import sys
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent.parent))
-from score_common import LabClient, api_call_count, endpoint_was_called, new_ideas_after, score_result
+from score_common import LabClient, api_call_count, endpoint_was_called, endpoint_query_matched, new_ideas_after, score_result
 
 SEED_IDEAS = 15
 SEED_BEST_SCORE = 0.75
@@ -129,16 +129,8 @@ def score(api_url: str) -> dict:
     # convergence_gap = 1.0 - score, so it should be MINIMIZED (sort=asc).
     # Primary signal: did the agent use sort=asc when querying the leaderboard
     # for convergence_gap? That proves they understood the direction.
-    used_asc = any(
-        "convergence_gap" in c.get("endpoint", "") and "sort=asc" in c.get("endpoint", "")
-        for c in call_list
-        if "/leaderboard" in c.get("endpoint", "")
-    )
-    queried_gap = any(
-        "convergence_gap" in c.get("endpoint", "")
-        for c in call_list
-        if "/leaderboard" in c.get("endpoint", "")
-    )
+    used_asc = endpoint_query_matched(stats, "/leaderboard", ["convergence_gap", "sort=asc"])
+    queried_gap = endpoint_query_matched(stats, "/leaderboard", ["convergence_gap"])
     if used_asc:
         checks["understood_convergence_gap"] = 1.0
     elif queried_gap:
@@ -159,8 +151,8 @@ def score(api_url: str) -> dict:
 
     # ── Used tag filtering ────────────────────────────────────────────
     checks["used_tag_filter"] = 1.0 if (
-        any("tags=" in c.get("endpoint", "") for c in call_list
-            if "/leaderboard" in c.get("endpoint", "") or "/orient" in c.get("endpoint", ""))
+        endpoint_query_matched(stats, "/leaderboard", ["tags="])
+        or endpoint_query_matched(stats, "/orient", ["tags="])
     ) else 0.0
 
     # ── Score improved ────────────────────────────────────────────────

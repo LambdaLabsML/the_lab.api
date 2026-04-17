@@ -10,7 +10,7 @@ import json
 import re
 import sys
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).parent.parent))
-from score_common import LabClient, api_call_count, endpoint_was_called, new_ideas_after, score_result
+from score_common import LabClient, api_call_count, endpoint_was_called, endpoint_query_matched, new_ideas_after, score_result
 
 SEED_IDEAS = 15
 SEED_BEST_SCORE = 0.75
@@ -59,18 +59,10 @@ def score(api_url: str) -> dict:
     # ── 4. Understood metric direction ──────────────────────────────
     # Check via leaderboard usage: did the agent use the correct sort order?
     # sort=asc for convergence_gap (lower is better) proves understanding.
-    used_correct_sort = any(
-        "convergence_gap" in c.get("endpoint", "") and "sort=asc" in c.get("endpoint", "")
-        for c in call_list
-        if "/leaderboard" in c.get("endpoint", "")
-    )
+    used_correct_sort = endpoint_query_matched(stats, "/leaderboard", ["convergence_gap", "sort=asc"])
     # Also accept sort=desc for score (higher is better) — but since desc is
     # the default, only count it if they explicitly passed sort=desc
-    explicit_desc_score = any(
-        "metric=score" in c.get("endpoint", "") and "sort=desc" in c.get("endpoint", "")
-        for c in call_list
-        if "/leaderboard" in c.get("endpoint", "")
-    )
+    explicit_desc_score = endpoint_query_matched(stats, "/leaderboard", ["metric=score", "sort=desc"])
     checks["understood_metric_direction"] = 1.0 if (used_correct_sort or explicit_desc_score) else 0.0
 
     # ── 5. Described tag purposes (notes explaining what tags mean) ───
@@ -114,10 +106,9 @@ def score(api_url: str) -> dict:
                     "5 experiment", "5 idea"]
     )
     # Also accept if they used tag filtering to explore
-    used_tag_filter = any(
-        "tags=" in c.get("endpoint", "")
-        for c in call_list
-        if "/leaderboard" in c.get("endpoint", "") or "/orient" in c.get("endpoint", "")
+    used_tag_filter = (
+        endpoint_query_matched(stats, "/leaderboard", ["tags="])
+        or endpoint_query_matched(stats, "/orient", ["tags="])
     )
     checks["mapped_tags_to_experiments"] = 1.0 if (mapped or used_tag_filter) else 0.0
 

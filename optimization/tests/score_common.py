@@ -48,6 +48,20 @@ def endpoint_was_called(stats: dict, endpoint_substring: str) -> bool:
     return False
 
 
+def endpoint_query_matched(stats: dict, endpoint_substring: str, query_substrings: list[str]) -> bool:
+    """Check if a call was made whose path matches endpoint_substring AND whose query contains every query_substring.
+
+    Reads from stats.history which preserves the raw query string; stats.calls[].endpoint
+    is normalized and strips the query, so query-aware checks must use history.
+    """
+    for h in stats.get("history", []):
+        path = h.get("path", "")
+        query = h.get("query", "")
+        if endpoint_substring in path and all(q in query for q in query_substrings):
+            return True
+    return False
+
+
 def new_ideas_after(ideas: list[dict], seed_count: int) -> list[dict]:
     """Return ideas created by the agent (after the pre-seeded ones)."""
     return [i for i in ideas if i["id"] > seed_count]
