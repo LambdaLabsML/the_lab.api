@@ -145,12 +145,11 @@ def main():
     problem_content = problem_path.read_text().strip() if problem_path.exists() else ""
 
     if inline_prompt:
-        # Inline mode: PROMPT.md (if exists) + API docs + inline question
-        parts = []
+        # Inline mode: question first, then background (PROMPT.md + API docs)
+        parts = [f"**User Question:** {inline_prompt}\n\n---\n\n**Background information below:**"]
         if problem_content:
             parts.append(problem_content)
         parts.append(api_header + api_content)
-        parts.append("---\n\n**Task:** " + inline_prompt)
         generated = "\n\n".join(parts) + "\n"
         fd, tmp_path = _tempfile.mkstemp(prefix="the-lab-prompt-", suffix=".md")
         os.write(fd, generated.encode())
