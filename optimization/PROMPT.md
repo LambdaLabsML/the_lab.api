@@ -22,9 +22,18 @@ All files in `arc3_autosolver/` are on your idea branches:
 
 | File | Purpose | Impact |
 |---|---|---|
-| `PROMPT.md` | Problem description, strategies, conventions | What the inner agent reads at the start |
-| `agent/arc_agent.py` | Baseline solver code | Starting point the inner agent iterates on |
-| `evaluate_agent.py` | Evaluation harness | How scores are collected (usually leave as-is) |
+| `PROMPT.md` (inner, in temp dir) | Problem description, strategies, conventions | What the inner agent reads at the start |
+| `the_lab/PROMPT_api.md` | API workflow docs | How the inner agent uses The Lab |
+| `the_lab/` (API code) | Lab backend | Endpoints, responses, notifications |
+| `gemma_agent.py` | Inner agent driver (tools, system prompt, agent loop) | How Gemma is invoked and controlled |
+| `agent/arc_agent.py` (in temp dir) | Baseline ARC solver code | Starting point for Gemma's edits |
+
+### Levers available to you
+
+1. **PROMPT.md (inner)** — what the inner Gemma agent reads
+2. **the_lab/PROMPT_api.md** — how the API workflow is documented
+3. **gemma_agent.py** — the agent driver itself: tools exposed, system prompt, tool descriptions, max_turns, temperature, which Lab endpoints are mapped
+4. **agent/arc_agent.py (baseline)** — starting code for Gemma to iterate on
 
 ### Primary lever: PROMPT.md
 
@@ -41,6 +50,21 @@ You can also improve the starting `agent/arc_agent.py`:
 - Seed it with a smarter baseline (not random) so the inner agent has something to build on
 - Add utility functions the inner agent can use (grid parsing, pattern detection, etc.)
 - Structure the code so it's easy for the inner agent to modify specific parts
+
+### Tertiary lever: gemma_agent.py (the inner agent driver)
+
+`gemma_agent.py` in the project root controls HOW Gemma is invoked:
+- **Tool set**: bash, read_file, write_file + auto-generated Lab API tools
+- **System prompt**: the persona/instructions given to Gemma on every call
+- **max_turns**: how many tool-use cycles before forced exit
+- **temperature**: sampling randomness (default 0.3)
+- **LAB_ENDPOINTS**: which Lab API endpoints are exposed as typed tools
+
+You can modify this to:
+- Add new custom tools (e.g., `analyze_grid`, `check_pattern`)
+- Tighten the system prompt to keep Gemma focused
+- Add reasoning scaffolds (e.g., require a "plan" message before coding)
+- Expose more/fewer Lab endpoints
 
 ## Setup
 

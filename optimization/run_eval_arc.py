@@ -237,10 +237,12 @@ def launch_inner_agent(
     env["VLLM_BASE"] = os.environ.get("VLLM_BASE", "http://localhost:8008/v1")
     env["VLLM_MODEL"] = model
 
-    # Use simple_agent.py instead of Claude Code — Gemma doesn't chain tool
-    # calls in Claude Code's --print mode. The simple agent loop calls vLLM
-    # directly via the OpenAI API with proper tool calling.
-    simple_agent = SCRIPT_DIR.parent / "model_inference" / "simple_agent.py"
+    # Use the branch's gemma_agent.py (editable by the outer optimization agent).
+    # Falls back to optimization/gemma_agent.py (source of truth), then the
+    # external model_inference/simple_agent.py as a last resort.
+    simple_agent = REPO_ROOT / "gemma_agent.py"
+    if not simple_agent.exists():
+        simple_agent = SCRIPT_DIR / "gemma_agent.py"
     if not simple_agent.exists():
         simple_agent = Path("/lambda/nfs/architects-us-south-2/model_inference/simple_agent.py")
 

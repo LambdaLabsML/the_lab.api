@@ -56,6 +56,9 @@ ensure_proj() {
         cp the_lab/agent_skills/settings.json .claude/settings.json 2>/dev/null || true
     fi
 
+    # Copy gemma_agent.py (the inner agent driver — editable by the outer agent)
+    cp "$SCRIPT_DIR/gemma_agent.py" gemma_agent.py
+
     # Symlink PROMPT.md from outer optimization prompt
     ln -sf ../PROMPT.md PROMPT.md
 
