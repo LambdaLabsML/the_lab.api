@@ -129,7 +129,7 @@ cmd_baseline() {
     local idea_resp
     idea_resp=$(curl -s -X POST "$api/ideas/new" \
         -H "Content-Type: application/json" \
-        -d '{"description": "Baseline: random agent (no optimization)"}')
+        -d '{"description": "Baseline: unoptimized PROMPT + default agent code"}')
     local idea_id
     idea_id=$(echo "$idea_resp" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])" 2>/dev/null)
 
@@ -142,11 +142,12 @@ cmd_baseline() {
 
     # Create experiment with run_eval_arc.py
     local eval_script="$SCRIPT_DIR/run_eval_arc.py"
-    local script_content="#!/bin/bash\nset -euo pipefail\npython $eval_script --model gemma-4-31b --budget $inner_budget --timeout $timeout"
+    local model="${VLLM_MODEL:-QuantTrio/gemma-4-31B-it-AWQ}"
+    local script_content="#!/bin/bash\nset -euo pipefail\npython $eval_script --model '$model' --budget $inner_budget --timeout $timeout"
     local exp_resp
     exp_resp=$(curl -s -X POST "$api/ideas/$idea_id/experiments" \
         -H "Content-Type: application/json" \
-        -d "{\"description\": \"Baseline eval (random agent, inner_budget=$inner_budget)\", \"script_content\": \"$script_content\", \"tags\": [\"baseline\", \"method-random\"]}")
+        -d "{\"description\": \"Baseline eval (inner_budget=$inner_budget)\", \"script_content\": \"$script_content\", \"tags\": [\"baseline\"]}")
     local exp_id
     exp_id=$(echo "$exp_resp" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])" 2>/dev/null)
 
@@ -184,7 +185,7 @@ else:
     # Conclude
     curl -s -X POST "$api/ideas/$idea_id/conclude" \
         -H "Content-Type: application/json" \
-        -d '{"conclusion": "Baseline established with random agent."}' > /dev/null
+        -d '{"conclusion": "Baseline established. Gemma with unoptimized prompts."}' > /dev/null
     echo "Baseline idea #$idea_id concluded."
 }
 
