@@ -82,9 +82,14 @@ signal.signal(signal.SIGINT, _signal_handler)
 # ---------------------------------------------------------------------------
 SCRIPT_DIR = Path(__file__).resolve().parent
 # The outer Lab's project dir (where the experiment runs)
+# REPO_ROOT = the worktree where the experiment runs (optimization/proj/ on an idea branch).
+# Contains the_lab/ (outer agent's edits to API code, PROMPT_api.md, agent_skills).
 REPO_ROOT = Path(os.environ.get("THE_LAB_REPO", os.getcwd())).resolve()
-# The arc3_autosolver source to copy
-ARC_PROJECT_SRC = SCRIPT_DIR / "arc3_autosolver"
+# Fixed ARC project files — accessed via symlink in .the_lab/artifacts/
+ARC_PROJECT_SRC = REPO_ROOT / ".the_lab" / "artifacts" / "arc3_autosolver"
+if not ARC_PROJECT_SRC.exists():
+    # Fallback: direct path from script location
+    ARC_PROJECT_SRC = SCRIPT_DIR / "arc3_autosolver"
 
 
 def _get_host() -> str:
@@ -105,17 +110,25 @@ def _lab_get(url: str, timeout: float = 5):
 
 
 def copy_project(dest: Path):
-    """Copy arc3_autosolver to a temp dir, build PROMPT_generated.md."""
+    """Set up a temp dir with ARC project files + branch's PROMPT_api.md.
+
+    Structure mirrors the self-optimization:
+    - ARC project files (agent/, evaluate_agent.py) from the fixed source
+    - PROMPT_generated.md built from ARC PROMPT.md + branch's PROMPT_api.md
+    - Agent skills from the branch's the_lab/agent_skills/
+    """
+    # 1. Copy fixed ARC project files
     shutil.copytree(
         ARC_PROJECT_SRC, dest, dirs_exist_ok=True,
-        ignore=shutil.ignore_patterns(".the_lab", ".git", "__pycache__", ".venv"),
+        ignore=shutil.ignore_patterns(".the_lab", ".git", "__pycache__", ".venv", ".claude", ".mcp.json"),
     )
 
-    # Build PROMPT_generated.md = PROMPT.md + PROMPT_api.md
+    # 2. Build PROMPT_generated.md = ARC PROMPT.md + branch's PROMPT_api.md
     prompt_src = dest / "PROMPT.md"
+    # Use the branch's PROMPT_api.md (outer agent may have edited it)
     prompt_api = REPO_ROOT / "the_lab" / "PROMPT_api.md"
     if not prompt_api.exists():
-        prompt_api = Path(__file__).resolve().parent.parent / "the_lab" / "PROMPT_api.md"
+        prompt_api = SCRIPT_DIR.parent / "the_lab" / "PROMPT_api.md"
 
     parts = []
     if prompt_src.exists():
@@ -124,8 +137,10 @@ def copy_project(dest: Path):
         parts.append(prompt_api.read_text().strip())
     (dest / "PROMPT_generated.md").write_text("\n\n".join(parts) + "\n")
 
-    # Copy agent skills (MCP bridge)
+    # 3. Copy agent skills from the branch (outer agent may have edited these)
     agent_skills = REPO_ROOT / "the_lab" / "agent_skills"
+    if not agent_skills.exists():
+        agent_skills = SCRIPT_DIR.parent / "the_lab" / "agent_skills"
     if agent_skills.exists():
         claude_dir = dest / ".claude"
         claude_dir.mkdir(exist_ok=True)
@@ -139,7 +154,7 @@ def copy_project(dest: Path):
         if settings_src.exists():
             shutil.copy2(settings_src, claude_dir / "settings.json")
 
-    # Init git if needed
+    # 4. Init git
     if not (dest / ".git").exists():
         subprocess.run(["git", "init"], cwd=str(dest), capture_output=True)
         subprocess.run(["git", "config", "user.name", "eval"], cwd=str(dest), capture_output=True)
@@ -147,7 +162,8 @@ def copy_project(dest: Path):
         subprocess.run(["git", "add", "-A"], cwd=str(dest), capture_output=True)
         subprocess.run(["git", "commit", "-m", "initial"], cwd=str(dest), capture_output=True)
 
-    print(f"  Copied project to {dest}", file=sys.stderr)
+    print(f"  Copied ARC project to {dest}", file=sys.stderr)
+    print(f"  PROMPT_api.md from: {prompt_api}", file=sys.stderr)
 
 
 def start_lab(repo_dir: str, port: int) -> subprocess.Popen:

@@ -12,7 +12,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-PROJ="$SCRIPT_DIR/arc3_autosolver"
+PROJ="$SCRIPT_DIR/proj"
 
 # Activate the repo's venv if not already active
 if [ -z "${VIRTUAL_ENV:-}" ] && [ -f "$REPO_ROOT/.venv/bin/activate" ]; then
@@ -22,41 +22,65 @@ fi
 # ── Setup ───────────────────────────────────────────────────────────────────
 
 ensure_proj() {
-    # arc3_autosolver is a symlink to the real project — check it exists
-    if [ ! -d "$PROJ" ]; then
-        echo "Error: $PROJ does not exist."
+    if [ -f "$PROJ/the_lab/app.py" ]; then
+        return
+    fi
+
+    # Check arc3_autosolver exists
+    local arc_src="$SCRIPT_DIR/arc3_autosolver"
+    if [ ! -d "$arc_src" ]; then
+        echo "Error: $arc_src does not exist."
         echo "Create or symlink it first."
         exit 1
     fi
 
-    # Ensure .the_lab structure exists
+    echo "Setting up optimization/proj/ for ARC..."
     mkdir -p "$PROJ/.the_lab/artifacts"
-    mkdir -p "$PROJ/.the_lab/sandbox"
-    echo '{"enabled": false}' > "$PROJ/.the_lab/sandbox/config.json"
 
-    # Symlink eval script into artifacts
-    ln -sf "$SCRIPT_DIR/run_eval_arc.py" "$PROJ/.the_lab/artifacts/run_eval_arc.py"
+    # Copy .git and checkout optim branch
+    cp -r "$REPO_ROOT/.git" "$PROJ/.git"
+    cd "$PROJ"
+    git checkout -b optim 2>/dev/null || git checkout optim
 
-    # Ensure git repo exists
-    if [ ! -d "$PROJ/.git" ]; then
-        cd "$PROJ"
-        git init
-        git add -A
-        git commit -m "Initial ARC project" 2>/dev/null || true
-        cd "$SCRIPT_DIR"
+    # Copy API code (editable by the outer agent on idea branches)
+    cp -r "$REPO_ROOT/the_lab" the_lab
+    rm -rf the_lab/static the_lab/__pycache__
+    find the_lab -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
+    cp "$REPO_ROOT/pyproject.toml" pyproject.toml
+
+    # Install agent skills for the outer agent
+    if [ -d "the_lab/agent_skills" ]; then
+        mkdir -p .claude/skills
+        cp the_lab/agent_skills/skills/lab_api_mcp.py .claude/skills/ 2>/dev/null || true
+        cp the_lab/agent_skills/mcp.json .mcp.json 2>/dev/null || true
+        cp the_lab/agent_skills/settings.json .claude/settings.json 2>/dev/null || true
     fi
 
-    # Install agent skills (MCP bridge) for the outer agent
-    local skills="$REPO_ROOT/the_lab/agent_skills"
-    if [ -d "$skills" ]; then
-        mkdir -p "$PROJ/.claude/skills"
-        cp "$skills/skills/lab_api_mcp.py" "$PROJ/.claude/skills/" 2>/dev/null || true
-        cp "$skills/mcp.json" "$PROJ/.mcp.json" 2>/dev/null || true
-        cp "$skills/settings.json" "$PROJ/.claude/settings.json" 2>/dev/null || true
-    fi
+    # Symlink PROMPT.md from outer optimization prompt
+    ln -sf ../PROMPT.md PROMPT.md
 
-    # Symlink outer PROMPT.md (the optimization instructions for Opus)
-    # The project's own PROMPT.md (for the inner agent) is managed separately
+    # Symlink eval script + ARC project into artifacts
+    ln -sf "$SCRIPT_DIR/run_eval_arc.py" .the_lab/artifacts/run_eval_arc.py
+    ln -sf "$arc_src" .the_lab/artifacts/arc3_autosolver
+
+    # Pre-commit hook
+    cat > .git/hooks/pre-commit << 'HOOK'
+#!/bin/bash
+if git diff --cached --name-only | grep -q '^\.the_lab/' ; then
+    echo "ERROR: .the_lab/ files staged for commit." >&2
+    exit 1
+fi
+HOOK
+    chmod +x .git/hooks/pre-commit
+
+    # Disable sandbox
+    mkdir -p .the_lab/sandbox
+    echo '{"enabled": false}' > .the_lab/sandbox/config.json
+
+    git add -A
+    git commit -m "Initial ARC optimization project" 2>/dev/null || true
+    echo "Done. proj/ ready on branch 'optim'."
+    cd "$SCRIPT_DIR"
     echo "  proj: $PROJ"
 }
 
@@ -176,26 +200,23 @@ cmd_agent() {
 }
 
 cmd_reset() {
-    echo "Resetting ARC project Lab data..."
+    echo "Resetting optimization/proj/..."
 
-    if [ -d "$PROJ/.the_lab" ]; then
-        # Preserve artifacts symlinks, remove experiments/ideas/notes
-        rm -rf "$PROJ/.the_lab/experiments" "$PROJ/.the_lab/worktrees" 2>/dev/null || true
-        rm -f "$PROJ/.the_lab/api_stats.json" "$PROJ/.the_lab/task.json" 2>/dev/null || true
-        echo "Cleared .the_lab experiment data."
+    if [ -d "$PROJ" ]; then
+        chmod -R u+w "$PROJ/.git" 2>/dev/null || true
+        rm -rf "$PROJ" 2>/dev/null || true
+        if [ -d "$PROJ" ]; then
+            sleep 2
+            rm -rf "$PROJ" 2>/dev/null || true
+        fi
+        if [ -d "$PROJ" ]; then
+            echo "Warning: could not fully remove proj/ (NFS stale handles)."
+            find "$PROJ" -not -name '.nfs*' -delete 2>/dev/null || true
+        fi
     fi
-
-    # Reset git to clean state
-    if [ -d "$PROJ/.git" ]; then
-        cd "$PROJ"
-        # Remove idea branches
-        git branch | grep -v '^\*\|main\|master' | xargs -r git branch -D 2>/dev/null || true
-        git checkout main 2>/dev/null || git checkout master 2>/dev/null || true
-        cd "$SCRIPT_DIR"
-    fi
-
     ensure_proj
-    echo "Done. Clean slate."
+
+    echo "Done. Clean slate from parent repo."
 }
 
 cmd_cherry_pick() {
