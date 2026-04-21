@@ -248,41 +248,64 @@ def main():
         if msg_id is None:
             continue
 
-        if method == "initialize":
-            send({
-                "jsonrpc": "2.0",
-                "id": msg_id,
-                "result": {
-                    "protocolVersion": "2024-11-05",
-                    "capabilities": {"tools": {}},
-                    "serverInfo": {"name": "labapi", "version": "1.0.0"},
-                },
-            })
-        elif method == "tools/list":
-            send({
-                "jsonrpc": "2.0",
-                "id": msg_id,
-                "result": {"tools": tools},
-            })
-        elif method == "tools/call":
-            params = msg.get("params", {})
-            name = params.get("name", "")
-            args = params.get("arguments", {})
-            if name in tool_meta:
-                text = proxy_call(name, args, tool_meta)
+        try:
+            # Lazy re-fetch spec if startup fetch failed and tools are still empty
+            if not tools and method in ("tools/list", "tools/call"):
+                try:
+                    spec = fetch_openapi_spec()
+                    tools, tool_meta = build_tools(spec)
+                    print(f"Reconnected: loaded {len(tools)} tools", file=sys.stderr)
+                except Exception as e:
+                    print(f"Re-fetch failed: {e}", file=sys.stderr)
+
+            if method == "initialize":
+                send({
+                    "jsonrpc": "2.0",
+                    "id": msg_id,
+                    "result": {
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {"tools": {}},
+                        "serverInfo": {"name": "labapi", "version": "1.0.0"},
+                    },
+                })
+            elif method == "tools/list":
+                send({
+                    "jsonrpc": "2.0",
+                    "id": msg_id,
+                    "result": {"tools": tools},
+                })
+            elif method == "tools/call":
+                params = msg.get("params", {})
+                name = params.get("name", "")
+                args = params.get("arguments", {})
+                if name in tool_meta:
+                    text = proxy_call(name, args, tool_meta)
+                else:
+                    text = json.dumps({"error": f"Unknown tool: {name}"})
+                send({
+                    "jsonrpc": "2.0",
+                    "id": msg_id,
+                    "result": {"content": [{"type": "text", "text": text}]},
+                })
             else:
-                text = json.dumps({"error": f"Unknown tool: {name}"})
-            send({
-                "jsonrpc": "2.0",
-                "id": msg_id,
-                "result": {"content": [{"type": "text", "text": text}]},
-            })
-        else:
-            send({
-                "jsonrpc": "2.0",
-                "id": msg_id,
-                "error": {"code": -32601, "message": f"Method not found: {method}"},
-            })
+                send({
+                    "jsonrpc": "2.0",
+                    "id": msg_id,
+                    "error": {"code": -32601, "message": f"Method not found: {method}"},
+                })
+        except BrokenPipeError:
+            # Client closed the pipe — exit cleanly
+            break
+        except Exception as e:
+            print(f"Error handling {method}: {e}", file=sys.stderr)
+            try:
+                send({
+                    "jsonrpc": "2.0",
+                    "id": msg_id,
+                    "error": {"code": -32603, "message": f"Internal error: {e}"},
+                })
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":
