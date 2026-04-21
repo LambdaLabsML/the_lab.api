@@ -138,6 +138,52 @@ def checkout(branch: str, cwd: str | Path | None = None):
     _run(["checkout", branch], cwd=cwd)
 
 
+def checkout_idea_carry(idea_id: int, cwd: str | Path | None = None) -> dict:
+    """Switch to idea/<id>, carrying uncommitted changes to commit *there*.
+
+    Unlike checkout_idea (which commits on the old branch first), this stashes
+    current work, checks out the new branch, then pops and commits — so the
+    changes land on the new idea branch, not the one we left.
+    """
+    current = get_current_branch(cwd=cwd)
+    target = f"idea/{idea_id}"
+
+    if current == target:
+        return {"status": "already_on_branch", "branch": target}
+
+    stash_result = _run(
+        ["stash", "push", "--include-untracked", "-m", f"carry to {target}"],
+        cwd=cwd, check=False,
+    )
+    had_stash = (
+        stash_result.returncode == 0
+        and "No local changes" not in stash_result.stdout
+    )
+
+    try:
+        checkout(target, cwd=cwd)
+    except GitError:
+        if had_stash:
+            _run(["stash", "pop"], cwd=cwd, check=False)
+        raise
+
+    carried = False
+    if had_stash:
+        pop = _run(["stash", "pop"], cwd=cwd, check=False)
+        if pop.returncode == 0:
+            try:
+                carried = auto_commit(cwd=cwd, message=f"carry-over from {current}")
+            except GitError:
+                pass
+
+    return {
+        "status": "checked_out",
+        "branch": target,
+        "previous_branch": current,
+        "auto_committed": carried,
+    }
+
+
 def checkout_idea(idea_id: int, cwd: str | Path | None = None) -> dict:
     """Auto-commit current changes and checkout an idea's branch.
 
@@ -219,16 +265,33 @@ def _ensure_clean_checkout(branch: str, cwd: str | Path | None = None):
 
 
 def create_branch_from_merge(
-    new_branch: str, parent_branches: list[str], cwd: str | Path | None = None
+    new_branch: str, parent_branches: list[str], cwd: str | Path | None = None,
+    carry: bool = False,
 ) -> list[str] | None:
     """Create a new branch by merging multiple parent branches.
 
-    Auto-commits, checks out first parent, creates branch, merges the rest.
+    Auto-commits (or stashes when ``carry=True``), checks out first parent,
+    creates branch, merges the rest.  When ``carry=True`` any uncommitted
+    changes are stashed before the switch and popped+committed on *new_branch*
+    so they land there rather than on the originating branch.
     Returns None on success, or a list of conflicting file paths on failure.
     """
     original_branch = get_current_branch(cwd=cwd)
 
-    # Checkout first parent (commit/stash current changes first)
+    # Stash first so _ensure_clean_checkout finds a clean workspace and won't
+    # commit anything to the old branch.
+    had_stash = False
+    if carry and has_uncommitted_changes(cwd=cwd):
+        stash_result = _run(
+            ["stash", "push", "--include-untracked", "-m", f"carry to {new_branch}"],
+            cwd=cwd, check=False,
+        )
+        had_stash = (
+            stash_result.returncode == 0
+            and "No local changes" not in stash_result.stdout
+        )
+
+    # Checkout first parent (workspace is clean now)
     _ensure_clean_checkout(parent_branches[0], cwd=cwd)
     _run(["checkout", "-b", new_branch], cwd=cwd)
 
@@ -247,6 +310,17 @@ def create_branch_from_merge(
             _run(["merge", "--abort"], cwd=cwd, check=False)
             checkout(original_branch, cwd=cwd)
             _run(["branch", "-D", new_branch], cwd=cwd, check=False)
+            if had_stash:
+                _run(["stash", "pop"], cwd=cwd, check=False)
             return conflicts
+
+    # Pop carried changes onto new branch and commit them there
+    if had_stash:
+        pop = _run(["stash", "pop"], cwd=cwd, check=False)
+        if pop.returncode == 0:
+            try:
+                auto_commit(cwd=cwd, message=f"carry-over from {original_branch}")
+            except GitError:
+                pass
 
     return None

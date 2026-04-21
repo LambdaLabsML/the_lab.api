@@ -13,6 +13,7 @@ from ..deps import (
 from ..git_ops import (
     GitError,
     checkout_idea,
+    checkout_idea_carry,
     create_branch_from,
     create_branch_from_merge,
     get_current_branch,
@@ -80,9 +81,18 @@ def create_idea(req: NewIdeaRequest):
             create_branch_from(branch_name, parent["branch"], cwd=REPO_DIR)
         else:
             parent_branches = [store.get_idea(pid)["branch"] for pid in parent_ids]
-            conflicts = create_branch_from_merge(branch_name, parent_branches, cwd=REPO_DIR)
+            # carry=True: stash current changes, create merge branch, pop+commit there
+            conflicts = create_branch_from_merge(branch_name, parent_branches, cwd=REPO_DIR, carry=True)
             if conflicts is not None:
                 return {"status": "conflict", "conflicts": conflicts}
+            # create_branch_from_merge already checked out the new branch
+            store.save_idea(idea)
+            similar = store.find_similar_ideas(req.description)
+            similar = [s for s in similar if s["id"] != idea["id"]]
+            if similar:
+                idea["similar_ideas"] = similar
+            idea["checked_out"] = True
+            return idea
 
         store.save_idea(idea)
         similar = store.find_similar_ideas(req.description)
@@ -91,7 +101,8 @@ def create_idea(req: NewIdeaRequest):
             idea["similar_ideas"] = similar
         if req.auto_checkout:
             try:
-                checkout_idea(idea_id, cwd=REPO_DIR)
+                # carry: uncommitted changes land on new branch, not the old one
+                checkout_idea_carry(idea_id, cwd=REPO_DIR)
                 idea["checked_out"] = True
             except GitError:
                 idea["checked_out"] = False
@@ -557,7 +568,8 @@ def adopt_idea(idea_id: int, req: AdoptRequest | None = None):
             create_branch_from(branch_name, parent["branch"], cwd=REPO_DIR)
         else:
             parent_branches = [store.get_idea(pid)["branch"] for pid in parent_ids]
-            conflicts = create_branch_from_merge(branch_name, parent_branches, cwd=REPO_DIR)
+            # carry=True: uncommitted changes land on new branch, not the old one
+            conflicts = create_branch_from_merge(branch_name, parent_branches, cwd=REPO_DIR, carry=True)
             if conflicts is not None:
                 return {"status": "conflict", "conflicts": conflicts}
 
