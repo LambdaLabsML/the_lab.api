@@ -18,6 +18,7 @@ API_BASE = os.environ.get("THE_LAB_API_URL", "http://localhost:8000/api/v1")
 # Only expose these paths as MCP tools (keeps system prompt lean).
 # Format: (method, path) → tool_name override (or None for auto-name).
 INCLUDE = {
+    ("get",  "/api/v1/instructions"):              "get_instructions",
     ("get",  "/api/v1/orient"):                    "orient",
     ("get",  "/api/v1/leaderboard/search"):        "leaderboard_search",
     ("get",  "/api/v1/wait"):                      "wait_for_experiment",

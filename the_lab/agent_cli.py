@@ -197,10 +197,19 @@ def main():
 
     # Build the prompt argument for Claude
     if use_loop:
-        # /loop references the file so Claude re-reads it each iteration
-        agent_prompt = f"/loop {args.duration} {prompt_path.resolve()}"
+        # In loop mode, ask the model to re-read instructions each iteration
+        agent_prompt = f"/loop {args.duration} Please re-read the instructions provided by thelabapi (get_instructions tool) and continue working on the provided problem."
         print(f"Mode: loop (every {args.duration})", file=sys.stderr)
     else:
+        # Prepend a directive to call get_instructions first if MCP is available
+        if mcp_config:
+            preamble = "Please start by calling get_instructions() to load the current task and API reference, then proceed to work on the problem.\n\n"
+            # Write a new temp file with the preamble + original prompt content
+            original_content = prompt_path.read_text()
+            fd2, tmp2 = _tempfile.mkstemp(prefix="the-lab-prompt-", suffix=".md")
+            os.write(fd2, (preamble + original_content).encode())
+            os.close(fd2)
+            prompt_path = Path(tmp2)
         agent_prompt = str(prompt_path.resolve())
         print(f"Mode: single run", file=sys.stderr)
 

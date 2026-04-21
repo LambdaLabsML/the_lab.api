@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import HTMLResponse, StreamingResponse
@@ -33,6 +34,34 @@ from ..store import Store
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+# --- Instructions ---
+
+_PROMPT_API_PATH = Path(__file__).parent.parent / "PROMPT_api.md"
+
+
+@router.get("/api/v1/instructions")
+def get_instructions():
+    """Return the combined project instructions (PROMPT.md + PROMPT_api.md).
+
+    PROMPT.md is read from the repo root (project-specific task description).
+    PROMPT_api.md ships with the_lab and documents all available API tools.
+
+    Use this at the start of a session (or each loop iteration) to get a
+    fresh copy of the current task and API reference.
+
+    Example:
+        GET /api/v1/instructions
+        -> {"content": "# Problem\\n\\n...\\n\\n---\\n\\n# Lab API\\n\\n..."}
+    """
+    parts = []
+    prompt_path = REPO_DIR / "PROMPT.md"
+    if prompt_path.exists():
+        parts.append(f"# Problem\n\n{prompt_path.read_text().strip()}")
+    if _PROMPT_API_PATH.exists():
+        parts.append(_PROMPT_API_PATH.read_text().strip())
+    return {"content": "\n\n---\n\n".join(parts)}
 
 
 # --- Current task ---
