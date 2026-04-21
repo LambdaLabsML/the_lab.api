@@ -31,6 +31,7 @@ export function DetailPanel() {
   // Output lightbox
   const [outputExp, setOutputExp] = useState<Experiment | null>(null);
   const [outputContent, setOutputContent] = useState<string | null>(null);
+  const [outputBasePath, setOutputBasePath] = useState("");
   const [outputLoading, setOutputLoading] = useState(false);
   const [outputFollowing, setOutputFollowing] = useState(true);
   const outputBodyRef = useRef<HTMLDivElement>(null);
@@ -141,7 +142,7 @@ export function DetailPanel() {
 
   function fetchOutputContent(exp: Experiment) {
     getExperimentOutput(exp.label || exp.id)
-      .then((data) => { setOutputContent(data.output); setOutputLoading(false); })
+      .then((data) => { setOutputContent(data.output); setOutputBasePath(data.base_path || ""); setOutputLoading(false); })
       .catch(() => { setOutputContent("(output file not found)"); setOutputLoading(false); });
   }
 
@@ -399,7 +400,7 @@ export function DetailPanel() {
             outputContent.startsWith("(") ? (
               <div style={{ color: "#8b949e", fontStyle: "italic" }}>{outputContent}</div>
             ) : (
-              <div class="md-output" dangerouslySetInnerHTML={{ __html: renderMarkdown(outputContent) }} />
+              <div class="md-output" dangerouslySetInnerHTML={{ __html: renderMarkdown(outputContent, outputBasePath) }} />
             )
           )}
         </Lightbox>
@@ -462,7 +463,12 @@ function colorizeScript(script: string): string {
     .join("\n");
 }
 
-function inlineMd(raw: string): string {
+function resolveUrl(url: string, basePath: string): string {
+  if (!url || /^(https?:|data:|\/)/i.test(url)) return url;
+  return `/api/v1/files/${basePath}/${url}`;
+}
+
+function inlineMd(raw: string, basePath = ""): string {
   const saved: string[] = [];
   const save = (html: string) => { const idx = saved.length; saved.push(html); return `\x00S${idx}\x00`; };
 
@@ -470,9 +476,9 @@ function inlineMd(raw: string): string {
   let s = raw
     .replace(/`([^`]+)`/g, (_, code) => save(`<code class="md-ic">${escapeHtml(code)}</code>`))
     .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_, alt, url) =>
-      save(`<img src="${escapeHtml(url)}" alt="${escapeHtml(alt)}" class="md-img" />`))
+      save(`<img src="${escapeHtml(resolveUrl(url, basePath))}" alt="${escapeHtml(alt)}" class="md-img" />`))
     .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, text, url) =>
-      save(`<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(text)}</a>`));
+      save(`<a href="${escapeHtml(resolveUrl(url, basePath))}" target="_blank" rel="noopener noreferrer">${escapeHtml(text)}</a>`));
 
   // Escape remaining HTML, then apply text formatting
   s = escapeHtml(s);
@@ -485,7 +491,7 @@ function inlineMd(raw: string): string {
   return s;
 }
 
-function renderMarkdown(md: string): string {
+function renderMarkdown(md: string, basePath = ""): string {
   // Extract fenced code blocks first
   const blocks: string[] = [];
   let s = md.replace(/```[^\n]*\n?([\s\S]*?)```/g, (_, code) => {
@@ -511,7 +517,7 @@ function renderMarkdown(md: string): string {
     // Headings
     const hm = line.match(/^(#{1,3})\s+(.*)/);
     if (hm) {
-      out.push(`<h${hm[1].length} class="md-h${hm[1].length}">${inlineMd(hm[2])}</h${hm[1].length}>`);
+      out.push(`<h${hm[1].length} class="md-h${hm[1].length}">${inlineMd(hm[2], basePath)}</h${hm[1].length}>`);
       i++;
       continue;
     }
@@ -528,7 +534,7 @@ function renderMarkdown(md: string): string {
       const items: string[] = [];
       while (i < lines.length && (/^[-*+]\s/.test(lines[i]) || /^\d+\.\s/.test(lines[i]))) {
         const text = lines[i].replace(/^[-*+]\s/, "").replace(/^\d+\.\s/, "");
-        items.push(`<li>${inlineMd(text)}</li>`);
+        items.push(`<li>${inlineMd(text, basePath)}</li>`);
         i++;
       }
       out.push(`<ul class="md-ul">${items.join("")}</ul>`);
@@ -543,7 +549,7 @@ function renderMarkdown(md: string): string {
     }
 
     // Paragraph
-    out.push(`<p class="md-p">${inlineMd(line)}</p>`);
+    out.push(`<p class="md-p">${inlineMd(line, basePath)}</p>`);
     i++;
   }
 

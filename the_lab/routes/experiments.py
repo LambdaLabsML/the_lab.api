@@ -4,7 +4,10 @@ from __future__ import annotations
 import json
 import os
 
+import mimetypes
+
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import FileResponse
 
 from ..deps import (
     store,
@@ -526,6 +529,28 @@ def compare_curves(
     return {"key": key, "experiments": result}
 
 
+# --- Static file serving for output.md image references ---
+
+@router.get("/files/{file_path:path}", include_in_schema=False)
+def serve_repo_file(file_path: str):
+    """Serve a file from the repository root directory.
+
+    Used by the dashboard to load images embedded in output.md files.
+    Path traversal outside the repo root is rejected with 403.
+    """
+    try:
+        full_path = (REPO_DIR / file_path).resolve()
+    except Exception:
+        raise HTTPException(400, "invalid path")
+    repo_root = REPO_DIR.resolve()
+    if not str(full_path).startswith(str(repo_root) + "/") and full_path != repo_root:
+        raise HTTPException(403, "access denied")
+    if not full_path.exists() or not full_path.is_file():
+        raise HTTPException(404, "file not found")
+    content_type, _ = mimetypes.guess_type(str(full_path))
+    return FileResponse(str(full_path), media_type=content_type or "application/octet-stream")
+
+
 # --- Parameterized experiment routes (MUST come after literal paths) ---
 
 @router.get("/experiments/{exp_ref}")
@@ -750,20 +775,21 @@ def get_experiment_script(exp_ref: str):
 def get_experiment_output(exp_ref: str):
     """Read the output.md file written by an experiment script.
 
-    Returns the markdown content of the script's output file (``<script>.output.md``),
-    which scripts write to summarise their results. Returns 404 if the file does not
-    exist yet (experiment still running or did not produce output).
+    Returns the markdown content plus ``base_path`` (directory of the file
+    relative to the repo root) so the caller can resolve relative image URLs
+    via ``GET /api/v1/files/<base_path>/<relative_path>``.
 
     Example:
         GET /api/v1/experiments/1.2/output
-        -> {"output": "# Results\\n\\nScore: 0.91\\n"}
+        -> {"output": "# Results\\n", "base_path": ".the_lab/experiments/1"}
     """
     exp = _resolve_exp(exp_ref)
     script_path = REPO_DIR / exp["script"]
     output_path = script_path.parent / (script_path.stem + ".output.md")
     if not output_path.exists():
         raise HTTPException(404, "output file not found")
-    return {"output": output_path.read_text()}
+    base_path = str(output_path.parent.relative_to(REPO_DIR))
+    return {"output": output_path.read_text(), "base_path": base_path}
 
 
 @router.get("/experiments/{exp_ref}/progress")
