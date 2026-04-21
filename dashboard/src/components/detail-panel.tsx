@@ -719,7 +719,7 @@ function ExperimentItem({
     <div class="exp-item" data-exp-label={exp.label || exp.id}>
       <div class="exp-header">
         <span class="exp-id" style={{ cursor: "pointer" }} onClick={() => navigateFromExperiment(exp.idea_id)} title="Scroll to this idea in graph + highlight in charts">
-          exp/{exp.label || exp.id}{exp.label && exp.id !== exp.seq ? ` (legacy: #${exp.id})` : ""}
+          exp/{exp.label || exp.id}
         </span>
         <span dangerouslySetInnerHTML={{ __html: badgeHtml(exp.status, progress?.pct_complete ?? progress?.pct) }} />
       </div>
