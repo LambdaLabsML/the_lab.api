@@ -328,11 +328,11 @@ export function DetailPanel() {
               {(notes.length > 0 || experiments.length > 0) && (
                 <div class="detail-view-controls">
                   <button
-                    class={`view-ctrl-btn${detailTimeline.value ? " vc-active" : ""}`}
+                    class="view-ctrl-btn vc-active"
                     onClick={() => { detailTimeline.value = !detailTimeline.value; }}
-                    title="Interleave notes and experiments by time"
+                    title={detailTimeline.value ? "Switch to grouped view" : "Switch to timeline view"}
                   >
-                    ⊞ Timeline
+                    {detailTimeline.value ? "⊞ Timeline" : "⊞ Grouped"}
                   </button>
                   <button
                     class="view-ctrl-btn"

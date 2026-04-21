@@ -102,9 +102,9 @@ export const filterBarOpen = useSetting("filterBarOpen", true);
 export const dashboardLayout = useSetting<object | null>("dashboardLayout", null);
 
 /** Whether the detail panel shows notes+experiments interleaved in a timeline. */
-export const detailTimeline = useSetting("detailTimeline", false);
+export const detailTimeline = useSetting("detailTimeline", true);
 /** When true, newest items appear first in the detail panel. */
-export const detailSortNewest = useSetting("detailSortNewest", false);
+export const detailSortNewest = useSetting("detailSortNewest", true);
 
 // ---------------------------------------------------------------------------
 // Server-provided defaults from GET /api/v1/config
