@@ -746,6 +746,26 @@ def get_experiment_script(exp_ref: str):
     return {"script": script_path.read_text()}
 
 
+@router.get("/experiments/{exp_ref}/output")
+def get_experiment_output(exp_ref: str):
+    """Read the output.md file written by an experiment script.
+
+    Returns the markdown content of the script's output file (``<script>.output.md``),
+    which scripts write to summarise their results. Returns 404 if the file does not
+    exist yet (experiment still running or did not produce output).
+
+    Example:
+        GET /api/v1/experiments/1.2/output
+        -> {"output": "# Results\\n\\nScore: 0.91\\n"}
+    """
+    exp = _resolve_exp(exp_ref)
+    script_path = REPO_DIR / exp["script"]
+    output_path = script_path.parent / (script_path.stem + ".output.md")
+    if not output_path.exists():
+        raise HTTPException(404, "output file not found")
+    return {"output": output_path.read_text()}
+
+
 @router.get("/experiments/{exp_ref}/progress")
 def get_experiment_progress(exp_ref: str):
     """Read script-reported progress for an experiment.

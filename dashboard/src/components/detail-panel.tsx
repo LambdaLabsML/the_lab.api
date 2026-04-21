@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from "preact/hooks";
 import { selectedIdea, selectedMetric } from "../state/settings";
 import { scrollToExperiment, runningProgress } from "../state/signals";
-import { getIdea, getExperimentProgress, getExperimentLog, getExperimentScript, getIdeaDiff } from "../state/api";
+import { getIdea, getExperimentProgress, getExperimentLog, getExperimentScript, getExperimentOutput, getIdeaDiff } from "../state/api";
 import { formatTime, badgeHtml, escapeHtml } from "../lib/format";
 import { navigateToIdea, navigateFromExperiment } from "../lib/navigate";
 import { Lightbox } from "./lightbox";
@@ -15,13 +15,28 @@ export function DetailPanel() {
   const pollRef = useRef<number | null>(null);
   const fetchRef = useRef(0);
 
-  // Lightbox state
+  // Log lightbox
   const [logExp, setLogExp] = useState<Experiment | null>(null);
   const [logContent, setLogContent] = useState<string | null>(null);
   const [logLoading, setLogLoading] = useState(false);
+  const [logFollowing, setLogFollowing] = useState(true);
+  const logBodyRef = useRef<HTMLDivElement>(null);
+  const logPollRef = useRef<number | null>(null);
+
+  // Script lightbox
   const [scriptExp, setScriptExp] = useState<Experiment | null>(null);
   const [scriptContent, setScriptContent] = useState<string | null>(null);
   const [scriptLoading, setScriptLoading] = useState(false);
+
+  // Output lightbox
+  const [outputExp, setOutputExp] = useState<Experiment | null>(null);
+  const [outputContent, setOutputContent] = useState<string | null>(null);
+  const [outputLoading, setOutputLoading] = useState(false);
+  const [outputFollowing, setOutputFollowing] = useState(true);
+  const outputBodyRef = useRef<HTMLDivElement>(null);
+  const outputPollRef = useRef<number | null>(null);
+
+  // Diff lightbox
   const [diffOpen, setDiffOpen] = useState(false);
   const [diffUseMain, setDiffUseMain] = useState(false);
   const [diffData, setDiffData] = useState<{ stat: string; diff: string } | null>(null);
@@ -55,7 +70,6 @@ export function DetailPanel() {
   useEffect(() => {
     const label = scrollToExperiment.value;
     if (!label) return;
-    // Wait a tick for DOM to render
     requestAnimationFrame(() => {
       const el = document.querySelector(`[data-exp-label="${label}"]`);
       if (el) {
@@ -79,7 +93,6 @@ export function DetailPanel() {
         getExperimentProgress(label).then((data) => {
           if (data.progress) {
             setProgressData((prev) => ({ ...prev, [String(exp.id)]: data.progress as Record<string, any> }));
-            // Update global signal so graph + table stay in sync
             const pct = (data.progress as any).pct_complete ?? (data.progress as any).pct;
             if (typeof pct === "number") {
               runningProgress.value = { ...runningProgress.value, [label]: pct };
@@ -93,18 +106,70 @@ export function DetailPanel() {
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [idea]);
 
-  // Log lightbox
+  // --- Log ---
+
+  function fetchLogContent(exp: Experiment) {
+    getExperimentLog(exp.label || exp.id)
+      .then((data) => { setLogContent(data.log); setLogLoading(false); })
+      .catch(() => { setLogContent("Failed to load log."); setLogLoading(false); });
+  }
+
+  // Auto-refresh log when running
+  useEffect(() => {
+    if (logPollRef.current) { clearInterval(logPollRef.current); logPollRef.current = null; }
+    if (!logExp || logExp.status !== "running") return;
+    logPollRef.current = window.setInterval(() => fetchLogContent(logExp), 3000);
+    return () => { if (logPollRef.current) { clearInterval(logPollRef.current); logPollRef.current = null; } };
+  }, [logExp]);
+
+  // Auto-scroll log when following and content updates
+  useEffect(() => {
+    if (logFollowing && logBodyRef.current) {
+      logBodyRef.current.scrollTop = logBodyRef.current.scrollHeight;
+    }
+  }, [logContent]);
+
   function openLog(exp: Experiment) {
     setLogExp(exp);
     setLogContent(null);
     setLogLoading(true);
-    getExperimentLog(exp.label || exp.id)
-      .then((data) => setLogContent(data.log))
-      .catch(() => setLogContent("Failed to load log"))
-      .finally(() => setLogLoading(false));
+    setLogFollowing(true);
+    fetchLogContent(exp);
   }
 
-  // Script lightbox
+  // --- Output ---
+
+  function fetchOutputContent(exp: Experiment) {
+    getExperimentOutput(exp.label || exp.id)
+      .then((data) => { setOutputContent(data.output); setOutputLoading(false); })
+      .catch(() => { setOutputContent("(output file not found)"); setOutputLoading(false); });
+  }
+
+  // Auto-refresh output when running
+  useEffect(() => {
+    if (outputPollRef.current) { clearInterval(outputPollRef.current); outputPollRef.current = null; }
+    if (!outputExp || outputExp.status !== "running") return;
+    outputPollRef.current = window.setInterval(() => fetchOutputContent(outputExp), 5000);
+    return () => { if (outputPollRef.current) { clearInterval(outputPollRef.current); outputPollRef.current = null; } };
+  }, [outputExp]);
+
+  // Auto-scroll output when following and content updates
+  useEffect(() => {
+    if (outputFollowing && outputBodyRef.current) {
+      outputBodyRef.current.scrollTop = outputBodyRef.current.scrollHeight;
+    }
+  }, [outputContent]);
+
+  function openOutput(exp: Experiment) {
+    setOutputExp(exp);
+    setOutputContent(null);
+    setOutputLoading(true);
+    setOutputFollowing(true);
+    fetchOutputContent(exp);
+  }
+
+  // --- Script ---
+
   function openScript(exp: Experiment) {
     setScriptExp(exp);
     setScriptContent(null);
@@ -115,7 +180,8 @@ export function DetailPanel() {
       .finally(() => setScriptLoading(false));
   }
 
-  // Diff lightbox
+  // --- Diff ---
+
   function openDiff(useMain = false) {
     setDiffOpen(true);
     setDiffUseMain(useMain);
@@ -246,6 +312,7 @@ export function DetailPanel() {
                       progress={progressData[String(exp.id)]}
                       onShowLog={() => openLog(exp)}
                       onShowScript={() => openScript(exp)}
+                      onShowOutput={() => openOutput(exp)}
                     />
                   ))}
                 </div>
@@ -260,6 +327,26 @@ export function DetailPanel() {
         <Lightbox
           title={`Log — exp/${logExp.label || logExp.id}: ${logExp.description}`}
           onClose={() => setLogExp(null)}
+          bodyRef={logBodyRef}
+          onBodyScroll={(e) => {
+            const el = e.currentTarget as HTMLDivElement;
+            const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
+            if (!atBottom && logFollowing) setLogFollowing(false);
+          }}
+          toolbar={
+            <button
+              class={`follow-btn${logFollowing ? " follow-active" : ""}`}
+              onClick={() => {
+                const next = !logFollowing;
+                setLogFollowing(next);
+                if (next && logBodyRef.current) {
+                  logBodyRef.current.scrollTop = logBodyRef.current.scrollHeight;
+                }
+              }}
+            >
+              {logFollowing ? "↓ Following" : "↓ Follow"}
+            </button>
+          }
         >
           {logLoading && <div style={{ color: "#8b949e" }}>Loading...</div>}
           {logContent !== null && <pre>{logContent || "(empty)"}</pre>}
@@ -275,6 +362,45 @@ export function DetailPanel() {
           {scriptLoading && <div style={{ color: "#8b949e" }}>Loading...</div>}
           {scriptContent !== null && (
             <pre dangerouslySetInnerHTML={{ __html: colorizeScript(scriptContent || "(empty)") }} />
+          )}
+        </Lightbox>
+      )}
+
+      {/* Output Lightbox */}
+      {outputExp && (
+        <Lightbox
+          title={`Output — exp/${outputExp.label || outputExp.id}`}
+          onClose={() => setOutputExp(null)}
+          bodyRef={outputBodyRef}
+          onBodyScroll={(e) => {
+            const el = e.currentTarget as HTMLDivElement;
+            const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
+            if (!atBottom && outputFollowing) setOutputFollowing(false);
+          }}
+          toolbar={
+            outputExp.status === "running" ? (
+              <button
+                class={`follow-btn${outputFollowing ? " follow-active" : ""}`}
+                onClick={() => {
+                  const next = !outputFollowing;
+                  setOutputFollowing(next);
+                  if (next && outputBodyRef.current) {
+                    outputBodyRef.current.scrollTop = outputBodyRef.current.scrollHeight;
+                  }
+                }}
+              >
+                {outputFollowing ? "↓ Following" : "↓ Follow"}
+              </button>
+            ) : undefined
+          }
+        >
+          {outputLoading && <div style={{ color: "#8b949e" }}>Loading...</div>}
+          {outputContent !== null && (
+            outputContent.startsWith("(") ? (
+              <div style={{ color: "#8b949e", fontStyle: "italic" }}>{outputContent}</div>
+            ) : (
+              <div class="md-output" dangerouslySetInnerHTML={{ __html: renderMarkdown(outputContent) }} />
+            )
           )}
         </Lightbox>
       )}
@@ -325,23 +451,101 @@ function colorizeScript(script: string): string {
     .split("\n")
     .map((line) => {
       const esc = escapeHtml(line);
-      // Shebang
       if (line.startsWith("#!")) return `<span class="sh-shebang">${esc}</span>`;
-      // Comments
       const trimmed = line.trimStart();
       if (trimmed.startsWith("#")) return `<span class="sh-comment">${esc}</span>`;
-      // set directives
       if (trimmed.startsWith("set ")) return `<span class="sh-directive">${esc}</span>`;
-      // Variable assignments (KEY=value)
       if (/^\s*[A-Z_][A-Z0-9_]*=/.test(line)) return `<span class="sh-var">${esc}</span>`;
-      // export/source/cd
       if (/^\s*(export|source|cd)\s/.test(line)) return `<span class="sh-builtin">${esc}</span>`;
       return esc;
     })
     .join("\n");
 }
 
-/** Color for running experiment status sub-headline */
+function inlineMd(raw: string): string {
+  const codes: string[] = [];
+  let s = raw.replace(/`([^`]+)`/g, (_, code) => {
+    const idx = codes.length;
+    codes.push(`<code class="md-ic">${escapeHtml(code)}</code>`);
+    return `\x00C${idx}\x00`;
+  });
+  s = escapeHtml(s);
+  s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  s = s.replace(/__([^_]+)__/g, "<strong>$1</strong>");
+  s = s.replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
+  s = s.replace(/_([^_\n]+)_/g, "<em>$1</em>");
+  s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+  codes.forEach((code, idx) => { s = s.replace(`\x00C${idx}\x00`, code); });
+  return s;
+}
+
+function renderMarkdown(md: string): string {
+  // Extract fenced code blocks first
+  const blocks: string[] = [];
+  let s = md.replace(/```[^\n]*\n?([\s\S]*?)```/g, (_, code) => {
+    const idx = blocks.length;
+    blocks.push(`<pre class="md-code"><code>${escapeHtml(code.trimEnd())}</code></pre>`);
+    return `\x00B${idx}\x00`;
+  });
+
+  const out: string[] = [];
+  const lines = s.split("\n");
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+
+    // Restore code block placeholder
+    if (/^\x00B\d+\x00$/.test(line.trim())) {
+      out.push(line.trim());
+      i++;
+      continue;
+    }
+
+    // Headings
+    const hm = line.match(/^(#{1,3})\s+(.*)/);
+    if (hm) {
+      out.push(`<h${hm[1].length} class="md-h${hm[1].length}">${inlineMd(hm[2])}</h${hm[1].length}>`);
+      i++;
+      continue;
+    }
+
+    // Horizontal rule
+    if (/^[-*]{3,}$/.test(line.trim())) {
+      out.push('<hr class="md-hr" />');
+      i++;
+      continue;
+    }
+
+    // List
+    if (/^[-*+]\s/.test(line) || /^\d+\.\s/.test(line)) {
+      const items: string[] = [];
+      while (i < lines.length && (/^[-*+]\s/.test(lines[i]) || /^\d+\.\s/.test(lines[i]))) {
+        const text = lines[i].replace(/^[-*+]\s/, "").replace(/^\d+\.\s/, "");
+        items.push(`<li>${inlineMd(text)}</li>`);
+        i++;
+      }
+      out.push(`<ul class="md-ul">${items.join("")}</ul>`);
+      continue;
+    }
+
+    // Empty line
+    if (line.trim() === "") {
+      out.push('<div class="md-gap"></div>');
+      i++;
+      continue;
+    }
+
+    // Paragraph
+    out.push(`<p class="md-p">${inlineMd(line)}</p>`);
+    i++;
+  }
+
+  let html = out.join("\n");
+  blocks.forEach((block, idx) => { html = html.replace(`\x00B${idx}\x00`, block); });
+  return html;
+}
+
 const STATUS_COLORS: Record<string, string> = {
   running: "#d29922",
   completed: "#3fb950",
@@ -355,11 +559,13 @@ function ExperimentItem({
   progress,
   onShowLog,
   onShowScript,
+  onShowOutput,
 }: {
   exp: Experiment;
   progress?: Record<string, any>;
   onShowLog: () => void;
   onShowScript: () => void;
+  onShowOutput?: () => void;
 }) {
   const statusColor = STATUS_COLORS[exp.status] || "#8b949e";
   const metricKey = selectedMetric.value;
@@ -377,7 +583,6 @@ function ExperimentItem({
       {exp.tags && exp.tags.length > 0 && (
         <div>{exp.tags.map((t) => <span key={t} class="tag-pill">{t}</span>)}</div>
       )}
-      {/* Progress: show JsonView when data is available, otherwise a loading placeholder for running exps */}
       {progress && Object.keys(progress).length > 0 ? (
         <JsonView data={progress} label="progress" labelColor={statusColor} startCollapsed />
       ) : exp.status === "running" ? (
@@ -410,6 +615,9 @@ function ExperimentItem({
         );
       })()}
       <div class="exp-actions">
+        {exp.has_output && onShowOutput && (
+          <button class="detail-expand-btn" onClick={onShowOutput}>Show output</button>
+        )}
         <button class="detail-expand-btn" onClick={onShowLog}>Show log</button>
         <button class="detail-expand-btn" onClick={onShowScript}>Show script</button>
       </div>

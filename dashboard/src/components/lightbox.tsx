@@ -5,11 +5,12 @@ interface LightboxProps {
   title: string;
   onClose: () => void;
   children: ComponentChildren;
-  /** Optional toolbar rendered to the right of the title */
   toolbar?: ComponentChildren;
+  bodyRef?: { current: HTMLDivElement | null };
+  onBodyScroll?: (e: UIEvent) => void;
 }
 
-export function Lightbox({ title, onClose, children, toolbar }: LightboxProps) {
+export function Lightbox({ title, onClose, children, toolbar, bodyRef, onBodyScroll }: LightboxProps) {
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") onClose();
@@ -32,7 +33,7 @@ export function Lightbox({ title, onClose, children, toolbar }: LightboxProps) {
           {toolbar && <span class="lightbox-toolbar">{toolbar}</span>}
           <span class="lightbox-close" onClick={onClose}>&times;</span>
         </div>
-        <div class="lightbox-body">
+        <div class="lightbox-body" ref={bodyRef} onScroll={onBodyScroll as any}>
           {children}
         </div>
       </div>

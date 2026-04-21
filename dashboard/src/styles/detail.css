@@ -174,6 +174,32 @@
   margin: 0;
 }
 
+/* Follow toggle button (log/output lightbox toolbar) */
+.follow-btn {
+  background: none; border: 1px solid #30363d; color: #8b949e;
+  border-radius: 4px; padding: 2px 8px; font-size: 10px; cursor: pointer;
+  font-family: inherit; white-space: nowrap;
+}
+.follow-btn:hover { color: #c9d1d9; border-color: #8b949e; }
+.follow-btn.follow-active { border-color: #3fb950; color: #3fb950; }
+
+/* Markdown output rendering inside lightbox */
+.md-output { color: #c9d1d9; line-height: 1.6; font-size: 12px; }
+.md-output .md-h1 { font-size: 15px; color: #58a6ff; margin: 10px 0 6px; border-bottom: 1px solid #21262d; padding-bottom: 4px; font-weight: 600; }
+.md-output .md-h2 { font-size: 13px; color: #79c0ff; margin: 8px 0 4px; font-weight: 600; }
+.md-output .md-h3 { font-size: 12px; color: #d2a8ff; margin: 6px 0 3px; font-weight: 600; }
+.md-output .md-p { margin: 2px 0 6px; }
+.md-output .md-gap { height: 4px; }
+.md-output .md-ul { margin: 2px 0 6px; padding-left: 18px; }
+.md-output .md-ul li { margin-bottom: 2px; }
+.md-output .md-hr { border: none; border-top: 1px solid #30363d; margin: 10px 0; }
+.md-output .md-code { background: #0d1117; border: 1px solid #21262d; border-radius: 4px; padding: 8px 10px; font-size: 11px; overflow-x: auto; white-space: pre; word-break: normal; margin: 6px 0; }
+.md-output .md-ic { background: #21262d; padding: 1px 4px; border-radius: 3px; font-size: 11px; color: #a5d6ff; font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; }
+.md-output a { color: #58a6ff; text-decoration: none; }
+.md-output a:hover { text-decoration: underline; }
+.md-output strong { color: #e6edf3; font-weight: 600; }
+.md-output em { color: #d2a8ff; font-style: italic; }
+
 /* Mobile: detail panel as overlay */
 @media (max-width: 800px) {
   #detail-panel {

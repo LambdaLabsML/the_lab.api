@@ -116,6 +116,13 @@ export async function getExperimentScript(
   return fetchJson<{ script: string }>(`/api/v1/experiments/${expRef}/script`);
 }
 
+/** GET /api/v1/experiments/:expRef/output */
+export async function getExperimentOutput(
+  expRef: string | number,
+): Promise<{ output: string }> {
+  return fetchJson<{ output: string }>(`/api/v1/experiments/${expRef}/output`);
+}
+
 /** GET /api/v1/experiments/:expRef/progress */
 export async function getExperimentProgress(
   expRef: string | number,

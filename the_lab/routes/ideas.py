@@ -279,7 +279,13 @@ def get_idea(idea_id: int, notes: str | None = None):
     idea = store.get_idea(idea_id)
     if not idea:
         raise HTTPException(404, "idea not found")
-    idea["experiments"] = store.list_experiments(idea_id)
+    exps = store.list_experiments(idea_id)
+    for exp in exps:
+        if exp.get("script"):
+            script_path = REPO_DIR / exp["script"]
+            output_path = script_path.parent / (script_path.stem + ".output.md")
+            exp["has_output"] = output_path.exists()
+    idea["experiments"] = exps
     if notes == "all":
         idea["notes"] = store.get_notes(idea_id, levels=Store.ALL_LEVELS)
     else:

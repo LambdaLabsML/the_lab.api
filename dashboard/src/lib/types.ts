@@ -47,6 +47,8 @@ export interface BacklogResponse {
 export interface Experiment {
   id: number;
   idea_id: number;
+  seq?: number;
+  label?: string;
   description: string;
   status: string;          // 'running' | 'completed' | 'failed' | 'cancelled' | 'pending'
   idea_status?: string;
@@ -58,6 +60,7 @@ export interface Experiment {
   finished_at?: string;
   created_at?: string;
   runtime?: string;
+  has_output?: boolean;
   /** Synthetic flag added by loadChartData for running experiments */
   _running?: boolean;
 }
