@@ -8,12 +8,34 @@ import { Lightbox } from "./lightbox";
 import { JsonView } from "./json-view";
 import type { IdeaDetail, Experiment, Note } from "../lib/types";
 
+// ---------------------------------------------------------------------------
+// URL hash helpers — encode/decode lightbox state as shareable deep links.
+// Format: #idea=5&exp=exp001&view=log  (view: log | script | output | diff)
+// ---------------------------------------------------------------------------
+
+function parseHash(): Record<string, string> {
+  const h = window.location.hash.slice(1);
+  if (!h) return {};
+  try { return Object.fromEntries(new URLSearchParams(h)); } catch { return {}; }
+}
+
+function setHash(params: Record<string, string | number | null>) {
+  const next = parseHash();
+  for (const [k, v] of Object.entries(params)) {
+    if (v === null) delete next[k];
+    else next[k] = String(v);
+  }
+  const qs = new URLSearchParams(next).toString();
+  history.replaceState(null, "", qs ? `#${qs}` : location.pathname + location.search);
+}
+
 export function DetailPanel() {
   const ideaId = selectedIdea.value;
   const [idea, setIdea] = useState<IdeaDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const pollRef = useRef<number | null>(null);
   const fetchRef = useRef(0);
+  const hashHandledForIdea = useRef<number | null>(null);
 
   // Log lightbox
   const [logExp, setLogExp] = useState<Experiment | null>(null);
@@ -45,6 +67,27 @@ export function DetailPanel() {
 
   // Progress data per experiment (keyed by exp id)
   const [progressData, setProgressData] = useState<Record<string, Record<string, any>>>({});
+
+  // On mount: read hash and navigate to the encoded idea
+  useEffect(() => {
+    const h = parseHash();
+    if (h.idea) selectedIdea.value = Number(h.idea);
+  }, []);
+
+  // Once an idea loads, auto-open the lightbox encoded in the hash (first time only per idea)
+  useEffect(() => {
+    if (!idea || hashHandledForIdea.current === idea.id) return;
+    hashHandledForIdea.current = idea.id;
+    const h = parseHash();
+    if (!h.view || Number(h.idea) !== idea.id) return;
+    if (h.view === "diff") { openDiff(false); return; }
+    if (!h.exp) return;
+    const exp = idea.experiments?.find(e => (e.label || String(e.id)) === h.exp);
+    if (!exp) return;
+    if (h.view === "log") openLog(exp);
+    else if (h.view === "script") openScript(exp);
+    else if (h.view === "output") openOutput(exp);
+  }, [idea]);
 
   // Fetch idea data on selection change + poll every 10s for updates
   useEffect(() => {
@@ -136,6 +179,7 @@ export function DetailPanel() {
     setLogLoading(true);
     setLogFollowing(true);
     fetchLogContent(exp);
+    setHash({ idea: ideaId, exp: exp.label || exp.id, view: "log" });
   }
 
   // --- Output ---
@@ -167,6 +211,7 @@ export function DetailPanel() {
     setOutputLoading(true);
     setOutputFollowing(true);
     fetchOutputContent(exp);
+    setHash({ idea: ideaId, exp: exp.label || exp.id, view: "output" });
   }
 
   // --- Script ---
@@ -179,6 +224,7 @@ export function DetailPanel() {
       .then((data) => setScriptContent(data.script))
       .catch(() => setScriptContent("Failed to load script"))
       .finally(() => setScriptLoading(false));
+    setHash({ idea: ideaId, exp: exp.label || exp.id, view: "script" });
   }
 
   // --- Diff ---
@@ -187,6 +233,7 @@ export function DetailPanel() {
     setDiffOpen(true);
     setDiffUseMain(useMain);
     loadDiff(useMain);
+    setHash({ idea: ideaId, view: "diff", exp: null });
   }
 
   function loadDiff(useMain: boolean) {
@@ -414,7 +461,7 @@ export function DetailPanel() {
       {logExp && (
         <Lightbox
           title={`Log — exp/${logExp.label || logExp.id}: ${logExp.description}`}
-          onClose={() => setLogExp(null)}
+          onClose={() => { setLogExp(null); setHash({ view: null, exp: null }); }}
           bodyRef={logBodyRef}
           onBodyScroll={(e) => {
             const el = e.currentTarget as HTMLDivElement;
@@ -445,7 +492,7 @@ export function DetailPanel() {
       {scriptExp && (
         <Lightbox
           title={`Script — exp/${scriptExp.label || scriptExp.id}`}
-          onClose={() => setScriptExp(null)}
+          onClose={() => { setScriptExp(null); setHash({ view: null, exp: null }); }}
         >
           {scriptLoading && <div style={{ color: "#8b949e" }}>Loading...</div>}
           {scriptContent !== null && (
@@ -458,7 +505,7 @@ export function DetailPanel() {
       {outputExp && (
         <Lightbox
           title={`Output — exp/${outputExp.label || outputExp.id}`}
-          onClose={() => setOutputExp(null)}
+          onClose={() => { setOutputExp(null); setHash({ view: null, exp: null }); }}
           bodyRef={outputBodyRef}
           onBodyScroll={(e) => {
             const el = e.currentTarget as HTMLDivElement;
@@ -495,7 +542,7 @@ export function DetailPanel() {
       {diffOpen && idea && (
         <Lightbox
           title={`Diff — ${idea.branch}`}
-          onClose={() => setDiffOpen(false)}
+          onClose={() => { setDiffOpen(false); setHash({ view: null, exp: null }); }}
           toolbar={
             <label style={{ cursor: "pointer" }}>
               <input type="checkbox" checked={diffUseMain} onChange={toggleDiffBase} />
