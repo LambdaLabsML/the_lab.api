@@ -288,6 +288,15 @@
 .md-output strong { color: #e6edf3; font-weight: 600; }
 .md-output em { color: #d2a8ff; font-style: italic; }
 .md-output .md-img { max-width: 100%; display: block; margin: 8px 0; border-radius: 4px; }
+.md-output details { margin: 6px 0; border: 1px solid #30363d; border-radius: 4px; background: #0d1117; padding: 0; }
+.md-output details[open] { padding-bottom: 8px; }
+.md-output summary { cursor: pointer; padding: 6px 10px; color: #8b949e; font-size: 11px; user-select: none; list-style: none; }
+.md-output summary::-webkit-details-marker { display: none; }
+.md-output summary::before { content: "▶ "; font-size: 9px; }
+.md-output details[open] summary::before { content: "▼ "; }
+.md-output details > :not(summary) { padding: 0 10px; }
+.md-output details p { margin: 4px 0; }
+.md-output details pre { margin: 6px 0; }
 
 /* Mobile: detail panel as overlay */
 @media (max-width: 800px) {

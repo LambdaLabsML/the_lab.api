@@ -623,6 +623,15 @@ function inlineMd(raw: string, basePath = ""): string {
   return s;
 }
 
+// Block-level HTML tags that pass through unescaped (GFM raw HTML blocks).
+// Allows <details>/<summary> and common structural elements to render natively.
+const HTML_PASSTHROUGH = new Set([
+  "details", "summary",
+  "div", "section", "article", "aside", "figure", "figcaption",
+  "table", "thead", "tbody", "tfoot", "tr", "th", "td", "colgroup", "col",
+  "br", "wbr",
+]);
+
 function renderMarkdown(md: string, basePath = ""): string {
   // Extract fenced code blocks first
   const blocks: string[] = [];
@@ -641,6 +650,14 @@ function renderMarkdown(md: string, basePath = ""): string {
 
     // Restore code block placeholder
     if (/^\x00B\d+\x00$/.test(line.trim())) {
+      out.push(line.trim());
+      i++;
+      continue;
+    }
+
+    // Raw HTML block — lines whose first token is an allowed tag pass through unescaped
+    const htmlTag = line.trim().match(/^<\/?([a-zA-Z][a-zA-Z0-9-]*)/);
+    if (htmlTag && HTML_PASSTHROUGH.has(htmlTag[1].toLowerCase())) {
       out.push(line.trim());
       i++;
       continue;
