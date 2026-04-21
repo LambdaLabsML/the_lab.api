@@ -419,7 +419,7 @@ export function DetailPanel() {
           onBodyScroll={(e) => {
             const el = e.currentTarget as HTMLDivElement;
             const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
-            if (!atBottom && logFollowing) setLogFollowing(false);
+            setLogFollowing(atBottom);
           }}
           toolbar={
             <button
@@ -463,23 +463,21 @@ export function DetailPanel() {
           onBodyScroll={(e) => {
             const el = e.currentTarget as HTMLDivElement;
             const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
-            if (!atBottom && outputFollowing) setOutputFollowing(false);
+            setOutputFollowing(atBottom);
           }}
           toolbar={
-            outputExp.status === "running" ? (
-              <button
-                class={`follow-btn${outputFollowing ? " follow-active" : ""}`}
-                onClick={() => {
-                  const next = !outputFollowing;
-                  setOutputFollowing(next);
-                  if (next && outputBodyRef.current) {
-                    outputBodyRef.current.scrollTop = outputBodyRef.current.scrollHeight;
-                  }
-                }}
-              >
-                {outputFollowing ? "↓ Following" : "↓ Follow"}
-              </button>
-            ) : undefined
+            <button
+              class={`follow-btn${outputFollowing ? " follow-active" : ""}`}
+              onClick={() => {
+                const next = !outputFollowing;
+                setOutputFollowing(next);
+                if (next && outputBodyRef.current) {
+                  outputBodyRef.current.scrollTop = outputBodyRef.current.scrollHeight;
+                }
+              }}
+            >
+              {outputFollowing ? "↓ Following" : "↓ Follow"}
+            </button>
           }
         >
           {outputLoading && <div style={{ color: "#8b949e" }}>Loading...</div>}
