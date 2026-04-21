@@ -101,6 +101,11 @@ export const filterBarOpen = useSetting("filterBarOpen", true);
 /** Persisted dockview layout JSON (null = use default). */
 export const dashboardLayout = useSetting<object | null>("dashboardLayout", null);
 
+/** Whether the detail panel shows notes+experiments interleaved in a timeline. */
+export const detailTimeline = useSetting("detailTimeline", false);
+/** When true, newest items appear first in the detail panel. */
+export const detailSortNewest = useSetting("detailSortNewest", false);
+
 // ---------------------------------------------------------------------------
 // Server-provided defaults from GET /api/v1/config
 // ---------------------------------------------------------------------------

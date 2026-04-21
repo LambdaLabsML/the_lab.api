@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from "preact/hooks";
-import { selectedIdea, selectedMetric } from "../state/settings";
+import { selectedIdea, selectedMetric, detailTimeline, detailSortNewest } from "../state/settings";
 import { scrollToExperiment, runningProgress } from "../state/signals";
 import { getIdea, getExperimentProgress, getExperimentLog, getExperimentScript, getExperimentOutput, getIdeaDiff } from "../state/api";
 import { formatTime, badgeHtml, escapeHtml } from "../lib/format";
@@ -224,6 +224,29 @@ export function DetailPanel() {
   const notes: Note[] = idea?.notes || [];
   const experiments: Experiment[] = idea?.experiments || [];
 
+  // --- Sorting ---
+  const newestFirst = detailSortNewest.value;
+  const sortMult = newestFirst ? -1 : 1;
+  function byTime<T>(getTs: (x: T) => string | undefined) {
+    return (a: T, b: T) => sortMult * (new Date(getTs(a) || 0).getTime() - new Date(getTs(b) || 0).getTime());
+  }
+  const sortedNotes = [...notes].sort(byTime<Note>(n => n.created_at));
+  const sortedExps  = [...experiments].sort(byTime<Experiment>(e => e.created_at));
+
+  // --- Timeline items ---
+  type TLItem = { kind: "note"; note: Note; t: number } | { kind: "exp"; exp: Experiment; t: number };
+  const tlItems: TLItem[] = detailTimeline.value ? [
+    ...notes.map(n => ({ kind: "note" as const, note: n, t: new Date(n.created_at || 0).getTime() })),
+    ...experiments.map(e => ({ kind: "exp" as const, exp: e, t: new Date(e.created_at || 0).getTime() })),
+  ].sort((a, b) => sortMult * (a.t - b.t)) : [];
+
+  // --- Stats for meta block ---
+  const expByStatus = experiments.reduce((acc, e) => { acc[e.status] = (acc[e.status] || 0) + 1; return acc; }, {} as Record<string, number>);
+  const noteByLevel = notes.reduce((acc, n) => { const l = n.level || "note"; acc[l] = (acc[l] || 0) + 1; return acc; }, {} as Record<string, number>);
+
+  const STATUS_ORDER = ["running", "pending", "completed", "failed", "cancelled"];
+  const LEVEL_ORDER  = ["milestone", "insight", "observation", "debug"];
+
   return (
     <>
       <div id="detail-panel" class="open">
@@ -243,80 +266,144 @@ export function DetailPanel() {
 
           {idea && (
             <>
-              <div class="detail-section">
-                <div class="label">Description</div>
-                <div class="value">{idea.description}</div>
-              </div>
+              {/* Description */}
+              <div class="detail-desc">{idea.description}</div>
 
-              {idea.branch && (
-                <div class="detail-section">
-                  <div class="label">Branch</div>
-                  <div class="value">{idea.branch}</div>
-                </div>
-              )}
+              {/* Compact meta block */}
+              <div class="idea-meta-block">
 
-              {idea.parent_ids && idea.parent_ids.length > 0 && (
-                <div class="detail-section">
-                  <div class="label">Parents</div>
-                  <div class="value">
-                    {idea.parent_ids.map((pid, i) => (
-                      <span key={pid}>
-                        {i > 0 && ", "}
-                        <a
-                          class="parent-link"
-                          href="#"
-                          onClick={(e) => { e.preventDefault(); navigateToIdea(pid); }}
-                          title={`Jump to idea #${pid}`}
-                        >
-                          #{pid}
-                        </a>
+                {/* Row 1: branch + parents + diff */}
+                {(idea.branch || (idea.parent_ids && idea.parent_ids.length > 0)) && (
+                  <div class="meta-row">
+                    {idea.branch && (
+                      <>
+                        <span class="meta-branch" title={idea.branch}>⎇ {idea.branch}</span>
+                        <button class="meta-btn" onClick={() => openDiff(false)}>diff ↗</button>
+                      </>
+                    )}
+                    {idea.parent_ids && idea.parent_ids.length > 0 && (
+                      <span class="meta-parents">
+                        {idea.parent_ids.map((pid, i) => (
+                          <span key={pid}>
+                            {i === 0 && <span class="meta-arrow">←</span>}
+                            {" "}
+                            <a class="parent-link" href="#"
+                              onClick={(e) => { e.preventDefault(); navigateToIdea(pid); }}
+                              title={`Jump to idea #${pid}`}>#{pid}</a>
+                          </span>
+                        ))}
                       </span>
+                    )}
+                  </div>
+                )}
+
+                {/* Row 2: experiment stats */}
+                {experiments.length > 0 && (
+                  <div class="meta-row meta-stats-row">
+                    <span class="meta-stat-label">{experiments.length} exp</span>
+                    {STATUS_ORDER.filter(s => expByStatus[s]).map(s => (
+                      <span key={s} class={`meta-pill meta-pill-${s}`}>{expByStatus[s]} {s}</span>
                     ))}
                   </div>
-                </div>
-              )}
+                )}
 
-              {idea.conclusion && (
-                <div class="detail-section">
-                  <div class="label">Conclusion</div>
-                  <div class="value">{idea.conclusion}</div>
-                </div>
-              )}
+                {/* Row 3: note stats */}
+                {notes.length > 0 && (
+                  <div class="meta-row meta-stats-row">
+                    <span class="meta-stat-label">{notes.length} notes</span>
+                    {LEVEL_ORDER.filter(l => noteByLevel[l]).map(l => (
+                      <span key={l} class={`meta-pill meta-pill-note-${l}`}>{noteByLevel[l]} {l}</span>
+                    ))}
+                    {noteByLevel["note"] ? <span class="meta-pill meta-pill-note-note">{noteByLevel["note"]} note</span> : null}
+                  </div>
+                )}
 
-              {idea.branch && (
-                <div class="detail-section">
-                  <button class="detail-expand-btn" onClick={() => openDiff(false)}>
-                    Show branch diff
+                {/* Conclusion */}
+                {idea.conclusion && (
+                  <div class="meta-conclusion">"{idea.conclusion}"</div>
+                )}
+              </div>
+
+              {/* View controls */}
+              {(notes.length > 0 || experiments.length > 0) && (
+                <div class="detail-view-controls">
+                  <button
+                    class={`view-ctrl-btn${detailTimeline.value ? " vc-active" : ""}`}
+                    onClick={() => { detailTimeline.value = !detailTimeline.value; }}
+                    title="Interleave notes and experiments by time"
+                  >
+                    ⊞ Timeline
+                  </button>
+                  <button
+                    class="view-ctrl-btn"
+                    onClick={() => { detailSortNewest.value = !detailSortNewest.value; }}
+                    title="Toggle sort order"
+                  >
+                    {newestFirst ? "↓ Newest first" : "↑ Oldest first"}
                   </button>
                 </div>
               )}
 
-              {notes.length > 0 && (
-                <div class="detail-section">
-                  <div class="label">Notes ({notes.length})</div>
-                  {notes.map((note, i) => (
-                    <div key={i} class={`note-item ${note.level}`}>
-                      <div class="note-meta">{note.level} &middot; {formatTime(note.created_at)}</div>
-                      {note.text}
+              {/* Content: timeline or normal */}
+              {detailTimeline.value ? (
+                <div class="tl-list">
+                  {tlItems.map((item, idx) => (
+                    <div key={idx} class="tl-entry">
+                      <div class="tl-marker">
+                        <span class={`tl-dot tl-dot-${item.kind === "note" ? (item.note.level || "note") : item.exp.status}`} />
+                        <span class="tl-ts">{formatTime(item.kind === "note" ? item.note.created_at : item.exp.created_at)}</span>
+                        <span class="tl-rule" />
+                        <span class={`tl-kind tl-kind-${item.kind === "note" ? (item.note.level || "note") : item.exp.status}`}>
+                          {item.kind === "note" ? (item.note.level || "note") : `exp/${item.exp.label || item.exp.id}`}
+                        </span>
+                      </div>
+                      {item.kind === "note" ? (
+                        <div class={`tl-content note-item ${item.note.level}`}>
+                          {item.note.text}
+                        </div>
+                      ) : (
+                        <div class="tl-content">
+                          <ExperimentItem
+                            exp={item.exp}
+                            progress={progressData[String(item.exp.id)]}
+                            onShowLog={() => openLog(item.exp)}
+                            onShowScript={() => openScript(item.exp)}
+                            onShowOutput={() => openOutput(item.exp)}
+                          />
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
-              )}
-
-              {experiments.length > 0 && (
-                <div class="detail-section">
-                  <div class="label">Experiments ({experiments.length})</div>
-                  {experiments.map((exp) => (
-                    <ExperimentItem
-                      key={exp.id}
-                      exp={exp}
-                      progress={progressData[String(exp.id)]}
-                      onShowLog={() => openLog(exp)}
-                      onShowScript={() => openScript(exp)}
-                      onShowOutput={() => openOutput(exp)}
-                    />
-                  ))}
-                </div>
+              ) : (
+                <>
+                  {sortedNotes.length > 0 && (
+                    <div class="detail-section">
+                      <div class="label">Notes ({sortedNotes.length})</div>
+                      {sortedNotes.map((note, i) => (
+                        <div key={i} class={`note-item ${note.level}`}>
+                          <div class="note-meta">{note.level} &middot; {formatTime(note.created_at)}</div>
+                          {note.text}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {sortedExps.length > 0 && (
+                    <div class="detail-section">
+                      <div class="label">Experiments ({sortedExps.length})</div>
+                      {sortedExps.map((exp) => (
+                        <ExperimentItem
+                          key={exp.id}
+                          exp={exp}
+                          progress={progressData[String(exp.id)]}
+                          onShowLog={() => openLog(exp)}
+                          onShowScript={() => openScript(exp)}
+                          onShowOutput={() => openOutput(exp)}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </>
               )}
             </>
           )}

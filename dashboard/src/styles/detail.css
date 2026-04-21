@@ -85,6 +85,94 @@
 .parent-link { color: #58a6ff; text-decoration: none; font-weight: 600; }
 .parent-link:hover { text-decoration: underline; color: #79c0ff; }
 
+/* Idea description (replaces detail-section wrapper) */
+.detail-desc { color: #c9d1d9; line-height: 1.5; margin-bottom: 10px; font-size: 12px; word-break: break-word; }
+
+/* ── Compact meta block ─────────────────────────────────── */
+.idea-meta-block {
+  background: #0d1117;
+  border: 1px solid #21262d;
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  font-size: 11px;
+  display: flex; flex-direction: column; gap: 5px;
+}
+.meta-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.meta-branch { font-family: 'SF Mono','Fira Code','Consolas',monospace; color: #79c0ff; font-size: 11px;
+  max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.meta-btn { background: none; border: 1px solid #30363d; color: #8b949e; border-radius: 3px;
+  padding: 1px 6px; font-size: 10px; cursor: pointer; font-family: inherit; }
+.meta-btn:hover { color: #c9d1d9; border-color: #8b949e; }
+.meta-arrow { color: #484f58; }
+.meta-parents { display: flex; align-items: center; gap: 3px; }
+.meta-stats-row { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.meta-stat-label { color: #8b949e; font-weight: 600; font-size: 10px; text-transform: uppercase; letter-spacing: 0.4px; margin-right: 2px; }
+.meta-pill { font-size: 10px; padding: 1px 5px; border-radius: 3px; border: 1px solid transparent; }
+/* Experiment status pills */
+.meta-pill-running   { color: #d29922; border-color: #d2992244; background: #d2992211; }
+.meta-pill-completed { color: #3fb950; border-color: #3fb95044; background: #3fb95011; }
+.meta-pill-failed    { color: #f85149; border-color: #f8514944; background: #f8514911; }
+.meta-pill-cancelled { color: #8b949e; border-color: #30363d; }
+.meta-pill-pending   { color: #58a6ff; border-color: #58a6ff44; background: #58a6ff11; }
+/* Note level pills */
+.meta-pill-note-milestone   { color: #d29922; border-color: #d2992244; background: #d2992211; }
+.meta-pill-note-insight     { color: #58a6ff; border-color: #58a6ff44; background: #58a6ff11; }
+.meta-pill-note-observation { color: #8b949e; border-color: #30363d; }
+.meta-pill-note-debug       { color: #f85149; border-color: #f8514944; background: #f8514911; }
+.meta-pill-note-note        { color: #8b949e; border-color: #30363d; }
+.meta-conclusion { color: #8b949e; font-style: italic; font-size: 11px; border-top: 1px solid #21262d; padding-top: 5px; margin-top: 2px; line-height: 1.4; }
+
+/* ── View controls (Timeline + Sort toggles) ─────────────── */
+.detail-view-controls { display: flex; gap: 6px; margin-bottom: 10px; }
+.view-ctrl-btn {
+  background: none; border: 1px solid #30363d; color: #8b949e;
+  border-radius: 4px; padding: 3px 8px; font-size: 10px; cursor: pointer;
+  font-family: inherit; white-space: nowrap;
+}
+.view-ctrl-btn:hover { color: #c9d1d9; border-color: #8b949e; }
+.view-ctrl-btn.vc-active { border-color: #58a6ff; color: #58a6ff; background: #58a6ff11; }
+
+/* ── Timeline view ───────────────────────────────────────── */
+.tl-list { display: flex; flex-direction: column; }
+.tl-entry { margin-bottom: 8px; }
+.tl-marker {
+  display: flex; align-items: center; gap: 5px;
+  margin-bottom: 4px;
+}
+.tl-dot {
+  width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+  background: #30363d;
+}
+/* Dot colors by type */
+.tl-dot-running    { background: #d29922; }
+.tl-dot-completed  { background: #3fb950; }
+.tl-dot-failed     { background: #f85149; }
+.tl-dot-cancelled  { background: #484f58; }
+.tl-dot-pending    { background: #58a6ff; }
+.tl-dot-milestone  { background: #d29922; }
+.tl-dot-insight    { background: #58a6ff; }
+.tl-dot-observation{ background: #8b949e; }
+.tl-dot-debug      { background: #f85149; }
+.tl-dot-note       { background: #8b949e; }
+.tl-ts   { font-size: 10px; color: #484f58; white-space: nowrap; flex-shrink: 0; }
+.tl-rule { flex: 1; height: 1px; background: #21262d; }
+.tl-kind { font-size: 10px; font-weight: 600; white-space: nowrap; flex-shrink: 0; font-family: 'SF Mono','Fira Code','Consolas',monospace; }
+/* kind label colors match dot colors */
+.tl-kind-running    { color: #d29922; }
+.tl-kind-completed  { color: #3fb950; }
+.tl-kind-failed     { color: #f85149; }
+.tl-kind-cancelled  { color: #484f58; }
+.tl-kind-pending    { color: #58a6ff; }
+.tl-kind-milestone  { color: #d29922; }
+.tl-kind-insight    { color: #58a6ff; }
+.tl-kind-observation{ color: #8b949e; }
+.tl-kind-debug      { color: #f85149; }
+.tl-kind-note       { color: #8b949e; }
+.tl-content { margin-left: 12px; }
+/* suppress redundant note-meta in timeline (timestamp already in marker) */
+.tl-content .note-meta { display: none; }
+
 /* Action buttons row */
 .exp-actions { display: flex; gap: 6px; margin-top: 6px; }
 
