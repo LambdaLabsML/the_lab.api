@@ -199,6 +199,7 @@
 .md-output a:hover { text-decoration: underline; }
 .md-output strong { color: #e6edf3; font-weight: 600; }
 .md-output em { color: #d2a8ff; font-style: italic; }
+.md-output .md-img { max-width: 100%; display: block; margin: 8px 0; border-radius: 4px; }
 
 /* Mobile: detail panel as overlay */
 @media (max-width: 800px) {

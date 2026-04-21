@@ -463,19 +463,25 @@ function colorizeScript(script: string): string {
 }
 
 function inlineMd(raw: string): string {
-  const codes: string[] = [];
-  let s = raw.replace(/`([^`]+)`/g, (_, code) => {
-    const idx = codes.length;
-    codes.push(`<code class="md-ic">${escapeHtml(code)}</code>`);
-    return `\x00C${idx}\x00`;
-  });
+  const saved: string[] = [];
+  const save = (html: string) => { const idx = saved.length; saved.push(html); return `\x00S${idx}\x00`; };
+
+  // Extract code, images, and links BEFORE italic processing so URLs are never mangled
+  let s = raw
+    .replace(/`([^`]+)`/g, (_, code) => save(`<code class="md-ic">${escapeHtml(code)}</code>`))
+    .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_, alt, url) =>
+      save(`<img src="${escapeHtml(url)}" alt="${escapeHtml(alt)}" class="md-img" />`))
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, text, url) =>
+      save(`<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(text)}</a>`));
+
+  // Escape remaining HTML, then apply text formatting
   s = escapeHtml(s);
   s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   s = s.replace(/__([^_]+)__/g, "<strong>$1</strong>");
   s = s.replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
   s = s.replace(/_([^_\n]+)_/g, "<em>$1</em>");
-  s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
-  codes.forEach((code, idx) => { s = s.replace(`\x00C${idx}\x00`, code); });
+
+  saved.forEach((item, idx) => { s = s.replace(`\x00S${idx}\x00`, item); });
   return s;
 }
 
