@@ -562,6 +562,22 @@ export function App() {
       }
     }
 
+    // Deep-link restore: if the URL hash specifies an idea, activate the detail
+    // panel so dockview mounts it (lazy-mount means it won't mount otherwise on
+    // fresh sessions where the detail tab was never clicked).
+    const _initHash = new URLSearchParams(window.location.hash.slice(1));
+    const _initIdea = _initHash.get("idea");
+    if (_initIdea) {
+      const _ideaId = parseInt(_initIdea);
+      if (_ideaId) {
+        selectedIdea.value = _ideaId;
+        requestAnimationFrame(() => {
+          const panel = dv.panels.find((p) => p.id === "detail");
+          if (panel) panel.api.setActive();
+        });
+      }
+    }
+
     // Save layout on changes
     const layoutDisposable = dv.onDidLayoutChange(() => {
       try {
