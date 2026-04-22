@@ -173,12 +173,22 @@ export interface SandboxObservedEntry {
   top_reason: string;
 }
 
+export interface SandboxFileBind {
+  path: string;
+  mode: "rw" | "ro";
+}
+
 export interface SandboxState {
   enabled: boolean;
   mode: string;
   allowlist: string[];
   denylist: string[];
+  file_rw: string[];
+  file_ro: string[];
   builtin_allowlist: string[];
+  builtin_file_rw: string[];
+  builtin_file_ro: string[];
+  builtin_file_binds: SandboxFileBind[];
   capabilities: SandboxCapabilities;
   observed: SandboxObservedEntry[];
 }

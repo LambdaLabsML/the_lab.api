@@ -246,7 +246,10 @@ def main():
             sys.exit(1)
         env["THE_LAB_SANDBOX_TARGET_UID"] = str(os.getuid())
         env["THE_LAB_SANDBOX_TARGET_GID"] = str(os.getgid())
-        cmd = build_sandbox_command(repo_root, args.agent, prompt_path.name, cmd)
+        cmd = build_sandbox_command(
+            repo_root, args.agent, prompt_path.name, cmd,
+            cwd=os.getcwd(),
+        )
 
     os.execvpe(cmd[0], cmd, env)
 

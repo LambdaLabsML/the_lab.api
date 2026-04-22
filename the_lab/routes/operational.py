@@ -185,6 +185,8 @@ def update_sandbox_state(req: SandboxConfigRequest):
             "enabled": req.enabled,
             "allowlist": req.allowlist,
             "denylist": req.denylist,
+            "file_rw": req.file_rw,
+            "file_ro": req.file_ro,
         },
     )
     capabilities = sandbox_capabilities()

@@ -62,6 +62,8 @@ class SandboxConfigRequest(BaseModel):
     enabled: bool = True
     allowlist: list[str] = []
     denylist: list[str] = []
+    file_rw: list[str] = []
+    file_ro: list[str] = []
 
 
 class AnalyzeRequest(BaseModel):

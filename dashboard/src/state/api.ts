@@ -185,6 +185,8 @@ export async function updateSandboxState(req: {
   enabled: boolean;
   allowlist: string[];
   denylist: string[];
+  file_rw: string[];
+  file_ro: string[];
 }): Promise<SandboxState> {
   return fetchJson<SandboxState>("/api/v1/sandbox", {
     method: "PUT",

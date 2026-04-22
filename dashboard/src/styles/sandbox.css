@@ -136,6 +136,35 @@
   background: #102234;
   color: #79c0ff;
   font-size: 12px;
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+}
+
+.sandbox-chip-rw {
+  border-color: #2d5637;
+  background: #0f2416;
+  color: #7ee787;
+}
+
+.sandbox-chip-ro {
+  border-color: #484f58;
+  background: #161b22;
+  color: #8b949e;
+}
+
+.sandbox-section-title {
+  margin: 8px 0 -4px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #c9d1d9;
+  border-bottom: 1px solid #21262d;
+  padding-bottom: 6px;
+}
+
+.sandbox-section-note {
+  margin: 0 0 -8px;
+  color: #8b949e;
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .sandbox-table-wrap {

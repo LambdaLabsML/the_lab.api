@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { getSandboxState, updateSandboxState } from "../state/api";
-import type { SandboxCapabilities, SandboxObservedEntry, SandboxState } from "../lib/types";
+import type { SandboxCapabilities, SandboxFileBind, SandboxObservedEntry, SandboxState } from "../lib/types";
 import { formatTime } from "../lib/format";
 
 function joinRules(lines: string[]): string {
@@ -11,8 +11,14 @@ function splitRules(text: string): string[] {
   return text.split("\n");
 }
 
-function snapshot(enabled: boolean, allowText: string, denyText: string): string {
-  return JSON.stringify({ enabled, allowText, denyText });
+function snapshot(
+  enabled: boolean,
+  allowText: string,
+  denyText: string,
+  rwText: string,
+  roText: string,
+): string {
+  return JSON.stringify({ enabled, allowText, denyText, rwText, roText });
 }
 
 export function SandboxView() {
@@ -20,7 +26,12 @@ export function SandboxView() {
   const [enabled, setEnabled] = useState(true);
   const [allowText, setAllowText] = useState("");
   const [denyText, setDenyText] = useState("");
+  const [rwText, setRwText] = useState("");
+  const [roText, setRoText] = useState("");
   const [builtinAllow, setBuiltinAllow] = useState<string[]>([]);
+  const [builtinRw, setBuiltinRw] = useState<string[]>([]);
+  const [builtinRo, setBuiltinRo] = useState<string[]>([]);
+  const [builtinFileBinds, setBuiltinFileBinds] = useState<SandboxFileBind[]>([]);
   const [observed, setObserved] = useState<SandboxObservedEntry[]>([]);
   const [capabilities, setCapabilities] = useState<SandboxCapabilities | null>(null);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
@@ -29,24 +40,38 @@ export function SandboxView() {
 
   function applyState(state: SandboxState, overwriteDraft = true) {
     setBuiltinAllow(state.builtin_allowlist || []);
+    setBuiltinRw(state.builtin_file_rw || []);
+    setBuiltinRo(state.builtin_file_ro || []);
+    setBuiltinFileBinds(state.builtin_file_binds || []);
     setObserved(state.observed || []);
     setCapabilities(state.capabilities || null);
     if (overwriteDraft) {
       setEnabled(state.enabled);
       setAllowText(joinRules(state.allowlist || []));
       setDenyText(joinRules(state.denylist || []));
-      setSavedSnapshot(snapshot(state.enabled, joinRules(state.allowlist || []), joinRules(state.denylist || [])));
+      setRwText(joinRules(state.file_rw || []));
+      setRoText(joinRules(state.file_ro || []));
+      setSavedSnapshot(snapshot(
+        state.enabled,
+        joinRules(state.allowlist || []),
+        joinRules(state.denylist || []),
+        joinRules(state.file_rw || []),
+        joinRules(state.file_ro || []),
+      ));
     }
   }
 
-  // Refs so the poll interval always reads current values without re-triggering the effect.
   const enabledRef = useRef(enabled);
   const allowTextRef = useRef(allowText);
   const denyTextRef = useRef(denyText);
+  const rwTextRef = useRef(rwText);
+  const roTextRef = useRef(roText);
   const savedSnapshotRef = useRef(savedSnapshot);
   enabledRef.current = enabled;
   allowTextRef.current = allowText;
   denyTextRef.current = denyText;
+  rwTextRef.current = rwText;
+  roTextRef.current = roText;
   savedSnapshotRef.current = savedSnapshot;
 
   useEffect(() => {
@@ -71,7 +96,13 @@ export function SandboxView() {
       try {
         const state = await getSandboxState();
         if (cancelled) return;
-        const dirty = snapshot(enabledRef.current, allowTextRef.current, denyTextRef.current) !== savedSnapshotRef.current;
+        const dirty = snapshot(
+          enabledRef.current,
+          allowTextRef.current,
+          denyTextRef.current,
+          rwTextRef.current,
+          roTextRef.current,
+        ) !== savedSnapshotRef.current;
         applyState(state, !dirty);
       } catch {
         // keep last good state
@@ -85,8 +116,8 @@ export function SandboxView() {
   }, []);
 
   const currentSnapshot = useMemo(
-    () => snapshot(enabled, allowText, denyText),
-    [enabled, allowText, denyText],
+    () => snapshot(enabled, allowText, denyText, rwText, roText),
+    [enabled, allowText, denyText, rwText, roText],
   );
 
   useEffect(() => {
@@ -99,10 +130,9 @@ export function SandboxView() {
           enabled,
           allowlist: splitRules(allowText),
           denylist: splitRules(denyText),
+          file_rw: splitRules(rwText),
+          file_ro: splitRules(roText),
         });
-        // Update observed/capabilities from server but keep the user's draft
-        // text intact — overwriting it resets cursor position and strips
-        // trailing newlines, making continued editing impossible.
         applyState(state, false);
         setSavedSnapshot(currentSnapshot);
         setSaveState("saved");
@@ -113,17 +143,17 @@ export function SandboxView() {
       }
     }, 500);
     return () => window.clearTimeout(timer);
-  }, [loaded, currentSnapshot, savedSnapshot, enabled, allowText, denyText]);
+  }, [loaded, currentSnapshot, savedSnapshot, enabled, allowText, denyText, rwText, roText]);
 
   return (
     <div id="sandbox-container">
       <div class="sandbox-header">
         <div>
-          <h2>Network Sandbox</h2>
+          <h2>Sandbox</h2>
           <p>
-            Default-deny outbound network policy for experiment runs and
-            `the-lab-agent` launches. Built-in package mirrors stay allowed,
-            and user allow or deny rules apply live to new connections.
+            Default-deny outbound network policy plus explicit file
+            bind-mounts for experiment runs and `the-lab-agent` launches.
+            Built-in rules stay applied; user rules apply live to new sessions.
           </p>
         </div>
         <div class="sandbox-status-wrap">
@@ -150,6 +180,7 @@ export function SandboxView() {
       )}
       {error && <div class="sandbox-error">{error}</div>}
 
+      <h3 class="sandbox-section-title">Network Access</h3>
       <div class="sandbox-grid">
         <section class="sandbox-panel">
           <div class="sandbox-panel-title">Allowlist</div>
@@ -183,8 +214,65 @@ export function SandboxView() {
         </div>
       </section>
 
+      <h3 class="sandbox-section-title">File Access</h3>
+      <p class="sandbox-section-note">
+        Absolute paths, one per line. Anything not listed (and not in the
+        built-in system set) is <em>invisible</em> to the sandboxed process.
+        RW paths can be modified; RO paths are read-only. Note: writes
+        happen as the sandbox's mapped sub-UID, so RW paths must allow
+        writes from "others" (<code>chmod o+w</code>) or be owned by that UID.
+      </p>
+      <div class="sandbox-grid">
+        <section class="sandbox-panel">
+          <div class="sandbox-panel-title">Read-Write Paths</div>
+          <div class="sandbox-panel-subtitle">Bind-mounted read-write.</div>
+          <textarea
+            value={rwText}
+            onInput={(e) => setRwText((e.target as HTMLTextAreaElement).value)}
+            placeholder={"/data/experiments\n/home/ubuntu/scratch"}
+          />
+        </section>
+
+        <section class="sandbox-panel">
+          <div class="sandbox-panel-title">Read-Only Paths</div>
+          <div class="sandbox-panel-subtitle">Bind-mounted read-only.</div>
+          <textarea
+            value={roText}
+            onInput={(e) => setRoText((e.target as HTMLTextAreaElement).value)}
+            placeholder={"/opt/models\n/home/ubuntu/reference"}
+          />
+        </section>
+      </div>
+
+      <section class="sandbox-panel builtin-panel">
+        <div class="sandbox-panel-title">Built-in File Binds</div>
+        <div class="sandbox-panel-subtitle">
+          Always applied: system libraries (read-only), repo &amp; agent credentials (read-write).
+        </div>
+        <div class="sandbox-chip-list">
+          {builtinRw.map((path) => (
+            <span class="sandbox-chip sandbox-chip-rw" key={`rw-${path}`} title="read-write">{path}</span>
+          ))}
+          {builtinRo.map((path) => (
+            <span class="sandbox-chip sandbox-chip-ro" key={`ro-${path}`} title="read-only">{path}</span>
+          ))}
+          {builtinFileBinds.map((bind) => (
+            <span
+              class={`sandbox-chip sandbox-chip-${bind.mode}`}
+              key={`sys-${bind.path}`}
+              title={bind.mode === "ro" ? "system (read-only)" : "system (read-write)"}
+            >
+              {bind.path}
+            </span>
+          ))}
+          {builtinRw.length === 0 && builtinRo.length === 0 && builtinFileBinds.length === 0 && (
+            <span class="sandbox-empty">No built-in binds detected.</span>
+          )}
+        </div>
+      </section>
+
       <section class="sandbox-panel observed-panel">
-        <div class="sandbox-panel-title">Observed Accesses</div>
+        <div class="sandbox-panel-title">Observed Network Accesses</div>
         <div class="sandbox-panel-subtitle">Gray list of requested destinations, aggregated from the live access log.</div>
         <div class="sandbox-table-wrap">
           <table class="sandbox-table">

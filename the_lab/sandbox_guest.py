@@ -508,114 +508,12 @@ def _target_env(api_scheme: str, api_port: int) -> dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
-# Executable accessibility fix
-# ---------------------------------------------------------------------------
-
-def _is_path_accessible(path: str, uid: int) -> bool:
-    """Check whether *path* is traversable by *uid* after privilege-drop."""
-    try:
-        for p in Path(path).resolve().parents:
-            st = os.stat(p)
-            if st.st_uid != uid and not (st.st_mode & 0o001):
-                return False
-    except OSError:
-        pass
-    return True
-
-
-def _fix_path_for_sandbox(env: dict[str, str]) -> None:
-    """Copy binaries from inaccessible PATH dirs to a temp bin directory.
-
-    After privilege-drop, PATH entries under e.g. /home/ubuntu (mode 750)
-    are unreachable.  We copy the actual binaries into /tmp/_lab_sandbox_path/
-    and prepend it to PATH.
-    """
-    uid = int(os.environ.get("THE_LAB_SANDBOX_TARGET_UID", "1000"))
-    target_gid = int(os.environ.get("THE_LAB_SANDBOX_TARGET_GID", str(uid)))
-    sandbox_bin = "/tmp/_lab_sandbox_path"
-    os.makedirs(sandbox_bin, exist_ok=True)
-
-    copied = False
-    for entry in env.get("PATH", "").split(":"):
-        if not entry or not os.path.isdir(entry):
-            continue
-        if _is_path_accessible(entry, uid):
-            continue
-        # This PATH entry is inaccessible — copy its executables.
-        try:
-            for name in os.listdir(entry):
-                src = os.path.join(entry, name)
-                dst = os.path.join(sandbox_bin, name)
-                if os.path.isfile(src) and os.access(src, os.X_OK) and not os.path.exists(dst):
-                    try:
-                        shutil.copy2(src, dst)
-                        os.chmod(dst, 0o755)
-                        copied = True
-                    except OSError:
-                        pass
-        except OSError:
-            pass
-
-    if copied:
-        os.chown(sandbox_bin, uid, target_gid)
-        for fn in os.listdir(sandbox_bin):
-            try:
-                os.chown(os.path.join(sandbox_bin, fn), uid, target_gid)
-            except OSError:
-                pass
-    # Always prepend if the sandbox bin dir has any executables (they may
-    # have been copied by a previous run).
-    if os.path.isdir(sandbox_bin) and os.listdir(sandbox_bin):
-        env["PATH"] = sandbox_bin + ":" + env.get("PATH", "")
-
-
-def _make_executable_accessible(command: list[str]) -> list[str]:
-    """Ensure the target executable is accessible after privilege-drop.
-
-    Inside rootlesskit the guest starts as (namespace) root but
-    _drop_privileges changes to the target UID.  If the original binary
-    lives under a directory like /home/ubuntu (mode 750), the dropped UID
-    cannot traverse it.  We fix this by resolving symlinks and, if the real
-    path is still inaccessible, copying it into /tmp.
-    """
-    exe = shutil.which(command[0]) or command[0]
-    try:
-        real = str(Path(exe).resolve())
-    except OSError:
-        return command
-
-    if os.access(real, os.X_OK):
-        uid = int(os.environ.get("THE_LAB_SANDBOX_TARGET_UID", "1000"))
-        parts = Path(real).parents
-        accessible = True
-        for p in parts:
-            try:
-                st = os.stat(p)
-                if st.st_uid != uid and not (st.st_mode & 0o001):
-                    accessible = False
-                    break
-            except OSError:
-                break
-        if accessible:
-            if command[0] != real:
-                return [real] + command[1:]
-            return command
-
-    import hashlib
-    name_hash = hashlib.sha256(real.encode()).hexdigest()[:12]
-    tmp_exe = f"/tmp/_lab_sandbox_bin_{name_hash}"
-    if not os.path.exists(tmp_exe):
-        shutil.copy2(real, tmp_exe)
-        os.chmod(tmp_exe, 0o755)
-    return [tmp_exe] + command[1:]
-
-
-# ---------------------------------------------------------------------------
 # Target process
 # ---------------------------------------------------------------------------
 
 async def _run_target(command: list[str], env: dict[str, str]) -> int:
-    command = _make_executable_accessible(command)
+    # bwrap binds the necessary paths into the namespace, so we don't need
+    # to copy binaries or resolve executables out of inaccessible dirs here.
     proc = subprocess.Popen(command, env=env, preexec_fn=_drop_privileges)
 
     loop = asyncio.get_running_loop()
@@ -647,6 +545,8 @@ async def _main() -> int:
     parser.add_argument("--repo", required=True)
     parser.add_argument("--kind", required=True)
     parser.add_argument("--label", required=True)
+    parser.add_argument("--cwd", default=None,
+                        help="Chdir here before exec'ing the target (defaults to --repo)")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
 
@@ -673,28 +573,24 @@ async def _main() -> int:
     # or the host user loses access to the entire repo.
     target_uid = int(os.environ.get("THE_LAB_SANDBOX_TARGET_UID", "1000"))
     target_gid = int(os.environ.get("THE_LAB_SANDBOX_TARGET_GID", str(target_uid)))
+    target_cwd = args.cwd or str(repo_dir)
     if args.kind not in _AGENT_KINDS:
-        cwd = os.getcwd()
         # Remove .venv symlinks — they point to the shared venv which is
         # read-only after privilege-drop.  Let `uv sync` in the experiment
         # script create a fresh writable .venv.
-        for entry in os.listdir(cwd):
-            p = os.path.join(cwd, entry)
+        for entry in os.listdir(target_cwd):
+            p = os.path.join(target_cwd, entry)
             if os.path.islink(p) and entry.startswith(".venv"):
                 os.unlink(p)
 
         # Make all directories world-writable so the dropped-privilege
         # process can create files (e.g. sed -i, uv sync).  Only touches
         # directory inodes — much faster than chowning every file on NFS.
-        for dirpath, dirnames, filenames in os.walk(cwd):
+        for dirpath, dirnames, filenames in os.walk(target_cwd):
             try:
                 os.chmod(dirpath, 0o777)
             except OSError:
                 pass
-
-    # Copy binaries from inaccessible PATH entries (e.g. /home/ubuntu/.local/bin)
-    # to a world-readable temp dir so the dropped-privilege process can run them.
-    _fix_path_for_sandbox(env)
 
     # /home/ubuntu is mode 750 and inaccessible after privilege-drop.
     # Tools like uv, pip, npm need writable cache dirs under HOME.
@@ -724,6 +620,14 @@ async def _main() -> int:
         # the host user's Claude sessions), point TMPDIR at the agent home
         # so Claude creates its workspace there instead.
         # TMPDIR is already set above to agent_home/tmp.
+
+    # Chdir into the caller's intended working directory before launching the
+    # target — bwrap initially chdir'd to repo_dir so python -m could resolve
+    # the_lab.sandbox_guest; now that we're past imports, land in the right spot.
+    try:
+        os.chdir(target_cwd)
+    except OSError:
+        pass
 
     try:
         return await _run_target(command, env)

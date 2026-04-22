@@ -362,6 +362,8 @@ class ExperimentRunner:
                 "experiment",
                 f"exp-{exp_id}",
                 command,
+                config=sandbox_config,
+                cwd=run_cwd,
             )
 
         # Write stdout/stderr directly to the log file so it survives server restarts.
