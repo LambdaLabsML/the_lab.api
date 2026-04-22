@@ -306,5 +306,8 @@
     width: 100vw;
     z-index: 100;
     border-left: none;
+    /* Extra bottom padding so the last experiment's buttons clear the browser
+       chrome (address bar / home indicator) that overlaps position:fixed content. */
+    padding-bottom: max(80px, env(safe-area-inset-bottom, 16px));
   }
 }

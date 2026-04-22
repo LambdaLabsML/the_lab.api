@@ -204,10 +204,20 @@
 
 /* Splitters: larger hit area on touch */
 @media (pointer: coarse) {
+  /* Floating panel corner/edge resize handles */
   .dockview-theme-dark .dv-resize-handle-horizontal,
   .dockview-theme-dark .dv-resize-handle-vertical {
-    width: 8px !important;
-    height: 8px !important;
+    width: 16px !important;
+    height: 16px !important;
+  }
+  /* Split-view sashes: widen the 4px hit target to 20px so a finger can grab it.
+     Horizontal container = left/right split → vertical divider line → widen width.
+     Vertical container   = top/bottom split → horizontal divider line → taller height. */
+  .dv-split-view-container.dv-horizontal > .dv-sash-container > .dv-sash {
+    width: 20px !important;
+  }
+  .dv-split-view-container.dv-vertical > .dv-sash-container > .dv-sash {
+    height: 20px !important;
   }
   .dockview-theme-dark .dv-tab {
     padding: 0 12px;
