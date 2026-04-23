@@ -178,6 +178,12 @@ export interface SandboxFileBind {
   mode: "rw" | "ro";
 }
 
+export interface PromptMeta {
+  role: string;
+  size: number;
+  updated_at: string;
+}
+
 export interface SandboxState {
   enabled: boolean;
   mode: string;

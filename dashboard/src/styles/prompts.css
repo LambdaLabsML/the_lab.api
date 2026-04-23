@@ -1,0 +1,338 @@
+#prompts-container {
+  flex: 1 1 0%;
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  background: #0d1117;
+  color: #c9d1d9;
+}
+
+.prompts-sidebar {
+  width: 220px;
+  flex: 0 0 220px;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid #21262d;
+  background: #0f141b;
+  min-height: 0;
+}
+
+.prompts-sidebar-header {
+  padding: 14px 16px 8px;
+  border-bottom: 1px solid #21262d;
+}
+
+.prompts-sidebar-header h3 {
+  margin: 0;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #8b949e;
+  font-weight: 600;
+}
+
+.prompts-role-list {
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: 6px 0;
+}
+
+.prompts-role-row {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 10px 14px;
+  background: transparent;
+  border: none;
+  border-left: 3px solid transparent;
+  color: #c9d1d9;
+  cursor: pointer;
+  font: inherit;
+}
+
+.prompts-role-row:hover {
+  background: #161b22;
+}
+
+.prompts-role-row.selected {
+  background: #161b22;
+  border-left-color: #58a6ff;
+}
+
+.prompts-role-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #c9d1d9;
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+}
+
+.prompts-role-badge {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid #274b6d;
+  background: #102234;
+  color: #79c0ff;
+  font-family: inherit;
+  font-weight: 500;
+}
+
+.prompts-role-meta {
+  font-size: 11px;
+  color: #8b949e;
+  margin-top: 3px;
+}
+
+.prompts-empty {
+  padding: 16px;
+  color: #8b949e;
+  font-size: 12px;
+}
+
+.prompts-add-btn {
+  margin: 8px;
+  padding: 8px 10px;
+  background: transparent;
+  border: 1px dashed #30363d;
+  border-radius: 8px;
+  color: #8b949e;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.prompts-add-btn:hover {
+  border-color: #58a6ff;
+  color: #58a6ff;
+}
+
+.prompts-add-form {
+  margin: 8px;
+  padding: 10px;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  background: #11161d;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.prompts-add-form input {
+  padding: 6px 8px;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  color: #c9d1d9;
+  font: inherit;
+  font-size: 12px;
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+}
+
+.prompts-add-form input:focus {
+  outline: none;
+  border-color: #58a6ff;
+}
+
+.prompts-add-error {
+  color: #f85149;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.prompts-add-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.prompts-main {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  padding: 16px;
+  gap: 12px;
+}
+
+.prompts-placeholder {
+  margin: auto;
+  color: #8b949e;
+  font-size: 13px;
+}
+
+.prompts-main-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  border: 1px solid #30363d;
+  background: linear-gradient(180deg, #141a22 0%, #0f141b 100%);
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+
+.prompts-main-title h2 {
+  margin: 0 0 6px 0;
+  font-size: 18px;
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  color: #c9d1d9;
+}
+
+.prompts-main-subtitle {
+  color: #8b949e;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.prompts-main-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.prompts-btn {
+  padding: 7px 12px;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  color: #c9d1d9;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.prompts-btn:hover:not(:disabled) {
+  background: #21262d;
+  border-color: #8b949e;
+}
+
+.prompts-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.prompts-btn.primary {
+  background: #1f6feb;
+  border-color: #1f6feb;
+  color: #ffffff;
+}
+
+.prompts-btn.primary:hover:not(:disabled) {
+  background: #388bfd;
+  border-color: #388bfd;
+}
+
+.prompts-btn.primary:not(.dirty):not(:disabled) {
+  background: #161b22;
+  border-color: #30363d;
+  color: #8b949e;
+}
+
+.prompts-btn.danger {
+  background: #21262d;
+  border-color: #6e1e23;
+  color: #f85149;
+}
+
+.prompts-btn.danger:hover {
+  background: #5a1e23;
+  color: #ffb3ba;
+}
+
+.prompts-btn-primary {
+  padding: 6px 10px;
+  background: #1f6feb;
+  border: 1px solid #1f6feb;
+  border-radius: 6px;
+  color: #ffffff;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.prompts-btn.copied {
+  background: #0f2416;
+  border-color: #2d5637;
+  color: #7ee787;
+}
+
+.prompts-save-saving {
+  background: #d29922 !important;
+  border-color: #d29922 !important;
+  color: #0d1117 !important;
+}
+
+.prompts-save-saved {
+  background: #238636 !important;
+  border-color: #238636 !important;
+  color: #ffffff !important;
+}
+
+.prompts-save-error {
+  background: #5a1e23 !important;
+  border-color: #f85149 !important;
+  color: #ffb3ba !important;
+}
+
+.prompts-textarea {
+  flex: 1 1 auto;
+  min-height: 200px;
+  resize: none;
+  border: 1px solid #30363d;
+  background: #0d1117;
+  color: #c9d1d9;
+  border-radius: 10px;
+  padding: 14px;
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.prompts-textarea:focus {
+  outline: none;
+  border-color: #58a6ff;
+}
+
+.prompts-footer {
+  font-size: 11px;
+  color: #8b949e;
+}
+
+.prompts-footer code {
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  padding: 3px 6px;
+  background: #161b22;
+  border: 1px solid #21262d;
+  border-radius: 4px;
+  color: #79c0ff;
+}
+
+.prompts-error {
+  margin: 8px 12px;
+  padding: 10px 12px;
+  background: #5a1e23;
+  border: 1px solid #f85149;
+  border-radius: 8px;
+  color: #ffb3ba;
+  font-size: 12px;
+}
+
+@media (max-width: 700px) {
+  #prompts-container {
+    flex-direction: column;
+  }
+  .prompts-sidebar {
+    width: 100%;
+    flex: 0 0 auto;
+    max-height: 40%;
+    border-right: none;
+    border-bottom: 1px solid #21262d;
+  }
+}

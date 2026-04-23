@@ -12,6 +12,7 @@ import type {
   Experiment,
   ProgressResponse,
   OpenAPISpec,
+  PromptMeta,
   SandboxState,
   SuggestIdeaRequest,
 } from "../lib/types";
@@ -192,6 +193,36 @@ export async function updateSandboxState(req: {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(req),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Prompts
+// ---------------------------------------------------------------------------
+
+/** GET /api/v1/prompts */
+export async function listPrompts(): Promise<PromptMeta[]> {
+  return fetchJson<PromptMeta[]>("/api/v1/prompts");
+}
+
+/** GET /api/v1/prompts/:role */
+export async function getPrompt(role: string): Promise<{ role: string; content: string }> {
+  return fetchJson<{ role: string; content: string }>(`/api/v1/prompts/${encodeURIComponent(role)}`);
+}
+
+/** PUT /api/v1/prompts/:role */
+export async function putPrompt(role: string, content: string): Promise<PromptMeta> {
+  return fetchJson<PromptMeta>(`/api/v1/prompts/${encodeURIComponent(role)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content }),
+  });
+}
+
+/** DELETE /api/v1/prompts/:role */
+export async function deletePromptRole(role: string): Promise<{ status: string; role: string }> {
+  return fetchJson<{ status: string; role: string }>(`/api/v1/prompts/${encodeURIComponent(role)}`, {
+    method: "DELETE",
   });
 }
 

@@ -7,7 +7,7 @@ const availablePanels = signal<string[]>([]);
 const isMaximized = signal(false);
 
 // Tray: panels that live in a bottom bar and pop up as dismissable floating lightboxes
-const DEFAULT_TRAY_IDS = ["api", "stats", "sandbox", "task", "suggest"];
+const DEFAULT_TRAY_IDS = ["api", "stats", "sandbox", "prompts", "task", "suggest"];
 // Which panels are currently in the tray (can grow when user sends panels to tray)
 const trayPanels = signal<string[]>([...DEFAULT_TRAY_IDS]);
 // Set of panel IDs currently shown as transient floats (auto-dismiss on click-outside)
@@ -39,6 +39,7 @@ import { LogView } from "./views/log-view";
 import { ApiView } from "./views/api-view";
 import { StatsView } from "./views/stats-view";
 import { SandboxView } from "./views/sandbox-view";
+import { PromptsView } from "./views/prompts-view";
 import { TablePanel } from "./components/table-panel";
 import { DetailPanel } from "./components/detail-panel";
 import { MetricsChart } from "./components/chart-panel/metrics-chart";
@@ -64,6 +65,7 @@ import { initTouchMoveMenu } from "./lib/touch-move-menu";
 const PANEL_NAMES: Record<string, string> = {
   graph: "Graph", timeline: "Timeline", log: "Log",
   api: "API", stats: "Stats", sandbox: "Sandbox",
+  prompts: "Prompts",
   metrics: "Metrics", scatter: "Scatter", detail: "Detail",
   filters: "Filters", suggest: "Suggest", task: "Task",
   table: "Table",
@@ -78,6 +80,7 @@ const PANEL_MAP: Record<string, (params?: any) => preact.JSX.Element> = {
   api: () => <ApiView />,
   stats: () => <StatsView />,
   sandbox: () => <SandboxView />,
+  prompts: () => <PromptsView />,
   metrics: (p?: any) => <MetricsChart instanceId={p?.instanceId} initialMetric={p?.metric} />,
   scatter: (p?: any) => <ScatterChart instanceId={p?.instanceId} initialXMetric={p?.xMetric} initialYMetric={p?.yMetric} />,
   detail: () => <DetailPanel />,
@@ -291,7 +294,7 @@ class PanelHeaderActions implements IHeaderActionsRenderer {
 // Row 1: Filters (full width, compact)
 // Row 2: Metrics (75% left) | Scatter (25% right)
 // Row 3: Table/Graph/Timeline/Log (50% left) | Detail (50% right)
-// Task, Suggest, API, Stats, Sandbox → tray
+// Task, Suggest, API, Stats, Sandbox, Prompts → tray
 const DEFAULT_LAYOUT: SerializedDockview = {"grid":{"root":{"type":"branch","data":[{"type":"leaf","data":{"views":["filters"],"activeView":"filters","id":"1"},"size":80},{"type":"branch","data":[{"type":"leaf","data":{"views":["metrics"],"activeView":"metrics","id":"2"},"size":1120},{"type":"leaf","data":{"views":["scatter"],"activeView":"scatter","id":"3"},"size":480}],"size":330},{"type":"branch","data":[{"type":"leaf","data":{"views":["table","graph","timeline","log"],"activeView":"table","id":"4"},"size":800},{"type":"leaf","data":{"views":["detail"],"activeView":"detail","id":"5"},"size":800}],"size":590}],"size":1600},"width":1600,"height":1000,"orientation":"VERTICAL"},"panels":{"filters":{"id":"filters","contentComponent":"default","title":"Filters"},"metrics":{"id":"metrics","contentComponent":"default","title":"Metrics"},"scatter":{"id":"scatter","contentComponent":"default","title":"Scatter"},"table":{"id":"table","contentComponent":"default","title":"Table"},"graph":{"id":"graph","contentComponent":"default","title":"Graph"},"timeline":{"id":"timeline","contentComponent":"default","title":"Timeline"},"log":{"id":"log","contentComponent":"default","title":"Log"},"detail":{"id":"detail","contentComponent":"default","title":"Detail"}},"activeGroup":"4"} as any;
 
 // Mobile/narrow layout: all panels stacked vertically in two groups
@@ -313,6 +316,7 @@ function buildMobileLayout(dv: DockviewComponent) {
   dv.addPanel({ id: "suggest", component: "default", title: "Suggest", position: { referencePanel: bottom } });
   dv.addPanel({ id: "task", component: "default", title: "Task", position: { referencePanel: bottom } });
   dv.addPanel({ id: "sandbox", component: "default", title: "Sandbox", position: { referencePanel: bottom } });
+  dv.addPanel({ id: "prompts", component: "default", title: "Prompts", position: { referencePanel: bottom } });
 }
 
 const NARROW_BREAKPOINT = 800;
