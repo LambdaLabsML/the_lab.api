@@ -68,6 +68,27 @@ def _write_json(path: Path, data):
     path.write_text(json.dumps(data, indent=2) + "\n")
 
 
+# Fields whose values flow into the cached aggregation endpoints
+# (/ideas, /ideas/{id}, /chart-data, /graph, /backlog). Updates that
+# only touch OTHER fields (notably ``meta`` — used for internal bookkeeping
+# like worktree paths) must NOT bump Store._version, since bumping would
+# invalidate every cached response for the entire dashboard.
+RENDERABLE_EXPERIMENT_FIELDS = {
+    "status",
+    "metrics",
+    "started_at",
+    "finished_at",
+    "description",
+    "error",
+    "tags",
+    "label",
+    "seq",
+    "conclusion",
+    "progress",
+    "runtime",
+}
+
+
 class Store:
     """File-based store with in-memory caches.
 
@@ -398,6 +419,14 @@ class Store:
         exp = self._experiments.get(label)
         if not exp:
             return None
+        # Diff renderable fields BEFORE mutating. Only fields that are actually
+        # serialized by the cached aggregation endpoints should invalidate the
+        # response cache — meta-only writes (e.g. worktree bookkeeping from the
+        # runner) must not bump _version, or the dashboard churns on every tick.
+        renderable_changed = any(
+            k in RENDERABLE_EXPERIMENT_FIELDS and exp.get(k) != v
+            for k, v in fields.items()
+        )
         exp.update(fields)
         exp = _enrich_experiment(exp)
         json_path = self._exp_json_path(exp["idea_id"], exp["seq"])
@@ -405,7 +434,8 @@ class Store:
         _write_json(json_path, exp)
         with self._lock:
             self._experiments[label] = exp
-            self._version += 1
+            if renderable_changed:
+                self._version += 1
         return exp
 
     def delete_experiment(self, exp_ref) -> dict | None:
