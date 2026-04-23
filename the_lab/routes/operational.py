@@ -95,6 +95,8 @@ def set_task(req: TaskRequest):
     if not req.text.strip():
         if task_path.exists():
             task_path.unlink()
+            # Invalidate caches that embed the task (list_ideas, backlog).
+            store._version += 1
         return None
     return _write_task(req.text.strip())
 

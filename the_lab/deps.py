@@ -166,4 +166,8 @@ def _write_task(text: str) -> dict:
     task_path = REPO_DIR / ".the_lab" / "task.json"
     task = {"text": text, "updated_at": _now()}
     task_path.write_text(json.dumps(task, indent=2) + "\n")
+    # Bump store version so /ideas and /backlog caches (which embed the task
+    # via _read_task) get invalidated on task changes.
+    if store is not None:
+        store._version += 1
     return task

@@ -685,7 +685,6 @@ def get_graph():
 
 
 @router.get("/chart-data")
-@cached_response(lambda: ())
 def get_chart_data():
     """Get all data for the dashboard metrics chart in one request.
 
