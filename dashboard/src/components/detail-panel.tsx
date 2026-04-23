@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from "preact/hooks";
+import { useEffect, useLayoutEffect, useState, useRef } from "preact/hooks";
 import { selectedIdea, selectedMetric, detailTimeline, detailSortNewest } from "../state/settings";
 import { scrollToExperiment, runningProgress } from "../state/signals";
 import { getIdea, getExperimentProgress, getExperimentLog, getExperimentScript, getExperimentOutput, getIdeaDiff } from "../state/api";
@@ -58,6 +58,10 @@ export function DetailPanel() {
   const [outputFollowing, setOutputFollowing] = useState(true);
   const outputBodyRef = useRef<HTMLDivElement>(null);
   const outputPollRef = useRef<number | null>(null);
+  // Remember open/closed state of <details> across polls so collapsible
+  // sections survive the 5s refresh. Keyed by summary text; falls back to
+  // position index when two summaries are identical.
+  const outputDetailsRef = useRef<Map<string, boolean>>(new Map());
 
   // Diff lightbox
   const [diffOpen, setDiffOpen] = useState(false);
@@ -205,7 +209,55 @@ export function DetailPanel() {
     }
   }, [outputContent]);
 
+  // Restore open <details> sections after each poll. Runs synchronously
+  // before the browser paints so readers never see a flash of "closed".
+  useLayoutEffect(() => {
+    const root = outputBodyRef.current;
+    if (!root || outputContent === null) return;
+    const list = root.querySelectorAll<HTMLDetailsElement>("details");
+    const seen = new Map<string, number>();
+    list.forEach((d, i) => {
+      const summary = d.querySelector("summary");
+      const base = summary?.textContent?.trim() || `idx-${i}`;
+      const dup = seen.get(base) || 0;
+      seen.set(base, dup + 1);
+      const key = dup === 0 ? base : `${base}#${dup}`;
+      const saved = outputDetailsRef.current.get(key);
+      if (saved !== undefined) d.open = saved;
+    });
+  }, [outputContent]);
+
+  // Listen for <details> toggle events inside the output body. `toggle`
+  // doesn't bubble, so we use capture-phase delegation on the container.
+  useEffect(() => {
+    const root = outputBodyRef.current;
+    if (!root || !outputExp) return;
+    const handler = (e: Event) => {
+      const target = e.target as HTMLElement;
+      if (target.tagName !== "DETAILS") return;
+      const d = target as HTMLDetailsElement;
+      const all = Array.from(root.querySelectorAll<HTMLDetailsElement>("details"));
+      const idx = all.indexOf(d);
+      if (idx < 0) return;
+      const seen = new Map<string, number>();
+      let key = `idx-${idx}`;
+      for (let i = 0; i <= idx; i++) {
+        const summary = all[i].querySelector("summary");
+        const base = summary?.textContent?.trim() || `idx-${i}`;
+        const dup = seen.get(base) || 0;
+        seen.set(base, dup + 1);
+        if (i === idx) key = dup === 0 ? base : `${base}#${dup}`;
+      }
+      outputDetailsRef.current.set(key, d.open);
+    };
+    root.addEventListener("toggle", handler, true);
+    return () => root.removeEventListener("toggle", handler, true);
+  }, [outputExp]);
+
   function openOutput(exp: Experiment) {
+    // Switching experiments clears the persisted state — different
+    // output.md files shouldn't share open/closed memory.
+    if (outputExp?.id !== exp.id) outputDetailsRef.current = new Map();
     setOutputExp(exp);
     setOutputContent(null);
     setOutputLoading(true);
