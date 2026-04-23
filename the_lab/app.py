@@ -17,8 +17,9 @@ logger = logging.getLogger(__name__)
 
 from .store import Store
 from .runner import ExperimentRunner
-from .stats import ApiStats
+from .stats import ApiStats, normalize_path as _normalize_path
 from . import deps
+from . import perf_log
 
 # --- Configuration ---
 REPO_DIR = Path(os.environ.get("THE_LAB_REPO", os.getcwd())).resolve()
@@ -59,34 +60,65 @@ app = FastAPI(title="The Lab", version="0.1.0", default_response_class=SafeJSONR
 
 @app.middleware("http")
 async def track_api_stats(request, call_next):
+    import time as _time
+
     # Capture body preview for POST/PUT before passing to handler
     body_preview = ""
+    body_bytes = 0
     if request.method in ("POST", "PUT") and request.url.path.startswith("/api/v1/"):
         try:
             raw = await request.body()
+            body_bytes = len(raw)
             body_preview = raw.decode(errors="replace")[:200]
         except Exception:
             pass
+    t0 = _time.perf_counter()
     response = await call_next(request)
+    duration_ms = (_time.perf_counter() - t0) * 1000.0
     path = request.url.path
-    # Skip stats tracking for dashboard/browser requests and stats endpoints.
-    # Primary: explicit header set by dashboard JS.
-    # Fallback: detect browser User-Agent (agents use curl/python/httpx).
+    # Classify source:
+    #   "dashboard" — explicit header from dashboard JS, or browser UA fallback
+    #   "mcp"       — MCP bridge (sets X-MCP-Proxy)
+    #   "agent"     — anything else hitting /api/v1/ (curl, python, httpx)
     is_dashboard = request.headers.get("x-the-lab-source") == "dashboard"
     if not is_dashboard:
         ua = request.headers.get("user-agent", "")
         is_dashboard = "Mozilla/" in ua
+    is_mcp = request.headers.get("x-mcp-proxy") == "true"
+    source = "dashboard" if is_dashboard else ("mcp" if is_mcp else "agent")
+
     if (path.startswith("/api/v1/")
             and not path.startswith("/api/v1/stats")
             and not is_dashboard):
         client = request.client.host if request.client else ""
-        is_mcp = request.headers.get("x-mcp-proxy") == "true"
         api_stats.record(
             request.method, path, client_ip=client,
             query=str(request.url.query) if request.url.query else "",
             body_preview=body_preview,
             status_code=response.status_code,
             mcp=is_mcp,
+        )
+
+    # Perf log: opt-in via THE_LAB_PERF_LOG. Unlike stats, we log dashboard
+    # calls too — that's the point. Skip the stats endpoint itself to avoid
+    # self-referential noise.
+    if perf_log.enabled() and not path.startswith("/api/v1/stats"):
+        resp_len_hdr = response.headers.get("content-length")
+        try:
+            resp_bytes = int(resp_len_hdr) if resp_len_hdr else 0
+        except ValueError:
+            resp_bytes = 0
+        perf_log.log_request(
+            method=request.method,
+            path=path,
+            normalized_path=_normalize_path(path),
+            status=response.status_code,
+            duration_ms=duration_ms,
+            source=source,
+            query=str(request.url.query) if request.url.query else "",
+            body_bytes=body_bytes,
+            response_bytes=resp_bytes,
+            client_ip=request.client.host if request.client else "",
         )
     return response
 
