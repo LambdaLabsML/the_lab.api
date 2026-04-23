@@ -66,12 +66,30 @@ def cmd_init(target: str | None = None):
         print(f"  {_green(chr(10003))} Git repository found: {repo}")
 
     # 2. PROMPT.md ---------------------------------------------------
-    prompt_path = repo / "PROMPT.md"
-    if prompt_path.exists():
-        print(f"  {_green(chr(10003))} PROMPT.md already exists")
+    # New layout: all prompt files live under .the_lab/ (PROMPT.md for the
+    # default role, PROMPT.<role>.md for named roles). Offer to migrate
+    # from the legacy <repo>/PROMPT.md location on first init.
+    lab_dir = repo / ".the_lab"
+    canonical_prompt = lab_dir / "PROMPT.md"
+    legacy_prompt = repo / "PROMPT.md"
+
+    if canonical_prompt.exists():
+        print(f"  {_green(chr(10003))} .the_lab/PROMPT.md already exists")
+    elif legacy_prompt.exists():
+        if _ask_yn(
+            "  Found PROMPT.md at the repo root. Move it into .the_lab/ "
+            "(needed for role-based prompts)?",
+            default=True,
+        ):
+            lab_dir.mkdir(parents=True, exist_ok=True)
+            legacy_prompt.rename(canonical_prompt)
+            print(f"  {_green(chr(10003))} Moved PROMPT.md -> .the_lab/PROMPT.md")
+        else:
+            print(f"  {_dim('-')} Kept PROMPT.md at the repo root (legacy fallback still works)")
     else:
-        prompt_path.write_text(_PROMPT_TEMPLATE.read_text())
-        print(f"  {_green(chr(10003))} Created PROMPT.md -- edit this with your research problem")
+        lab_dir.mkdir(parents=True, exist_ok=True)
+        canonical_prompt.write_text(_PROMPT_TEMPLATE.read_text())
+        print(f"  {_green(chr(10003))} Created .the_lab/PROMPT.md -- edit this with your research problem")
 
     # 3. MCP bridge ----------------------------------------------------------
     _pkg_skills = Path(__file__).parent / "agent_skills"
