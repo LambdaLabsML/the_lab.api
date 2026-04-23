@@ -275,6 +275,7 @@ def suggest_idea(req: SuggestIdeaRequest):
 
 
 @router.get("/ideas/{idea_id}")
+@cached_response(lambda idea_id, notes=None: (idea_id, notes))
 def get_idea(idea_id: int, notes: str | None = None):
     """Get full detail for a single idea, including its experiments and notes.
 
