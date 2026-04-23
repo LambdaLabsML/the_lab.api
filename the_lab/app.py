@@ -248,11 +248,13 @@ from .routes.ideas import router as ideas_router
 from .routes.experiments import router as experiments_router
 from .routes.overview import router as overview_router
 from .routes.operational import router as operational_router
+from .routes.prompts import router as prompts_router
 
 app.include_router(ideas_router)
 app.include_router(experiments_router)
 app.include_router(overview_router)
 app.include_router(operational_router)
+app.include_router(prompts_router)
 
 
 # --- SPA Fallback (must be last) ---
