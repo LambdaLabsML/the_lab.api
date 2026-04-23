@@ -11,6 +11,7 @@ import math
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.gzip import GZipMiddleware
 from starlette.responses import Response
 
 logger = logging.getLogger(__name__)
@@ -189,6 +190,16 @@ async def inject_notifications(request, call_next):
                         media_type="application/json")
     return Response(content=body, status_code=response.status_code,
                     headers=dict(response.headers), media_type=response.media_type)
+
+
+# GZip compression. Starlette's add_middleware() inserts at position 0 of the
+# user_middleware list, and the list is applied in reverse when building the
+# ASGI stack — so the LAST middleware added is the OUTERMOST wrapper. Adding
+# GZip here (after the two @app.middleware("http") decorators) puts it outside
+# both custom middlewares: it sees the request first and the fully-assembled
+# response last, which is exactly when we want to compress (after notifications
+# have been injected). JSON compresses ~4x; 1 KB threshold skips tiny responses.
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 
 # --- Lifecycle ---
