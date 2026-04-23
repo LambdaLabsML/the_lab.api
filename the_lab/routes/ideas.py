@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query
 
+from ..cache import cached_response
 from ..deps import (
     store,
     REPO_DIR,
@@ -149,6 +150,7 @@ def checkout_idea_endpoint(idea_id: int):
 
 
 @router.get("/ideas")
+@cached_response(lambda status=None, source=None: (status, source))
 def list_ideas(status: str | None = None, source: str | None = None):
     """List all ideas with their notes and a compact experiment summary.
 

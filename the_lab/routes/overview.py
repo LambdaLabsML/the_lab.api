@@ -5,6 +5,7 @@ import json
 
 from fastapi import APIRouter, HTTPException, Query
 
+from ..cache import cached_response
 from ..deps import (
     store,
     runner,
@@ -413,6 +414,7 @@ async def wait_for_experiment(
 
 
 @router.get("/backlog")
+@cached_response(lambda: ())
 def get_backlog():
     """Get an overview of active work and the suggestion backlog.
 
@@ -639,6 +641,7 @@ def orient(
 
 
 @router.get("/graph")
+@cached_response(lambda: ())
 def get_graph():
     """Get the full idea DAG for the dashboard visualization.
 
@@ -682,6 +685,7 @@ def get_graph():
 
 
 @router.get("/chart-data")
+@cached_response(lambda: ())
 def get_chart_data():
     """Get all data for the dashboard metrics chart in one request.
 

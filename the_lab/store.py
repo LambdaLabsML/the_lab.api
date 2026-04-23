@@ -90,8 +90,17 @@ class Store:
         self._experiments: dict[str, dict] = {}
         self._exp_by_idea: dict[int, set[str]] = {}
         self._notes: dict[int, list[dict]] = {}
+        # Monotonic counter bumped on every write. The response cache keys
+        # entries by (endpoint, params, version), so any write naturally
+        # invalidates all cached reads.
+        self._version = 0
 
         self._load_all()
+
+    @property
+    def version(self) -> int:
+        """Monotonic version counter — bumped on every state-mutating write."""
+        return self._version
 
     def _ensure_gitignore(self):
         """Make sure .the_lab/ is gitignored on ALL branches."""
@@ -251,6 +260,7 @@ class Store:
                 self._notes[idea_id] = []
             if idea_id not in self._exp_by_idea:
                 self._exp_by_idea[idea_id] = set()
+            self._version += 1
 
     def get_idea(self, idea_id: int) -> dict | None:
         return self._ideas.get(idea_id)
@@ -263,6 +273,7 @@ class Store:
         _write_json(self._idea_dir(idea_id) / "idea.json", idea)
         with self._lock:
             self._ideas[idea_id] = idea
+            self._version += 1
         return idea
 
     def list_ideas(self, status: str | None = None, source: str | None = None) -> list[dict]:
@@ -297,6 +308,7 @@ class Store:
             notes.append(note)
             self._notes[idea_id] = notes
             _write_json(notes_path, notes)
+            self._version += 1
         return note
 
     def get_notes(self, idea_id: int, levels: set[str] | None = None) -> list[dict]:
@@ -374,6 +386,7 @@ class Store:
         with self._lock:
             self._experiments[label] = exp
             self._exp_by_idea.setdefault(idea_id, set()).add(label)
+            self._version += 1
         return exp
 
     def get_experiment(self, exp_ref) -> dict | None:
@@ -392,6 +405,7 @@ class Store:
         _write_json(json_path, exp)
         with self._lock:
             self._experiments[label] = exp
+            self._version += 1
         return exp
 
     def delete_experiment(self, exp_ref) -> dict | None:
@@ -443,6 +457,7 @@ class Store:
             labels = self._exp_by_idea.get(idea_id)
             if labels is not None:
                 labels.discard(label)
+            self._version += 1
 
         return exp
 
