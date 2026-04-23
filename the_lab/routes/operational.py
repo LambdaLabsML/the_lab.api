@@ -18,6 +18,13 @@ from ..deps import (
     _write_task,
     _read_metric_directions,
 )
+from ..prompts import (
+    DEFAULT_ROLE,
+    InvalidRoleError,
+    list_roles,
+    read_prompt,
+    validate_role,
+)
 from ..sandbox import (
     list_observed_accesses,
     load_sandbox_config,
@@ -42,26 +49,60 @@ _PROMPT_API_PATH = Path(__file__).parent.parent / "PROMPT_api.md"
 
 
 @router.get("/api/v1/instructions")
-def get_instructions():
-    """Return the combined project instructions (PROMPT.md + PROMPT_api.md).
+def get_instructions(role: str | None = None):
+    """Return the combined project instructions (PROMPT<.role>.md + PROMPT_api.md).
 
-    PROMPT.md is read from the repo root (project-specific task description).
-    PROMPT_api.md ships with the_lab and documents all available API tools.
+    Role-specific prompts live in ``.the_lab/`` — ``PROMPT.md`` for the
+    default role, ``PROMPT.<role>.md`` for named roles. Pass ``?role=<name>``
+    to select one. When the requested role doesn't exist, the default
+    prompt is returned along with the list of available roles so the
+    caller can retry with a valid name.
 
-    Use this at the start of a session (or each loop iteration) to get a
-    fresh copy of the current task and API reference.
+    PROMPT_api.md ships with the_lab and is appended to every response.
 
     Example:
-        GET /api/v1/instructions
-        -> {"content": "# Problem\\n\\n...\\n\\n---\\n\\n# Lab API\\n\\n..."}
+        GET /api/v1/instructions?role=instructor
+        -> {"content": "...", "role": "instructor"}
+
+        GET /api/v1/instructions?role=typo     # role doesn't exist
+        -> {"content": "<default content>", "role": "default",
+            "requested_role": "typo",
+            "available_roles": ["default", "instructor", "worker"]}
     """
+    requested = role
+    resolved = role if role else DEFAULT_ROLE
+    # Validate role syntax — invalid syntax falls back to default, not an error.
+    if resolved != DEFAULT_ROLE:
+        try:
+            validate_role(resolved)
+        except InvalidRoleError:
+            resolved = DEFAULT_ROLE
+
+    content = read_prompt(REPO_DIR, resolved)
+    fell_back = False
+    if content is None and resolved != DEFAULT_ROLE:
+        fell_back = True
+        resolved = DEFAULT_ROLE
+        content = read_prompt(REPO_DIR, DEFAULT_ROLE)
+
     parts = []
-    prompt_path = REPO_DIR / "PROMPT.md"
-    if prompt_path.exists():
-        parts.append(f"# Problem\n\n{prompt_path.read_text().strip()}")
+    if content:
+        parts.append(f"# Problem\n\n{content.strip()}")
     if _PROMPT_API_PATH.exists():
         parts.append(_PROMPT_API_PATH.read_text().strip())
-    return {"content": "\n\n---\n\n".join(parts)}
+
+    response: dict = {
+        "content": "\n\n---\n\n".join(parts),
+        "role": resolved,
+    }
+    # Hint back which roles exist if the caller asked for something unknown
+    # and we actually have more than just the default configured.
+    if fell_back:
+        roles = [r["role"] for r in list_roles(REPO_DIR)]
+        if len(roles) > 1:
+            response["requested_role"] = requested
+            response["available_roles"] = roles
+    return response
 
 
 # --- Current task ---

@@ -100,6 +100,19 @@ All endpoints are documented with descriptions, parameters, and examples in the 
 - **Spec** → `GET /openapi.json`
 - **Docs** → `GET /docs` (Swagger UI)
 
+### Role-based prompts
+
+Projects can define multiple agent prompts for different roles (e.g. an "instructor" that plans and a "worker" that executes). Prompt files live in `.the_lab/`:
+
+- `.the_lab/PROMPT.md` — the default role (used when no role is specified)
+- `.the_lab/PROMPT.<role>.md` — a named role (`[a-z0-9_-]{1,32}`)
+
+Relevant tools:
+- `get_instructions(role="<name>")` — load the role-specific prompt. Without a `role`, returns the default. If the requested role doesn't exist, returns the default plus an `available_roles` list so you can retry.
+- `list_prompts()` — see which roles are configured.
+- The dashboard's **Prompts** tab adds/edits/removes roles.
+- Launching: `the-lab-agent --role instructor loop -d 30m` (or `--list-roles` to see what exists).
+
 ### MCP tools (when available)
 
 If MCP tools are available (tool names like `orient`, `create_idea`, `wait_for_experiment`),

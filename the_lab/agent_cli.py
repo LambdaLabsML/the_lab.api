@@ -115,7 +115,33 @@ def main():
         default=8000,
         help="Port of the Lab API server (default: 8000)",
     )
+    parser.add_argument(
+        "--role",
+        default=None,
+        help="Role-specific prompt to use (looks up .the_lab/PROMPT.<role>.md). "
+             "Falls back to the default prompt if the role has no file. "
+             "Run with --list-roles to see what's configured.",
+    )
+    parser.add_argument(
+        "--list-roles",
+        action="store_true",
+        help="List configured prompt roles (from .the_lab/PROMPT*.md) and exit.",
+    )
     args = parser.parse_args()
+
+    # --list-roles: handle and exit before any agent setup.
+    if args.list_roles:
+        repo_root = _find_repo_root(Path.cwd()) or Path.cwd()
+        from .prompts import list_roles as _list_roles
+        rows = _list_roles(repo_root)
+        if not rows:
+            print("No prompt roles configured yet.")
+            print(f"Run `the-lab init` in {repo_root} or add .the_lab/PROMPT.md directly.")
+        else:
+            print(f"Configured roles in {repo_root}/.the_lab/:")
+            for r in rows:
+                print(f"  {r['role']:<20}  {r['size']:>6} bytes   updated {r['updated_at'][:19]}")
+        sys.exit(0)
 
     # Handle 'loop' subcommand: "the-lab-agent loop [file]" vs "the-lab-agent [file|string]"
     use_loop = False
@@ -140,9 +166,33 @@ def main():
     api_content = _PROMPT_API.read_text().strip() if _PROMPT_API.exists() else ""
     api_header = f"**Lab API base URL:** `{api_base}`\n\nAll API endpoints below are relative to this base URL. Use `curl {api_base}/orient` to get started.\n\n"
 
-    # Read PROMPT.md if it exists (used in both file and inline modes)
+    # Resolve role → concrete prompt content.
+    # Look under <repo>/.the_lab/PROMPT.<role>.md; fall back to the default
+    # (<repo>/.the_lab/PROMPT.md, then repo-root PROMPT.md for legacy projects).
+    repo_root_for_prompts = _find_repo_root(Path.cwd()) or Path.cwd()
+    from .prompts import DEFAULT_ROLE, read_prompt
+    effective_role = DEFAULT_ROLE
+    problem_content = ""
+    if args.role:
+        role_content = read_prompt(repo_root_for_prompts, args.role)
+        if role_content is not None:
+            effective_role = args.role
+            problem_content = role_content.strip()
+        else:
+            print(
+                f"[warn] role '{args.role}' not found; falling back to default",
+                file=sys.stderr,
+            )
+            default_content = read_prompt(repo_root_for_prompts, DEFAULT_ROLE)
+            if default_content is not None:
+                problem_content = default_content.strip()
+    else:
+        default_content = read_prompt(repo_root_for_prompts, DEFAULT_ROLE)
+        if default_content is not None:
+            problem_content = default_content.strip()
+
+    # Legacy single-file path used by the "prompt file" positional arg below.
     problem_path = project_dir / "PROMPT.md"
-    problem_content = problem_path.read_text().strip() if problem_path.exists() else ""
 
     if inline_prompt:
         # Inline mode: question first, then background (PROMPT.md + API docs)
@@ -196,14 +246,18 @@ def main():
         print(f"MCP bridge: labapi → {api_base}", file=sys.stderr)
 
     # Build the prompt argument for Claude
+    role_suffix = f" (role='{effective_role}')" if effective_role != "default" else ""
+    role_arg = f"role='{effective_role}'" if effective_role != "default" else ""
     if use_loop:
         # In loop mode, ask the model to re-read instructions each iteration
-        agent_prompt = f"/loop {args.duration} Please re-read the instructions provided by thelabapi (get_instructions tool) and continue working on the provided problem."
-        print(f"Mode: loop (every {args.duration})", file=sys.stderr)
+        tool_call = f"get_instructions tool with {role_arg}" if role_arg else "get_instructions tool"
+        agent_prompt = f"/loop {args.duration} Please re-read the instructions provided by thelabapi ({tool_call}) and continue working on the provided problem."
+        print(f"Mode: loop (every {args.duration}){role_suffix}", file=sys.stderr)
     else:
         # Prepend a directive to call get_instructions first if MCP is available
         if mcp_config:
-            preamble = "Please start by calling get_instructions() to load the current task and API reference, then proceed to work on the problem.\n\n"
+            call = f"get_instructions({role_arg})" if role_arg else "get_instructions()"
+            preamble = f"Please start by calling {call} to load the current task and API reference, then proceed to work on the problem.\n\n"
             # Write a new temp file with the preamble + original prompt content
             original_content = prompt_path.read_text()
             fd2, tmp2 = _tempfile.mkstemp(prefix="the-lab-prompt-", suffix=".md")
@@ -211,7 +265,7 @@ def main():
             os.close(fd2)
             prompt_path = Path(tmp2)
         agent_prompt = str(prompt_path.resolve())
-        print(f"Mode: single run", file=sys.stderr)
+        print(f"Mode: single run{role_suffix}", file=sys.stderr)
 
     cmd = _build_launch_command(
         args.agent,
