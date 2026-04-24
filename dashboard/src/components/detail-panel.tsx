@@ -755,6 +755,10 @@ const HTML_PASSTHROUGH = new Set([
   "details", "summary",
   "div", "section", "article", "aside", "figure", "figcaption",
   "table", "thead", "tbody", "tfoot", "tr", "th", "td", "colgroup", "col",
+  "p", "pre", "blockquote",
+  "ul", "ol", "li", "dl", "dt", "dd",
+  "h1", "h2", "h3", "h4", "h5", "h6",
+  "hr",
   "br", "wbr",
 ]);
 
@@ -781,9 +785,27 @@ function renderMarkdown(md: string, basePath = ""): string {
       continue;
     }
 
-    // Raw HTML block — lines whose first token is an allowed tag pass through unescaped
+    // Raw HTML block — lines whose first token is an allowed tag pass through unescaped.
     const htmlTag = line.trim().match(/^<\/?([a-zA-Z][a-zA-Z0-9-]*)/);
     if (htmlTag && HTML_PASSTHROUGH.has(htmlTag[1].toLowerCase())) {
+      const tagName = htmlTag[1].toLowerCase();
+      const isOpening = !line.trim().startsWith("</");
+      // <pre> preserves literal whitespace + newlines and its content isn't
+      // markdown. If it's opened here and not closed on the same line,
+      // consume the following lines verbatim until we see </pre>. This
+      // handles the common <pre><code>...multi-line JSON...</code></pre>
+      // pattern that otherwise gets shredded by the paragraph handler.
+      if (isOpening && tagName === "pre" && !/<\/pre\s*>/i.test(line)) {
+        const block = [line];
+        i++;
+        while (i < lines.length) {
+          block.push(lines[i]);
+          if (/<\/pre\s*>/i.test(lines[i])) { i++; break; }
+          i++;
+        }
+        out.push(block.join("\n"));
+        continue;
+      }
       out.push(line.trim());
       i++;
       continue;
