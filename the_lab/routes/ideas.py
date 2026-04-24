@@ -274,37 +274,62 @@ def suggest_idea(req: SuggestIdeaRequest):
     return idea
 
 
-@router.get("/ideas/{idea_id}")
+def _has_output_md(script_relpath: str | None) -> bool:
+    """True if <script>.output.md exists on disk for this experiment."""
+    if not script_relpath:
+        return False
+    p = REPO_DIR / script_relpath
+    return (p.parent / (p.stem + ".output.md")).exists()
+
+
 @cached_response(lambda idea_id, notes=None: (idea_id, notes))
+def _get_idea_cacheable(idea_id: int, notes: str | None):
+    """Build the cacheable portion of /ideas/{id}: idea metadata + experiments
+    + notes. Excludes ``has_output``, which depends on filesystem state that
+    isn't tracked by Store._version. Returns None on miss.
+
+    This function must NOT mutate the store's dicts — its return value is
+    shared across cache hits.
+    """
+    idea = store.get_idea(idea_id)
+    if not idea:
+        return None
+    result = {**idea}  # shallow copy so we don't mutate _ideas[idea_id]
+    result["experiments"] = store.list_experiments(idea_id)
+    if notes == "all":
+        result["notes"] = store.get_notes(idea_id, levels=Store.ALL_LEVELS)
+    else:
+        result["notes"] = store.get_notes(idea_id, levels=Store.DETAIL_LEVELS)
+    return result
+
+
+@router.get("/ideas/{idea_id}")
 def get_idea(idea_id: int, notes: str | None = None):
     """Get full detail for a single idea, including its experiments and notes.
 
     Returns the idea record with all associated experiments and journal notes.
+    Each experiment includes ``has_output`` reflecting the *current* presence
+    of its ``<script>.output.md`` file (checked on every call, since output
+    is written by the experiment script and isn't tracked by Store.version).
+
     By default, debug-level notes are excluded. Pass ``?notes=all`` to include
-    every note level (insight, milestone, observation, and debug), which is
-    useful for troubleshooting experiment scripts or understanding low-level
-    decisions.
+    every note level (insight, milestone, observation, and debug).
 
     Example:
         GET /api/v1/ideas/1?notes=all
         -> {"id": 1, "description": "...", "status": "active", "branch": "idea/1",
             "experiments": [...], "notes": [...]}
     """
-    idea = store.get_idea(idea_id)
-    if not idea:
+    cached = _get_idea_cacheable(idea_id, notes)
+    if cached is None:
         raise HTTPException(404, "idea not found")
-    exps = store.list_experiments(idea_id)
-    for exp in exps:
-        if exp.get("script"):
-            script_path = REPO_DIR / exp["script"]
-            output_path = script_path.parent / (script_path.stem + ".output.md")
-            exp["has_output"] = output_path.exists()
-    idea["experiments"] = exps
-    if notes == "all":
-        idea["notes"] = store.get_notes(idea_id, levels=Store.ALL_LEVELS)
-    else:
-        idea["notes"] = store.get_notes(idea_id, levels=Store.DETAIL_LEVELS)
-    return idea
+    # Build a copy with fresh has_output flags — must not mutate cached dicts
+    # (other callers share them).
+    fresh_exps = [
+        {**exp, "has_output": _has_output_md(exp.get("script"))}
+        for exp in cached.get("experiments", [])
+    ]
+    return {**cached, "experiments": fresh_exps}
 
 
 @router.get("/ideas/{idea_id}/parent")
