@@ -652,6 +652,71 @@ function resolveUrl(url: string, basePath: string): string {
   return `/api/v1/files/${basePath}/${url}`;
 }
 
+// Inline HTML tags that pass through (sanitized) inside paragraphs.
+// Keep this list conservative: text/styling only — nothing that can load
+// remote content or run scripts.
+const INLINE_HTML_TAGS = new Set([
+  "span", "mark", "kbd", "samp", "var", "sub", "sup", "small",
+  "abbr", "dfn", "time", "q", "cite", "code",
+  "em", "strong", "i", "b", "u", "s", "strike", "del", "ins",
+  "a", "br", "wbr",
+]);
+
+// Attributes allowed on any inline tag. `href` is permitted on <a> only,
+// gated by protocol whitelist below.
+const SAFE_INLINE_ATTRS = new Set([
+  "class", "id", "title", "style", "role", "lang", "dir",
+]);
+
+function _safeHrefValue(value: string): string | null {
+  const v = value.trim().toLowerCase();
+  if (v.startsWith("http://") || v.startsWith("https://") ||
+      v.startsWith("/") || v.startsWith("#") || v.startsWith("mailto:")) {
+    return value;
+  }
+  return null;
+}
+
+function sanitizeInlineHtmlTag(rawTag: string): string {
+  // Match: opening/closing/void tag with optional attributes.
+  const m = rawTag.match(/^<(\/?)([a-zA-Z][a-zA-Z0-9]*)((?:\s+[^>]*?)?)(\s*\/)?>$/);
+  if (!m) return "";
+  const [, slash, tagRaw, attrsRaw, selfCloseSlash] = m;
+  const tag = tagRaw.toLowerCase();
+  if (!INLINE_HTML_TAGS.has(tag)) return "";
+  if (slash) return `</${tag}>`;
+
+  const cleaned: string[] = [];
+  if (attrsRaw) {
+    const attrRe = /([a-zA-Z-][\w-]*)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g;
+    let am: RegExpExecArray | null;
+    while ((am = attrRe.exec(attrsRaw)) !== null) {
+      const name = am[1].toLowerCase();
+      const rawValue = am[2] ?? am[3] ?? am[4] ?? "";
+      if (name.startsWith("on")) continue;  // drop event handlers
+      const isSafe = SAFE_INLINE_ATTRS.has(name)
+        || name.startsWith("data-")
+        || (name === "href" && tag === "a");
+      if (!isSafe) continue;
+      let value: string | null = rawValue;
+      if (name === "href") value = _safeHrefValue(rawValue);
+      if (value === null) continue;
+      // Escape <, >, and " so the attribute value can't break out.
+      const safe = value.replace(/[<>"]/g, (c) =>
+        ({ "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c] as string));
+      cleaned.push(`${name}="${safe}"`);
+    }
+  }
+  // External-link hardening: add target+rel when <a href="..."> is present.
+  if (tag === "a" && cleaned.some((a) => a.startsWith("href="))) {
+    if (!cleaned.some((a) => a.startsWith("target="))) cleaned.push('target="_blank"');
+    if (!cleaned.some((a) => a.startsWith("rel="))) cleaned.push('rel="noopener noreferrer"');
+  }
+  const attrStr = cleaned.length ? " " + cleaned.join(" ") : "";
+  const close = selfCloseSlash ? " /" : "";
+  return `<${tag}${attrStr}${close}>`;
+}
+
 function inlineMd(raw: string, basePath = ""): string {
   const saved: string[] = [];
   const save = (html: string) => { const idx = saved.length; saved.push(html); return `\x00S${idx}\x00`; };
@@ -663,6 +728,15 @@ function inlineMd(raw: string, basePath = ""): string {
       save(`<img src="${escapeHtml(resolveUrl(url, basePath))}" alt="${escapeHtml(alt)}" class="md-img" />`))
     .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, text, url) =>
       save(`<a href="${escapeHtml(resolveUrl(url, basePath))}" target="_blank" rel="noopener noreferrer">${escapeHtml(text)}</a>`));
+
+  // Extract whitelisted inline HTML tags so they survive the escape step.
+  // Non-whitelisted / malformed matches fall through and get escaped normally.
+  s = s.replace(/<\/?[a-zA-Z][a-zA-Z0-9]*(?:\s[^>]*?)?\s*\/?>/g, (match) => {
+    const nameMatch = match.match(/^<\/?([a-zA-Z][a-zA-Z0-9]*)/);
+    if (!nameMatch || !INLINE_HTML_TAGS.has(nameMatch[1].toLowerCase())) return match;
+    const clean = sanitizeInlineHtmlTag(match);
+    return clean ? save(clean) : match;
+  });
 
   // Escape remaining HTML, then apply text formatting
   s = escapeHtml(s);
