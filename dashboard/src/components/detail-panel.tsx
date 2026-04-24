@@ -62,6 +62,12 @@ export function DetailPanel() {
   // sections survive the 5s refresh. Keyed by summary text; falls back to
   // position index when two summaries are identical.
   const outputDetailsRef = useRef<Map<string, boolean>>(new Map());
+  // Navigation stack for clicking local .md links inside the output viewer.
+  // When non-empty, the top entry's content/basePath replaces the exp output.
+  const [outputFileStack, setOutputFileStack] = useState<
+    Array<{ path: string; content: string; basePath: string }>
+  >([]);
+  const [outputFileLoading, setOutputFileLoading] = useState(false);
 
   // Diff lightbox
   const [diffOpen, setDiffOpen] = useState(false);
@@ -254,6 +260,54 @@ export function DetailPanel() {
     return () => root.removeEventListener("toggle", handler, true);
   }, [outputExp]);
 
+  // Intercept clicks on local .md links inside the output viewer so they
+  // render in-place rather than opening the raw file in a new tab.
+  useEffect(() => {
+    const root = outputBodyRef.current;
+    if (!root || !outputExp) return;
+    const handler = (e: MouseEvent) => {
+      const anchor = (e.target as HTMLElement | null)?.closest?.("a") as HTMLAnchorElement | null;
+      if (!anchor) return;
+      const hrefAttr = anchor.getAttribute("href") || "";
+      if (!hrefAttr) return;
+      // Resolve to an absolute URL so we can compare origin + pathname.
+      let resolved: URL;
+      try {
+        resolved = new URL(hrefAttr, window.location.href);
+      } catch { return; }
+      if (resolved.origin !== window.location.origin) return;
+      if (!resolved.pathname.startsWith("/api/v1/files/")) return;
+      if (!/\.md$/i.test(resolved.pathname)) return;
+
+      e.preventDefault();
+      const filePath = decodeURIComponent(resolved.pathname.slice("/api/v1/files/".length));
+      const slashIdx = filePath.lastIndexOf("/");
+      const newBasePath = slashIdx >= 0 ? filePath.slice(0, slashIdx) : "";
+
+      setOutputFileLoading(true);
+      // Reset details memory — linked file has different summaries.
+      outputDetailsRef.current = new Map();
+      fetch(resolved.toString())
+        .then((r) => (r.ok ? r.text() : Promise.reject(new Error(`${r.status}`))))
+        .then((content) => {
+          setOutputFileStack((stack) => [...stack, { path: filePath, content, basePath: newBasePath }]);
+          // Scroll to top on navigate.
+          if (outputBodyRef.current) outputBodyRef.current.scrollTop = 0;
+          setOutputFollowing(false);
+        })
+        .catch(() => {
+          setOutputFileStack((stack) => [...stack, {
+            path: filePath,
+            content: `(failed to load ${filePath})`,
+            basePath: newBasePath,
+          }]);
+        })
+        .finally(() => setOutputFileLoading(false));
+    };
+    root.addEventListener("click", handler);
+    return () => root.removeEventListener("click", handler);
+  }, [outputExp]);
+
   function openOutput(exp: Experiment) {
     // Switching experiments clears the persisted state — different
     // output.md files shouldn't share open/closed memory.
@@ -262,6 +316,7 @@ export function DetailPanel() {
     setOutputContent(null);
     setOutputLoading(true);
     setOutputFollowing(true);
+    setOutputFileStack([]);  // drop any previous linked-file navigation
     fetchOutputContent(exp);
     setHash({ idea: ideaId, exp: exp.label || exp.id, view: "output" });
   }
@@ -554,41 +609,67 @@ export function DetailPanel() {
       )}
 
       {/* Output Lightbox */}
-      {outputExp && (
-        <Lightbox
-          title={`Output — exp/${outputExp.label || outputExp.id}`}
-          onClose={() => { setOutputExp(null); setHash({ view: null, exp: null }); }}
-          bodyRef={outputBodyRef}
-          onBodyScroll={(e) => {
-            const el = e.currentTarget as HTMLDivElement;
-            const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
-            setOutputFollowing(atBottom);
-          }}
-          toolbar={
-            <button
-              class={`follow-btn${outputFollowing ? " follow-active" : ""}`}
-              onClick={() => {
-                const next = !outputFollowing;
-                setOutputFollowing(next);
-                if (next && outputBodyRef.current) {
-                  outputBodyRef.current.scrollTop = outputBodyRef.current.scrollHeight;
-                }
-              }}
-            >
-              {outputFollowing ? "↓ Following" : "↓ Follow"}
-            </button>
-          }
-        >
-          {outputLoading && <div style={{ color: "#8b949e" }}>Loading...</div>}
-          {outputContent !== null && (
-            outputContent.startsWith("(") ? (
-              <div style={{ color: "#8b949e", fontStyle: "italic" }}>{outputContent}</div>
-            ) : (
-              <div class="md-output" dangerouslySetInnerHTML={{ __html: renderMarkdown(outputContent, outputBasePath) }} />
-            )
-          )}
-        </Lightbox>
-      )}
+      {outputExp && (() => {
+        const linked = outputFileStack.length > 0 ? outputFileStack[outputFileStack.length - 1] : null;
+        const displayedContent = linked ? linked.content : outputContent;
+        const displayedBasePath = linked ? linked.basePath : outputBasePath;
+        const linkedName = linked ? (linked.path.split("/").pop() || linked.path) : "";
+        const title = linked
+          ? `Output — exp/${outputExp.label || outputExp.id} › ${linkedName}`
+          : `Output — exp/${outputExp.label || outputExp.id}`;
+        return (
+          <Lightbox
+            title={title}
+            onClose={() => { setOutputExp(null); setHash({ view: null, exp: null }); }}
+            bodyRef={outputBodyRef}
+            onBodyScroll={(e) => {
+              const el = e.currentTarget as HTMLDivElement;
+              const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
+              setOutputFollowing(atBottom);
+            }}
+            toolbar={
+              <>
+                {linked && (
+                  <button
+                    class="follow-btn"
+                    onClick={() => {
+                      outputDetailsRef.current = new Map();
+                      setOutputFileStack((s) => s.slice(0, -1));
+                      if (outputBodyRef.current) outputBodyRef.current.scrollTop = 0;
+                    }}
+                    title={linked.path}
+                  >
+                    ← Back
+                  </button>
+                )}
+                {!linked && (
+                  <button
+                    class={`follow-btn${outputFollowing ? " follow-active" : ""}`}
+                    onClick={() => {
+                      const next = !outputFollowing;
+                      setOutputFollowing(next);
+                      if (next && outputBodyRef.current) {
+                        outputBodyRef.current.scrollTop = outputBodyRef.current.scrollHeight;
+                      }
+                    }}
+                  >
+                    {outputFollowing ? "↓ Following" : "↓ Follow"}
+                  </button>
+                )}
+              </>
+            }
+          >
+            {(outputLoading || outputFileLoading) && <div style={{ color: "#8b949e" }}>Loading...</div>}
+            {displayedContent !== null && (
+              displayedContent.startsWith("(") ? (
+                <div style={{ color: "#8b949e", fontStyle: "italic" }}>{displayedContent}</div>
+              ) : (
+                <div class="md-output" dangerouslySetInnerHTML={{ __html: renderMarkdown(displayedContent, displayedBasePath) }} />
+              )
+            )}
+          </Lightbox>
+        );
+      })()}
 
       {/* Diff Lightbox */}
       {diffOpen && idea && (
