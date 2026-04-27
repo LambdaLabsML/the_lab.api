@@ -999,6 +999,48 @@ const HTML_PASSTHROUGH = new Set([
 // (paragraph-wrapped) by the line-by-line markdown processor.
 const MULTILINE_PASSTHROUGH = new Set(["pre", "script", "style", "textarea", "svg"]);
 
+/** Render a flat list of {indent, text} items into nested <ul><li>…</li></ul>.
+ *  Each unique indent value maps to a level, so mixed 2/4-space conventions
+ *  still work. Nested <ul>s are placed inside the parent <li> per HTML spec.
+ */
+function _renderNestedList(
+  items: Array<{ indent: number; text: string }>,
+  basePath: string,
+): string {
+  if (items.length === 0) return "";
+  const uniqueIndents = Array.from(new Set(items.map((it) => it.indent))).sort(
+    (a, b) => a - b,
+  );
+  const level = new Map(uniqueIndents.map((v, i) => [v, i] as const));
+  let html = "";
+  let depth = -1;
+  for (const it of items) {
+    const lvl = level.get(it.indent) || 0;
+    if (lvl > depth) {
+      while (depth < lvl) {
+        html += '<ul class="md-ul">';
+        depth++;
+      }
+    } else if (lvl < depth) {
+      html += "</li>";
+      while (depth > lvl) {
+        html += "</ul></li>";
+        depth--;
+      }
+    } else {
+      html += "</li>";
+    }
+    html += `<li>${inlineMd(it.text, basePath)}`;
+  }
+  html += "</li>";
+  while (depth > 0) {
+    html += "</ul></li>";
+    depth--;
+  }
+  html += "</ul>";
+  return html;
+}
+
 function renderMarkdown(md: string, basePath = ""): string {
   // Extract fenced code blocks first. The language hint after ``` controls
   // how we emit the block: `mermaid` becomes a <pre class="mermaid"> that
@@ -1074,15 +1116,18 @@ function renderMarkdown(md: string, basePath = ""): string {
       continue;
     }
 
-    // List
-    if (/^[-*+]\s/.test(line) || /^\d+\.\s/.test(line)) {
-      const items: string[] = [];
-      while (i < lines.length && (/^[-*+]\s/.test(lines[i]) || /^\d+\.\s/.test(lines[i]))) {
-        const text = lines[i].replace(/^[-*+]\s/, "").replace(/^\d+\.\s/, "");
-        items.push(`<li>${inlineMd(text, basePath)}</li>`);
+    // List — supports nesting via leading whitespace. Each unique indent
+    // value becomes a level (so 2-space and 4-space conventions both work).
+    const _listRe = /^(\s*)([-*+]|\d+\.)\s+(.*)$/;
+    if (_listRe.test(line)) {
+      const items: Array<{ indent: number; text: string }> = [];
+      while (i < lines.length) {
+        const m = lines[i].match(_listRe);
+        if (!m) break;
+        items.push({ indent: m[1].length, text: m[3] });
         i++;
       }
-      out.push(`<ul class="md-ul">${items.join("")}</ul>`);
+      out.push(_renderNestedList(items, basePath));
       continue;
     }
 
