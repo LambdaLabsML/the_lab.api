@@ -208,6 +208,21 @@ export function DetailPanel() {
     return () => { if (outputPollRef.current) { clearInterval(outputPollRef.current); outputPollRef.current = null; } };
   }, [outputExp]);
 
+  // Currently-displayed file: top of stack if any linked .md is open, else
+  // the experiment's own output. Effects below depend on these so they
+  // re-run when the user navigates linked files or the poll fetches new
+  // content.
+  const _outputLinkedTop = outputFileStack.length > 0 ? outputFileStack[outputFileStack.length - 1] : null;
+  const displayedContent = _outputLinkedTop ? _outputLinkedTop.content : outputContent;
+  const displayedBasePath = _outputLinkedTop ? _outputLinkedTop.basePath : outputBasePath;
+
+  // Track which inline scripts we've already executed in this context so
+  // poll refreshes don't re-run them and stack intervals/listeners.
+  const executedScriptsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    executedScriptsRef.current = new Set();
+  }, [outputExp?.id, outputFileStack.length]);
+
   // Auto-scroll output when following and content updates
   useEffect(() => {
     if (outputFollowing && outputBodyRef.current) {
@@ -217,9 +232,13 @@ export function DetailPanel() {
 
   // Restore open <details> sections after each poll. Runs synchronously
   // before the browser paints so readers never see a flash of "closed".
+  // Also: rewrite raw-HTML relative URLs (src/href) to /api/v1/files/...
+  // and re-execute inline <script> tags (innerHTML never runs them).
   useLayoutEffect(() => {
     const root = outputBodyRef.current;
-    if (!root || outputContent === null) return;
+    if (!root || displayedContent === null) return;
+
+    // 1. Restore <details> open state
     const list = root.querySelectorAll<HTMLDetailsElement>("details");
     const seen = new Map<string, number>();
     list.forEach((d, i) => {
@@ -231,7 +250,48 @@ export function DetailPanel() {
       const saved = outputDetailsRef.current.get(key);
       if (saved !== undefined) d.open = saved;
     });
-  }, [outputContent]);
+
+    // 2. Rewrite relative src/href in raw HTML so e.g. <img src="grids/x.png">
+    //    resolves to /api/v1/files/<basePath>/grids/x.png. Markdown-generated
+    //    links/images already have absolute paths via resolveUrl, so the
+    //    starts-with-slash check leaves them alone.
+    const isAbs = (u: string) => /^(https?:|data:|blob:|\/|#|mailto:)/i.test(u);
+    const prefix = `/api/v1/files/${displayedBasePath}/`;
+    root.querySelectorAll<HTMLImageElement>("img[src]").forEach((el) => {
+      const v = el.getAttribute("src") || "";
+      if (!isAbs(v)) el.setAttribute("src", prefix + v);
+    });
+    root.querySelectorAll<HTMLAnchorElement>("a[href]").forEach((el) => {
+      const v = el.getAttribute("href") || "";
+      if (!isAbs(v)) el.setAttribute("href", prefix + v);
+    });
+    root.querySelectorAll<HTMLElement>(
+      "source[src], iframe[src], video[src], audio[src], script[src]"
+    ).forEach((el) => {
+      const v = el.getAttribute("src") || "";
+      if (!isAbs(v)) el.setAttribute("src", prefix + v);
+    });
+
+    // 3. Re-execute <script> tags. innerHTML inserts them but the browser
+    //    won't run them — we have to detach + create + insert. Dedupe by
+    //    code text so polling refreshes on a running experiment don't stack
+    //    intervals/listeners; reset of the dedupe set happens when the
+    //    user switches experiment or navigates a linked file.
+    root.querySelectorAll<HTMLScriptElement>("script").forEach((old) => {
+      const code = (old.textContent || "") + "" + (old.getAttribute("src") || "");
+      if (executedScriptsRef.current.has(code)) {
+        old.remove();
+        return;
+      }
+      executedScriptsRef.current.add(code);
+      const fresh = document.createElement("script");
+      for (const attr of Array.from(old.attributes)) {
+        try { fresh.setAttribute(attr.name, attr.value); } catch { /* ignore */ }
+      }
+      if (old.textContent) fresh.textContent = old.textContent;
+      old.replaceWith(fresh);
+    });
+  }, [displayedContent, displayedBasePath]);
 
   // Listen for <details> toggle events inside the output body. `toggle`
   // doesn't bubble, so we use capture-phase delegation on the container.
@@ -610,9 +670,7 @@ export function DetailPanel() {
 
       {/* Output Lightbox */}
       {outputExp && (() => {
-        const linked = outputFileStack.length > 0 ? outputFileStack[outputFileStack.length - 1] : null;
-        const displayedContent = linked ? linked.content : outputContent;
-        const displayedBasePath = linked ? linked.basePath : outputBasePath;
+        const linked = _outputLinkedTop;
         const linkedName = linked ? (linked.path.split("/").pop() || linked.path) : "";
         const title = linked
           ? `Output — exp/${outputExp.label || outputExp.id} › ${linkedName}`
@@ -841,7 +899,19 @@ const HTML_PASSTHROUGH = new Set([
   "h1", "h2", "h3", "h4", "h5", "h6",
   "hr",
   "br", "wbr",
+  // Media + interactive — agent-generated outputs frequently embed
+  // self-contained widgets (animation viewers, image galleries, etc.).
+  "img", "audio", "video", "source", "picture", "iframe",
+  "button", "input", "select", "option", "textarea", "label",
+  "fieldset", "legend", "form", "progress", "meter",
+  "canvas", "svg",
+  // Inline scripts/styles for the widgets above.
+  "script", "style", "noscript",
 ]);
+
+// Tags whose content can span multiple lines and shouldn't be reformatted
+// (paragraph-wrapped) by the line-by-line markdown processor.
+const MULTILINE_PASSTHROUGH = new Set(["pre", "script", "style", "textarea", "svg"]);
 
 function renderMarkdown(md: string, basePath = ""): string {
   // Extract fenced code blocks first
@@ -871,23 +941,26 @@ function renderMarkdown(md: string, basePath = ""): string {
     if (htmlTag && HTML_PASSTHROUGH.has(htmlTag[1].toLowerCase())) {
       const tagName = htmlTag[1].toLowerCase();
       const isOpening = !line.trim().startsWith("</");
-      // <pre> preserves literal whitespace + newlines and its content isn't
-      // markdown. If it's opened here and not closed on the same line,
-      // consume the following lines verbatim until we see </pre>. This
-      // handles the common <pre><code>...multi-line JSON...</code></pre>
-      // pattern that otherwise gets shredded by the paragraph handler.
-      if (isOpening && tagName === "pre" && !/<\/pre\s*>/i.test(line)) {
-        const block = [line];
-        i++;
-        while (i < lines.length) {
-          block.push(lines[i]);
-          if (/<\/pre\s*>/i.test(lines[i])) { i++; break; }
+      // For tags that wrap literal multi-line content (<pre>, <script>,
+      // <style>, <textarea>, <svg>): if opened on this line and not closed
+      // on the same line, consume subsequent lines verbatim until the
+      // matching close. Without this, inner lines (multi-line JSON inside
+      // <pre>, JS source inside <script>, etc.) get paragraph-wrapped.
+      if (isOpening && MULTILINE_PASSTHROUGH.has(tagName)) {
+        const closeRe = new RegExp(`</${tagName}\\s*>`, "i");
+        if (!closeRe.test(line)) {
+          const block = [line];
           i++;
+          while (i < lines.length) {
+            block.push(lines[i]);
+            if (closeRe.test(lines[i])) { i++; break; }
+            i++;
+          }
+          out.push(block.join("\n"));
+          continue;
         }
-        out.push(block.join("\n"));
-        continue;
       }
-      out.push(line.trim());
+      out.push(line);
       i++;
       continue;
     }
