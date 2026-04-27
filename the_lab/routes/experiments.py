@@ -783,13 +783,20 @@ def get_experiment_output(exp_ref: str):
         GET /api/v1/experiments/1.2/output
         -> {"output": "# Results\\n", "base_path": ".the_lab/experiments/1"}
     """
+    from fastapi.responses import JSONResponse
     exp = _resolve_exp(exp_ref)
     script_path = REPO_DIR / exp["script"]
     output_path = script_path.parent / (script_path.stem + ".output.md")
     if not output_path.exists():
         raise HTTPException(404, "output file not found")
     base_path = str(output_path.parent.relative_to(REPO_DIR))
-    return {"output": output_path.read_text(), "base_path": base_path}
+    # Disable browser HTTP caching — agents append to output.md after the
+    # experiment completes (e.g. summary/post-mortem), so a stale cached
+    # response would hide updates from the dashboard.
+    return JSONResponse(
+        {"output": output_path.read_text(), "base_path": base_path},
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+    )
 
 
 @router.get("/experiments/{exp_ref}/progress")

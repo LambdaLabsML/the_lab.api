@@ -370,7 +370,7 @@ export function DetailPanel() {
       setOutputFileLoading(true);
       // Reset details memory — linked file has different summaries.
       outputDetailsRef.current = new Map();
-      fetch(resolved.toString())
+      fetch(resolved.toString(), { cache: "no-cache" })
         .then((r) => (r.ok ? r.text() : Promise.reject(new Error(`${r.status}`))))
         .then((content) => {
           setOutputFileStack((stack) => [...stack, { path: filePath, content, basePath: newBasePath }]);
@@ -723,6 +723,38 @@ export function DetailPanel() {
                     ← Back
                   </button>
                 )}
+                <button
+                  class="follow-btn"
+                  onClick={() => {
+                    // Force a fresh fetch of whatever's currently displayed.
+                    // Reset script-execution memory so widgets re-init against
+                    // the new DOM, and clear <details> open-state memory so
+                    // it tracks new content correctly.
+                    executedScriptsRef.current = new Set();
+                    outputDetailsRef.current = new Map();
+                    if (linked) {
+                      const target = linked.path;
+                      setOutputFileLoading(true);
+                      fetch(`/api/v1/files/${target}`, { cache: "no-cache" })
+                        .then((r) => (r.ok ? r.text() : Promise.reject(new Error(`${r.status}`))))
+                        .then((content) => {
+                          setOutputFileStack((s) => {
+                            if (s.length === 0) return s;
+                            const next = s.slice(0, -1);
+                            next.push({ ...s[s.length - 1], content });
+                            return next;
+                          });
+                        })
+                        .catch(() => { /* keep current content on failure */ })
+                        .finally(() => setOutputFileLoading(false));
+                    } else {
+                      fetchOutputContent(outputExp);
+                    }
+                  }}
+                  title="Re-fetch the file from disk"
+                >
+                  ↻ Refresh
+                </button>
                 {!linked && (
                   <button
                     class={`follow-btn${outputFollowing ? " follow-active" : ""}`}
