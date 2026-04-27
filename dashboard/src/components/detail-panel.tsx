@@ -64,10 +64,16 @@ export function DetailPanel() {
   const outputDetailsRef = useRef<Map<string, boolean>>(new Map());
   // Navigation stack for clicking local .md links inside the output viewer.
   // When non-empty, the top entry's content/basePath replaces the exp output.
+  // - parentScroll: scrollTop of the lightbox body before navigating into
+  //   this entry; restored when popped.
+  // - anchor: id of an element to scroll to on first render of this entry
+  //   (set when the link's URL had a #fragment).
   const [outputFileStack, setOutputFileStack] = useState<
-    Array<{ path: string; content: string; basePath: string }>
+    Array<{ path: string; content: string; basePath: string; parentScroll: number; anchor?: string }>
   >([]);
   const [outputFileLoading, setOutputFileLoading] = useState(false);
+  // One-shot scroll intent applied by the post-render layout effect.
+  const pendingScrollRef = useRef<{ kind: "anchor"; id: string } | { kind: "top"; value: number } | null>(null);
 
   // Diff lightbox
   const [diffOpen, setDiffOpen] = useState(false);
@@ -314,6 +320,26 @@ export function DetailPanel() {
           });
         });
     }
+
+    // 5. Apply any pending scroll intent (anchor link, restore-on-back).
+    //    Single-shot — clear the ref so re-renders for the same content
+    //    (e.g. <details> open/close) don't re-jump the user.
+    const intent = pendingScrollRef.current;
+    if (intent) {
+      pendingScrollRef.current = null;
+      if (intent.kind === "anchor") {
+        try {
+          const sel = (window as any).CSS?.escape ? CSS.escape(intent.id) : intent.id;
+          const target = root.querySelector(`#${sel}`) as HTMLElement | null;
+          if (target) target.scrollIntoView({ behavior: "auto", block: "start" });
+          else root.scrollTop = 0;
+        } catch {
+          root.scrollTop = 0;
+        }
+      } else {
+        root.scrollTop = intent.value;
+      }
+    }
   }, [displayedContent, displayedBasePath]);
 
   // Listen for <details> toggle events inside the output body. `toggle`
@@ -345,6 +371,7 @@ export function DetailPanel() {
 
   // Intercept clicks on local .md links inside the output viewer so they
   // render in-place rather than opening the raw file in a new tab.
+  // Also handles in-page #anchor links and cross-file file.md#anchor links.
   useEffect(() => {
     const root = outputBodyRef.current;
     if (!root || !outputExp) return;
@@ -353,6 +380,21 @@ export function DetailPanel() {
       if (!anchor) return;
       const hrefAttr = anchor.getAttribute("href") || "";
       if (!hrefAttr) return;
+
+      // Pure same-page anchor (#section) — scroll to the matching id WITHOUT
+      // navigating or pushing onto the stack. Avoids a hash change that
+      // would interfere with the dashboard's deep-link logic.
+      if (hrefAttr.startsWith("#")) {
+        const id = hrefAttr.slice(1);
+        if (!id) return;
+        e.preventDefault();
+        try {
+          const target = root.querySelector(`#${(window as any).CSS?.escape ? CSS.escape(id) : id}`);
+          if (target) (target as HTMLElement).scrollIntoView({ behavior: "smooth", block: "start" });
+        } catch { /* invalid selector */ }
+        return;
+      }
+
       // Resolve to an absolute URL so we can compare origin + pathname.
       let resolved: URL;
       try {
@@ -366,23 +408,34 @@ export function DetailPanel() {
       const filePath = decodeURIComponent(resolved.pathname.slice("/api/v1/files/".length));
       const slashIdx = filePath.lastIndexOf("/");
       const newBasePath = slashIdx >= 0 ? filePath.slice(0, slashIdx) : "";
+      const linkAnchor = resolved.hash ? resolved.hash.slice(1) : undefined;
+      const parentScroll = root.scrollTop;
 
       setOutputFileLoading(true);
       // Reset details memory — linked file has different summaries.
       outputDetailsRef.current = new Map();
-      fetch(resolved.toString(), { cache: "no-cache" })
+      // Drop hash from the fetch URL so the server doesn't see it in the path.
+      const fetchUrl = `${resolved.origin}${resolved.pathname}`;
+      fetch(fetchUrl, { cache: "no-cache" })
         .then((r) => (r.ok ? r.text() : Promise.reject(new Error(`${r.status}`))))
         .then((content) => {
-          setOutputFileStack((stack) => [...stack, { path: filePath, content, basePath: newBasePath }]);
-          // Scroll to top on navigate.
-          if (outputBodyRef.current) outputBodyRef.current.scrollTop = 0;
+          // Tell the post-render layout effect where to scroll once the new
+          // content is in the DOM.
+          pendingScrollRef.current = linkAnchor
+            ? { kind: "anchor", id: linkAnchor }
+            : { kind: "top", value: 0 };
+          setOutputFileStack((stack) => [...stack, {
+            path: filePath, content, basePath: newBasePath, parentScroll, anchor: linkAnchor,
+          }]);
           setOutputFollowing(false);
         })
         .catch(() => {
+          pendingScrollRef.current = { kind: "top", value: 0 };
           setOutputFileStack((stack) => [...stack, {
             path: filePath,
             content: `(failed to load ${filePath})`,
             basePath: newBasePath,
+            parentScroll,
           }]);
         })
         .finally(() => setOutputFileLoading(false));
@@ -715,8 +768,10 @@ export function DetailPanel() {
                     class="follow-btn"
                     onClick={() => {
                       outputDetailsRef.current = new Map();
+                      // Restore the parent's scroll position after the
+                      // content swap re-renders.
+                      pendingScrollRef.current = { kind: "top", value: linked.parentScroll };
                       setOutputFileStack((s) => s.slice(0, -1));
-                      if (outputBodyRef.current) outputBodyRef.current.scrollTop = 0;
                     }}
                     title={linked.path}
                   >
@@ -999,6 +1054,20 @@ const HTML_PASSTHROUGH = new Set([
 // (paragraph-wrapped) by the line-by-line markdown processor.
 const MULTILINE_PASSTHROUGH = new Set(["pre", "script", "style", "textarea", "svg"]);
 
+/** GitHub-style slug from a heading's raw markdown text. Used to give
+ *  every heading an id so `[link](#section)` works. Strips inline HTML
+ *  tags and markdown emphasis chars first. */
+function _slugifyHeading(text: string): string {
+  return text
+    .replace(/<[^>]+>/g, "")        // strip inline HTML
+    .replace(/[`*_~]/g, "")          // strip markdown emphasis
+    .toLowerCase()
+    .replace(/[^\w\s-]/g, "")        // keep word chars, spaces, hyphens
+    .trim()
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-");
+}
+
 /** Render a flat list of {indent, text} items into nested <ul><li>…</li></ul>.
  *  Each unique indent value maps to a level, so mixed 2/4-space conventions
  *  still work. Nested <ul>s are placed inside the parent <li> per HTML spec.
@@ -1101,10 +1170,13 @@ function renderMarkdown(md: string, basePath = ""): string {
       continue;
     }
 
-    // Headings
-    const hm = line.match(/^(#{1,3})\s+(.*)/);
+    // Headings — emit a slugified id so [link](#title) anchors work.
+    const hm = line.match(/^(#{1,6})\s+(.*)/);
     if (hm) {
-      out.push(`<h${hm[1].length} class="md-h${hm[1].length}">${inlineMd(hm[2], basePath)}</h${hm[1].length}>`);
+      const lvl = hm[1].length;
+      const id = _slugifyHeading(hm[2]);
+      const idAttr = id ? ` id="${escapeHtml(id)}"` : "";
+      out.push(`<h${lvl}${idAttr} class="md-h${lvl}">${inlineMd(hm[2], basePath)}</h${lvl}>`);
       i++;
       continue;
     }
