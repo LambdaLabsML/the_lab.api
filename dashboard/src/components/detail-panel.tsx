@@ -1025,7 +1025,16 @@ function inlineMd(raw: string, basePath = ""): string {
   s = s.replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
   s = s.replace(/_([^_\n]+)_/g, "<em>$1</em>");
 
-  saved.forEach((item, idx) => { s = s.replace(`\x00S${idx}\x00`, item); });
+  // Repeatedly substitute placeholders until none remain — a saved item
+  // (e.g. a link) can contain another placeholder (e.g. a code span used
+  // as the link text), so a single pass leaves the inner one stranded.
+  // Function callback also avoids the `$&` / `$1` replacement-string
+  // gotcha when saved HTML contains literal "$".
+  for (let _i = 0; _i < 10; _i++) {
+    const next = s.replace(/\x00S(\d+)\x00/g, (_, idx) => saved[parseInt(idx)] ?? "");
+    if (next === s) break;
+    s = next;
+  }
   return s;
 }
 
@@ -1216,7 +1225,13 @@ function renderMarkdown(md: string, basePath = ""): string {
   }
 
   let html = out.join("\n");
-  blocks.forEach((block, idx) => { html = html.replace(`\x00B${idx}\x00`, block); });
+  // Same loop-until-stable + function-callback pattern as inlineMd's
+  // saved-restore — defends against $-interpretation in code-block content.
+  for (let _i = 0; _i < 10; _i++) {
+    const next = html.replace(/\x00B(\d+)\x00/g, (_, idx) => blocks[parseInt(idx)] ?? "");
+    if (next === html) break;
+    html = next;
+  }
   return html;
 }
 
