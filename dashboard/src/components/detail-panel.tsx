@@ -291,6 +291,29 @@ export function DetailPanel() {
       if (old.textContent) fresh.textContent = old.textContent;
       old.replaceWith(fresh);
     });
+
+    // 4. Render mermaid diagrams. Lazy-loads the library on first encounter
+    //    (~600 KB). Mermaid v10 stamps data-processed="true" on rendered
+    //    elements and skips them on later run() calls, so re-renders after
+    //    polling are cheap.
+    const mermaidNodes = Array.from(
+      root.querySelectorAll<HTMLElement>(".mermaid:not([data-processed])"),
+    );
+    if (mermaidNodes.length > 0) {
+      ensureMermaid()
+        .then((mermaid) => mermaid.run({
+          nodes: mermaidNodes,
+          suppressErrors: true,
+        }))
+        .catch((e) => {
+          console.warn("mermaid render failed:", e);
+          mermaidNodes.forEach((n) => {
+            n.setAttribute("data-processed", "true");
+            n.style.color = "#f85149";
+            n.textContent = `(mermaid render failed: ${e?.message || e})\n` + (n.textContent || "");
+          });
+        });
+    }
   }, [displayedContent, displayedBasePath]);
 
   // Listen for <details> toggle events inside the output body. `toggle`
@@ -807,6 +830,37 @@ const SAFE_INLINE_ATTRS = new Set([
   "class", "id", "title", "style", "role", "lang", "dir",
 ]);
 
+// Lazy-load mermaid.js the first time we see a mermaid block. ~600 KB —
+// not worth bundling for users who never use mermaid. Stored on a module-
+// level promise so concurrent calls share one fetch.
+let _mermaidPromise: Promise<any> | null = null;
+function ensureMermaid(): Promise<any> {
+  if (_mermaidPromise) return _mermaidPromise;
+  if ((window as any).mermaid) {
+    const m = (window as any).mermaid;
+    _mermaidPromise = Promise.resolve(m);
+    return _mermaidPromise;
+  }
+  _mermaidPromise = new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js";
+    s.onload = () => {
+      const m = (window as any).mermaid;
+      try {
+        m.initialize({
+          startOnLoad: false,
+          theme: "dark",
+          securityLevel: "loose",
+        });
+      } catch { /* ignore double-init */ }
+      resolve(m);
+    };
+    s.onerror = () => reject(new Error("failed to load mermaid"));
+    document.head.appendChild(s);
+  });
+  return _mermaidPromise;
+}
+
 function _safeHrefValue(value: string): string | null {
   const v = value.trim().toLowerCase();
   if (v.startsWith("http://") || v.startsWith("https://") ||
@@ -914,11 +968,19 @@ const HTML_PASSTHROUGH = new Set([
 const MULTILINE_PASSTHROUGH = new Set(["pre", "script", "style", "textarea", "svg"]);
 
 function renderMarkdown(md: string, basePath = ""): string {
-  // Extract fenced code blocks first
+  // Extract fenced code blocks first. The language hint after ``` controls
+  // how we emit the block: `mermaid` becomes a <pre class="mermaid"> that
+  // the post-render effect lazy-loads mermaid.js to render into an SVG;
+  // anything else stays a regular code block.
   const blocks: string[] = [];
-  let s = md.replace(/```[^\n]*\n?([\s\S]*?)```/g, (_, code) => {
+  let s = md.replace(/```([^\n]*)\n?([\s\S]*?)```/g, (_, lang, code) => {
     const idx = blocks.length;
-    blocks.push(`<pre class="md-code"><code>${escapeHtml(code.trimEnd())}</code></pre>`);
+    const trimmedLang = (lang || "").trim().toLowerCase();
+    if (trimmedLang === "mermaid") {
+      blocks.push(`<pre class="mermaid">${escapeHtml(code.trimEnd())}</pre>`);
+    } else {
+      blocks.push(`<pre class="md-code"><code>${escapeHtml(code.trimEnd())}</code></pre>`);
+    }
     return `\x00B${idx}\x00`;
   });
 
