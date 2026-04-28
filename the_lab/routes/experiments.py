@@ -771,30 +771,52 @@ def get_experiment_script(exp_ref: str):
     return {"script": script_path.read_text()}
 
 
+def _resolve_output_path(script_relpath: str | None):
+    """Locate the output file for a script.
+
+    Prefers ``<script>.output.html`` over ``<script>.output.md`` if both
+    exist — an agent that emits HTML deliberately is bypassing the markdown
+    pipeline. Returns ``(path, format)`` where format is "html" or "md",
+    or ``(None, None)`` when neither exists.
+    """
+    if not script_relpath:
+        return None, None
+    script_path = REPO_DIR / script_relpath
+    html_path = script_path.parent / (script_path.stem + ".output.html")
+    if html_path.exists():
+        return html_path, "html"
+    md_path = script_path.parent / (script_path.stem + ".output.md")
+    if md_path.exists():
+        return md_path, "md"
+    return None, None
+
+
 @router.get("/experiments/{exp_ref}/output")
 def get_experiment_output(exp_ref: str):
-    """Read the output.md file written by an experiment script.
+    """Read the experiment's output file (HTML preferred, else markdown).
 
-    Returns the markdown content plus ``base_path`` (directory of the file
+    Returns the file content plus ``base_path`` (directory of the file
     relative to the repo root) so the caller can resolve relative image URLs
-    via ``GET /api/v1/files/<base_path>/<relative_path>``.
+    via ``GET /api/v1/files/<base_path>/<relative_path>``, plus ``format``
+    (``"html"`` | ``"md"``) so the dashboard knows whether to run the
+    markdown renderer or display the content as raw HTML.
 
     Example:
         GET /api/v1/experiments/1.2/output
-        -> {"output": "# Results\\n", "base_path": ".the_lab/experiments/1"}
+        -> {"output": "# Results\\n", "base_path": ".the_lab/experiments/1",
+            "format": "md"}
     """
     from fastapi.responses import JSONResponse
     exp = _resolve_exp(exp_ref)
-    script_path = REPO_DIR / exp["script"]
-    output_path = script_path.parent / (script_path.stem + ".output.md")
-    if not output_path.exists():
+    output_path, fmt = _resolve_output_path(exp.get("script"))
+    if output_path is None:
         raise HTTPException(404, "output file not found")
     base_path = str(output_path.parent.relative_to(REPO_DIR))
-    # Disable browser HTTP caching — agents append to output.md after the
+    # Disable browser HTTP caching — agents append to output files after the
     # experiment completes (e.g. summary/post-mortem), so a stale cached
     # response would hide updates from the dashboard.
     return JSONResponse(
-        {"output": output_path.read_text(), "base_path": base_path},
+        {"output": output_path.read_text(), "base_path": base_path, "format": fmt},
         headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
     )
 

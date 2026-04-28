@@ -120,8 +120,10 @@ export async function getExperimentScript(
 /** GET /api/v1/experiments/:expRef/output */
 export async function getExperimentOutput(
   expRef: string | number,
-): Promise<{ output: string; base_path: string }> {
-  return fetchJson<{ output: string; base_path: string }>(`/api/v1/experiments/${expRef}/output`);
+): Promise<{ output: string; base_path: string; format?: "md" | "html" }> {
+  return fetchJson<{ output: string; base_path: string; format?: "md" | "html" }>(
+    `/api/v1/experiments/${expRef}/output`,
+  );
 }
 
 /** GET /api/v1/experiments/:expRef/progress */

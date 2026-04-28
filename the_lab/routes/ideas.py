@@ -275,11 +275,14 @@ def suggest_idea(req: SuggestIdeaRequest):
 
 
 def _has_output_md(script_relpath: str | None) -> bool:
-    """True if <script>.output.md exists on disk for this experiment."""
+    """True if an output file (HTML or markdown) exists for this experiment."""
     if not script_relpath:
         return False
     p = REPO_DIR / script_relpath
-    return (p.parent / (p.stem + ".output.md")).exists()
+    return (
+        (p.parent / (p.stem + ".output.html")).exists()
+        or (p.parent / (p.stem + ".output.md")).exists()
+    )
 
 
 @cached_response(lambda idea_id, notes=None: (idea_id, notes))

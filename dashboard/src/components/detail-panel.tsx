@@ -54,6 +54,7 @@ export function DetailPanel() {
   const [outputExp, setOutputExp] = useState<Experiment | null>(null);
   const [outputContent, setOutputContent] = useState<string | null>(null);
   const [outputBasePath, setOutputBasePath] = useState("");
+  const [outputFormat, setOutputFormat] = useState<"md" | "html">("md");
   const [outputLoading, setOutputLoading] = useState(false);
   const [outputFollowing, setOutputFollowing] = useState(true);
   const outputBodyRef = useRef<HTMLDivElement>(null);
@@ -62,14 +63,17 @@ export function DetailPanel() {
   // sections survive the 5s refresh. Keyed by summary text; falls back to
   // position index when two summaries are identical.
   const outputDetailsRef = useRef<Map<string, boolean>>(new Map());
-  // Navigation stack for clicking local .md links inside the output viewer.
-  // When non-empty, the top entry's content/basePath replaces the exp output.
+  // Navigation stack for clicking local .md / .html links inside the output
+  // viewer. When non-empty, the top entry's content/basePath/format replaces
+  // the exp output.
   // - parentScroll: scrollTop of the lightbox body before navigating into
   //   this entry; restored when popped.
   // - anchor: id of an element to scroll to on first render of this entry
   //   (set when the link's URL had a #fragment).
+  // - format: how to render the content ("md" runs the markdown renderer,
+  //   "html" injects directly).
   const [outputFileStack, setOutputFileStack] = useState<
-    Array<{ path: string; content: string; basePath: string; parentScroll: number; anchor?: string }>
+    Array<{ path: string; content: string; basePath: string; format: "md" | "html"; parentScroll: number; anchor?: string }>
   >([]);
   const [outputFileLoading, setOutputFileLoading] = useState(false);
   // One-shot scroll intent applied by the post-render layout effect.
@@ -202,7 +206,12 @@ export function DetailPanel() {
 
   function fetchOutputContent(exp: Experiment) {
     getExperimentOutput(exp.label || exp.id)
-      .then((data) => { setOutputContent(data.output); setOutputBasePath(data.base_path || ""); setOutputLoading(false); })
+      .then((data) => {
+        setOutputContent(data.output);
+        setOutputBasePath(data.base_path || "");
+        setOutputFormat((data.format as "md" | "html") || "md");
+        setOutputLoading(false);
+      })
       .catch(() => { setOutputContent("(output file not found)"); setOutputLoading(false); });
   }
 
@@ -221,6 +230,7 @@ export function DetailPanel() {
   const _outputLinkedTop = outputFileStack.length > 0 ? outputFileStack[outputFileStack.length - 1] : null;
   const displayedContent = _outputLinkedTop ? _outputLinkedTop.content : outputContent;
   const displayedBasePath = _outputLinkedTop ? _outputLinkedTop.basePath : outputBasePath;
+  const displayedFormat: "md" | "html" = _outputLinkedTop ? _outputLinkedTop.format : outputFormat;
 
   // Track which inline scripts we've already executed in this context so
   // poll refreshes don't re-run them and stack intervals/listeners.
@@ -402,12 +412,13 @@ export function DetailPanel() {
       } catch { return; }
       if (resolved.origin !== window.location.origin) return;
       if (!resolved.pathname.startsWith("/api/v1/files/")) return;
-      if (!/\.md$/i.test(resolved.pathname)) return;
+      if (!/\.(md|html?)$/i.test(resolved.pathname)) return;
 
       e.preventDefault();
       const filePath = decodeURIComponent(resolved.pathname.slice("/api/v1/files/".length));
       const slashIdx = filePath.lastIndexOf("/");
       const newBasePath = slashIdx >= 0 ? filePath.slice(0, slashIdx) : "";
+      const linkFormat: "md" | "html" = /\.html?$/i.test(filePath) ? "html" : "md";
       const linkAnchor = resolved.hash ? resolved.hash.slice(1) : undefined;
       const parentScroll = root.scrollTop;
 
@@ -425,7 +436,7 @@ export function DetailPanel() {
             ? { kind: "anchor", id: linkAnchor }
             : { kind: "top", value: 0 };
           setOutputFileStack((stack) => [...stack, {
-            path: filePath, content, basePath: newBasePath, parentScroll, anchor: linkAnchor,
+            path: filePath, content, basePath: newBasePath, format: linkFormat, parentScroll, anchor: linkAnchor,
           }]);
           setOutputFollowing(false);
         })
@@ -435,6 +446,7 @@ export function DetailPanel() {
             path: filePath,
             content: `(failed to load ${filePath})`,
             basePath: newBasePath,
+            format: linkFormat,
             parentScroll,
           }]);
         })
@@ -832,7 +844,14 @@ export function DetailPanel() {
               displayedContent.startsWith("(") ? (
                 <div style={{ color: "#8b949e", fontStyle: "italic" }}>{displayedContent}</div>
               ) : (
-                <div class="md-output" dangerouslySetInnerHTML={{ __html: renderMarkdown(displayedContent, displayedBasePath) }} />
+                <div
+                  class="md-output"
+                  dangerouslySetInnerHTML={{
+                    __html: displayedFormat === "html"
+                      ? displayedContent
+                      : renderMarkdown(displayedContent, displayedBasePath),
+                  }}
+                />
               )
             )}
           </Lightbox>
