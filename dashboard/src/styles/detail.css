@@ -288,6 +288,12 @@
 .md-output strong { color: #e6edf3; font-weight: 600; }
 .md-output em { color: #d2a8ff; font-style: italic; }
 .md-output .md-img { max-width: 100%; display: block; margin: 8px 0; border-radius: 4px; }
+.md-output .md-table { border-collapse: collapse; margin: 8px 0; font-size: 11px; max-width: 100%; }
+.md-output .md-table th,
+.md-output .md-table td { border: 1px solid #30363d; padding: 4px 8px; vertical-align: top; }
+.md-output .md-table thead th { background: #161b22; color: #c9d1d9; font-weight: 600; text-align: left; }
+.md-output .md-table tbody tr:nth-child(even) { background: rgba(110, 118, 129, 0.05); }
+.md-output .md-table tbody td { color: #8b949e; }
 .md-output details { margin: 6px 0; border: 1px solid #30363d; border-radius: 4px; background: #0d1117; padding: 0; }
 .md-output details[open] { padding-bottom: 8px; }
 .md-output summary { cursor: pointer; padding: 6px 10px; color: #8b949e; font-size: 11px; user-select: none; list-style: none; }

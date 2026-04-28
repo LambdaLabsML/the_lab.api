@@ -1063,6 +1063,76 @@ const HTML_PASSTHROUGH = new Set([
 // (paragraph-wrapped) by the line-by-line markdown processor.
 const MULTILINE_PASSTHROUGH = new Set(["pre", "script", "style", "textarea", "svg"]);
 
+/** GFM pipe-table helpers. */
+function _isPipeTableRow(line: string): boolean {
+  const t = line.trim();
+  // Must contain at least one pipe and at least one cell. Leading/trailing
+  // pipes optional per spec but we require leading | here to avoid eating
+  // arbitrary text containing a pipe.
+  return t.startsWith("|") && t.length > 1 && t.includes("|", 1);
+}
+
+function _isPipeTableSeparator(line: string): boolean {
+  const t = line.trim();
+  if (!t.startsWith("|")) return false;
+  const inner = t.replace(/^\|/, "").replace(/\|$/, "");
+  const cells = inner.split("|");
+  if (cells.length === 0) return false;
+  return cells.every((c) => /^\s*:?-{2,}:?\s*$/.test(c));
+}
+
+function _splitTableRow(line: string): string[] {
+  const t = line.trim().replace(/^\|/, "").replace(/\|$/, "");
+  // Split on unescaped pipes. \| represents a literal pipe within a cell.
+  const out: string[] = [];
+  let cur = "";
+  for (let i = 0; i < t.length; i++) {
+    const ch = t[i];
+    if (ch === "\\" && t[i + 1] === "|") { cur += "|"; i++; continue; }
+    if (ch === "|") { out.push(cur.trim()); cur = ""; continue; }
+    cur += ch;
+  }
+  out.push(cur.trim());
+  return out;
+}
+
+function _parseTableAligns(separator: string): Array<"left" | "right" | "center" | null> {
+  const t = separator.trim().replace(/^\|/, "").replace(/\|$/, "");
+  return t.split("|").map((c) => {
+    const s = c.trim();
+    const left = s.startsWith(":");
+    const right = s.endsWith(":");
+    if (left && right) return "center";
+    if (right) return "right";
+    if (left) return "left";
+    return null;
+  });
+}
+
+function _renderTable(
+  headers: string[],
+  aligns: Array<"left" | "right" | "center" | null>,
+  body: string[][],
+  basePath: string,
+): string {
+  const styleFor = (idx: number) => {
+    const a = aligns[idx];
+    return a ? ` style="text-align:${a}"` : "";
+  };
+  const ths = headers
+    .map((h, idx) => `<th${styleFor(idx)}>${inlineMd(h, basePath)}</th>`)
+    .join("");
+  const trs = body
+    .map((row) => {
+      const tds = row
+        .map((c, idx) => `<td${styleFor(idx)}>${inlineMd(c, basePath)}</td>`)
+        .join("");
+      return `<tr>${tds}</tr>`;
+    })
+    .join("");
+  return `<table class="md-table"><thead><tr>${ths}</tr></thead><tbody>${trs}</tbody></table>`;
+}
+
 /** GitHub-style slug from a heading's raw markdown text. Used to give
  *  every heading an id so `[link](#section)` works. Strips inline HTML
  *  tags and markdown emphasis chars first. */
@@ -1194,6 +1264,26 @@ function renderMarkdown(md: string, basePath = ""): string {
     if (/^[-*]{3,}$/.test(line.trim())) {
       out.push('<hr class="md-hr" />');
       i++;
+      continue;
+    }
+
+    // GFM pipe table — header row + separator row + body. Standard syntax
+    // (leading/trailing pipes optional, GFM allows omitting them but the
+    // common case includes them and that's what the agent emits).
+    if (
+      _isPipeTableRow(line) &&
+      i + 1 < lines.length &&
+      _isPipeTableSeparator(lines[i + 1])
+    ) {
+      const headers = _splitTableRow(line);
+      const aligns = _parseTableAligns(lines[i + 1]);
+      i += 2;
+      const body: string[][] = [];
+      while (i < lines.length && _isPipeTableRow(lines[i])) {
+        body.push(_splitTableRow(lines[i]));
+        i++;
+      }
+      out.push(_renderTable(headers, aligns, body, basePath));
       continue;
     }
 
