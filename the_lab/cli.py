@@ -201,9 +201,12 @@ def cmd_init(target: str | None = None):
         print(f"  {_green(chr(10003))} .gitignore already includes .the_lab/ and .claude/")
 
     # 5. Pre-fill PROMPT.md with Claude --------------------------------
+    # Pick the active prompt file: prefer .the_lab/PROMPT.md (canonical),
+    # fall back to legacy <repo>/PROMPT.md if the user declined migration.
+    active_prompt = canonical_prompt if canonical_prompt.exists() else legacy_prompt
     import shutil as _shutil
     claude_bin = _shutil.which("claude")
-    if claude_bin and prompt_path.exists():
+    if claude_bin and active_prompt.exists():
         print(f"\n  {_blue('?')} Describe your research goal so Claude can pre-fill PROMPT.md.")
         print(f"    {_dim('Leave blank to skip and edit the file yourself.')}")
         try:
@@ -223,7 +226,7 @@ def cmd_init(target: str | None = None):
                 "Keep the existing Goal / Background / Setup structure. Replace the "
                 "placeholder text with concrete details. Be specific and concise.\n\n"
                 "If you can't determine something, leave a [TODO: ...] marker.\n\n"
-                f"Edit the file: {prompt_path}"
+                f"Edit the file: {active_prompt}"
             )
             result = subprocess.run(
                 [claude_bin, "--dangerously-skip-permissions", "-p", prefill_prompt],
