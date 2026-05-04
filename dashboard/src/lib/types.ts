@@ -215,6 +215,74 @@ export type IdeaDetail = IdeaNode;
 /** Response shape from GET /api/v1/ideas/:id/experiments */
 export type IdeaExperimentsResponse = Experiment[];
 
+/** A queued or running experiment as returned by GET /api/v1/queue */
+export interface QueueExp {
+  id: string | number;
+  label: string;
+  idea_id: number;
+  description: string;
+  status: string;
+  priority: number;
+  requirements: { units?: number; kind: string; tags: string[] };
+  depends_on: string[];
+  created_at: string;
+  started_at: string | null;
+  queued_at: string | null;
+  tags: string[];
+  assigned_resource: string | null;
+  assigned_units: number[] | null;
+}
+
+/** A holder of a unit slot on a resource */
+export interface ResourceHolder {
+  experiment_label: string;
+  units: number[];
+}
+
+/** Computed utilization for a resource */
+export interface ResourceUtilization {
+  capacity: number;
+  in_use_units: number;
+  free_units: number;
+  running_jobs: number;
+  max_parallel_jobs: number;
+  default_units_per_job: number;
+  holders: ResourceHolder[];
+}
+
+/** A queue resource (e.g. a GPU pool) returned by GET /api/v1/resources */
+export interface ResourceState {
+  name: string;
+  kind: string;
+  unit_kind: string;
+  capacity: number;
+  jobs_per_unit: number;
+  default_units_per_job: number;
+  max_parallel_jobs: number;
+  tags: string[];
+  executor_config: Record<string, unknown>;
+  utilization: ResourceUtilization;
+}
+
+/** Snapshot returned by GET /api/v1/queue */
+export interface QueueSnapshot {
+  queued: QueueExp[];
+  running: QueueExp[];
+  resources: ResourceState[];
+  config: { paused: boolean; dispatch_interval_s: number };
+}
+
+/** Body for PUT /api/v1/resources/:name */
+export interface ResourceUpsertBody {
+  name: string;
+  kind: string;
+  unit_kind: string;
+  capacity: number;
+  jobs_per_unit: number;
+  tags: string[];
+  executor_config: Record<string, unknown>;
+}
+
 /** A log entry built from idea, experiment, and note data */
 export interface LogEntry {
   type: string;

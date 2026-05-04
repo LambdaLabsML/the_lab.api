@@ -14,6 +14,9 @@ import type {
   ProgressResponse,
   OpenAPISpec,
   PromptMeta,
+  QueueSnapshot,
+  ResourceState,
+  ResourceUpsertBody,
   SandboxState,
   SuggestIdeaRequest,
 } from "../lib/types";
@@ -248,6 +251,95 @@ export async function unregisterAgent(
     `/api/v1/agents/${encodeURIComponent(id)}${qs}`,
     { method: "DELETE" },
   );
+}
+
+// ---------------------------------------------------------------------------
+// Queue + Resources
+// ---------------------------------------------------------------------------
+
+/** GET /api/v1/queue */
+export async function getQueue(): Promise<QueueSnapshot> {
+  return fetchJson<QueueSnapshot>("/api/v1/queue");
+}
+
+/** GET /api/v1/queue/config */
+export async function getQueueConfig(): Promise<{ paused: boolean; dispatch_interval_s: number }> {
+  return fetchJson<{ paused: boolean; dispatch_interval_s: number }>("/api/v1/queue/config");
+}
+
+/** PUT /api/v1/queue/config */
+export async function setQueueConfig(req: {
+  paused?: boolean;
+  dispatch_interval_s?: number;
+}): Promise<{ paused: boolean; dispatch_interval_s: number }> {
+  return fetchJson<{ paused: boolean; dispatch_interval_s: number }>("/api/v1/queue/config", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+  });
+}
+
+/** POST /api/v1/queue/pause */
+export async function pauseQueue(): Promise<{ paused: boolean; dispatch_interval_s: number }> {
+  return fetchJson<{ paused: boolean; dispatch_interval_s: number }>("/api/v1/queue/pause", {
+    method: "POST",
+  });
+}
+
+/** POST /api/v1/queue/resume */
+export async function resumeQueue(): Promise<{ paused: boolean; dispatch_interval_s: number }> {
+  return fetchJson<{ paused: boolean; dispatch_interval_s: number }>("/api/v1/queue/resume", {
+    method: "POST",
+  });
+}
+
+/** GET /api/v1/resources */
+export async function listResources(): Promise<ResourceState[]> {
+  return fetchJson<ResourceState[]>("/api/v1/resources");
+}
+
+/** GET /api/v1/resources/:name */
+export async function getResource(name: string): Promise<ResourceState> {
+  return fetchJson<ResourceState>(`/api/v1/resources/${encodeURIComponent(name)}`);
+}
+
+/** PUT /api/v1/resources/:name */
+export async function upsertResource(
+  name: string,
+  body: ResourceUpsertBody,
+): Promise<ResourceState> {
+  return fetchJson<ResourceState>(`/api/v1/resources/${encodeURIComponent(name)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+/** DELETE /api/v1/resources/:name */
+export async function deleteResource(name: string): Promise<{ status: string; name: string }> {
+  return fetchJson<{ status: string; name: string }>(
+    `/api/v1/resources/${encodeURIComponent(name)}`,
+    { method: "DELETE" },
+  );
+}
+
+/** POST /api/v1/experiments/:ref/priority */
+export async function setExperimentPriority(
+  ref: string | number,
+  priority: number,
+): Promise<unknown> {
+  return fetchJson<unknown>(`/api/v1/experiments/${ref}/priority`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ priority }),
+  });
+}
+
+/** POST /api/v1/experiments/:ref/cancel */
+export async function cancelExperiment(ref: string | number): Promise<unknown> {
+  return fetchJson<unknown>(`/api/v1/experiments/${ref}/cancel`, {
+    method: "POST",
+  });
 }
 
 // ---------------------------------------------------------------------------
