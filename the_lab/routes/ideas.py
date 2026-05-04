@@ -1,12 +1,13 @@
 """Idea CRUD, suggest, and adopt endpoints."""
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from ..cache import cached_response
 from ..deps import (
     store,
     REPO_DIR,
+    agent_cwd,
     _idea_context,
     _branch_diff_summary,
     _read_task,
@@ -37,7 +38,7 @@ router = APIRouter(prefix="/api/v1")
 # --- Ideas ---
 
 @router.post("/ideas/new", status_code=201)
-def create_idea(req: NewIdeaRequest):
+def create_idea(req: NewIdeaRequest, request: Request):
     """Create a new idea and its corresponding git branch.
 
     Creates an idea record and a git branch named ``idea/<id>``. If no
@@ -52,10 +53,11 @@ def create_idea(req: NewIdeaRequest):
         POST /api/v1/ideas/new {"parent_ids": [1], "description": "test new hypothesis"}
         -> {"id": 3, "branch": "idea/3", "status": "active", "similar_ideas": [...]}
     """
+    cwd = agent_cwd(request)
     # If no parents given, infer from current branch (idea/N → parent is N)
     parent_ids = req.parent_ids
     if not parent_ids:
-        current = get_current_branch(cwd=REPO_DIR)
+        current = get_current_branch(cwd=cwd)
         if current.startswith("idea/"):
             try:
                 current_idea_id = int(current.split("/")[1])
@@ -75,15 +77,15 @@ def create_idea(req: NewIdeaRequest):
 
     try:
         if len(parent_ids) == 0:
-            base = get_default_branch(cwd=REPO_DIR)
-            create_branch_from(branch_name, base, cwd=REPO_DIR)
+            base = get_default_branch(cwd=cwd)
+            create_branch_from(branch_name, base, cwd=cwd)
         elif len(parent_ids) == 1:
             parent = store.get_idea(parent_ids[0])
-            create_branch_from(branch_name, parent["branch"], cwd=REPO_DIR)
+            create_branch_from(branch_name, parent["branch"], cwd=cwd)
         else:
             parent_branches = [store.get_idea(pid)["branch"] for pid in parent_ids]
             # carry=True: stash current changes, create merge branch, pop+commit there
-            conflicts = create_branch_from_merge(branch_name, parent_branches, cwd=REPO_DIR, carry=True)
+            conflicts = create_branch_from_merge(branch_name, parent_branches, cwd=cwd, carry=True)
             if conflicts is not None:
                 return {"status": "conflict", "conflicts": conflicts}
             # create_branch_from_merge already checked out the new branch
@@ -103,7 +105,7 @@ def create_idea(req: NewIdeaRequest):
         if req.auto_checkout:
             try:
                 # carry: uncommitted changes land on new branch, not the old one
-                checkout_idea_carry(idea_id, cwd=REPO_DIR)
+                checkout_idea_carry(idea_id, cwd=cwd)
                 idea["checked_out"] = True
             except GitError:
                 idea["checked_out"] = False
@@ -113,7 +115,7 @@ def create_idea(req: NewIdeaRequest):
 
 
 @router.post("/ideas/{idea_id}/checkout")
-def checkout_idea_endpoint(idea_id: int):
+def checkout_idea_endpoint(idea_id: int, request: Request):
     """Switch the working tree to an idea's branch.
 
     Auto-commits any uncommitted changes on the current branch before
@@ -125,11 +127,12 @@ def checkout_idea_endpoint(idea_id: int):
         POST /api/v1/ideas/2/checkout
         -> {"branch": "idea/2", "stashed": false, "idea_id": 2, "idea_description": "..."}
     """
+    cwd = agent_cwd(request)
     idea = store.get_idea(idea_id)
     if not idea:
         raise HTTPException(404, "idea not found")
     # Idempotent: if already on this branch, return success
-    current = get_current_branch(cwd=REPO_DIR)
+    current = get_current_branch(cwd=cwd)
     if current == f"idea/{idea_id}":
         return {
             "branch": current,
@@ -139,7 +142,7 @@ def checkout_idea_endpoint(idea_id: int):
             "idea_description": idea["description"],
         }
     try:
-        result = checkout_idea(idea_id, cwd=REPO_DIR)
+        result = checkout_idea(idea_id, cwd=cwd)
         return {
             **result,
             "idea_id": idea["id"],
@@ -568,7 +571,7 @@ def get_notes(
 
 
 @router.post("/ideas/{idea_id}/adopt")
-def adopt_idea(idea_id: int, req: AdoptRequest | None = None):
+def adopt_idea(idea_id: int, request: Request, req: AdoptRequest | None = None):
     """Adopt a suggested idea, creating its git branch and activating it.
 
     Transitions a ``suggested`` idea to ``active`` status and creates its
@@ -581,6 +584,7 @@ def adopt_idea(idea_id: int, req: AdoptRequest | None = None):
         POST /api/v1/ideas/5/adopt {"agent_note": "Looks promising, starting now"}
         -> {"id": 5, "status": "active", "branch": "idea/5", ...}
     """
+    cwd = agent_cwd(request)
     idea = store.get_idea(idea_id)
     if not idea:
         raise HTTPException(404, "idea not found")
@@ -592,15 +596,15 @@ def adopt_idea(idea_id: int, req: AdoptRequest | None = None):
 
     try:
         if len(parent_ids) == 0:
-            base = get_default_branch(cwd=REPO_DIR)
-            create_branch_from(branch_name, base, cwd=REPO_DIR)
+            base = get_default_branch(cwd=cwd)
+            create_branch_from(branch_name, base, cwd=cwd)
         elif len(parent_ids) == 1:
             parent = store.get_idea(parent_ids[0])
-            create_branch_from(branch_name, parent["branch"], cwd=REPO_DIR)
+            create_branch_from(branch_name, parent["branch"], cwd=cwd)
         else:
             parent_branches = [store.get_idea(pid)["branch"] for pid in parent_ids]
             # carry=True: uncommitted changes land on new branch, not the old one
-            conflicts = create_branch_from_merge(branch_name, parent_branches, cwd=REPO_DIR, carry=True)
+            conflicts = create_branch_from_merge(branch_name, parent_branches, cwd=cwd, carry=True)
             if conflicts is not None:
                 return {"status": "conflict", "conflicts": conflicts}
 

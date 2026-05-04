@@ -60,6 +60,33 @@ app = FastAPI(title="The Lab", version="0.1.0", default_response_class=SafeJSONR
 # --- Middleware ---
 
 @app.middleware("http")
+async def resolve_agent(request, call_next):
+    """Read X-Agent-Id, look up the agent's worktree, stash on request.state.
+
+    Routes that touch git can call ``deps.agent_cwd(request)`` to get the
+    correct worktree as cwd. When the header is absent, request.state.agent_id
+    is None and routes fall back to REPO_DIR.
+    """
+    from . import agents as _agents_mod
+    agent_id = request.headers.get("x-agent-id") or None
+    request.state.agent_id = agent_id
+    request.state.agent_cwd = None
+    request.state.agent_unknown = False
+    if agent_id:
+        entry = _agents_mod.lookup_agent(REPO_DIR, agent_id)
+        if entry:
+            from pathlib import Path as _P
+            wt = _P(entry["worktree"])
+            if wt.exists():
+                request.state.agent_cwd = wt
+            else:
+                request.state.agent_unknown = True
+        else:
+            request.state.agent_unknown = True
+    return await call_next(request)
+
+
+@app.middleware("http")
 async def track_api_stats(request, call_next):
     import time as _time
 
@@ -178,6 +205,28 @@ async def inject_notifications(request, call_next):
             })
     except Exception:
         pass
+    # Mild nudge when a git-touching route ran in the main repo because no
+    # X-Agent-Id was provided (and the agent_cwd helper flagged it).
+    if getattr(request.state, "git_no_agent_warning", False):
+        notifications.append({
+            "type": "agent",
+            "message": (
+                "X-Agent-Id header missing; this git operation ran in the "
+                "main repo. Register an agent with POST /api/v1/agents/register "
+                "and pass the returned id back in the X-Agent-Id header."
+            ),
+            "action": "POST /api/v1/agents/register",
+        })
+    elif getattr(request.state, "agent_unknown", False):
+        notifications.append({
+            "type": "agent",
+            "message": (
+                f"X-Agent-Id '{getattr(request.state, 'agent_id', '?')}' is not "
+                "registered; falling back to the main repo. Re-register with "
+                "POST /api/v1/agents/register."
+            ),
+            "action": "POST /api/v1/agents/register",
+        })
     if notifications:
         data["_notifications"] = notifications
         try:
@@ -249,12 +298,14 @@ from .routes.experiments import router as experiments_router
 from .routes.overview import router as overview_router
 from .routes.operational import router as operational_router
 from .routes.prompts import router as prompts_router
+from .routes.agents import router as agents_router
 
 app.include_router(ideas_router)
 app.include_router(experiments_router)
 app.include_router(overview_router)
 app.include_router(operational_router)
 app.include_router(prompts_router)
+app.include_router(agents_router)
 
 
 # --- SPA Fallback (must be last) ---

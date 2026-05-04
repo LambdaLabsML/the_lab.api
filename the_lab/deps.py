@@ -18,6 +18,26 @@ api_stats: ApiStats = None  # type: ignore[assignment]
 REPO_DIR: Path = None  # type: ignore[assignment]
 
 
+def agent_cwd(request) -> Path:
+    """Return the cwd a git-touching route should use for *request*.
+
+    - If X-Agent-Id was provided and matches a registered agent, returns
+      that agent's worktree path.
+    - If the header was provided but the id is unknown, returns REPO_DIR
+      and flags the request so the notifications middleware appends a
+      "register first" nudge.
+    - If no X-Agent-Id at all, returns REPO_DIR and flags a milder nudge
+      reminding the caller that isolated mode is recommended.
+    """
+    cwd = getattr(request.state, "agent_cwd", None)
+    if cwd is not None:
+        return cwd
+    # No matching worktree — check whether the caller even provided a header.
+    if not getattr(request.state, "agent_id", None):
+        request.state.git_no_agent_warning = True
+    return REPO_DIR
+
+
 def init(
     _store: Store,
     _runner: ExperimentRunner,
