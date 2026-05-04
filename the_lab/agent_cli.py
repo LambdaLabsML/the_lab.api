@@ -127,6 +127,13 @@ def main():
         action="store_true",
         help="List configured prompt roles (from .the_lab/PROMPT*.md) and exit.",
     )
+    parser.add_argument(
+        "--no-isolated",
+        action="store_true",
+        help="Run in the main repo instead of registering a per-agent git "
+             "worktree (legacy behaviour). Default is isolated mode: a fresh "
+             "worktree is created and removed automatically around the run.",
+    )
     args = parser.parse_args()
 
     # --list-roles: handle and exit before any agent setup.
@@ -277,6 +284,46 @@ def main():
     )
 
     env = dict(os.environ)
+
+    # Isolated mode (default): register a per-agent worktree with the API
+    # server and run the agent inside it. The X-Agent-Id is propagated to
+    # the MCP bridge via env so every API call routes to this worktree.
+    agent_id: str | None = None
+    agent_worktree: Path | None = None
+    if not args.no_isolated:
+        api_base_for_register = f"http://localhost:{args.port}/api/v1"
+        try:
+            import urllib.request as _urlreq
+            import urllib.error as _urlerr
+            import json as _json
+            payload = _json.dumps({
+                "role": args.role,
+                "pid": os.getpid(),
+            }).encode()
+            req_obj = _urlreq.Request(
+                f"{api_base_for_register}/agents/register",
+                data=payload, method="POST",
+                headers={"Content-Type": "application/json"},
+            )
+            with _urlreq.urlopen(req_obj, timeout=10) as resp:
+                reg = _json.loads(resp.read().decode())
+            agent_id = reg["agent_id"]
+            agent_worktree = Path(reg["worktree"]).resolve()
+            print(
+                f"Agent: registered id={agent_id} on branch {reg['branch']} "
+                f"(parent: {reg['parent_branch']})\n"
+                f"  worktree: {agent_worktree}",
+                file=sys.stderr,
+            )
+            env["THE_LAB_AGENT_ID"] = agent_id
+            env["THE_LAB_AGENT_WORKTREE"] = str(agent_worktree)
+        except Exception as e:
+            print(
+                f"Warning: agent registration failed ({e}); "
+                "running in legacy/main-repo mode. Pass --no-isolated to silence.",
+                file=sys.stderr,
+            )
+
     if args.sandbox:
         if args.repo:
             repo_root = Path(args.repo).resolve()
@@ -305,6 +352,50 @@ def main():
             cwd=os.getcwd(),
         )
 
+    # Pick the cwd for the agent process: its worktree if isolated, else
+    # whatever cwd we were launched from.
+    run_cwd = str(agent_worktree) if agent_worktree else None
+
+    # In isolated mode we need to outlive the agent process so we can
+    # unregister + clean up the worktree. Use Popen + signal forwarding
+    # instead of execvpe.
+    if agent_id:
+        import signal as _signal
+        import subprocess as _sp
+        proc = _sp.Popen(cmd, env=env, cwd=run_cwd)
+        forwarded = {"sig": None}
+
+        def _forward(signum, _frame):
+            forwarded["sig"] = signum
+            try:
+                proc.send_signal(signum)
+            except Exception:
+                pass
+
+        for s in (_signal.SIGINT, _signal.SIGTERM, _signal.SIGHUP):
+            try:
+                _signal.signal(s, _forward)
+            except (ValueError, OSError):
+                pass
+
+        try:
+            rc = proc.wait()
+        finally:
+            try:
+                import urllib.request as _urlreq
+                _urlreq.urlopen(
+                    _urlreq.Request(
+                        f"http://localhost:{args.port}/api/v1/agents/{agent_id}",
+                        method="DELETE",
+                    ),
+                    timeout=10,
+                )
+            except Exception as e:
+                print(f"Warning: failed to unregister agent {agent_id}: {e}",
+                      file=sys.stderr)
+        sys.exit(rc)
+
+    # Legacy / --no-isolated path: replace this process with the agent.
     os.execvpe(cmd[0], cmd, env)
 
 
