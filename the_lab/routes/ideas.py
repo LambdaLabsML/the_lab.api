@@ -1,6 +1,8 @@
 """Idea CRUD, suggest, and adopt endpoints."""
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from ..cache import cached_response
@@ -131,9 +133,10 @@ def checkout_idea_endpoint(idea_id: int, request: Request):
     idea = store.get_idea(idea_id)
     if not idea:
         raise HTTPException(404, "idea not found")
+    branch_name = f"idea/{idea_id}"
     # Idempotent: if already on this branch, return success
     current = get_current_branch(cwd=cwd)
-    if current == f"idea/{idea_id}":
+    if current == branch_name:
         return {
             "branch": current,
             "stashed": False,
@@ -141,6 +144,18 @@ def checkout_idea_endpoint(idea_id: int, request: Request):
             "idea_id": idea["id"],
             "idea_description": idea["description"],
         }
+    # Refuse if some other worktree (another agent / the main repo) already
+    # holds this branch — git would refuse anyway, but with a clearer 409.
+    from .. import agents as _agents_mod
+    holder = _agents_mod.find_branch_holder(REPO_DIR, branch_name)
+    if holder and str(Path(holder["worktree"]).resolve()) != str(Path(cwd).resolve()):
+        held_by = holder.get("agent_id") or "the main repo"
+        raise HTTPException(
+            409,
+            f"branch '{branch_name}' is already checked out by {held_by} "
+            f"(at {holder['worktree']}). Wait for that agent to finish, "
+            "or unregister it via DELETE /api/v1/agents/<id>.",
+        )
     try:
         result = checkout_idea(idea_id, cwd=cwd)
         return {

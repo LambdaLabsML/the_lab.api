@@ -198,6 +198,37 @@ def prune_dead_agents(repo_dir: Path) -> list[str]:
     return removed
 
 
+def find_branch_holder(repo_dir: Path, branch: str) -> dict | None:
+    """Return the registry entry of the agent currently holding *branch*.
+
+    Branches in git can be checked out in only one worktree at a time. This
+    helper scans ``git worktree list`` and matches the result against the
+    agent registry. Returns ``{"agent_id": None, "worktree": <path>}`` if
+    the holder is the main repo's working tree (not an agent), or ``None``
+    when nothing has the branch checked out.
+    """
+    repo_dir = Path(repo_dir).resolve()
+    target = f"refs/heads/{branch}"
+    result = git_ops._run(
+        ["worktree", "list", "--porcelain"], cwd=repo_dir, check=False,
+    )
+    if result.returncode != 0:
+        return None
+    current_wt: str | None = None
+    for line in result.stdout.splitlines():
+        if line.startswith("worktree "):
+            current_wt = line[len("worktree "):].strip()
+        elif line.startswith("branch ") and line[len("branch "):].strip() == target:
+            holder_path = current_wt or ""
+            if not holder_path:
+                continue
+            for entry in list_agents(repo_dir):
+                if str(Path(entry["worktree"]).resolve()) == str(Path(holder_path).resolve()):
+                    return entry
+            return {"agent_id": None, "worktree": holder_path, "branch": branch}
+    return None
+
+
 def get_cwd_for_request(repo_dir: Path, agent_id: str | None) -> Path:
     """Resolve the cwd a git-touching route should use.
 
