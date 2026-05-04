@@ -7,7 +7,7 @@ const availablePanels = signal<string[]>([]);
 const isMaximized = signal(false);
 
 // Tray: panels that live in a bottom bar and pop up as dismissable floating lightboxes
-const DEFAULT_TRAY_IDS = ["api", "stats", "sandbox", "prompts", "task", "suggest"];
+const DEFAULT_TRAY_IDS = ["api", "stats", "sandbox", "prompts", "agents", "task", "suggest"];
 // Which panels are currently in the tray (can grow when user sends panels to tray)
 const trayPanels = signal<string[]>([...DEFAULT_TRAY_IDS]);
 // Set of panel IDs currently shown as transient floats (auto-dismiss on click-outside)
@@ -40,6 +40,7 @@ import { ApiView } from "./views/api-view";
 import { StatsView } from "./views/stats-view";
 import { SandboxView } from "./views/sandbox-view";
 import { PromptsView } from "./views/prompts-view";
+import { AgentsView } from "./views/agents-view";
 import { TablePanel } from "./components/table-panel";
 import { DetailPanel } from "./components/detail-panel";
 import { MetricsChart } from "./components/chart-panel/metrics-chart";
@@ -65,7 +66,7 @@ import { initTouchMoveMenu } from "./lib/touch-move-menu";
 const PANEL_NAMES: Record<string, string> = {
   graph: "Graph", timeline: "Timeline", log: "Log",
   api: "API", stats: "Stats", sandbox: "Sandbox",
-  prompts: "Prompts",
+  prompts: "Prompts", agents: "Agents",
   metrics: "Metrics", scatter: "Scatter", detail: "Detail",
   filters: "Filters", suggest: "Suggest", task: "Task",
   table: "Table",
@@ -81,6 +82,7 @@ const PANEL_MAP: Record<string, (params?: any) => preact.JSX.Element> = {
   stats: () => <StatsView />,
   sandbox: () => <SandboxView />,
   prompts: () => <PromptsView />,
+  agents: () => <AgentsView />,
   metrics: (p?: any) => <MetricsChart instanceId={p?.instanceId} initialMetric={p?.metric} />,
   scatter: (p?: any) => <ScatterChart instanceId={p?.instanceId} initialXMetric={p?.xMetric} initialYMetric={p?.yMetric} />,
   detail: () => <DetailPanel />,
@@ -317,6 +319,7 @@ function buildMobileLayout(dv: DockviewComponent) {
   dv.addPanel({ id: "task", component: "default", title: "Task", position: { referencePanel: bottom } });
   dv.addPanel({ id: "sandbox", component: "default", title: "Sandbox", position: { referencePanel: bottom } });
   dv.addPanel({ id: "prompts", component: "default", title: "Prompts", position: { referencePanel: bottom } });
+  dv.addPanel({ id: "agents", component: "default", title: "Agents", position: { referencePanel: bottom } });
 }
 
 const NARROW_BREAKPOINT = 800;

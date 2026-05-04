@@ -5,6 +5,7 @@
 // ------------------------------------------------------------
 
 import type {
+  AgentEntry,
   BacklogResponse,
   GraphResponse,
   ChartDataResponse,
@@ -226,6 +227,27 @@ export async function deletePromptRole(role: string): Promise<{ status: string; 
   return fetchJson<{ status: string; role: string }>(`/api/v1/prompts/${encodeURIComponent(role)}`, {
     method: "DELETE",
   });
+}
+
+// ---------------------------------------------------------------------------
+// Agents
+// ---------------------------------------------------------------------------
+
+/** GET /api/v1/agents */
+export async function listAgents(): Promise<AgentEntry[]> {
+  return fetchJson<AgentEntry[]>("/api/v1/agents");
+}
+
+/** DELETE /api/v1/agents/:id?keep_branch=true|false */
+export async function unregisterAgent(
+  id: string,
+  keepBranch: boolean = true,
+): Promise<{ status: string; agent_id: string }> {
+  const qs = `?keep_branch=${keepBranch ? "true" : "false"}`;
+  return fetchJson<{ status: string; agent_id: string }>(
+    `/api/v1/agents/${encodeURIComponent(id)}${qs}`,
+    { method: "DELETE" },
+  );
 }
 
 // ---------------------------------------------------------------------------

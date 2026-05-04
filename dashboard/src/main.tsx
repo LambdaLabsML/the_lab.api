@@ -11,6 +11,7 @@ import "./styles/log.css";
 import "./styles/api.css";
 import "./styles/sandbox.css";
 import "./styles/prompts.css";
+import "./styles/agents.css";
 import "./styles/suggest.css";
 import "./styles/tags.css";
 import "./styles/task.css";

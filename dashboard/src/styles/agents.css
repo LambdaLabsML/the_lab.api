@@ -1,0 +1,288 @@
+#agents-container {
+  flex: 1 1 0%;
+  overflow: auto;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  background: #0d1117;
+  color: #c9d1d9;
+}
+
+.agents-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  align-items: flex-start;
+  padding: 18px 20px;
+  border: 1px solid #30363d;
+  background: linear-gradient(180deg, #141a22 0%, #0f141b 100%);
+  border-radius: 12px;
+}
+
+.agents-header-left h2 {
+  margin: 0 0 8px 0;
+  font-size: 18px;
+}
+
+.agents-header-left p {
+  margin: 0;
+  color: #8b949e;
+  max-width: 760px;
+  line-height: 1.45;
+  font-size: 12px;
+}
+
+.agents-header-left code {
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  padding: 1px 5px;
+  background: #161b22;
+  border: 1px solid #21262d;
+  border-radius: 4px;
+  color: #79c0ff;
+  font-size: 11px;
+}
+
+.agents-header-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.agents-summary {
+  font-size: 12px;
+  color: #8b949e;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.agents-error {
+  border-radius: 10px;
+  padding: 12px 14px;
+  border: 1px solid #f85149;
+  background: #5a1e23;
+  color: #ffb3ba;
+  font-size: 12px;
+}
+
+.agents-empty {
+  border: 1px dashed #30363d;
+  background: #11161d;
+  border-radius: 12px;
+  padding: 28px 20px;
+  text-align: center;
+  color: #8b949e;
+}
+
+.agents-empty-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #c9d1d9;
+  margin-bottom: 6px;
+}
+
+.agents-empty-body {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.agents-empty code {
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  padding: 2px 6px;
+  background: #161b22;
+  border: 1px solid #21262d;
+  border-radius: 4px;
+  color: #79c0ff;
+  font-size: 11px;
+}
+
+.agents-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 14px;
+}
+
+.agents-card {
+  border: 1px solid #30363d;
+  background: #11161d;
+  border-radius: 12px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.agents-card-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.agents-card-id-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+  min-width: 0;
+}
+
+.agents-card-id {
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 18px;
+  font-weight: 700;
+  color: #c9d1d9;
+  letter-spacing: 0.04em;
+}
+
+.agents-chip {
+  display: inline-block;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid #274b6d;
+  background: #102234;
+  color: #79c0ff;
+  font-weight: 500;
+}
+
+.agents-pid-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #8b949e;
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+}
+
+.agents-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #6e7681;
+  display: inline-block;
+}
+
+.agents-pid-status.alive .agents-dot {
+  background: #3fb950;
+  box-shadow: 0 0 6px rgba(63, 185, 80, 0.55);
+}
+
+.agents-pid-status.dead .agents-dot {
+  background: #f85149;
+}
+
+.agents-card-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  min-width: 0;
+}
+
+.agents-card-label {
+  flex: 0 0 76px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #8b949e;
+  padding-top: 2px;
+}
+
+.agents-card-value {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12px;
+  color: #c9d1d9;
+}
+
+.agents-branch {
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 12px;
+  color: #c9d1d9;
+  word-break: break-all;
+}
+
+.agents-branch-parent {
+  font-size: 11px;
+  color: #8b949e;
+  margin-top: 2px;
+}
+
+.agents-branch-parent code {
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 11px;
+  color: #79c0ff;
+  background: transparent;
+  border: none;
+  padding: 0;
+}
+
+.agents-worktree {
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 11px;
+  padding: 2px 6px;
+  background: #0d1117;
+  border: 1px solid #21262d;
+  border-radius: 4px;
+  color: #c9d1d9;
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agents-card-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: auto;
+  padding-top: 6px;
+}
+
+.agents-btn {
+  padding: 6px 11px;
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  color: #c9d1d9;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.agents-btn:hover:not(:disabled) {
+  background: #21262d;
+  border-color: #8b949e;
+}
+
+.agents-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.agents-btn.danger {
+  background: #21262d;
+  border-color: #6e1e23;
+  color: #f85149;
+}
+
+.agents-btn.danger:hover:not(:disabled) {
+  background: #5a1e23;
+  color: #ffb3ba;
+}
+
+@media (max-width: 700px) {
+  .agents-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .agents-header-right {
+    align-items: flex-start;
+  }
+}

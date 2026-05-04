@@ -184,6 +184,16 @@ export interface PromptMeta {
   updated_at: string;
 }
 
+export interface AgentEntry {
+  agent_id: string;
+  role: string;
+  branch: string;
+  parent_branch: string;
+  worktree: string;
+  pid: number | null;
+  created_at: string;
+}
+
 export interface SandboxState {
   enabled: boolean;
   mode: string;
