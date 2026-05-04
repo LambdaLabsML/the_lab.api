@@ -12,7 +12,10 @@ class ResourceItem(BaseModel):
 
 
 class NewIdeaRequest(BaseModel):
-    parent_ids: list[int] = []
+    # None  → infer parent from the currently checked-out branch
+    # []    → no parent (root idea, branched from main)
+    # [..]  → explicit parents
+    parent_ids: list[int] | None = None
     description: str
     auto_checkout: bool = True
 

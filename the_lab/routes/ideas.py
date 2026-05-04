@@ -56,9 +56,13 @@ def create_idea(req: NewIdeaRequest, request: Request):
         -> {"id": 3, "branch": "idea/3", "status": "active", "similar_ideas": [...]}
     """
     cwd = agent_cwd(request)
-    # If no parents given, infer from current branch (idea/N → parent is N)
+    # parent_ids semantics:
+    #   None  → infer from the currently checked-out branch (idea/N → [N])
+    #   []    → explicit "no parent" (root idea, branched from main)
+    #   [..]  → use as given
     parent_ids = req.parent_ids
-    if not parent_ids:
+    if parent_ids is None:
+        parent_ids = []
         current = get_current_branch(cwd=cwd)
         if current.startswith("idea/"):
             try:
@@ -484,7 +488,11 @@ def conclude_idea(idea_id: int, req: ConcludeRequest):
         raise HTTPException(404, "idea not found")
     if idea["status"] != "active":
         raise HTTPException(400, f"idea is {idea['status']}, cannot conclude")
-    return store.update_idea(idea_id, status="concluded", conclusion=req.conclusion)
+    result = store.update_idea(idea_id, status="concluded", conclusion=req.conclusion)
+    # Surface the undo path — reopening is an existing endpoint but it's
+    # easy to miss if you've never had to reach for it.
+    result["undo"] = f"POST /api/v1/ideas/{idea_id}/reopen with a reason"
+    return result
 
 
 @router.post("/ideas/{idea_id}/abandon")
@@ -505,7 +513,9 @@ def abandon_idea(idea_id: int, req: AbandonRequest):
         raise HTTPException(404, "idea not found")
     if idea["status"] not in ("active", "suggested"):
         raise HTTPException(400, f"idea is {idea['status']}, cannot abandon")
-    return store.update_idea(idea_id, status="abandoned", conclusion=req.reason)
+    result = store.update_idea(idea_id, status="abandoned", conclusion=req.reason)
+    result["undo"] = f"POST /api/v1/ideas/{idea_id}/reopen with a reason"
+    return result
 
 
 @router.post("/ideas/{idea_id}/reopen")
