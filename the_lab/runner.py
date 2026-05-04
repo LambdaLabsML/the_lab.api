@@ -18,6 +18,7 @@ from .git_ops import (
     remove_worktree,
     resolve_branch_commit,
 )
+from .queue import Allocator, load_config, match_resource
 from .sandbox import build_sandbox_command, load_sandbox_config, sandbox_capabilities
 from .store import Store
 
@@ -30,6 +31,12 @@ class ExperimentRunner:
         self._git_lock = None  # initialized as asyncio.Lock in reattach_running
         self._worktree_dir = store.repo_dir / ".the_lab" / "worktrees"
         self._worktree_dir.mkdir(parents=True, exist_ok=True)
+
+        # Queue / scheduler state — populated lazily on the first schedule
+        # tick so we don't need an event-loop at construction time.
+        self._allocator = Allocator()
+        self._scheduler_task: asyncio.Task | None = None
+        self._scheduler_wake: asyncio.Event | None = None  # set when something queueable changes
 
         # Recover orphaned experiments on startup.
         # If the process is still alive, re-attach to it. Otherwise mark as failed.
@@ -151,13 +158,135 @@ class ExperimentRunner:
         """Re-attach to experiments that survived a server restart.
         Call this once after the event loop is running."""
         self._git_lock = asyncio.Lock()
+        self._scheduler_wake = asyncio.Event()
         for exp in self._reattach_running:
             task = asyncio.create_task(self._monitor_pid(exp))
             self._tasks[exp["id"]] = task
         if self._reattach_running:
             labels = [e.get("label", str(e["id"])) for e in self._reattach_running]
             print(f"[the-lab] re-attached to {len(labels)} running experiment(s): {labels}")
+        # Restore allocator state so cancel/release work correctly for
+        # re-attached experiments.
+        self._allocator.restore_from_running(self._reattach_running)
         self._reattach_running = []
+        # Start the scheduler loop.
+        self._scheduler_task = asyncio.create_task(self._scheduler_loop())
+
+    def wake_scheduler(self) -> None:
+        """Nudge the scheduler — call when an experiment is queued/finished."""
+        if self._scheduler_wake is not None:
+            self._scheduler_wake.set()
+
+    async def _scheduler_loop(self) -> None:
+        """Tick on a configurable interval (or when woken) and dispatch
+        queued experiments onto free resources.
+        """
+        while True:
+            try:
+                resources, qc = load_config(self._store.repo_dir)
+                interval = max(0.5, qc.dispatch_interval_s)
+                if not qc.paused:
+                    await self._dispatch_once(resources)
+            except Exception as e:
+                # Scheduler must never die — log and continue.
+                print(f"[the-lab] scheduler error: {e}")
+                interval = 5.0
+            try:
+                await asyncio.wait_for(self._scheduler_wake.wait(), timeout=interval)
+            except asyncio.TimeoutError:
+                pass
+            self._scheduler_wake.clear()
+
+    async def _dispatch_once(self, resources: list) -> None:
+        """One scheduler pass: walk queued experiments and start what fits."""
+        if not resources:
+            return
+        # Queue-related fields live inside ``meta`` so we can extend the
+        # model without an on-disk migration.
+        def _qmeta(exp: dict) -> dict:
+            return exp.get("meta") or {}
+
+        # Find queued (or legacy "pending") experiments. Prefer priority
+        # desc, then created_at asc.
+        all_exps = self._store.list_all_experiments()
+        queued = [
+            e for e in all_exps
+            if e.get("status") in ("queued", "pending")
+        ]
+        queued.sort(key=lambda e: (-int(_qmeta(e).get("priority", 0) or 0), e.get("created_at") or ""))
+        # Index of experiments by label for dependency lookups.
+        by_label: dict[str, dict] = {(e.get("label") or str(e["id"])): e for e in all_exps}
+
+        for exp in queued:
+            qm = _qmeta(exp)
+            # Dependency check.
+            deps = list(qm.get("depends_on") or [])
+            on_success = bool(qm.get("depends_on_success", True))
+            ready = True
+            for dep_label in deps:
+                dep = by_label.get(dep_label)
+                if not dep:
+                    # Missing dependency — fail the experiment with a clear reason.
+                    self._store.update_experiment(
+                        (exp.get("label") or str(exp["id"])),
+                        status="failed",
+                        error=f"depends_on references unknown experiment '{dep_label}'",
+                        finished_at=datetime.now(timezone.utc).isoformat(),
+                    )
+                    ready = False
+                    break
+                if dep.get("status") in ("queued", "pending", "running"):
+                    ready = False
+                    break
+                if on_success and dep.get("status") in ("failed", "cancelled"):
+                    self._store.update_experiment(
+                        (exp.get("label") or str(exp["id"])),
+                        status="cancelled",
+                        error=f"parent experiment '{dep_label}' {dep['status']}",
+                        finished_at=datetime.now(timezone.utc).isoformat(),
+                    )
+                    ready = False
+                    break
+            if not ready:
+                continue
+
+            # Pick a resource matching requirements.
+            req = dict(qm.get("requirements") or {})
+            resource = match_resource(resources, req)
+            if resource is None:
+                continue
+            units_wanted = int(req.get("units") or resource.default_units_per_job)
+            label = exp.get("label") or str(exp["id"])
+            assigned = self._allocator.reserve(label, resource, units_wanted)
+            if assigned is None:
+                continue  # not enough free units / max_parallel reached
+
+            # Stash the assignment in meta so cancel/restart can release.
+            try:
+                meta = {
+                    **(exp.get("meta") or {}),
+                    "assigned_resource": resource.name,
+                    "assigned_units": assigned,
+                }
+                self._store.update_experiment(label, meta=meta)
+            except Exception:
+                pass
+
+            # Build env additions for the executor.
+            extra_env: dict[str, str] = {}
+            if resource.unit_kind == "gpu":
+                extra_env["CUDA_VISIBLE_DEVICES"] = ",".join(str(u) for u in assigned)
+            extra_env["THE_LAB_ASSIGNED_RESOURCE"] = resource.name
+            extra_env["THE_LAB_ASSIGNED_UNITS"] = ",".join(str(u) for u in assigned)
+
+            try:
+                result = await self.start(label, env_extra=extra_env)
+                if result.get("status") == "error":
+                    # Release the units we held; the start failed.
+                    self._allocator.release(label)
+            except Exception as e:
+                self._allocator.release(label)
+                print(f"[the-lab] failed to start exp {label}: {e}")
 
     def _cleanup_worktree(self, exp: dict) -> None:
         wt = (exp.get("meta") or {}).get("worktree")
@@ -259,12 +388,17 @@ class ExperimentRunner:
         self._tasks.pop(exp_id, None)
         self._finished_queue.put_nowait(exp_id)
 
-    async def start(self, exp_id, timeout: float | None = None) -> dict:
+    async def start(
+        self,
+        exp_id,
+        timeout: float | None = None,
+        env_extra: dict[str, str] | None = None,
+    ) -> dict:
         exp = self._store.get_experiment(exp_id)
         if not exp:
             return {"status": "error", "reason": f"experiment {exp_id} not found"}
-        if exp["status"] not in ("pending", "failed", "cancelled"):
-            return {"status": "error", "reason": f"experiment is {exp['status']}, expected pending, failed, or cancelled"}
+        if exp["status"] not in ("queued", "pending", "failed", "cancelled"):
+            return {"status": "error", "reason": f"experiment is {exp['status']}, expected queued, failed, or cancelled"}
 
         script_path = self._store.repo_dir / exp["script"]
         if not script_path.exists():
@@ -348,6 +482,8 @@ class ExperimentRunner:
             "THE_LAB_PROGRESS": str(progress_path),
             "THE_LAB_METRICS": str(metrics_path),
         }
+        if env_extra:
+            env.update(env_extra)
         command = ["bash", str(script_path)]
         sandbox_config = load_sandbox_config(self._store.repo_dir)
         if sandbox_config.get("enabled", False) and not os.environ.get("THE_LAB_NO_SANDBOX"):
@@ -459,6 +595,15 @@ class ExperimentRunner:
             except Exception:
                 pass
 
+        # Release the resource units this experiment held, then wake the
+        # scheduler so it can fill the freed capacity.
+        try:
+            label = exp.get("label") or str(exp_id)
+            self._allocator.release(label)
+            self.wake_scheduler()
+        except Exception:
+            pass
+
         self._tasks.pop(exp_id, None)
         self._finished_queue.put_nowait(exp_id)
 
@@ -480,7 +625,12 @@ class ExperimentRunner:
         exp = self._store.get_experiment(exp_id)
         if not exp:
             return None
-        if exp["status"] == "pending":
+        # Release any resource the experiment held in the allocator (queued
+        # exps don't hold any, but doesn't hurt to call).
+        label = exp.get("label") or str(exp_id)
+        self._allocator.release(label)
+        if exp["status"] in ("queued", "pending"):
+            self.wake_scheduler()
             return self._store.update_experiment(
                 exp_id,
                 status="cancelled",

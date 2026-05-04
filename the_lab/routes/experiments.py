@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime, timezone
 
 import mimetypes
 
@@ -58,7 +59,21 @@ async def create_experiment(idea_id: int, req: NewExperimentRequest):
         raise HTTPException(404, "idea not found")
     if idea["status"] != "active":
         raise HTTPException(400, f"idea is {idea['status']}, cannot add experiments")
-    exp = store.create_experiment(idea_id, req.description, meta=req.meta, tags=req.tags)
+
+    # Build the queue-related fields into meta so they survive the existing
+    # store API (no schema migration needed).
+    extra_meta = {}
+    if req.priority:
+        extra_meta["priority"] = req.priority
+    if req.requirements is not None:
+        extra_meta["requirements"] = req.requirements.model_dump(exclude_none=True)
+    if req.depends_on:
+        extra_meta["depends_on"] = list(req.depends_on)
+    if not req.depends_on_success:
+        extra_meta["depends_on_success"] = False
+    merged_meta = {**(req.meta or {}), **extra_meta}
+
+    exp = store.create_experiment(idea_id, req.description, meta=merged_meta, tags=req.tags)
 
     if req.script_content is not None:
         script_path = REPO_DIR / exp["script"]
@@ -66,13 +81,32 @@ async def create_experiment(idea_id: int, req: NewExperimentRequest):
         script_path.write_text(_wrap_script(req.script_content))
         os.chmod(script_path, 0o644)
 
-    # Auto-start: when script_content is provided, start by default unless auto_start=False
-    should_start = req.auto_start if req.auto_start is not None else (req.script_content is not None)
-    if should_start:
-        result = await runner.start(exp["id"])
-        if result["status"] != "error":
-            exp = result.get("experiment", exp)
-            exp["auto_started"] = True
+    # The queue takes it from here. New experiments default to "queued";
+    # the scheduler will start them when capacity permits and dependencies
+    # have settled. The legacy `auto_start` flag is ignored — queueing is
+    # mandatory now.
+    store.update_experiment(
+        exp.get("label") or str(exp["id"]),
+        status="queued",
+        queued_at=datetime.now(timezone.utc).isoformat(),
+    )
+    exp = store.get_experiment(exp.get("label") or str(exp["id"])) or exp
+    runner.wake_scheduler()
+
+    # Surface the queue position so callers know roughly when to expect it
+    # to start. Best-effort — doesn't account for resource capacity.
+    queue = [
+        e for e in store.list_all_experiments()
+        if e.get("status") in ("queued", "pending")
+    ]
+    queue.sort(key=lambda e: (
+        -int((e.get("meta") or {}).get("priority", 0) or 0),
+        e.get("created_at") or "",
+    ))
+    for i, qexp in enumerate(queue):
+        if qexp.get("id") == exp.get("id"):
+            exp["queue_position"] = i + 1
+            break
 
     # Include branch diff summary so agent sees what code changed (or didn't)
     diff_summary = _branch_diff_summary(idea_id)
