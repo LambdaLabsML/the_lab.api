@@ -23,7 +23,7 @@ router = APIRouter(prefix="/api/v1")
 
 def _build_leaderboard_response(
     metric: str, top: int, recent: int, tags: str | None, include_details: bool,
-    descending: bool = True,
+    descending: bool = True, max_open_ideas: int = 20, max_progression: int = 10,
 ) -> dict:
     """Shared implementation for /leaderboard and /digest endpoints."""
     all_ideas = store.list_ideas()
@@ -66,6 +66,13 @@ def _build_leaderboard_response(
             "pending_experiments": sum(1 for e in idea_exps if e.get("status") == "pending"),
             "last_activity": _last_activity(idea_exps),
         })
+    # Cap to the N most recently active — sorting puts ideas with current
+    # work at the top so older inactive-but-still-"active" ideas don't bloat
+    # the response.
+    open_ideas_total = len(open_ideas)
+    open_ideas.sort(key=lambda i: i.get("last_activity") or "", reverse=True)
+    if open_ideas_total > max_open_ideas:
+        open_ideas = open_ideas[:max_open_ideas]
 
     running_experiments = []
     for exp in all_exps:
@@ -97,21 +104,26 @@ def _build_leaderboard_response(
         if metric in e["metrics"] and isinstance(e["metrics"][metric], (int, float))
     ]
 
+    def _exp_label(e: dict) -> str:
+        # Defensive: legacy records can have label=None on disk.
+        return (e.get("label") or str(e.get("id") or ""))
+
     by_value = sorted(with_metric, key=lambda e: e["metrics"][metric], reverse=descending)
     leaderboard = []
     for exp in by_value[:top]:
         entry = {
             "experiment_id": exp["id"],
+            "experiment_label": _exp_label(exp),
             "idea_id": exp["idea_id"],
             "idea_description": _idea_desc(exp["idea_id"]),
             "value": exp["metrics"][metric],
             "tags": exp.get("tags", []),
-            "meta": _public_meta(exp),
             "finished_at": exp.get("finished_at"),
         }
         if include_details:
             entry["all_metrics"] = exp.get("metrics", {})
             entry["settings"] = exp.get("meta", {})
+            entry["meta"] = _public_meta(exp)
             entry["experiment_description"] = exp.get("description")
         leaderboard.append(entry)
 
@@ -120,6 +132,7 @@ def _build_leaderboard_response(
     for exp in by_time_desc[:recent]:
         entry = {
             "experiment_id": exp["id"],
+            "experiment_label": _exp_label(exp),
             "idea_id": exp["idea_id"],
             "idea_description": _idea_desc(exp["idea_id"]),
             "value": exp["metrics"][metric],
@@ -162,11 +175,17 @@ def _build_leaderboard_response(
             running_best = v
             progression.append({
                 "experiment_id": exp["id"],
+                "experiment_label": _exp_label(exp),
                 "idea_id": exp["idea_id"],
                 "idea_description": _idea_desc(exp["idea_id"]),
                 "value": v,
                 "finished_at": exp.get("finished_at"),
             })
+    # Cap to the most recent N improvements — older improvements are still
+    # implied by the surviving entries.
+    progression_total = len(progression)
+    if progression_total > max_progression:
+        progression = progression[-max_progression:]
 
     key_insights = []
     for idea in all_ideas:
@@ -207,10 +226,13 @@ def _build_leaderboard_response(
         "leaderboard": leaderboard,
         "total_experiments_with_metric": len(with_metric),
         "open_ideas": open_ideas,
+        "open_ideas_total": open_ideas_total,
         "running_experiments": running_experiments,
         "recent": recent_out,
         "progression": progression,
+        "progression_total": progression_total,
         "key_insights": key_insights[:10],
+        "key_insights_total": len(key_insights),
     }
 
 
@@ -224,6 +246,8 @@ def get_leaderboard(
     tags: str | None = Query(default=None, description="Comma-separated tags — experiments must have ALL of them (AND filter)"),
     include_details: bool = Query(default=False, description="Include per-problem metrics and experiment settings/meta"),
     sort: str = Query(default="desc", description="Sort order: 'desc' (highest first) or 'asc' (lowest first)"),
+    max_open_ideas: int = Query(default=20, description="Cap on the open_ideas list (most recently active first)"),
+    max_progression: int = Query(default=10, description="Cap on the progression list (most recent improvements)"),
 ):
     """Get a compact, metric-focused research leaderboard.
 
@@ -245,7 +269,10 @@ def get_leaderboard(
         GET /api/v1/leaderboard?metric=convergence_gap&sort=asc&top=5
     """
     descending = sort.lower() != "asc"
-    return _build_leaderboard_response(metric, top, recent, tags, include_details, descending=descending)
+    return _build_leaderboard_response(
+        metric, top, recent, tags, include_details, descending=descending,
+        max_open_ideas=max_open_ideas, max_progression=max_progression,
+    )
 
 
 @router.get("/leaderboard/search")
@@ -254,6 +281,9 @@ def leaderboard_with_search(
     q: str = Query(default="", description="Comma-separated keywords to search for in idea descriptions"),
     top: int = Query(default=10, description="Number of top experiments to show"),
     sort: str = Query(default="desc", description="Sort order: 'desc' (highest first) or 'asc' (lowest first)"),
+    max_open_ideas: int = Query(default=10, description="Cap on the open_ideas list (most recently active first)"),
+    max_progression: int = Query(default=8, description="Cap on the progression list (most recent improvements)"),
+    max_search_results: int = Query(default=5, description="Cap on idea search_results when q is provided"),
 ):
     """Combined leaderboard + search: see rankings and find related ideas in one call.
 
@@ -265,13 +295,17 @@ def leaderboard_with_search(
         GET /api/v1/leaderboard/search?metric=score&sort=desc
     """
     descending = sort.lower() != "asc"
-    leaderboard = _build_leaderboard_response(metric, top, 5, None, False, descending=descending)
+    leaderboard = _build_leaderboard_response(
+        metric, top, 5, None, False, descending=descending,
+        max_open_ideas=max_open_ideas, max_progression=max_progression,
+    )
     searched_keywords = set()
     if q.strip():
         keywords = [k.strip() for k in q.split(",") if k.strip()]
         searched_keywords = {k.lower() for k in keywords}
         search_results = store.search_ideas_by_keywords(keywords)
-        leaderboard["search_results"] = search_results[:10]
+        leaderboard["search_results_total"] = len(search_results)
+        leaderboard["search_results"] = search_results[:max_search_results]
         leaderboard["search_query"] = q
     # Suggest searching for a keyword found in top leaderboard entries but not yet searched
     if searched_keywords:
@@ -565,10 +599,24 @@ def orient(
 
     # Determine recommendation -- single focused action per state
     if all_running:
-        exp = all_running[0]
+        n = len(all_running)
+        labels = [(e.get("label") or str(e["id"])) for e in all_running]
         resp["status"] = "has_running"
-        resp["recommendation"] = f"Wait for experiment {exp.get('label', exp['id'])} to finish"
-        resp["next_step"] = f"GET /api/v1/wait?experiment_id={exp.get('label', exp['id'])}"
+        if n == 1:
+            resp["recommendation"] = f"Wait for experiment {labels[0]} to finish"
+            resp["next_step"] = f"GET /api/v1/wait?experiment_id={labels[0]}"
+        else:
+            shown = ", ".join(labels[:5]) + (", …" if n > 5 else "")
+            resp["recommendation"] = (
+                f"{n} experiments running ({shown}). You can wait for any to finish, "
+                "or branch a new idea / start a parallel experiment in the meantime."
+            )
+            resp["next_step"] = "GET /api/v1/wait  # blocks until any running experiment finishes"
+            resp["alternatives"] = [
+                "POST /api/v1/ideas/new       # branch a new idea",
+                "POST /api/v1/ideas/{idea_id}/experiments  # start a parallel experiment under an existing active idea",
+            ]
+            resp["running_experiment_labels"] = labels
     elif all_failed and not filtered_completed:
         resp["status"] = "has_failures"
         resp["recommendation"] = (
