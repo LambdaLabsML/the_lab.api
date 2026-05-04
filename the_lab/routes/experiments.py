@@ -727,9 +727,19 @@ async def cancel_experiment(exp_ref: str):
         -> {"id": 4, "status": "cancelled", ...}
     """
     exp = _resolve_exp(exp_ref)
-    result = await runner.cancel(exp["id"])
+    try:
+        result = await runner.cancel(exp["id"])
+    except Exception:
+        result = None
+    # If runner.cancel returned None or raised, re-fetch the experiment.
+    # The cancel side effect may still have succeeded (process killed,
+    # status updated by the watch task) — only return 404 if the
+    # experiment really isn't in the store.
     if result is None:
-        raise HTTPException(404, "experiment not found")
+        latest = store.get_experiment(exp["id"])
+        if latest is None:
+            raise HTTPException(404, "experiment not found")
+        return latest
     return result
 
 
