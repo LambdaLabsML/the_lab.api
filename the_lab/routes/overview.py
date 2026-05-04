@@ -10,6 +10,7 @@ from ..deps import (
     store,
     runner,
     REPO_DIR,
+    metric_direction,
     _idea_context,
     _branch_diff_summary,
     _read_task,
@@ -324,6 +325,236 @@ def leaderboard_with_search(
                 "description": f"Search for '{next_kw}' ideas to compare approaches",
             }
     return leaderboard
+
+
+# ---------------------------------------------------------------------------
+# Aggregation + comparison (variance-aware)
+# ---------------------------------------------------------------------------
+
+def _median(xs: list[float]) -> float:
+    s = sorted(xs)
+    n = len(s)
+    return s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2
+
+
+def _percentile(xs: list[float], p: float) -> float:
+    """Linear-interpolation percentile (NumPy default), p in [0, 1]."""
+    if not xs:
+        return 0.0
+    s = sorted(xs)
+    if len(s) == 1:
+        return s[0]
+    pos = p * (len(s) - 1)
+    lo = int(pos)
+    hi = min(lo + 1, len(s) - 1)
+    frac = pos - lo
+    return s[lo] + (s[hi] - s[lo]) * frac
+
+
+def _aggregate_metric(values: list[float]) -> dict:
+    """Summary stats for a single group of metric values."""
+    n = len(values)
+    if n == 0:
+        return {"n": 0}
+    if n == 1:
+        v = values[0]
+        return {"n": 1, "median": v, "mean": v, "std": 0.0, "min": v, "max": v}
+    mean = sum(values) / n
+    var = sum((x - mean) ** 2 for x in values) / max(n - 1, 1)
+    std = var ** 0.5
+    return {
+        "n": n,
+        "median": _median(values),
+        "mean": mean,
+        "std": std,
+        "min": min(values),
+        "max": max(values),
+        "p25": _percentile(values, 0.25),
+        "p75": _percentile(values, 0.75),
+    }
+
+
+def _bootstrap_diff_medians(
+    a: list[float], b: list[float], n_resamples: int = 1000, seed: int = 42,
+) -> dict:
+    """Bootstrap CI on (median(a) - median(b)). Returns observed delta + 95% CI."""
+    import random
+    if not a or not b:
+        return {"observed_delta": None, "ci95_lo": None, "ci95_hi": None,
+                "n_resamples": 0}
+    rng = random.Random(seed)
+    deltas: list[float] = []
+    la, lb = len(a), len(b)
+    for _ in range(n_resamples):
+        sa = [a[rng.randrange(la)] for _ in range(la)]
+        sb = [b[rng.randrange(lb)] for _ in range(lb)]
+        deltas.append(_median(sa) - _median(sb))
+    deltas.sort()
+    return {
+        "observed_delta": _median(a) - _median(b),
+        "ci95_lo": deltas[int(0.025 * n_resamples)],
+        "ci95_hi": deltas[int(0.975 * n_resamples) - 1],
+        "n_resamples": n_resamples,
+    }
+
+
+def _resolve_selector(selector: str, metric: str) -> tuple[list[float], list[dict]]:
+    """Parse 'tag:foo' / 'idea:5' / 'all' and return (numeric values, exp summaries)."""
+    all_exps = [
+        e for e in store.list_all_experiments()
+        if e.get("status") == "completed" and isinstance((e.get("metrics") or {}).get(metric), (int, float))
+    ]
+    sel = (selector or "").strip()
+    if not sel or sel == "all":
+        matched = all_exps
+    elif sel.startswith("tag:"):
+        wanted = sel[4:].strip()
+        matched = [e for e in all_exps if wanted in (e.get("tags") or [])]
+    elif sel.startswith("idea:"):
+        try:
+            wanted_id = int(sel[5:])
+            matched = [e for e in all_exps if e.get("idea_id") == wanted_id]
+        except ValueError:
+            matched = []
+    else:
+        # Fallback: treat as a tag for convenience
+        matched = [e for e in all_exps if sel in (e.get("tags") or [])]
+    values = [float(e["metrics"][metric]) for e in matched]
+    summaries = [
+        {
+            "experiment_label": e.get("label") or str(e.get("id")),
+            "idea_id": e.get("idea_id"),
+            "value": e["metrics"][metric],
+            "tags": e.get("tags") or [],
+        }
+        for e in matched
+    ]
+    return values, summaries
+
+
+@router.get("/leaderboard/aggregate")
+def leaderboard_aggregate(
+    metric: str = Query(..., description="Metric to aggregate (must be numeric)"),
+    group_by: str = Query(default="tag", description="'tag' or 'idea'"),
+    tags: str | None = Query(default=None, description="Comma-separated tag filter (AND)"),
+    top: int = Query(default=20, description="Cap on returned groups (most populous first)"),
+):
+    """Per-group summary stats for a metric: median / mean / std / min / max / p25 / p75 / n.
+
+    Useful for "what's the noise floor on tag X?" without fetching every
+    experiment. Experiments with multiple tags appear in multiple groups
+    when ``group_by=tag``.
+
+    Example:
+        GET /api/v1/leaderboard/aggregate?metric=score&group_by=tag
+        -> {"groups": [{"key": "baseline", "stats": {n: 5, median: 0.42, ...}}, ...]}
+    """
+    if group_by not in ("tag", "idea"):
+        raise HTTPException(400, "group_by must be 'tag' or 'idea'")
+
+    tag_filter = [t.strip() for t in (tags or "").split(",") if t.strip()]
+    completed = [
+        e for e in store.list_all_experiments()
+        if e.get("status") == "completed"
+        and isinstance((e.get("metrics") or {}).get(metric), (int, float))
+        and (not tag_filter or all(t in (e.get("tags") or []) for t in tag_filter))
+    ]
+
+    groups: dict[str, list[float]] = {}
+    if group_by == "tag":
+        for e in completed:
+            for t in (e.get("tags") or []):
+                groups.setdefault(t, []).append(float(e["metrics"][metric]))
+    else:  # idea
+        for e in completed:
+            key = f"idea/{e.get('idea_id')}"
+            groups.setdefault(key, []).append(float(e["metrics"][metric]))
+
+    rows = [
+        {"key": k, "stats": _aggregate_metric(v)}
+        for k, v in groups.items()
+    ]
+    rows.sort(key=lambda r: r["stats"]["n"], reverse=True)
+
+    return {
+        "metric": metric,
+        "metric_direction": metric_direction(metric),
+        "group_by": group_by,
+        "tags_filter": tag_filter,
+        "groups_total": len(rows),
+        "groups": rows[:top],
+    }
+
+
+@router.get("/leaderboard/compare")
+def leaderboard_compare(
+    a: str = Query(..., description="Selector A — 'tag:<name>', 'idea:<id>', or 'all'"),
+    b: str = Query(..., description="Selector B — same format"),
+    metric: str = Query(default="score", description="Metric to compare on"),
+    n_resamples: int = Query(default=1000, description="Bootstrap resamples"),
+):
+    """Compare two selections via bootstrap-on-difference-of-medians.
+
+    Returns the observed median delta (a - b), a 95% CI from N bootstrap
+    resamples, and a verdict that respects the metric's direction:
+
+      - **real_improvement** — CI excludes 0 in the favourable direction
+      - **regression**       — CI excludes 0 in the unfavourable direction
+      - **inconclusive**     — CI straddles 0
+
+    Selectors:
+      tag:<name>   all completed experiments tagged with <name>
+      idea:<id>    all completed experiments under idea <id>
+      all          everything completed
+
+    Example:
+        GET /api/v1/leaderboard/compare?metric=score&a=tag:baseline&b=tag:new
+        -> {"a": {...}, "b": {...}, "delta": {"observed": 0.07, "ci95_lo": 0.02, "ci95_hi": 0.11},
+            "verdict": "real_improvement", ...}
+    """
+    a_values, a_summaries = _resolve_selector(a, metric)
+    b_values, b_summaries = _resolve_selector(b, metric)
+    boot = _bootstrap_diff_medians(a_values, b_values, n_resamples=n_resamples)
+
+    direction = metric_direction(metric)  # "minimize" or "maximize"
+    higher_is_better = direction == "maximize"
+    lo, hi = boot.get("ci95_lo"), boot.get("ci95_hi")
+    if lo is None or hi is None:
+        verdict = "insufficient_data"
+    elif higher_is_better:
+        if lo > 0:
+            verdict = "real_improvement"   # a strictly > b in favourable dir
+        elif hi < 0:
+            verdict = "regression"
+        else:
+            verdict = "inconclusive"
+    else:  # minimize: lower is better, so a < b means "a improved"
+        if hi < 0:
+            verdict = "real_improvement"
+        elif lo > 0:
+            verdict = "regression"
+        else:
+            verdict = "inconclusive"
+
+    return {
+        "metric": metric,
+        "metric_direction": direction,
+        "a": {"selector": a, "stats": _aggregate_metric(a_values),
+              "experiments": a_summaries[:50]},
+        "b": {"selector": b, "stats": _aggregate_metric(b_values),
+              "experiments": b_summaries[:50]},
+        "delta": {
+            "observed": boot.get("observed_delta"),
+            "ci95_lo": lo,
+            "ci95_hi": hi,
+            "n_resamples": boot.get("n_resamples"),
+            "interpretation": (
+                "delta = median(A) - median(B); CI excluding 0 in the favourable "
+                "direction (per metric_direction) implies a real change."
+            ),
+        },
+        "verdict": verdict,
+    }
 
 
 @router.get("/digest")
