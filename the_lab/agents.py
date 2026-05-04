@@ -1,0 +1,213 @@
+"""Per-agent worktrees + registry.
+
+When ``the-lab-agent`` starts in isolated mode it calls
+``register_agent()`` to get its own git worktree, agent id, and branch.
+Each agent's git operations (idea creation, adopt, etc.) are routed to
+that worktree by the X-Agent-Id middleware. The registry persists at
+``.the_lab/agents/registry.json``.
+
+Layout::
+
+    .the_lab/agents/
+        registry.json                 -- {agent_id: {role, branch, pid, ...}}
+        <agent_id>/                   -- the worktree (git worktree add ...)
+            .the_lab.agentid          -- 5-char hex, gitignored
+            .claude -> ../../../.claude
+            .mcp.json -> ../../../.mcp.json
+            (project source files at the chosen branch)
+"""
+from __future__ import annotations
+
+import json
+import os
+import secrets
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+from . import git_ops
+
+_ID_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789"
+AGENTID_FILE = ".the_lab.agentid"
+
+
+def _agents_dir(repo_dir: Path) -> Path:
+    p = repo_dir / ".the_lab" / "agents"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _registry_path(repo_dir: Path) -> Path:
+    return _agents_dir(repo_dir) / "registry.json"
+
+
+def _read_registry(repo_dir: Path) -> dict:
+    path = _registry_path(repo_dir)
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _write_registry(repo_dir: Path, data: dict) -> None:
+    _registry_path(repo_dir).write_text(json.dumps(data, indent=2) + "\n")
+
+
+def _generate_agent_id(existing: set[str]) -> str:
+    """5-char lowercase-alphanumeric id, retry-on-collision."""
+    for _ in range(64):
+        candidate = "".join(secrets.choice(_ID_ALPHABET) for _ in range(5))
+        if candidate not in existing:
+            return candidate
+    raise RuntimeError("could not allocate a unique 5-char agent id")
+
+
+def _recent_active_idea_branch(store, default: str = "main") -> str:
+    """Return the most-recent-by-created_at ``idea/N`` branch with status=active.
+
+    Falls back to *default* (the repo's main branch) if no active ideas exist
+    or the store hasn't loaded any ideas yet.
+    """
+    try:
+        active = [i for i in store.list_ideas() if i.get("status") == "active"]
+    except Exception:
+        return default
+    if not active:
+        return default
+    active.sort(key=lambda i: i.get("created_at") or "", reverse=True)
+    branch = active[0].get("branch")
+    return branch or default
+
+
+def _ensure_symlink(link: Path, target: Path) -> None:
+    """Create a symlink at *link* pointing at *target*. Idempotent."""
+    if link.is_symlink() or link.exists():
+        return
+    try:
+        link.symlink_to(target)
+    except OSError:
+        pass  # filesystem doesn't support symlinks; not fatal
+
+
+def register_agent(
+    repo_dir: Path,
+    store,
+    role: str | None = None,
+    pid: int | None = None,
+) -> dict:
+    """Allocate an id, create the agent's worktree, return registry entry."""
+    repo_dir = Path(repo_dir).resolve()
+    registry = _read_registry(repo_dir)
+    agent_id = _generate_agent_id(set(registry.keys()))
+
+    parent_branch = _recent_active_idea_branch(
+        store, default=git_ops.get_default_branch(cwd=repo_dir),
+    )
+    agent_branch = f"agent_init_{agent_id}"
+    git_ops.create_branch_from(agent_branch, parent_branch, cwd=repo_dir)
+
+    worktree = _agents_dir(repo_dir) / agent_id
+    git_ops._run(
+        ["worktree", "add", str(worktree), agent_branch],
+        cwd=repo_dir,
+    )
+
+    # Symlinks — let the agent's tooling find configs without absolute paths.
+    _ensure_symlink(worktree / ".claude", Path("../../../.claude"))
+    _ensure_symlink(worktree / ".mcp.json", Path("../../../.mcp.json"))
+
+    # The id file is gitignored (see init); useful for scripts running inside
+    # the worktree that need to look up the agent's id without an env var.
+    (worktree / AGENTID_FILE).write_text(agent_id + "\n")
+
+    entry = {
+        "agent_id": agent_id,
+        "role": role or "default",
+        "branch": agent_branch,
+        "parent_branch": parent_branch,
+        "worktree": str(worktree),
+        "pid": pid,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    registry[agent_id] = entry
+    _write_registry(repo_dir, registry)
+    return entry
+
+
+def lookup_agent(repo_dir: Path, agent_id: str) -> dict | None:
+    return _read_registry(Path(repo_dir).resolve()).get(agent_id)
+
+
+def list_agents(repo_dir: Path) -> list[dict]:
+    return list(_read_registry(Path(repo_dir).resolve()).values())
+
+
+def unregister_agent(repo_dir: Path, agent_id: str, *, keep_branch: bool = True) -> bool:
+    repo_dir = Path(repo_dir).resolve()
+    registry = _read_registry(repo_dir)
+    entry = registry.pop(agent_id, None)
+    if entry is None:
+        return False
+    worktree = Path(entry["worktree"])
+    git_ops.remove_worktree(worktree, cwd=repo_dir)
+    git_ops.prune_worktrees(cwd=repo_dir)
+    if not keep_branch:
+        try:
+            git_ops._run(["branch", "-D", entry["branch"]], cwd=repo_dir, check=False)
+        except Exception:
+            pass
+    _write_registry(repo_dir, registry)
+    return True
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # PID exists but we can't signal it — count it as alive.
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def prune_dead_agents(repo_dir: Path) -> list[str]:
+    """Remove registry entries whose PIDs are gone. Returns ids removed."""
+    repo_dir = Path(repo_dir).resolve()
+    registry = _read_registry(repo_dir)
+    removed: list[str] = []
+    for agent_id, entry in list(registry.items()):
+        pid = entry.get("pid")
+        if pid is None:
+            continue  # PID unknown — leave it alone
+        if _pid_alive(int(pid)):
+            continue
+        try:
+            git_ops.remove_worktree(Path(entry["worktree"]), cwd=repo_dir)
+        except Exception:
+            pass
+        registry.pop(agent_id, None)
+        removed.append(agent_id)
+    if removed:
+        git_ops.prune_worktrees(cwd=repo_dir)
+        _write_registry(repo_dir, registry)
+    return removed
+
+
+def get_cwd_for_request(repo_dir: Path, agent_id: str | None) -> Path:
+    """Resolve the cwd a git-touching route should use.
+
+    Returns the agent's worktree if registered, otherwise *repo_dir*.
+    Intentionally does NOT raise — middleware handles the unknown-id case.
+    """
+    if not agent_id:
+        return Path(repo_dir).resolve()
+    entry = lookup_agent(repo_dir, agent_id)
+    if not entry:
+        return Path(repo_dir).resolve()
+    wt = Path(entry["worktree"])
+    return wt if wt.exists() else Path(repo_dir).resolve()
