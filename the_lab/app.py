@@ -256,6 +256,18 @@ app.add_middleware(GZipMiddleware, minimum_size=1000)
 @app.on_event("startup")
 async def startup():
     await runner.reattach_running()
+    # Reap agent worktrees whose registered PID is gone (a CLI wrapper that
+    # crashed before unregistering). Safe to skip on errors.
+    try:
+        from . import agents as _agents_mod
+        removed = _agents_mod.prune_dead_agents(REPO_DIR)
+        if removed:
+            logger.info(
+                "Pruned %d stale agent worktree(s): %s",
+                len(removed), ", ".join(removed),
+            )
+    except Exception as e:  # pragma: no cover
+        logger.warning("agent prune failed at startup: %s", e)
 
 
 @app.on_event("shutdown")
