@@ -182,7 +182,7 @@ def cmd_init(target: str | None = None):
     lines = existing.splitlines()
 
     entries_to_add = []
-    for entry in [".the_lab/", ".claude/", ".mcp.json", "PROMPT.md"]:
+    for entry in [".the_lab/", ".claude/", ".mcp.json", "PROMPT.md", ".the_lab.agentid"]:
         if not any(line.strip() == entry or line.strip() == entry.rstrip("/") for line in lines):
             entries_to_add.append(entry)
 

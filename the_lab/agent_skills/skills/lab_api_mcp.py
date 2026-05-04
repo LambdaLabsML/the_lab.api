@@ -199,8 +199,13 @@ def proxy_call(tool_name, arguments, tool_meta):
                 body_obj[p] = arguments[p]
         body_data = json.dumps(body_obj).encode()
 
-    # Make request — identify as MCP proxy so Lab tracks it separately
+    # Make request — identify as MCP proxy so Lab tracks it separately.
+    # Include X-Agent-Id when launched in isolated mode so git operations
+    # route to this agent's worktree.
     headers = {"X-MCP-Proxy": "true"}
+    agent_id = os.environ.get("THE_LAB_AGENT_ID")
+    if agent_id:
+        headers["X-Agent-Id"] = agent_id
     if body_data:
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(url, data=body_data, headers=headers, method=method)
