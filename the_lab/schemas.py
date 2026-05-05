@@ -33,7 +33,11 @@ class AdoptRequest(BaseModel):
 
 class ResourceRequirements(BaseModel):
     units: int | None = None      # None → use the matched resource's default
-    kind: str = "gpu"              # gpu | cpu | none
+    # kind: "gpu" | "cpu" | "none" | "any" (or None) — None/any matches any
+    # resource. Most experiments don't need to pin to a specific kind; vLLM
+    # client experiments in particular share a host-side server and just
+    # consume queue width.
+    kind: str | None = None
     tags: list[str] = []
 
 

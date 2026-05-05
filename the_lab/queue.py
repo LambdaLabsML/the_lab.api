@@ -223,18 +223,24 @@ def match_resource(
     """Pick the most-idle resource that satisfies *requirements*.
 
     requirements:
-      kind:  "gpu" | "cpu" | "none"  (matches Resource.unit_kind; default "gpu")
+      kind:  "gpu" | "cpu" | "none" | "any" (matches Resource.unit_kind; when
+             omitted or "any", any unit_kind is accepted — common for vLLM
+             client experiments where the GPU is held by the server, not the
+             experiment process)
       tags:  list of required tags (must all be present in resource.tags)
       units: int                     (caller-specified; if 0 or missing, uses
                                        the resource's default_units_per_job)
 
     Returns None if no resource satisfies the requirement.
     """
-    want_kind = requirements.get("kind") or "gpu"
+    want_kind = requirements.get("kind")
+    if want_kind == "any":
+        want_kind = None
     want_tags = set(requirements.get("tags") or [])
     candidates = [
         r for r in resources
-        if r.unit_kind == want_kind and want_tags.issubset(set(r.tags))
+        if (want_kind is None or r.unit_kind == want_kind)
+        and want_tags.issubset(set(r.tags))
     ]
     if not candidates:
         return None
