@@ -14,6 +14,7 @@ from ..deps import (
     _idea_context,
     _branch_diff_summary,
     _read_task,
+    project_fields,
 )
 from ..git_ops import get_current_branch
 
@@ -285,6 +286,12 @@ def leaderboard_with_search(
     max_open_ideas: int = Query(default=10, description="Cap on the open_ideas list (most recently active first)"),
     max_progression: int = Query(default=8, description="Cap on the progression list (most recent improvements)"),
     max_search_results: int = Query(default=5, description="Cap on idea search_results when q is provided"),
+    fields: str | None = Query(
+        default=None,
+        description="Comma-separated top-level field projection (e.g. 'leaderboard,best_idea,next_step'). "
+                    "Drops the rest of the response (open_ideas, progression, recent, key_insights, …) — "
+                    "useful when the agent only needs the ranking and not every supporting section.",
+    ),
 ):
     """Combined leaderboard + search: see rankings and find related ideas in one call.
 
@@ -294,6 +301,7 @@ def leaderboard_with_search(
 
     Example:
         GET /api/v1/leaderboard/search?metric=score&sort=desc
+        GET /api/v1/leaderboard/search?fields=leaderboard,best_idea
     """
     descending = sort.lower() != "asc"
     leaderboard = _build_leaderboard_response(
@@ -324,7 +332,7 @@ def leaderboard_with_search(
                 "action": f"GET /api/v1/ideas/search?q={next_kw}",
                 "description": f"Search for '{next_kw}' ideas to compare approaches",
             }
-    return leaderboard
+    return project_fields(leaderboard, fields)
 
 
 # ---------------------------------------------------------------------------
@@ -941,6 +949,7 @@ def get_graph():
     for i in ideas:
         exps = store.list_experiments(i["id"])
         has_running = any(e["status"] == "running" for e in exps)
+        has_queued = any(e["status"] in ("queued", "pending") for e in exps)
         # Time range: earliest start -> latest finish (for timeline view)
         starts = [e["started_at"] for e in exps if e.get("started_at")]
         finishes = [e["finished_at"] for e in exps if e.get("finished_at")]
@@ -951,6 +960,7 @@ def get_graph():
             "source": i.get("source", "agent"),
             "priority": i.get("priority", "normal"),
             "has_running": has_running,
+            "has_queued": has_queued,
             "created_at": i.get("created_at"),
             "first_start": min(starts) if starts else i.get("created_at"),
             "last_finish": max(finishes) if finishes else None,

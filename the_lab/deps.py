@@ -74,6 +74,56 @@ _INTERNAL_META_KEYS = {"git_branch", "git_commit", "worktree"}
 
 # --- Helper functions ---
 
+def _description_short(desc: str | None, limit: int = 120) -> str:
+    """First line of a description, truncated to *limit* chars with an ellipsis.
+
+    Synthesised field for the ``fields=`` projection — agents working under a
+    context budget can fetch ``description_short`` instead of the full
+    multi-paragraph descriptions some ideas accumulate.
+    """
+    if not desc:
+        return ""
+    line = desc.splitlines()[0].strip()
+    if len(line) <= limit:
+        return line
+    return line[: limit - 1].rstrip() + "…"
+
+
+def project_fields(data, fields: str | None):
+    """Restrict a response to the given comma-separated field list.
+
+    - List response → apply per-item (each dict gets keys filtered).
+    - Dict response → apply at top level.
+    - Scalars / other types → return unchanged.
+
+    Unknown field names are silently dropped (consistent with sparse-fieldset
+    conventions in REST APIs). ``fields`` is ``None`` or empty → no-op.
+
+    Items that are dicts get the magic ``description_short`` field synthesised
+    on demand so callers can opt into a compact description view.
+    """
+    if not fields:
+        return data
+    wanted = [f.strip() for f in fields.split(",") if f.strip()]
+    if not wanted:
+        return data
+
+    def _pick(d: dict) -> dict:
+        out: dict = {}
+        for f in wanted:
+            if f == "description_short":
+                out[f] = _description_short(d.get("description"))
+            elif f in d:
+                out[f] = d[f]
+        return out
+
+    if isinstance(data, list):
+        return [_pick(x) if isinstance(x, dict) else x for x in data]
+    if isinstance(data, dict):
+        return _pick(data)
+    return data
+
+
 def _wrap_script(content: str) -> str:
     """Inject a guard + optional preamble that prevents running outside the backend."""
     lines = content.split("\n", 1)

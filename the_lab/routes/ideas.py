@@ -13,9 +13,11 @@ from ..deps import (
     _idea_context,
     _branch_diff_summary,
     _read_task,
+    project_fields,
 )
 from ..git_ops import (
     GitError,
+    branch_exists,
     checkout_idea,
     checkout_idea_carry,
     create_branch_from,
@@ -172,43 +174,61 @@ def checkout_idea_endpoint(idea_id: int, request: Request):
 
 
 @router.get("/ideas")
-@cached_response(lambda status=None, source=None: (status, source))
-def list_ideas(status: str | None = None, source: str | None = None):
+@cached_response(lambda status=None, source=None, fields=None: (status, source, fields))
+def list_ideas(
+    status: str | None = None,
+    source: str | None = None,
+    fields: str | None = Query(
+        default=None,
+        description="Comma-separated field projection (e.g. 'id,status,description_short'). "
+                    "Use 'description_short' for the first line truncated to 120 chars. "
+                    "Reduces response size dramatically for agents under a context budget.",
+    ),
+):
     """List all ideas with their notes and a compact experiment summary.
 
     Each idea in the response includes journal notes (insight/milestone/observation
     levels) and an ``experiment_summary`` object with counts of total, completed,
     failed, and running experiments plus the latest completed metrics. Use the
     ``status`` query parameter (e.g. ``?status=active``) to filter by idea
-    status, and ``source`` (e.g. ``?source=human``) to filter by origin.
+    status, ``source`` (e.g. ``?source=human``) to filter by origin, and
+    ``fields`` to keep only specific fields per idea.
 
     Example:
         GET /api/v1/ideas?status=active
+        GET /api/v1/ideas?fields=id,status,description_short
         -> [{"id": 1, "description": "...", "status": "active",
              "notes": [...], "experiment_summary": {"total": 5, "completed": 3, ...}}, ...]
     """
     ideas = store.list_ideas(status=status, source=source)
+    # Skip per-idea note + summary enrichment when those fields aren't asked
+    # for — building them dominates response time and is wasted work if the
+    # caller will drop them in the projection.
+    requested = {f.strip() for f in (fields or "").split(",") if f.strip()}
+    want_notes = not requested or "notes" in requested
+    want_summary = not requested or "experiment_summary" in requested
     for idea in ideas:
-        idea["notes"] = store.get_notes(idea["id"], levels=Store.LISTING_LEVELS)
-        # Compact experiment summary with latest completed metrics
-        exps = store.list_experiments(idea["id"])
-        completed = [e for e in exps if e["status"] == "completed" and e.get("metrics")]
-        latest = max(completed, key=lambda e: e.get("finished_at", "")) if completed else None
-        idea["experiment_summary"] = {
-            "total": len(exps),
-            "completed": len(completed),
-            "failed": sum(1 for e in exps if e["status"] == "failed"),
-            "running": sum(1 for e in exps if e["status"] == "running"),
-            "latest_metrics": latest["metrics"] if latest else None,
-            "latest_experiment_id": latest["id"] if latest else None,
-        }
+        if want_notes:
+            idea["notes"] = store.get_notes(idea["id"], levels=Store.LISTING_LEVELS)
+        if want_summary:
+            exps = store.list_experiments(idea["id"])
+            completed = [e for e in exps if e["status"] == "completed" and e.get("metrics")]
+            latest = max(completed, key=lambda e: e.get("finished_at", "")) if completed else None
+            idea["experiment_summary"] = {
+                "total": len(exps),
+                "completed": len(completed),
+                "failed": sum(1 for e in exps if e["status"] == "failed"),
+                "running": sum(1 for e in exps if e["status"] == "running"),
+                "latest_metrics": latest["metrics"] if latest else None,
+                "latest_experiment_id": latest["id"] if latest else None,
+            }
     # When filtering for suggested ideas and none exist, include the
     # current task so agents always have direction.
     if status == "suggested" and not ideas:
         task = _read_task()
         if task:
             return {"ideas": [], "current_task": task}
-    return ideas
+    return project_fields(ideas, fields)
 
 
 @router.get("/ideas/search")
@@ -218,6 +238,12 @@ def search_ideas(
     metric: str | None = Query(default=None, description="Metric key to filter/sort by (e.g. accuracy_per_mtoken)"),
     min_metric: float | None = Query(default=None, description="Minimum metric value — requires metric param"),
     after: str | None = Query(default=None, description="ISO datetime — only ideas created after this timestamp"),
+    fields: str | None = Query(
+        default=None,
+        description="Comma-separated field projection (e.g. 'id,relevance,description_short'). "
+                    "Drops everything else; useful when search results would otherwise blow the "
+                    "agent's context budget.",
+    ),
 ):
     """Search ideas by multiple keywords, ranked by descending relevance.
 
@@ -261,7 +287,7 @@ def search_ideas(
             return False
         results = [r for r in results if _has_min_metric(r)]
 
-    return results
+    return project_fields(results, fields)
 
 
 @router.post("/ideas/suggest", status_code=201)
@@ -618,6 +644,16 @@ def adopt_idea(idea_id: int, request: Request, req: AdoptRequest | None = None):
 
     branch_name = f"idea/{idea_id}"
     parent_ids = idea.get("parent_ids", [])
+
+    # Fast-path: if the branch was pre-created by the agent (e.g. manually
+    # or after a partial-adopt git failure), skip the branch-creation step
+    # and just mark the idea active. This avoids "already checked out" errors
+    # when a parent branch is live in another git worktree.
+    if branch_exists(branch_name, cwd=cwd):
+        store.update_idea(idea_id, status="active", branch=branch_name)
+        if req and req.agent_note:
+            store.add_note(idea_id, req.agent_note, level="observation")
+        return store.get_idea(idea_id)
 
     try:
         if len(parent_ids) == 0:
