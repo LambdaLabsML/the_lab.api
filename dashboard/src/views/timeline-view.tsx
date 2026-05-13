@@ -131,7 +131,7 @@ export function TimelineView() {
       const x1 = tToX(start);
       const x2 = tToX(end);
       const barW = Math.max(x2 - x1, 4);
-      const status = n.has_running ? "running" : n.status;
+      const status = n.has_running ? "running" : (n.has_queued ? "queued" : n.status);
       const color = STATUS_BAR_COLORS[status] || STATUS_BAR_COLORS.active;
       ctx.fillStyle = color + "aa";
       ctx.strokeStyle = color;

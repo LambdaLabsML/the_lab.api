@@ -74,14 +74,21 @@ export function filterMetricExperiments(
   activeTagFilters: string[],
   tagFilterMode: "or" | "and",
   hiddenStatuses?: Set<string>,
+  hideRunning?: boolean,
 ): Experiment[] {
   let filtered = allExperiments.filter(
     (e) => resolveNumericValue(e, metricKey) !== undefined,
   );
 
-  // Filter by idea status visibility
+  // Filter by idea status visibility (abandoned/concluded). Active ideas are
+  // not filtered here — running experiments are gated by hideRunning instead,
+  // so completed experiments under still-active ideas remain visible.
   if (hiddenStatuses && hiddenStatuses.size > 0) {
     filtered = filtered.filter((e) => !hiddenStatuses.has(e.idea_status || "active"));
+  }
+
+  if (hideRunning) {
+    filtered = filtered.filter((e) => !e._running && e.status !== "running");
   }
 
   if (activeTagFilters.length === 0) return filtered;
@@ -105,6 +112,7 @@ export function filterVisibleChartExperiments(
   tagFilterMode: "or" | "and",
   improvementsOnly: boolean,
   hiddenStatuses?: Set<string>,
+  hideRunning?: boolean,
 ): Experiment[] {
   const filtered = filterMetricExperiments(
     metricKey,
@@ -112,6 +120,7 @@ export function filterVisibleChartExperiments(
     activeTagFilters,
     tagFilterMode,
     hiddenStatuses,
+    hideRunning,
   );
 
   if (!improvementsOnly) return filtered;
@@ -191,6 +200,7 @@ export function buildChartData(
   reversed: boolean = false,
   hiddenStatuses?: Set<string>,
   useIdeaMean: boolean = false,
+  hideRunning?: boolean,
 ): ChartDataResult {
   const metricFiltered = filterMetricExperiments(
     metricKey,
@@ -198,6 +208,7 @@ export function buildChartData(
     activeTagFilters,
     tagFilterMode,
     hiddenStatuses,
+    hideRunning,
   );
   let filtered: Experiment[];
 
@@ -210,7 +221,7 @@ export function buildChartData(
   if (useIdeaMean) {
     // Get all matching experiments (without improvements-only filter)
     const allMatching = filterMetricExperiments(
-      metricKey, allExperiments, activeTagFilters, tagFilterMode, hiddenStatuses,
+      metricKey, allExperiments, activeTagFilters, tagFilterMode, hiddenStatuses, hideRunning,
     );
     allMeans = aggregateByIdeaMean(allMatching, metricKey);
 
@@ -244,7 +255,7 @@ export function buildChartData(
     }
   } else {
     filtered = filterVisibleChartExperiments(
-      metricKey, allExperiments, activeTagFilters, tagFilterMode, improvementsOnly, hiddenStatuses,
+      metricKey, allExperiments, activeTagFilters, tagFilterMode, improvementsOnly, hiddenStatuses, hideRunning,
     );
   }
 

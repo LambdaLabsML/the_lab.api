@@ -10,6 +10,7 @@ import type { Experiment, IdeaNode, SubwayLayout } from './types';
 export const STATUS_COLORS: Record<string, { bg: string; border: string; font: string }> = {
   active:    { bg: '#238636', border: '#3fb950', font: '#ffffff' },
   running:   { bg: '#6e4b00', border: '#d29922', font: '#ffffff' },
+  queued:    { bg: '#1c2a3a', border: '#6e7681', font: '#c9d1d9' },
   concluded: { bg: '#1f6feb', border: '#58a6ff', font: '#ffffff' },
   abandoned: { bg: '#da3633', border: '#f85149', font: '#ffffff' },
   suggested: { bg: '#2d1a00', border: '#d29922', font: '#ffffff' },
@@ -19,6 +20,7 @@ export const STATUS_COLORS: Record<string, { bg: string; border: string; font: s
 export const STATUS_BAR_COLORS: Record<string, string> = {
   active: '#3fb950',
   running: '#d29922',
+  queued: '#6e7681',
   concluded: '#58a6ff',
   abandoned: '#f85149',
   suggested: '#d29922',
@@ -245,12 +247,12 @@ export function _colorForIdea(
   }
   if (mode === 'status') {
     const idea = allIdeas[ideaId];
-    const st = idea ? (idea.has_running ? 'running' : idea.status) : 'active';
+    const st = idea ? (idea.has_running ? 'running' : (idea.has_queued ? 'queued' : idea.status)) : 'active';
     return STATUS_BAR_COLORS[st] || '#8b949e';
   }
   if (mode === 'status+improve') {
     const idea = allIdeas[ideaId];
-    const st = idea ? (idea.has_running ? 'running' : idea.status) : 'active';
+    const st = idea ? (idea.has_running ? 'running' : (idea.has_queued ? 'queued' : idea.status)) : 'active';
     const base = STATUS_BAR_COLORS[st] || '#8b949e';
     if (!metricKey) return base;
     if (_ideaHasGlobalImprovement(ideaId, metricKey, allExperiments))

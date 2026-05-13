@@ -114,11 +114,12 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric }: { i
     ? (v: string) => { setLocalY(v); if (instanceId && updatePanelTitle) updatePanelTitle(instanceId, `Scatter: ${xMetric || "?"} vs ${v}`); }
     : (v: string) => { scatterYMetric.value = v; };
 
-  // Build set of hidden idea statuses
+  // Idea-status filters (abandoned/concluded). The "running" toggle is
+  // experiment-level — see hideRunning below.
   const hiddenStatuses = new Set<string>();
   if (!showAbandoned.value) hiddenStatuses.add("abandoned");
   if (!showConcluded.value) hiddenStatuses.add("concluded");
-  if (!showRunning.value) { hiddenStatuses.add("active"); hiddenStatuses.add("suggested"); }
+  const hideRunning = !showRunning.value;
 
   // Auto-select metrics if not set
   if (!xMetric && metricKeys.length > 0) {
@@ -144,7 +145,7 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric }: { i
     let filtered: Experiment[];
     if (mean) {
       // Filter for x metric, then aggregate both
-      const xFiltered = filterMetricExperiments(xMetric, experiments, tags, tagMode, hiddenStatuses);
+      const xFiltered = filterMetricExperiments(xMetric, experiments, tags, tagMode, hiddenStatuses, hideRunning);
       // Further filter to only those that also have y metric
       const bothFiltered = xFiltered.filter(
         (e) => resolveNumericValue(e, yMetric) !== undefined,
@@ -152,7 +153,7 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric }: { i
       filtered = aggregateScatterByIdeaMean(bothFiltered, xMetric, yMetric);
     } else {
       // Filter for x metric
-      const xFiltered = filterMetricExperiments(xMetric, experiments, tags, tagMode, hiddenStatuses);
+      const xFiltered = filterMetricExperiments(xMetric, experiments, tags, tagMode, hiddenStatuses, hideRunning);
       // Further filter to only those that also have y metric
       filtered = xFiltered.filter(
         (e) => resolveNumericValue(e, yMetric) !== undefined,
@@ -176,7 +177,7 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric }: { i
 
     // Color computation
     const metricFiltered = filterMetricExperiments(
-      selectedMetric.value || yMetric, experiments, tags, tagMode, hiddenStatuses,
+      selectedMetric.value || yMetric, experiments, tags, tagMode, hiddenStatuses, hideRunning,
     );
     const ideaColorMap: Record<number, string> = {};
     let colorIdx = 0;

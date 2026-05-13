@@ -16,6 +16,7 @@ export interface IdeaNode {
   first_start?: string;
   last_finish?: string;
   has_running?: boolean;
+  has_queued?: boolean;
   parent_ids?: number[];
   /** Populated when fetching a single idea with ?notes=all */
   notes?: Note[];

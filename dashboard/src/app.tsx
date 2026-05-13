@@ -299,7 +299,7 @@ class PanelHeaderActions implements IHeaderActionsRenderer {
 // Row 2: Metrics (75% left) | Scatter (25% right)
 // Row 3: Table/Graph/Timeline/Log (50% left) | Detail (50% right)
 // Task, Suggest, API, Stats, Sandbox, Prompts → tray
-const DEFAULT_LAYOUT: SerializedDockview = {"grid":{"root":{"type":"branch","data":[{"type":"leaf","data":{"views":["filters"],"activeView":"filters","id":"1"},"size":80},{"type":"branch","data":[{"type":"leaf","data":{"views":["metrics"],"activeView":"metrics","id":"2"},"size":1120},{"type":"leaf","data":{"views":["scatter"],"activeView":"scatter","id":"3"},"size":480}],"size":330},{"type":"branch","data":[{"type":"leaf","data":{"views":["table","graph","timeline","log"],"activeView":"table","id":"4"},"size":800},{"type":"leaf","data":{"views":["detail"],"activeView":"detail","id":"5"},"size":800}],"size":590}],"size":1600},"width":1600,"height":1000,"orientation":"VERTICAL"},"panels":{"filters":{"id":"filters","contentComponent":"default","title":"Filters"},"metrics":{"id":"metrics","contentComponent":"default","title":"Metrics"},"scatter":{"id":"scatter","contentComponent":"default","title":"Scatter"},"table":{"id":"table","contentComponent":"default","title":"Table"},"graph":{"id":"graph","contentComponent":"default","title":"Graph"},"timeline":{"id":"timeline","contentComponent":"default","title":"Timeline"},"log":{"id":"log","contentComponent":"default","title":"Log"},"detail":{"id":"detail","contentComponent":"default","title":"Detail"}},"activeGroup":"4"} as any;
+const DEFAULT_LAYOUT: SerializedDockview = {"grid":{"root":{"type":"branch","data":[{"type":"leaf","data":{"views":["filters"],"activeView":"filters","id":"1"},"size":80},{"type":"branch","data":[{"type":"leaf","data":{"views":["metrics"],"activeView":"metrics","id":"2"},"size":1120},{"type":"leaf","data":{"views":["scatter"],"activeView":"scatter","id":"3"},"size":480}],"size":330},{"type":"branch","data":[{"type":"leaf","data":{"views":["table","graph","timeline","queue","log"],"activeView":"table","id":"4"},"size":800},{"type":"leaf","data":{"views":["detail"],"activeView":"detail","id":"5"},"size":800}],"size":590}],"size":1600},"width":1600,"height":1000,"orientation":"VERTICAL"},"panels":{"filters":{"id":"filters","contentComponent":"default","title":"Filters"},"metrics":{"id":"metrics","contentComponent":"default","title":"Metrics"},"scatter":{"id":"scatter","contentComponent":"default","title":"Scatter"},"table":{"id":"table","contentComponent":"default","title":"Table"},"graph":{"id":"graph","contentComponent":"default","title":"Graph"},"timeline":{"id":"timeline","contentComponent":"default","title":"Timeline"},"queue":{"id":"queue","contentComponent":"default","title":"Queue"},"log":{"id":"log","contentComponent":"default","title":"Log"},"detail":{"id":"detail","contentComponent":"default","title":"Detail"}},"activeGroup":"4"} as any;
 
 // Mobile/narrow layout: all panels stacked vertically in two groups
 function buildMobileLayout(dv: DockviewComponent) {
@@ -822,11 +822,26 @@ export function App() {
   const SAVED_LAYOUTS_KEY = "the-lab:savedLayouts";
 
   const handleResetLayout = useCallback(() => {
+    if (!confirm("Reset to default layout and clear all dashboard preferences (selected metric, tag filters, status toggles, etc.)? Saved named layouts will be kept.")) return;
     const dv = dockviewRef.current;
     if (!dv) return;
+    // Wipe every `the-lab:` localStorage key except saved named layouts.
+    // Reload afterwards so signals re-initialise from defaults — they read
+    // localStorage at module load, so an in-memory reset would leave stale
+    // values until the next refresh.
+    try {
+      const keep = new Set([SAVED_LAYOUTS_KEY]);
+      const toRemove: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith("the-lab:") && !keep.has(k)) toRemove.push(k);
+      }
+      for (const k of toRemove) localStorage.removeItem(k);
+    } catch { /* ignore */ }
     dv.clear();
     buildDefaultLayout(dv);
     dashboardLayout.value = null;
+    location.reload();
   }, []);
 
   const handleSaveLayout = useCallback((name: string) => {

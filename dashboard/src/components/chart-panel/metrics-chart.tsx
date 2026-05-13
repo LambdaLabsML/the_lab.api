@@ -40,11 +40,13 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
   const clip = clipOutliers.value;
   const mean = ideaMean.value;
 
-  // Build set of hidden idea statuses
+  // Idea-status filters (abandoned/concluded). The "running" toggle is
+  // experiment-level — see hideRunning below — so completed experiments
+  // under still-active ideas remain visible when running is toggled off.
   const hiddenStatuses = new Set<string>();
   if (!showAbandoned.value) hiddenStatuses.add("abandoned");
   if (!showConcluded.value) hiddenStatuses.add("concluded");
-  if (!showRunning.value) { hiddenStatuses.add("active"); hiddenStatuses.add("suggested"); }
+  const hideRunning = !showRunning.value;
 
   // Destroy chart only on unmount
   useEffect(() => {
@@ -70,6 +72,7 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
       reversed,
       hiddenStatuses,
       mean,
+      hideRunning,
     );
 
     if (!chartData) return;

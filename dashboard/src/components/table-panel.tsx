@@ -59,14 +59,16 @@ export function TablePanel() {
   const impOnly = improvementsOnly.value;
   const mean = ideaMean.value;
 
-  // Build hidden statuses set (same logic as metrics chart)
+  // Idea-status filters (abandoned/concluded). The "running" toggle is
+  // experiment-level — completed experiments under active ideas remain
+  // visible when running is toggled off.
   const hiddenStatuses = useMemo(() => {
     const s = new Set<string>();
     if (!showAbandoned.value) s.add("abandoned");
     if (!showConcluded.value) s.add("concluded");
-    if (!showRunning.value) { s.add("active"); s.add("suggested"); }
     return s;
-  }, [showAbandoned.value, showConcluded.value, showRunning.value]);
+  }, [showAbandoned.value, showConcluded.value]);
+  const hideRunning = !showRunning.value;
 
   // Filter experiments by tags + status. When improvements-only is on and a
   // metric is selected, further filter to only improvement points.
@@ -74,6 +76,7 @@ export function TablePanel() {
     // Base filter: tags + status (always applied)
     let result = experiments.filter((e) => {
       if (hiddenStatuses.has(e.idea_status || "active")) return false;
+      if (hideRunning && (e._running || e.status === "running")) return false;
       if (tags.length > 0) {
         const expTags = e.tags || [];
         if (expTags.length === 0) return false;
@@ -139,7 +142,7 @@ export function TablePanel() {
     }
 
     return result;
-  }, [experiments, hiddenStatuses, tags, tagMode, metric, impOnly, mean]);
+  }, [experiments, hiddenStatuses, hideRunning, tags, tagMode, metric, impOnly, mean]);
 
   // Collect all metric keys from the filtered set
   const allMetricKeys = useMemo(() => {

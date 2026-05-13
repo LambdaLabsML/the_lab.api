@@ -128,7 +128,7 @@ export function DagView() {
     if (needsMeasure.length > 0) {
       let mHtml = '<div style="position:absolute;visibility:hidden;top:0;left:0">';
       for (const n of needsMeasure) {
-        const ds = n.has_running ? "running" : n.status;
+        const ds = n.has_running ? "running" : (n.has_queued ? "queued" : n.status);
         const sc = STATUS_BAR_COLORS[ds] || STATUS_BAR_COLORS.active;
         const lc = IDEA_PALETTE[layout.ideaLane[n.id] % IDEA_PALETTE.length];
         mHtml +=
