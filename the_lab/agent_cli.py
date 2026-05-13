@@ -236,13 +236,19 @@ def main():
         print(f"Error: '{agent_bin}' not found in PATH.", file=sys.stderr)
         sys.exit(1)
 
-    # Build MCP config if the bridge script exists
+    # Build MCP config if the bridge script exists. The packaged bridge is
+    # the source of truth — local copies under ``<project>/.claude/skills/``
+    # silently rot (they predate X-Agent-Id, the anyOf flatten fix, etc.) and
+    # break agent isolation when picked up by accident. Set
+    # THE_LAB_LOCAL_MCP=1 to opt back into the local copy.
     import json as _json
     mcp_config = None
-    mcp_script = project_dir / ".claude" / "skills" / "lab_api_mcp.py"
-    if not mcp_script.exists():
-        # Fall back to package source
-        mcp_script = Path(__file__).parent / "agent_skills" / "skills" / "lab_api_mcp.py"
+    mcp_script = Path(__file__).parent / "agent_skills" / "skills" / "lab_api_mcp.py"
+    if os.environ.get("THE_LAB_LOCAL_MCP") == "1":
+        local = project_dir / ".claude" / "skills" / "lab_api_mcp.py"
+        if local.exists():
+            mcp_script = local
+            print(f"MCP bridge: using local copy at {local} (THE_LAB_LOCAL_MCP=1)", file=sys.stderr)
     if mcp_script.exists():
         api_base = f"http://localhost:{args.port}/api/v1"
         mcp_config = _json.dumps({"mcpServers": {"labapi": {

@@ -72,6 +72,28 @@ def resolve_ref(ref, spec):
     return node
 
 
+def flatten_optional(schema, spec):
+    """Collapse Pydantic-style ``T | None`` schemas to ``T``.
+
+    Pydantic emits ``Optional[T]`` as ``{"anyOf": [<T>, {"type": "null"}]}``,
+    which leaves the property without a ``type`` after our prop builder copies
+    only the well-known keys. The calling LLM then has no schema to work
+    against and often stringifies dicts/lists, which the proxy then re-encodes
+    on top — the agent sees ``"meta"`` arrive as a JSON string. Picking the
+    first non-null branch (resolving any inner $ref) restores the type info.
+    """
+    if "anyOf" in schema:
+        for branch in schema["anyOf"]:
+            if branch.get("type") == "null":
+                continue
+            if "$ref" in branch:
+                branch = resolve_ref(branch["$ref"], spec)
+            return branch
+    if "$ref" in schema:
+        return resolve_ref(schema["$ref"], spec)
+    return schema
+
+
 def build_tools(spec):
     """Build MCP tool definitions and metadata from the OpenAPI spec."""
     tools = []       # MCP tool definitions (for tools/list)
@@ -93,8 +115,7 @@ def build_tools(spec):
             for param in detail.get("parameters", []):
                 name = param["name"]
                 schema = param.get("schema", {"type": "string"})
-                if "$ref" in schema:
-                    schema = resolve_ref(schema["$ref"], spec)
+                schema = flatten_optional(schema, spec)
 
                 prop = {}
                 for k in ("type", "items", "default", "enum"):
@@ -123,10 +144,9 @@ def build_tools(spec):
                 if "$ref" in json_schema:
                     json_schema = resolve_ref(json_schema["$ref"], spec)
                 for prop_name, prop_schema in json_schema.get("properties", {}).items():
-                    if "$ref" in prop_schema:
-                        prop_schema = resolve_ref(prop_schema["$ref"], spec)
+                    prop_schema = flatten_optional(prop_schema, spec)
                     prop = {}
-                    for k in ("type", "items", "default", "enum", "description"):
+                    for k in ("type", "items", "default", "enum", "description", "additionalProperties"):
                         if k in prop_schema:
                             prop[k] = prop_schema[k]
                     properties[prop_name] = prop
@@ -190,13 +210,24 @@ def proxy_call(tool_name, arguments, tool_meta):
     if query:
         url += "?" + urllib.parse.urlencode(query)
 
-    # Build body from body parameters
+    # Build body from body parameters. Some MCP clients stringify nested
+    # dict/list arguments when the schema is fuzzy — undo that here so a
+    # JSON string arriving for an object/array param is parsed back before
+    # we re-encode the request body. Without this, the API sees ``meta``
+    # as a string and 422s.
     body_data = None
     if meta["body_params"]:
         body_obj = {}
         for p in meta["body_params"]:
-            if p in arguments:
-                body_obj[p] = arguments[p]
+            if p not in arguments:
+                continue
+            v = arguments[p]
+            if isinstance(v, str) and v and v[0] in "{[":
+                try:
+                    v = json.loads(v)
+                except json.JSONDecodeError:
+                    pass
+            body_obj[p] = v
         body_data = json.dumps(body_obj).encode()
 
     # Make request — identify as MCP proxy so Lab tracks it separately.
