@@ -685,13 +685,26 @@ class ExperimentRunner:
         timeout: float = 3600,
         experiment_id=None,
         idea_id: int | None = None,
+        agent_id: str | None = None,
+        agent_role: str | None = None,
     ) -> dict:
-        """Block until an experiment finishes.
+        """Block until an experiment finishes — or a message arrives.
 
         Optional filters:
           experiment_id — only return when this specific experiment finishes
           idea_id       — only return experiments belonging to this idea
+          agent_id      — also wake on unread messages addressed to this agent
+          agent_role    — also wake on messages addressed to this role / 'all'
+
+        When woken by a message, returns
+        ``{"event": "message", "messages": [...], "running": [...]}``
+        so the caller can react before the experiment completes.
         """
+        from . import messages as messages_mod
+
+        repo_dir = self._store.repo_dir
+        wake_event = messages_mod._wake_event() if (agent_id or agent_role) else None
+
         deadline = asyncio.get_event_loop().time() + timeout
         while True:
             # Reconcile stale running experiments whose process already exited.
@@ -716,6 +729,25 @@ class ExperimentRunner:
                         "experiment": exp,
                     }
 
+            # Check for unread messages addressed to this agent — return early
+            # so the caller can react. Same recipient resolution as the
+            # notifications middleware.
+            if agent_id or agent_role:
+                unread = messages_mod.unread_for(
+                    repo_dir, agent_id=agent_id, role=agent_role, limit=20,
+                )
+                if unread:
+                    running = self._store.list_experiments_by_status("running")
+                    if experiment_id is not None:
+                        running = [e for e in running if e["id"] == experiment_id]
+                    if idea_id is not None:
+                        running = [e for e in running if e.get("idea_id") == idea_id]
+                    return {
+                        "event": "message",
+                        "messages": unread,
+                        "running": [e["id"] for e in running],
+                    }
+
             remaining = deadline - asyncio.get_event_loop().time()
             if remaining <= 0:
                 running = self._store.list_experiments_by_status("running")
@@ -728,14 +760,23 @@ class ExperimentRunner:
                     "running": [e["id"] for e in running],
                 }
 
-            # Wait for queue notification OR poll every 5s (whichever comes first)
+            # Wait for queue notification OR message wake OR poll every 5s
+            # (whichever comes first). We race two futures with asyncio.wait so
+            # either source unblocks the loop immediately.
             poll_timeout = min(remaining, 5.0)
+            waiters = [asyncio.create_task(self._finished_queue.get())]
+            if wake_event is not None:
+                wake_event.clear()
+                waiters.append(asyncio.create_task(wake_event.wait()))
             try:
-                await asyncio.wait_for(
-                    self._finished_queue.get(), timeout=poll_timeout
+                done, pending = await asyncio.wait(
+                    waiters,
+                    timeout=poll_timeout,
+                    return_when=asyncio.FIRST_COMPLETED,
                 )
+                for t in pending:
+                    t.cancel()
             except asyncio.TimeoutError:
                 pass
-            # In both cases (queue event or poll timeout), loop back and
-            # re-check the store. The queue is used purely as a wake-up
-            # signal; filtering happens in the store scan above.
+            # In every case (queue event, message wake, or poll timeout) we
+            # loop back and re-check the store. Filtering happens above.

@@ -124,3 +124,9 @@ class RenameTagRequest(BaseModel):
 class UpdateTagsRequest(BaseModel):
     add: list[str] = []
     remove: list[str] = []
+
+
+class MessageRequest(BaseModel):
+    # to: 'agent:<id>' | 'role:<role>' | 'all'
+    to: str
+    text: str

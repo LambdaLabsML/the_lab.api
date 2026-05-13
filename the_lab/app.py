@@ -8,7 +8,7 @@ from pathlib import Path
 
 import math
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import GZipMiddleware
@@ -151,36 +151,20 @@ async def track_api_stats(request, call_next):
     return response
 
 
-@app.middleware("http")
-async def inject_notifications(request, call_next):
-    """Append _notifications to JSON API responses when there's something actionable."""
-    response = await call_next(request)
-    path = request.url.path
-    # Only enrich /api/v1/ JSON responses (skip openapi, docs, stats, dashboard)
-    if (not path.startswith("/api/v1/")
-            or path in ("/api/v1/openapi.json", "/api/v1/docs", "/api/v1/redoc")
-            or path.startswith("/api/v1/stats")
-            or response.status_code >= 400):
-        return response
-    content_type = response.headers.get("content-type", "")
-    if "application/json" not in content_type:
-        return response
-    # Read the response body
-    body_parts = []
-    async for chunk in response.body_iterator:
-        body_parts.append(chunk if isinstance(chunk, bytes) else chunk.encode())
-    body = b"".join(body_parts)
-    try:
-        data = _json.loads(body)
-    except (ValueError, TypeError):
-        return Response(content=body, status_code=response.status_code,
-                        headers=dict(response.headers), media_type=response.media_type)
-    # Only enrich dict responses (not lists)
-    if not isinstance(data, dict):
-        return Response(content=body, status_code=response.status_code,
-                        headers=dict(response.headers), media_type=response.media_type)
-    # Build notifications
-    notifications = []
+def build_notifications(request) -> list[dict]:
+    """Collect every actionable notification for the caller.
+
+    Single source of truth used by both the response-rewriting middleware
+    and the dedicated ``GET /api/v1/notifications`` endpoint. The caller is
+    identified by X-Agent-Id (already resolved by the resolve_agent
+    middleware into request.state.agent_id), which gates the per-agent
+    message inbox.
+    """
+    from . import messages as messages_mod
+    from . import agents as agents_mod
+
+    notifications: list[dict] = []
+    # Suggestion queue — gives any caller a quick scan over pending ideas.
     try:
         suggested = store.list_ideas(status="suggested")
         for idea in suggested:
@@ -205,6 +189,28 @@ async def inject_notifications(request, call_next):
             })
     except Exception:
         pass
+    # Per-agent inbox: unread directed messages.
+    agent_id = getattr(request.state, "agent_id", None)
+    if agent_id:
+        try:
+            entry = agents_mod.lookup_agent(REPO_DIR, agent_id) or {}
+            role = entry.get("role")
+            unread = messages_mod.unread_for(
+                REPO_DIR, agent_id=agent_id, role=role, limit=20,
+            )
+            for m in unread:
+                origin = m.get("from_role") or m.get("from_agent") or "system"
+                notifications.append({
+                    "type": "message",
+                    "priority": "high",
+                    "message_id": m["id"],
+                    "from": origin,
+                    "to": m.get("to"),
+                    "message": f"{origin}: {m.get('text', '')}",
+                    "action": f"POST /api/v1/messages/{m['id']}/read",
+                })
+        except Exception:
+            pass
     # Mild nudge when a git-touching route ran in the main repo because no
     # X-Agent-Id was provided (and the agent_cwd helper flagged it).
     if getattr(request.state, "git_no_agent_warning", False):
@@ -227,18 +233,70 @@ async def inject_notifications(request, call_next):
             ),
             "action": "POST /api/v1/agents/register",
         })
-    if notifications:
+    return notifications
+
+
+@app.middleware("http")
+async def inject_notifications(request, call_next):
+    """Append _notifications to JSON API responses when there's something actionable.
+
+    For dict-shaped responses we attach ``_notifications`` to the body.
+    For list-shaped responses (which we can't safely re-shape) we attach an
+    ``X-Notifications-Count`` header instead so agents know to fetch
+    ``GET /api/v1/notifications`` for the full payload.
+    """
+    response = await call_next(request)
+    path = request.url.path
+    # Only enrich /api/v1/ JSON responses (skip openapi, docs, stats, dashboard).
+    # Skip the dedicated /notifications endpoint to avoid self-reference.
+    if (not path.startswith("/api/v1/")
+            or path in ("/api/v1/openapi.json", "/api/v1/docs", "/api/v1/redoc")
+            or path.startswith("/api/v1/stats")
+            or path == "/api/v1/notifications"
+            or response.status_code >= 400):
+        return response
+    content_type = response.headers.get("content-type", "")
+    if "application/json" not in content_type:
+        return response
+    body_parts = []
+    async for chunk in response.body_iterator:
+        body_parts.append(chunk if isinstance(chunk, bytes) else chunk.encode())
+    body = b"".join(body_parts)
+    try:
+        data = _json.loads(body)
+    except (ValueError, TypeError):
+        return Response(content=body, status_code=response.status_code,
+                        headers=dict(response.headers), media_type=response.media_type)
+    notifications = build_notifications(request)
+    if not notifications:
+        return Response(content=body, status_code=response.status_code,
+                        headers=dict(response.headers), media_type=response.media_type)
+    # Dict body → inline. List body → header-only signal.
+    if isinstance(data, dict):
         data["_notifications"] = notifications
         try:
             new_body = _json.dumps(data, allow_nan=True).encode()
         except (ValueError, TypeError):
-            # If re-serialization fails, return the original body unchanged
             return Response(content=body, status_code=response.status_code,
                             headers=dict(response.headers), media_type=response.media_type)
         return Response(content=new_body, status_code=response.status_code,
                         media_type="application/json")
+    headers = dict(response.headers)
+    headers["X-Notifications-Count"] = str(len(notifications))
+    headers.pop("content-length", None)  # body unchanged but defensive
     return Response(content=body, status_code=response.status_code,
-                    headers=dict(response.headers), media_type=response.media_type)
+                    headers=headers, media_type=response.media_type)
+
+
+@app.get("/api/v1/notifications")
+def get_notifications(request: Request):
+    """Return the current caller's notifications without any other payload.
+
+    Useful from contexts where the response middleware can't reshape the
+    body (list endpoints), or when an agent just wants to poll its inbox.
+    The response shape is ``{"notifications": [...]}``.
+    """
+    return {"notifications": build_notifications(request)}
 
 
 # GZip compression. Starlette's add_middleware() inserts at position 0 of the
@@ -312,6 +370,7 @@ from .routes.operational import router as operational_router
 from .routes.prompts import router as prompts_router
 from .routes.agents import router as agents_router
 from .routes.queue import router as queue_router
+from .routes.messages import router as messages_router
 
 app.include_router(ideas_router)
 app.include_router(experiments_router)
@@ -320,6 +379,7 @@ app.include_router(operational_router)
 app.include_router(prompts_router)
 app.include_router(agents_router)
 app.include_router(queue_router)
+app.include_router(messages_router)
 
 
 # --- SPA Fallback (must be last) ---

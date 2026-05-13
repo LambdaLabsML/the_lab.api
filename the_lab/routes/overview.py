@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from ..cache import cached_response
 from ..deps import (
@@ -579,6 +579,7 @@ def get_digest_compat(
 
 @router.get("/wait")
 async def wait_for_experiment(
+    request: Request,
     timeout: float = Query(default=3600, le=86400),
     experiment_id: str | None = Query(default=None, description="Global ID or label (e.g. '4' or '1.2')"),
     idea_id: int | None = Query(default=None),
@@ -608,10 +609,21 @@ async def wait_for_experiment(
             resolved_exp_id = exp["id"]
         else:
             raise HTTPException(404, f"experiment '{experiment_id}' not found")
+    # Pull the caller's agent + role from the request so wait_any wakes on
+    # messages addressed to them (in addition to experiment events).
+    from .. import agents as _agents_mod
+    _agent_id = getattr(request.state, "agent_id", None)
+    _agent_role = None
+    if _agent_id:
+        _entry = _agents_mod.lookup_agent(REPO_DIR, _agent_id) or {}
+        _agent_role = _entry.get("role")
+
     result = await runner.wait_any(
         timeout=timeout,
         experiment_id=resolved_exp_id,
         idea_id=idea_id,
+        agent_id=_agent_id,
+        agent_role=_agent_role,
     )
     result["current_branch"] = get_current_branch(cwd=REPO_DIR)
     exp = result.get("experiment")
