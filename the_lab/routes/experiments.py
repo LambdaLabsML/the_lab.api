@@ -660,23 +660,29 @@ def delete_experiment(exp_ref: str):
 
 @router.post("/experiments/{exp_ref}/start")
 async def start_experiment(exp_ref: str, req: StartExperimentRequest | None = None):
-    """Run an experiment's script.
+    """Queue an experiment for the scheduler to dispatch.
 
-    Auto-commits any uncommitted changes on the idea's branch, creates a git
-    worktree for isolated execution, and launches the script as a background
-    process. An optional ``timeout`` (in seconds) will automatically cancel
-    the experiment if it exceeds the limit. Returns the experiment record with
-    the current branch context.
+    Puts (or re-puts) the experiment in ``queued`` state and wakes the
+    scheduler — it will start the script as soon as a resource slot frees
+    up, honouring capacity, max_parallel_jobs, priority, and dependencies.
+
+    Idempotent: already-running and already-queued states are returned
+    unchanged. Completed experiments cannot be re-started this way; use
+    ``POST /api/v1/experiments/{ref}/rerun`` to create a fresh queued
+    copy. Failed and cancelled experiments are re-queued.
+
+    The ``timeout`` field on the request is recorded on the experiment's
+    meta and applied by the scheduler when it eventually dispatches.
 
     Example:
         POST /api/v1/experiments/4/start {"timeout": 600}
-        -> {"status": "running", "experiment": {"id": 4, ...},
-            "current_branch": "idea/1", "idea_id": 1, ...}
+        -> {"status": "queued", "experiment": {"id": 4, ...},
+            "queue_position": 2, "current_branch": "idea/1", ...}
     """
     # Resolve exp ref (global ID or label like '1.2')
     exp_check = _resolve_exp(exp_ref)
-    exp_id = exp_check["id"]
-    # Idempotent: if already running, return current state instead of error
+    label = exp_check.get("label") or str(exp_check["id"])
+
     if exp_check.get("status") == "running":
         return {
             "status": "already_running",
@@ -684,12 +690,47 @@ async def start_experiment(exp_ref: str, req: StartExperimentRequest | None = No
             "current_branch": get_current_branch(cwd=REPO_DIR),
             **_idea_context(exp_check.get("idea_id")),
         }
-    timeout = req.timeout if req else None
-    result = await runner.start(exp_id, timeout=timeout)
-    if result["status"] == "error":
-        raise HTTPException(400, result.get("error", "experiment failed to start"))
-    # Add idea context + current branch
-    exp = result.get("experiment", {})
+    if exp_check.get("status") == "completed":
+        raise HTTPException(
+            400,
+            "experiment is completed; use POST /experiments/{ref}/rerun "
+            "to create a queued copy.",
+        )
+
+    # Stash the requested timeout on the experiment's meta so the scheduler
+    # can apply it when it dispatches.
+    meta_update = dict(exp_check.get("meta") or {})
+    if req and req.timeout is not None:
+        meta_update["timeout"] = float(req.timeout)
+    # Clear any leftover error / finished_at from a previous failed run so
+    # the row reads cleanly as queued.
+    store.update_experiment(
+        label,
+        status="queued",
+        meta=meta_update,
+        error=None,
+        finished_at=None,
+        queued_at=datetime.now(timezone.utc).isoformat(),
+    )
+    runner.wake_scheduler()
+
+    # Build the response in the same shape /rerun returns: include
+    # queue_position so the caller knows where they sit.
+    exp = store.get_experiment(label) or exp_check
+    queue = [
+        e for e in store.list_all_experiments()
+        if e.get("status") in ("queued", "pending")
+    ]
+    queue.sort(key=lambda e: (
+        -int((e.get("meta") or {}).get("priority", 0) or 0),
+        e.get("created_at") or "",
+    ))
+    for i, qexp in enumerate(queue):
+        if qexp.get("id") == exp.get("id"):
+            exp["queue_position"] = i + 1
+            break
+
+    result = {"status": "queued", "experiment": exp}
     result["current_branch"] = get_current_branch(cwd=REPO_DIR)
     result.update(_idea_context(exp.get("idea_id")))
     return result
@@ -698,17 +739,19 @@ async def start_experiment(exp_ref: str, req: StartExperimentRequest | None = No
 
 @router.post("/experiments/{exp_ref}/rerun", status_code=201)
 async def rerun_experiment(exp_ref: str):
-    """Create and start a new experiment cloned from an existing one's script.
+    """Create a queued copy of an existing experiment from its script.
 
     Reads the script file of the referenced experiment and creates a brand-new
     experiment on the same idea with the same script content, description
-    (prefixed with "rerun: "), tags, and meta. The new experiment is auto-started
-    immediately. Works on experiments in any status — useful for re-running a
-    completed experiment to check reproducibility.
+    (prefixed with "rerun: "), tags, and meta. The new experiment is **queued**
+    — the scheduler dispatches it when capacity permits, the same as any
+    create_experiment call. Works on experiments in any status; useful for
+    re-running a completed experiment to check reproducibility.
 
     Example:
         POST /api/v1/experiments/1.2/rerun
-        -> {"id": "1.3", "label": "1.3", "idea_id": 1, "status": "running", ...}
+        -> {"id": "1.3", "label": "1.3", "idea_id": 1, "status": "queued",
+            "queue_position": 2, "rerun_of": "1.2", ...}
     """
     source = _resolve_exp(exp_ref)
     idea_id = source["idea_id"]
@@ -737,14 +780,34 @@ async def rerun_experiment(exp_ref: str):
     new_script_path.write_text(script_content)
     os.chmod(new_script_path, 0o644)
 
-    # Auto-start
-    result = await runner.start(new_exp["id"])
-    if result["status"] == "error":
-        raise HTTPException(400, result.get("error", "experiment failed to start"))
+    # Queue it — same pattern as create_experiment so reruns respect
+    # resource capacity, priorities, and parallel-job caps instead of
+    # racing past the scheduler.
+    label = new_exp.get("label") or str(new_exp["id"])
+    store.update_experiment(
+        label,
+        status="queued",
+        queued_at=datetime.now(timezone.utc).isoformat(),
+    )
+    new_exp = store.get_experiment(label) or new_exp
+    runner.wake_scheduler()
 
-    exp_out = result.get("experiment", new_exp)
-    exp_out["rerun_of"] = source.get("label", str(source["id"]))
-    return exp_out
+    # Surface queue position so the caller sees where they sit.
+    queue = [
+        e for e in store.list_all_experiments()
+        if e.get("status") in ("queued", "pending")
+    ]
+    queue.sort(key=lambda e: (
+        -int((e.get("meta") or {}).get("priority", 0) or 0),
+        e.get("created_at") or "",
+    ))
+    for i, qexp in enumerate(queue):
+        if qexp.get("id") == new_exp.get("id"):
+            new_exp["queue_position"] = i + 1
+            break
+
+    new_exp["rerun_of"] = source.get("label", str(source["id"]))
+    return new_exp
 
 
 @router.post("/experiments/{exp_ref}/cancel")

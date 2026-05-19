@@ -279,8 +279,19 @@ class ExperimentRunner:
             extra_env["THE_LAB_ASSIGNED_RESOURCE"] = resource.name
             extra_env["THE_LAB_ASSIGNED_UNITS"] = ",".join(str(u) for u in assigned)
 
+            # The caller may have stashed a timeout on the experiment's
+            # meta (POST /experiments/{ref}/start with {"timeout": N}).
+            # Apply it here so the start path respects the same SIGTERM
+            # deadline whether the user kicked it via /start or the
+            # scheduler dispatched it on its own.
             try:
-                result = await self.start(label, env_extra=extra_env)
+                meta_timeout = qm.get("timeout")
+                start_timeout = float(meta_timeout) if meta_timeout is not None else None
+            except (TypeError, ValueError):
+                start_timeout = None
+
+            try:
+                result = await self.start(label, env_extra=extra_env, timeout=start_timeout)
                 if result.get("status") == "error":
                     # Release the units we held; the start failed.
                     self._allocator.release(label)
@@ -310,7 +321,7 @@ class ExperimentRunner:
         now = datetime.now(timezone.utc).isoformat()
 
         output = log_path.read_text() if log_path.exists() else ""
-        result = self._extract_json(output)
+        result, result_idx = self._extract_json(output)
         if result is not None:
             metrics = result.get("metrics", {})
             meta = {**exp.get("meta", {}), **result.get("meta", {})}
@@ -323,6 +334,8 @@ class ExperimentRunner:
                 error=None,
                 finished_at=now,
             )
+            if result_idx is not None:
+                self._strip_result_line(log_path, result_idx)
             self._cleanup_worktree(exp)
             return True
 
@@ -362,7 +375,7 @@ class ExperimentRunner:
         now = datetime.now(timezone.utc).isoformat()
         output = log_path.read_text() if log_path.exists() else ""
 
-        result = self._extract_json(output)
+        result, result_idx = self._extract_json(output)
         if result is not None:
             metrics = result.get("metrics", {})
             meta = {**exp.get("meta", {}), **result.get("meta", {})}
@@ -370,6 +383,8 @@ class ExperimentRunner:
                 exp_id, status="completed", metrics=metrics, meta=meta,
                 pid=None, finished_at=now,
             )
+            if result_idx is not None:
+                self._strip_result_line(log_path, result_idx)
         else:
             # Metrics-optional: assume success if process was running normally
             self._store.update_experiment(
@@ -567,7 +582,7 @@ class ExperimentRunner:
             )
             err_path.write_text(f"{error}\n\n{output[-2000:]}")
         elif process.returncode == 0:
-            result = self._extract_json(output)
+            result, result_idx = self._extract_json(output)
             if result is not None:
                 metrics = result.get("metrics", {})
                 meta = {**exp.get("meta", {}), **result.get("meta", {})}
@@ -575,6 +590,8 @@ class ExperimentRunner:
                     exp_id, status="completed", metrics=metrics, meta=meta,
                     pid=None, finished_at=now,
                 )
+                if result_idx is not None:
+                    self._strip_result_line(log_path, result_idx)
             else:
                 self._store.update_experiment(
                     exp_id, status="completed", metrics=None,
@@ -607,19 +624,78 @@ class ExperimentRunner:
         self._tasks.pop(exp_id, None)
         self._finished_queue.put_nowait(exp_id)
 
-    def _extract_json(self, output: str) -> dict | None:
-        lines = output.strip().split("\n")
-        for line in reversed(lines):
-            line = line.strip()
-            if not line:
+    def _extract_json(self, output: str) -> tuple[dict | None, int | None]:
+        """Find the last non-empty line that parses as a JSON object.
+
+        Returns ``(parsed_dict, line_index)`` so callers can both consume the
+        parsed result and (optionally) strip that line from the on-disk log.
+        Returns ``(None, None)`` if no JSON-object line exists. Scans from
+        the end; the first non-JSON non-empty line stops the search.
+        """
+        lines = output.split("\n")
+        for i in range(len(lines) - 1, -1, -1):
+            stripped = lines[i].strip()
+            if not stripped:
                 continue
             try:
-                parsed = json.loads(line)
-                if isinstance(parsed, dict):
-                    return parsed
+                parsed = json.loads(stripped)
             except json.JSONDecodeError:
+                # Tail content isn't the result line — stop searching, the
+                # result line (if any) must be the very last non-empty one.
+                return None, None
+            if isinstance(parsed, dict):
+                return parsed, i
+            return None, None
+        return None, None
+
+    @staticmethod
+    def _strip_result_line(log_path: Path, line_idx: int) -> None:
+        """Remove a specific line from a log file in place.
+
+        Used after the runner has captured the JSON result from the log: we
+        don't want the raw dump cluttering the "Show log" view, and the
+        parsed data already lives on the experiment record. Best-effort —
+        failures are swallowed because the experiment is already recorded.
+        """
+        if line_idx < 0:
+            return
+        try:
+            text = log_path.read_text()
+        except OSError:
+            return
+        lines = text.split("\n")
+        if line_idx >= len(lines):
+            return
+        del lines[line_idx]
+        try:
+            log_path.write_text("\n".join(lines))
+        except OSError:
+            pass
+
+    @staticmethod
+    def _strip_trailing_json_line(text: str) -> str:
+        """Drop a trailing JSON-object line (defense-in-depth for legacy logs).
+
+        Newly-completed experiments have their result line stripped from
+        disk via _strip_result_line, but older runs still have it. This
+        runs on every read of the log so the "Show log" view stays clean.
+        """
+        if not text:
+            return text
+        lines = text.split("\n")
+        for i in range(len(lines) - 1, -1, -1):
+            stripped = lines[i].strip()
+            if not stripped:
                 continue
-        return None
+            try:
+                parsed = json.loads(stripped)
+                if isinstance(parsed, dict):
+                    del lines[i]
+                    return "\n".join(lines)
+            except json.JSONDecodeError:
+                pass
+            return text
+        return text
 
     async def cancel(self, exp_id) -> dict | None:
         exp = self._store.get_experiment(exp_id)
@@ -660,14 +736,21 @@ class ExperimentRunner:
         )
 
     def get_log(self, exp_id: int, tail: int | None = None) -> str | None:
-        """Read the .log file for an experiment, optionally tail N lines."""
+        """Read the .log file for an experiment, optionally tail N lines.
+
+        Trailing JSON-object lines (the script's final result dump) are
+        filtered out — the parsed metrics already live on the experiment
+        record and the raw blob clutters the "Show log" view. Newly-
+        completed runs have the line stripped from disk; this filter is
+        defense-in-depth for legacy logs.
+        """
         exp = self._store.get_experiment(exp_id)
         if not exp:
             return None
         log_path = self._store.repo_dir / exp["script"].replace(".sh", ".log")
         if not log_path.exists():
             return ""
-        content = log_path.read_text()
+        content = self._strip_trailing_json_line(log_path.read_text())
         if tail is not None:
             lines = content.split("\n")
             content = "\n".join(lines[-tail:])
