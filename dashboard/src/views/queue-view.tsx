@@ -434,6 +434,7 @@ export function QueueView() {
 
   const queued = snapshot?.queued ?? [];
   const running = snapshot?.running ?? [];
+  const recent = snapshot?.recent ?? [];
   const resources = snapshot?.resources ?? [];
 
   const summary = snapshot
@@ -725,6 +726,66 @@ export function QueueView() {
               <div class="queue-empty">Nothing running.</div>
             )}
           </div>
+        </div>
+      </section>
+
+      <section class="queue-section">
+        <div class="queue-section-header">
+          <h3>Recent</h3>
+          <span class="queue-section-meta">{recent.length}</span>
+        </div>
+        <div class="queue-list">
+          {recent.map((exp) => {
+            const status = (exp.status || "").toLowerCase();
+            const score = exp.metrics && typeof (exp.metrics as Record<string, unknown>).score === "number"
+              ? ((exp.metrics as Record<string, number>).score)
+              : null;
+            return (
+              <div class={`queue-row recent ${status}`} key={String(exp.id)}>
+                <div class="queue-row-main">
+                  <div class="queue-row-label-line">
+                    <code class="queue-row-label">exp/{exp.label}</code>
+                    <span class="agents-chip" style={{ textTransform: "uppercase" }}>{status}</span>
+                    <button
+                      class="queue-link"
+                      onClick={() => handleOpenIdea(exp.idea_id)}
+                      title={`Open idea ${exp.idea_id}`}
+                    >
+                      idea {exp.idea_id}
+                    </button>
+                  </div>
+                  <div class="queue-row-desc" title={exp.description}>
+                    {truncate(exp.description, 140)}
+                  </div>
+                  <div class="queue-row-meta">
+                    {score != null && (
+                      <span class="queue-meta-item">
+                        score: <code>{score.toFixed(4)}</code>
+                      </span>
+                    )}
+                    {exp.error && (
+                      <span class="queue-meta-item" style={{ color: "#f85149" }} title={exp.error}>
+                        error: {truncate(exp.error, 80)}
+                      </span>
+                    )}
+                    {exp.assigned_resource && (
+                      <span class="queue-meta-item">
+                        ran on <code>{exp.assigned_resource}</code>
+                      </span>
+                    )}
+                    {exp.finished_at && (
+                      <span class="queue-meta-item" title={exp.finished_at}>
+                        finished {relativeTime(exp.finished_at)}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+          {recent.length === 0 && loaded && (
+            <div class="queue-empty">No finished experiments yet.</div>
+          )}
         </div>
       </section>
     </div>

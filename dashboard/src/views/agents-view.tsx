@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
-import { listAgents, unregisterAgent } from "../state/api";
-import type { AgentEntry } from "../lib/types";
+import { listAgents, listMessages, unregisterAgent } from "../state/api";
+import type { AgentEntry, MessageEntry } from "../lib/types";
 
 /** Shorten a long path by replacing the middle with an ellipsis. */
 function truncateMiddle(s: string, max: number): string {
@@ -29,6 +29,7 @@ function relativeTime(iso: string): string {
 
 export function AgentsView() {
   const [agents, setAgents] = useState<AgentEntry[]>([]);
+  const [messages, setMessages] = useState<MessageEntry[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -39,9 +40,15 @@ export function AgentsView() {
 
   async function refresh(): Promise<AgentEntry[] | null> {
     try {
-      const list = await listAgents();
+      // Fetch agents + messages in parallel; the inbox is small and the
+      // agents pane is exactly where the conversation belongs.
+      const [list, msgs] = await Promise.all([
+        listAgents(),
+        listMessages(100).catch(() => [] as MessageEntry[]),
+      ]);
       if (cancelledRef.current) return null;
       setAgents(list);
+      setMessages(msgs);
       setError(null);
       setLoaded(true);
       return list;
@@ -64,6 +71,32 @@ export function AgentsView() {
       window.clearInterval(tickT);
     };
   }, []);
+
+  // Resolve agent_id -> role for nicer "from"/"to" display when available.
+  const roleByAgent = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const a of agents) map[a.agent_id] = a.role || "default";
+    return map;
+  }, [agents]);
+
+  function describeRecipient(to: string): string {
+    if (to === "all") return "everyone";
+    if (to.startsWith("agent:")) {
+      const id = to.slice(6);
+      const role = roleByAgent[id];
+      return role ? `${id} (${role})` : id;
+    }
+    if (to.startsWith("role:")) return `role:${to.slice(5)}`;
+    return to;
+  }
+
+  function describeSender(m: MessageEntry): string {
+    if (m.from_agent) {
+      const role = m.from_role || roleByAgent[m.from_agent];
+      return role ? `${m.from_agent} (${role})` : m.from_agent;
+    }
+    return m.from_role || "system";
+  }
 
   async function handleUnregister(agent: AgentEntry, dropBranch: boolean) {
     const msg = dropBranch
@@ -145,12 +178,39 @@ export function AgentsView() {
                 </div>
 
                 <div class="agents-card-row">
-                  <div class="agents-card-label">Branch</div>
+                  <div class="agents-card-label">Working on</div>
                   <div class="agents-card-value">
-                    <div class="agents-branch">{agent.branch}</div>
-                    <div class="agents-branch-parent">
-                      branched from <code>{agent.parent_branch}</code>
-                    </div>
+                    {agent.current_idea ? (
+                      <>
+                        <div class="agents-branch">
+                          <code>{agent.current_branch}</code>
+                          {" — idea #"}{agent.current_idea.id}
+                          {" "}<span class="agents-chip">{agent.current_idea.status}</span>
+                        </div>
+                        <div class="agents-branch-parent" title={agent.current_idea.description}>
+                          {agent.current_idea.description.split("\n")[0].slice(0, 100)}
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div class="agents-branch">
+                          <code>{agent.current_branch || agent.branch}</code>
+                          {(!agent.current_branch || agent.current_branch === agent.branch) && (
+                            <span class="agents-branch-parent" style={{ marginLeft: 6 }}>
+                              (initial — not on an idea yet)
+                            </span>
+                          )}
+                        </div>
+                        <div class="agents-branch-parent">
+                          initial branch <code>{agent.branch}</code>, branched from <code>{agent.parent_branch}</code>
+                        </div>
+                      </>
+                    )}
+                    {agent.unread_messages != null && agent.unread_messages > 0 && (
+                      <div class="agents-branch-parent" style={{ marginTop: 4, color: "#d29922" }}>
+                        ✉ {agent.unread_messages} unread message{agent.unread_messages === 1 ? "" : "s"}
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -192,6 +252,46 @@ export function AgentsView() {
           })}
         </div>
       )}
+
+      <section class="agents-messages">
+        <div class="agents-messages-header">
+          <h3>Message log</h3>
+          <span class="agents-messages-meta">
+            {messages.length === 0 ? "no messages yet" : `${messages.length} message${messages.length === 1 ? "" : "s"}`}
+          </span>
+        </div>
+        {messages.length === 0 ? (
+          <div class="agents-messages-empty">
+            Inter-agent messages will appear here as agents send them via
+            <code> POST /api/v1/messages</code>.
+          </div>
+        ) : (
+          <ol class="agents-messages-list">
+            {messages.map((m) => (
+              <li class="agents-message" key={m.id}>
+                <div class="agents-message-head">
+                  <span class="agents-message-from" title={`agent ${m.from_agent ?? "system"}`}>
+                    {describeSender(m)}
+                  </span>
+                  <span class="agents-message-arrow">→</span>
+                  <span class="agents-message-to">{describeRecipient(m.to)}</span>
+                  <span class="agents-message-time" title={m.created_at}>
+                    {relativeTime(m.created_at)}
+                  </span>
+                  {m.read_by && m.read_by.length > 0 ? (
+                    <span class="agents-message-read" title={`read by: ${m.read_by.join(", ")}`}>
+                      ✓ read by {m.read_by.length}
+                    </span>
+                  ) : (
+                    <span class="agents-message-unread">unread</span>
+                  )}
+                </div>
+                <div class="agents-message-body">{m.text}</div>
+              </li>
+            ))}
+          </ol>
+        )}
+      </section>
     </div>
   );
 }

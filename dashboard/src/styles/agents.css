@@ -286,3 +286,89 @@
     align-items: flex-start;
   }
 }
+
+/* ── Message log ────────────────────────────────────────── */
+.agents-messages {
+  margin-top: 24px;
+  border-top: 1px solid #30363d;
+  padding-top: 16px;
+}
+.agents-messages-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+.agents-messages-header h3 {
+  margin: 0;
+  font-size: 13px;
+  color: #c9d1d9;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.agents-messages-meta {
+  font-size: 11px;
+  color: #8b949e;
+}
+.agents-messages-empty {
+  color: #8b949e;
+  font-size: 12px;
+  padding: 12px 0;
+}
+.agents-messages-empty code {
+  background: #161b22;
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 11px;
+}
+.agents-messages-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 480px;
+  overflow-y: auto;
+}
+.agents-message {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+.agents-message-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  color: #8b949e;
+  margin-bottom: 4px;
+}
+.agents-message-from {
+  color: #c9d1d9;
+  font-weight: 600;
+}
+.agents-message-arrow {
+  color: #6e7681;
+}
+.agents-message-to {
+  color: #58a6ff;
+}
+.agents-message-time {
+  margin-left: auto;
+}
+.agents-message-read {
+  color: #3fb950;
+}
+.agents-message-unread {
+  color: #d29922;
+}
+.agents-message-body {
+  color: #c9d1d9;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.4;
+}

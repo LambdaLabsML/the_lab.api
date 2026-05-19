@@ -185,6 +185,17 @@ export interface PromptMeta {
   updated_at: string;
 }
 
+export interface MessageEntry {
+  id: number;
+  from_agent: string | null;
+  from_role: string | null;
+  /** "agent:<id>" | "role:<role>" | "all" */
+  to: string;
+  text: string;
+  created_at: string;
+  read_by: string[];
+}
+
 export interface AgentEntry {
   agent_id: string;
   role: string;
@@ -193,6 +204,13 @@ export interface AgentEntry {
   worktree: string;
   pid: number | null;
   created_at: string;
+  /** Live branch currently checked out in the agent's worktree (may differ
+   *  from `branch`, which is the initial agent_init_<id>). */
+  current_branch?: string;
+  /** When current_branch matches idea/<N>, summary of that idea. */
+  current_idea?: { id: number; description: string; status: string };
+  /** Count of unread messages addressed to this agent. */
+  unread_messages?: number;
 }
 
 export interface SandboxState {
@@ -216,7 +234,7 @@ export type IdeaDetail = IdeaNode;
 /** Response shape from GET /api/v1/ideas/:id/experiments */
 export type IdeaExperimentsResponse = Experiment[];
 
-/** A queued or running experiment as returned by GET /api/v1/queue */
+/** A queued, running, or recently-finished experiment as returned by /queue */
 export interface QueueExp {
   id: string | number;
   label: string;
@@ -229,9 +247,13 @@ export interface QueueExp {
   created_at: string;
   started_at: string | null;
   queued_at: string | null;
+  finished_at?: string | null;
   tags: string[];
   assigned_resource: string | null;
   assigned_units: number[] | null;
+  /** Populated for finished rows in the `recent` history section. */
+  error?: string | null;
+  metrics?: Record<string, unknown> | null;
 }
 
 /** A holder of a unit slot on a resource */
@@ -269,6 +291,8 @@ export interface ResourceState {
 export interface QueueSnapshot {
   queued: QueueExp[];
   running: QueueExp[];
+  /** Recent history: completed / failed / cancelled, newest first. */
+  recent?: QueueExp[];
   resources: ResourceState[];
   config: { paused: boolean; dispatch_interval_s: number };
 }

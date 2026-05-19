@@ -632,3 +632,9 @@
     justify-content: flex-start;
   }
 }
+
+/* Recent (history) rows — distinguish completed / failed / cancelled */
+.queue-row.recent { border-left: 3px solid #30363d; }
+.queue-row.recent.completed { border-left-color: #3fb950; }
+.queue-row.recent.failed    { border-left-color: #f85149; }
+.queue-row.recent.cancelled { border-left-color: #8b949e; }

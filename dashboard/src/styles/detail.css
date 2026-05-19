@@ -86,7 +86,7 @@
 .parent-link:hover { text-decoration: underline; color: #79c0ff; }
 
 /* Idea description (replaces detail-section wrapper) */
-.detail-desc { color: #c9d1d9; line-height: 1.5; margin-bottom: 10px; font-size: 12px; word-break: break-word; }
+.detail-desc { color: #c9d1d9; line-height: 1.5; margin-bottom: 10px; font-size: 12px; word-break: break-word; white-space: pre-wrap; }
 
 /* ── Compact meta block ─────────────────────────────────── */
 .idea-meta-block {

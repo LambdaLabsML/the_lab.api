@@ -11,6 +11,7 @@ import type {
   ChartDataResponse,
   IdeaDetail,
   Experiment,
+  MessageEntry,
   ProgressResponse,
   OpenAPISpec,
   PromptMeta,
@@ -239,6 +240,11 @@ export async function deletePromptRole(role: string): Promise<{ status: string; 
 /** GET /api/v1/agents */
 export async function listAgents(): Promise<AgentEntry[]> {
   return fetchJson<AgentEntry[]>("/api/v1/agents");
+}
+
+/** GET /api/v1/messages */
+export async function listMessages(limit: number = 100): Promise<MessageEntry[]> {
+  return fetchJson<MessageEntry[]>(`/api/v1/messages?limit=${limit}`);
 }
 
 /** DELETE /api/v1/agents/:id?keep_branch=true|false */
