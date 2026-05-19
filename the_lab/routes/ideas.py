@@ -14,6 +14,7 @@ from ..deps import (
     _branch_diff_summary,
     _read_task,
     project_fields,
+    resolve_metric,
 )
 from ..git_ops import (
     GitError,
@@ -281,7 +282,9 @@ def search_ideas(
     if metric is not None and min_metric is not None:
         def _has_min_metric(idea: dict) -> bool:
             for exp in idea.get("experiments", []):
-                v = (exp.get("metrics") or {}).get(metric)
+                # resolve_metric honours dot-notation paths into nested
+                # metric dicts (e.g. "subagent.cache_hits").
+                v = resolve_metric(exp.get("metrics"), metric)
                 if isinstance(v, (int, float)) and v >= min_metric:
                     return True
             return False
@@ -623,17 +626,24 @@ def get_notes(
 
 @router.post("/ideas/{idea_id}/adopt")
 def adopt_idea(idea_id: int, request: Request, req: AdoptRequest | None = None):
-    """Adopt a suggested idea, creating its git branch and activating it.
+    """Adopt a suggested idea, creating its git branch, activating it, and
+    checking it out in the calling agent's worktree.
 
-    Transitions a ``suggested`` idea to ``active`` status and creates its
-    ``idea/<id>`` branch (from the parent branch or main). Only ideas in
-    ``suggested`` status can be adopted. An optional ``agent_note`` is saved
-    as an observation note on the idea. For multi-parent ideas, branches are
-    merged; if conflicts arise, the response contains a ``conflicts`` list.
+    Transitions a ``suggested`` idea to ``active`` status, creates its
+    ``idea/<id>`` branch (from the parent branch or main), and switches the
+    caller's working tree to that branch so subsequent edits and commits
+    land on ``idea/<id>``. Only ideas in ``suggested`` status can be
+    adopted. An optional ``agent_note`` is saved as an observation note on
+    the idea. For multi-parent ideas, branches are merged; if conflicts
+    arise, the response contains a ``conflicts`` list.
+
+    Refuses with 409 if some other worktree already has ``idea/<id>``
+    checked out (a previous agent holds it). Wait for them to finish or
+    unregister them via ``DELETE /api/v1/agents/<id>``.
 
     Example:
         POST /api/v1/ideas/5/adopt {"agent_note": "Looks promising, starting now"}
-        -> {"id": 5, "status": "active", "branch": "idea/5", ...}
+        -> {"id": 5, "status": "active", "branch": "idea/5", "checked_out": true, ...}
     """
     cwd = agent_cwd(request)
     idea = store.get_idea(idea_id)
@@ -645,33 +655,53 @@ def adopt_idea(idea_id: int, request: Request, req: AdoptRequest | None = None):
     branch_name = f"idea/{idea_id}"
     parent_ids = idea.get("parent_ids", [])
 
+    # Refuse if some other worktree already has this branch checked out —
+    # git would refuse the subsequent checkout anyway; the 409 gives a
+    # clearer error and matches /checkout_idea behaviour.
+    from .. import agents as _agents_mod
+    holder = _agents_mod.find_branch_holder(REPO_DIR, branch_name)
+    if holder and str(Path(holder["worktree"]).resolve()) != str(Path(cwd).resolve()):
+        held_by = holder.get("agent_id") or "the main repo"
+        raise HTTPException(
+            409,
+            f"branch '{branch_name}' is already checked out by {held_by} "
+            f"(at {holder['worktree']}). Wait for that agent to finish, "
+            "or unregister it via DELETE /api/v1/agents/<id>.",
+        )
+
     # Fast-path: if the branch was pre-created by the agent (e.g. manually
     # or after a partial-adopt git failure), skip the branch-creation step
-    # and just mark the idea active. This avoids "already checked out" errors
-    # when a parent branch is live in another git worktree.
-    if branch_exists(branch_name, cwd=cwd):
-        store.update_idea(idea_id, status="active", branch=branch_name)
-        if req and req.agent_note:
-            store.add_note(idea_id, req.agent_note, level="observation")
-        return store.get_idea(idea_id)
+    # and just mark the idea active. We still fall through to the checkout
+    # so the worktree's HEAD actually moves to idea/<id>.
+    branch_already_existed = branch_exists(branch_name, cwd=cwd)
 
     try:
-        if len(parent_ids) == 0:
-            base = get_default_branch(cwd=cwd)
-            create_branch_from(branch_name, base, cwd=cwd)
-        elif len(parent_ids) == 1:
-            parent = store.get_idea(parent_ids[0])
-            create_branch_from(branch_name, parent["branch"], cwd=cwd)
-        else:
-            parent_branches = [store.get_idea(pid)["branch"] for pid in parent_ids]
-            # carry=True: uncommitted changes land on new branch, not the old one
-            conflicts = create_branch_from_merge(branch_name, parent_branches, cwd=cwd, carry=True)
-            if conflicts is not None:
-                return {"status": "conflict", "conflicts": conflicts}
+        if not branch_already_existed:
+            if len(parent_ids) == 0:
+                base = get_default_branch(cwd=cwd)
+                create_branch_from(branch_name, base, cwd=cwd)
+            elif len(parent_ids) == 1:
+                parent = store.get_idea(parent_ids[0])
+                create_branch_from(branch_name, parent["branch"], cwd=cwd)
+            else:
+                parent_branches = [store.get_idea(pid)["branch"] for pid in parent_ids]
+                # carry=True: uncommitted changes land on new branch, not the old one
+                conflicts = create_branch_from_merge(branch_name, parent_branches, cwd=cwd, carry=True)
+                if conflicts is not None:
+                    return {"status": "conflict", "conflicts": conflicts}
 
         store.update_idea(idea_id, status="active", branch=branch_name)
         if req and req.agent_note:
             store.add_note(idea_id, req.agent_note, level="observation")
-        return store.get_idea(idea_id)
+
+        # Move the agent's worktree onto the idea branch. Idempotent — if
+        # they're already on it, checkout_idea returns "already_on_branch".
+        # Auto-commits or stashes any uncommitted changes on the previous
+        # branch, same as POST /ideas/<id>/checkout does.
+        checkout_result = checkout_idea(idea_id, cwd=cwd)
+        result = store.get_idea(idea_id)
+        result["checked_out"] = True
+        result["checkout"] = checkout_result
+        return result
     except GitError as e:
         raise HTTPException(500, str(e))

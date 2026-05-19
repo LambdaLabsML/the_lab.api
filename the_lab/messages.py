@@ -247,3 +247,12 @@ def delete_message(repo_dir: Path, msg_id: int) -> bool:
             return False
         _write(repo_dir, data)
     return True
+
+
+def clear_all(repo_dir: Path) -> int:
+    """Delete all messages and reset the id counter. Returns the count removed."""
+    with _lock:
+        data = _read(repo_dir)
+        n = len(data["messages"])
+        _write(repo_dir, {"next_id": 1, "messages": []})
+    return n

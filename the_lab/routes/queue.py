@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 from .. import queue as queue_mod
 from ..deps import REPO_DIR, runner, store
@@ -18,13 +18,23 @@ router = APIRouter()
 # ---------------------------------------------------------------------------
 
 @router.get("/api/v1/queue")
-def get_queue():
-    """Inspect current queue state: queued + running experiments + resource utilization.
+def get_queue(
+    history: int = Query(
+        default=20,
+        ge=0,
+        le=200,
+        description="How many recently-finished experiments to include (newest first). "
+                    "0 disables the history section.",
+    ),
+):
+    """Inspect current queue state: queued + running experiments + recent history.
 
     Useful for the dashboard's queue pane and for agents that want to know
     "how busy is the lab right now". Returns:
       - ``queued``: experiments waiting for a free slot, in dispatch order.
       - ``running``: currently running experiments with their resource assignment.
+      - ``recent``: most recently finished experiments (completed / failed /
+        cancelled), newest first. Capped by the ``history`` query param.
       - ``resources``: per-resource utilization (capacity, in_use, free, holders).
       - ``config``: paused, dispatch_interval_s.
     """
@@ -48,9 +58,14 @@ def get_queue():
             "created_at": e.get("created_at"),
             "started_at": e.get("started_at"),
             "queued_at": e.get("queued_at"),
+            "finished_at": e.get("finished_at"),
             "tags": e.get("tags", []),
             "assigned_resource": qm.get("assigned_resource"),
             "assigned_units": qm.get("assigned_units"),
+            # Surface error + a one-line metric summary so the history view
+            # is useful at a glance without a per-row /experiments call.
+            "error": e.get("error"),
+            "metrics": e.get("metrics"),
         }
 
     queued = [_slim(e) for e in all_exps if e.get("status") in ("queued", "pending")]
@@ -59,9 +74,24 @@ def get_queue():
     running = [_slim(e) for e in all_exps if e.get("status") == "running"]
     running.sort(key=lambda e: e["started_at"] or "")
 
+    recent: list[dict] = []
+    if history > 0:
+        finished = [
+            _slim(e) for e in all_exps
+            if e.get("status") in ("completed", "failed", "cancelled")
+        ]
+        # Newest first; fall back to created_at when finished_at is missing
+        # (e.g. legacy cancelled rows).
+        finished.sort(
+            key=lambda e: e.get("finished_at") or e.get("created_at") or "",
+            reverse=True,
+        )
+        recent = finished[:history]
+
     return {
         "queued": queued,
         "running": running,
+        "recent": recent,
         "resources": [runner._allocator.utilization(r) for r in resources],
         "config": asdict(qc),
     }

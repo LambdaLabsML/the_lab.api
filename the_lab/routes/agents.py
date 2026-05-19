@@ -73,7 +73,14 @@ def register_agent(req: RegisterAgentRequest):
     The agent is expected to call ``DELETE /api/v1/agents/{id}`` on
     exit. If it crashes, ``prune_dead_agents`` removes the entry on
     the next API server restart (when a PID is recorded).
+
+    When no other agents are currently registered (i.e. this is the first
+    agent of a new session), all accumulated messages from previous sessions
+    are cleared so the new agent starts with a clean inbox.
     """
+    # Clear stale messages when this is the first agent of a new session.
+    if not agents_mod.list_agents(REPO_DIR):
+        messages_mod.clear_all(REPO_DIR)
     try:
         return agents_mod.register_agent(REPO_DIR, store, role=req.role, pid=req.pid)
     except Exception as e:
