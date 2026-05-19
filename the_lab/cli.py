@@ -454,6 +454,14 @@ def main():
         },
     )
 
+    # Announce auth status so operators know whether the UI is open.
+    _auth_user = os.environ.get("THE_LAB_USER", "").strip()
+    _auth_pass = os.environ.get("THE_LAB_PASSWORD", "").strip()
+    if _auth_user and _auth_pass:
+        print(f"[auth] HTTP Basic Auth enabled (user: {_auth_user})", file=sys.stderr)
+    else:
+        print("[auth] No authentication — set THE_LAB_USER + THE_LAB_PASSWORD to enable", file=sys.stderr)
+
     # Auto-build dashboard if sources changed
     dashboard_dir = _find_dashboard_dir()
     if dashboard_dir:

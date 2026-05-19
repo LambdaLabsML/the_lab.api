@@ -1,9 +1,11 @@
 """The Lab — Experiment Management API."""
 from __future__ import annotations
 
+import base64
 import json as _json
 import logging
 import os
+import secrets
 from pathlib import Path
 
 import math
@@ -13,6 +15,21 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.responses import Response
+
+# ---------------------------------------------------------------------------
+# HTTP Basic Auth
+#
+# Set THE_LAB_USER and THE_LAB_PASSWORD to enable. Both must be set or
+# auth is disabled (default: open, safe for local use).
+# ---------------------------------------------------------------------------
+_AUTH_USER = os.environ.get("THE_LAB_USER", "").strip()
+_AUTH_PASSWORD = os.environ.get("THE_LAB_PASSWORD", "").strip()
+_AUTH_ENABLED = bool(_AUTH_USER and _AUTH_PASSWORD)
+
+if _AUTH_ENABLED:
+    _AUTH_EXPECTED = base64.b64encode(
+        f"{_AUTH_USER}:{_AUTH_PASSWORD}".encode()
+    ).decode()
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +75,32 @@ app = FastAPI(title="The Lab", version="0.1.0", default_response_class=SafeJSONR
 
 
 # --- Middleware ---
+
+@app.middleware("http")
+async def basic_auth(request: Request, call_next):
+    """HTTP Basic Auth gate. Active only when THE_LAB_USER + THE_LAB_PASSWORD are set.
+
+    Exempts the /assets/ path so the browser can load the JS/CSS bundle
+    after the auth dialog has been accepted. Every other path — including
+    the SPA root and all /api/v1/ routes — requires a valid credential.
+    """
+    if not _AUTH_ENABLED:
+        return await call_next(request)
+    # Static assets are fetched by the browser after the page is authenticated;
+    # they don't send credentials themselves, so exempt them.
+    if request.url.path.startswith("/assets/"):
+        return await call_next(request)
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Basic "):
+        provided = auth_header[len("Basic "):].strip()
+        if secrets.compare_digest(provided, _AUTH_EXPECTED):
+            return await call_next(request)
+    return Response(
+        content="Unauthorized",
+        status_code=401,
+        headers={"WWW-Authenticate": 'Basic realm="The Lab"'},
+    )
+
 
 @app.middleware("http")
 async def resolve_agent(request, call_next):
