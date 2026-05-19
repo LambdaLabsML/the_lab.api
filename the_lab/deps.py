@@ -89,6 +89,35 @@ def _description_short(desc: str | None, limit: int = 120) -> str:
     return line[: limit - 1].rstrip() + "…"
 
 
+def resolve_metric(metrics: dict | None, key: str):
+    """Look up a metric by flat key, falling back to dot-notation traversal.
+
+    Progress and result files sometimes nest related metrics in sub-dicts
+    (e.g. ``{"subagent": {"cache_hits": 12}}``); supporting ``a.b.c`` in
+    metric queries lets the leaderboard / search / aggregate endpoints
+    reach those values without flattening every script's output.
+
+    A literal flat key always wins on collision: ``{"a.b": 1}`` resolves
+    to ``1`` for ``"a.b"`` even if a dotted walk would also succeed. The
+    walk only returns a value when each hop is a dict and the leaf is
+    numeric; otherwise None.
+    """
+    if not metrics or not key:
+        return None
+    if key in metrics:
+        return metrics[key]
+    if "." not in key:
+        return None
+    node = metrics
+    for part in key.split("."):
+        if not isinstance(node, dict) or part not in node:
+            return None
+        node = node[part]
+    if isinstance(node, (int, float)):
+        return node
+    return None
+
+
 def project_fields(data, fields: str | None):
     """Restrict a response to the given comma-separated field list.
 
@@ -125,11 +154,21 @@ def project_fields(data, fields: str | None):
 
 
 def _wrap_script(content: str) -> str:
-    """Inject a guard + optional preamble that prevents running outside the backend."""
-    lines = content.split("\n", 1)
-    if lines[0].startswith("#!"):
-        return lines[0] + "\n" + SCRIPT_GUARD + PREAMBLE_SOURCE + (lines[1] if len(lines) > 1 else "")
-    return "#!/bin/bash\n" + SCRIPT_GUARD + PREAMBLE_SOURCE + content
+    """Inject a guard + optional preamble that prevents running outside the backend.
+
+    Export lines are hoisted before the preamble so variables like
+    MAX_WALL_SECONDS are visible when preamble.sh sets the deadline.
+    """
+    lines = content.split("\n")
+    shebang = ""
+    if lines and lines[0].startswith("#!"):
+        shebang = lines[0] + "\n"
+        lines = lines[1:]
+    export_lines = [l for l in lines if l.strip().startswith("export ")]
+    other_lines = [l for l in lines if not l.strip().startswith("export ")]
+    exports_block = "\n".join(export_lines) + "\n" if export_lines else ""
+    rest = "\n".join(other_lines)
+    return shebang + SCRIPT_GUARD + exports_block + PREAMBLE_SOURCE + rest
 
 
 def _resolve_exp(exp_ref) -> dict:

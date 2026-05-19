@@ -10,15 +10,43 @@ import { IDEA_PALETTE, _colorForExp, isLowerBetter } from './colors';
 /** Internal meta keys that should not appear in the dropdown. */
 const HIDDEN_META_KEYS = new Set(["git_branch", "git_commit", "worktree", "outdir"]);
 
+/** Maximum depth we recurse into nested metric dicts when building dotted keys. */
+const MAX_METRIC_DEPTH = 3;
+
+/**
+ * Look up a key in a metric/meta dict, honouring dot-notation traversal so
+ * nested progress files (e.g. ``{"subagent": {"cache_hits": 12}}``) are
+ * addressable as ``subagent.cache_hits``. A literal flat key wins on
+ * collision: if both ``"a.b"`` and ``a -> b`` exist, the flat one is
+ * returned.
+ */
+function lookupDotted(bag: Record<string, unknown> | undefined, key: string): unknown {
+  if (!bag) return undefined;
+  if (key in bag) return bag[key];
+  if (!key.includes('.')) return undefined;
+  let node: unknown = bag;
+  for (const part of key.split('.')) {
+    if (node && typeof node === 'object' && !Array.isArray(node) && part in (node as Record<string, unknown>)) {
+      node = (node as Record<string, unknown>)[part];
+    } else {
+      return undefined;
+    }
+  }
+  return node;
+}
+
 /**
  * Resolve a chart key to a numeric value from an experiment.
- * Checks metrics first, then meta, then computed timing fields.
+ * Checks metrics first (with dot-notation walk into nested dicts), then meta,
+ * then computed timing fields.
  */
 export function resolveNumericValue(exp: Experiment, key: string): number | undefined {
-  // 1. Metrics
-  if (exp.metrics && typeof exp.metrics[key] === 'number') return exp.metrics[key];
-  // 2. Meta (numeric values only)
-  if (exp.meta && typeof exp.meta[key] === 'number') return exp.meta[key] as number;
+  // 1. Metrics — flat lookup, then dotted walk.
+  const m = lookupDotted(exp.metrics as Record<string, unknown> | undefined, key);
+  if (typeof m === 'number') return m;
+  // 2. Meta (numeric values only).
+  const me = lookupDotted(exp.meta as Record<string, unknown> | undefined, key);
+  if (typeof me === 'number') return me;
   // 3. Timing fields (converted to epoch seconds for charting)
   if (key === 'runtime_seconds' && exp.started_at && exp.finished_at) {
     const ms = new Date(exp.finished_at).getTime() - new Date(exp.started_at).getTime();
@@ -36,16 +64,33 @@ export interface GroupedKeys {
   timing: string[];
 }
 
+/** Walk a nested dict and collect every numeric leaf path (dotted). Capped depth. */
+function collectNumericPaths(
+  obj: Record<string, unknown> | undefined,
+  out: Set<string>,
+  prefix = '',
+  depth = 0,
+): void {
+  if (!obj || depth > MAX_METRIC_DEPTH) return;
+  for (const [k, v] of Object.entries(obj)) {
+    const path = prefix ? `${prefix}.${k}` : k;
+    if (typeof v === 'number') {
+      out.add(path);
+    } else if (v && typeof v === 'object' && !Array.isArray(v)) {
+      collectNumericPaths(v as Record<string, unknown>, out, path, depth + 1);
+    }
+  }
+}
+
 /** Collect all chartable keys from experiments, grouped by source. */
 export function collectChartKeys(experiments: Experiment[]): GroupedKeys {
   const metricSet = new Set<string>();
   const metaSet = new Set<string>();
 
   for (const exp of experiments) {
-    if (exp.metrics) for (const k of Object.keys(exp.metrics)) {
-      if (typeof exp.metrics[k] === 'number') metricSet.add(k);
-    }
+    collectNumericPaths(exp.metrics as Record<string, unknown> | undefined, metricSet);
     if (exp.meta) for (const [k, v] of Object.entries(exp.meta)) {
+      // Meta stays single-level to avoid surfacing unrelated nested config.
       if (typeof v === 'number' && !HIDDEN_META_KEYS.has(k)) metaSet.add(k);
     }
   }

@@ -15,6 +15,7 @@ from ..deps import (
     _branch_diff_summary,
     _read_task,
     project_fields,
+    resolve_metric,
 )
 from ..git_ops import get_current_branch
 
@@ -101,16 +102,18 @@ def _build_leaderboard_response(
         ]
 
     completed = [e for e in filtered_exps if e.get("status") == "completed" and e.get("metrics")]
-    with_metric = [
-        e for e in completed
-        if metric in e["metrics"] and isinstance(e["metrics"][metric], (int, float))
-    ]
+    # Metric lookup uses resolve_metric so callers can address nested
+    # paths via dot notation (e.g. "subagent.cache_hits"). Flat keys still
+    # win on collision; see resolve_metric in deps.py.
+    def _mv(e):  # short alias used several times below
+        return resolve_metric(e.get("metrics"), metric)
+    with_metric = [e for e in completed if isinstance(_mv(e), (int, float))]
 
     def _exp_label(e: dict) -> str:
         # Defensive: legacy records can have label=None on disk.
         return (e.get("label") or str(e.get("id") or ""))
 
-    by_value = sorted(with_metric, key=lambda e: e["metrics"][metric], reverse=descending)
+    by_value = sorted(with_metric, key=lambda e: _mv(e), reverse=descending)
     leaderboard = []
     for exp in by_value[:top]:
         entry = {
@@ -118,7 +121,7 @@ def _build_leaderboard_response(
             "experiment_label": _exp_label(exp),
             "idea_id": exp["idea_id"],
             "idea_description": _idea_desc(exp["idea_id"]),
-            "value": exp["metrics"][metric],
+            "value": _mv(exp),
             "tags": exp.get("tags", []),
             "finished_at": exp.get("finished_at"),
         }
@@ -137,7 +140,7 @@ def _build_leaderboard_response(
             "experiment_label": _exp_label(exp),
             "idea_id": exp["idea_id"],
             "idea_description": _idea_desc(exp["idea_id"]),
-            "value": exp["metrics"][metric],
+            "value": _mv(exp),
             "tags": exp.get("tags", []),
             "finished_at": exp.get("finished_at"),
         }
@@ -159,7 +162,7 @@ def _build_leaderboard_response(
                 "parent_ids": idea.get("parent_ids", []),
                 "branch": idea.get("branch"),
                 "conclusion": idea.get("conclusion"),
-                "best_value": best_exp["metrics"][metric],
+                "best_value": _mv(best_exp),
                 "key_insights": insights[:5],
                 "branch_from_this": f"POST /ideas/new with parent_ids=[{idea['id']}]",
             }
@@ -171,7 +174,7 @@ def _build_leaderboard_response(
     progression = []
     running_best = None
     for exp in by_time_asc:
-        v = exp["metrics"][metric]
+        v = _mv(exp)
         improved = running_best is None or (v < running_best if minimize else v > running_best)
         if improved:
             running_best = v
@@ -407,10 +410,15 @@ def _bootstrap_diff_medians(
 
 
 def _resolve_selector(selector: str, metric: str) -> tuple[list[float], list[dict]]:
-    """Parse 'tag:foo' / 'idea:5' / 'all' and return (numeric values, exp summaries)."""
+    """Parse 'tag:foo' / 'idea:5' / 'all' and return (numeric values, exp summaries).
+
+    Honours dot-notation metric paths (e.g. ``subagent.cache_hits``) via
+    resolve_metric.
+    """
     all_exps = [
         e for e in store.list_all_experiments()
-        if e.get("status") == "completed" and isinstance((e.get("metrics") or {}).get(metric), (int, float))
+        if e.get("status") == "completed"
+        and isinstance(resolve_metric(e.get("metrics"), metric), (int, float))
     ]
     sel = (selector or "").strip()
     if not sel or sel == "all":
@@ -427,12 +435,12 @@ def _resolve_selector(selector: str, metric: str) -> tuple[list[float], list[dic
     else:
         # Fallback: treat as a tag for convenience
         matched = [e for e in all_exps if sel in (e.get("tags") or [])]
-    values = [float(e["metrics"][metric]) for e in matched]
+    values = [float(resolve_metric(e.get("metrics"), metric)) for e in matched]
     summaries = [
         {
             "experiment_label": e.get("label") or str(e.get("id")),
             "idea_id": e.get("idea_id"),
-            "value": e["metrics"][metric],
+            "value": resolve_metric(e.get("metrics"), metric),
             "tags": e.get("tags") or [],
         }
         for e in matched
@@ -464,7 +472,7 @@ def leaderboard_aggregate(
     completed = [
         e for e in store.list_all_experiments()
         if e.get("status") == "completed"
-        and isinstance((e.get("metrics") or {}).get(metric), (int, float))
+        and isinstance(resolve_metric(e.get("metrics"), metric), (int, float))
         and (not tag_filter or all(t in (e.get("tags") or []) for t in tag_filter))
     ]
 
@@ -472,11 +480,11 @@ def leaderboard_aggregate(
     if group_by == "tag":
         for e in completed:
             for t in (e.get("tags") or []):
-                groups.setdefault(t, []).append(float(e["metrics"][metric]))
+                groups.setdefault(t, []).append(float(resolve_metric(e.get("metrics"), metric)))
     else:  # idea
         for e in completed:
             key = f"idea/{e.get('idea_id')}"
-            groups.setdefault(key, []).append(float(e["metrics"][metric]))
+            groups.setdefault(key, []).append(float(resolve_metric(e.get("metrics"), metric)))
 
     rows = [
         {"key": k, "stats": _aggregate_metric(v)}
