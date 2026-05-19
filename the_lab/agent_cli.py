@@ -251,10 +251,17 @@ def main():
             print(f"MCP bridge: using local copy at {local} (THE_LAB_LOCAL_MCP=1)", file=sys.stderr)
     if mcp_script.exists():
         api_base = f"http://localhost:{args.port}/api/v1"
+        # Thread auth credentials through to the bridge so it can attach
+        # Authorization headers when the API has Basic Auth enabled.
+        _bridge_env: dict[str, str] = {"PYTHONUNBUFFERED": "1", "THE_LAB_API_URL": api_base}
+        for _k in ("THE_LAB_USER", "THE_LAB_PASSWORD"):
+            _v = os.environ.get(_k, "").strip()
+            if _v:
+                _bridge_env[_k] = _v
         mcp_config = _json.dumps({"mcpServers": {"labapi": {
             "command": "python3",
             "args": [str(mcp_script.resolve())],
-            "env": {"PYTHONUNBUFFERED": "1", "THE_LAB_API_URL": api_base},
+            "env": _bridge_env,
         }}})
         print(f"MCP bridge: labapi → {api_base}", file=sys.stderr)
 

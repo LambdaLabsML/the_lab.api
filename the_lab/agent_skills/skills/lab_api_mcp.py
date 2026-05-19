@@ -240,10 +240,19 @@ def proxy_call(tool_name, arguments, tool_meta):
     # Make request — identify as MCP proxy so Lab tracks it separately.
     # Include X-Agent-Id when launched in isolated mode so git operations
     # route to this agent's worktree.
+    # Include Basic Auth when THE_LAB_USER + THE_LAB_PASSWORD are set so
+    # agents work transparently behind the auth gate.
+    import base64 as _b64
     headers = {"X-MCP-Proxy": "true"}
     agent_id = os.environ.get("THE_LAB_AGENT_ID")
     if agent_id:
         headers["X-Agent-Id"] = agent_id
+    _user = os.environ.get("THE_LAB_USER", "").strip()
+    _pw   = os.environ.get("THE_LAB_PASSWORD", "").strip()
+    if _user and _pw:
+        headers["Authorization"] = "Basic " + _b64.b64encode(
+            f"{_user}:{_pw}".encode()
+        ).decode()
     if body_data:
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(url, data=body_data, headers=headers, method=method)
