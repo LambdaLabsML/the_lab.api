@@ -25,3 +25,4 @@ optimization/baseline_*.log
 /PROMPT.md
 optimization/tests/*/fixture/
 optimization/archive_labs
+.env
