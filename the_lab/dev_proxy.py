@@ -122,8 +122,13 @@ class DevProxy:
                         timeout=httpx.Timeout(connect=5, read=86400, write=5, pool=5),
                     )
                 # Success — send response back
+                # Drop content-length: httpx decompresses gzip automatically
+                # so resp.content is the uncompressed body, which is larger
+                # than the backend's compressed Content-Length. Uvicorn will
+                # compute the correct length from the body we actually send.
+                # Also drop content-encoding since the content is now plain.
                 resp_headers = [[k.encode(), v.encode()] for k, v in resp.headers.items()
-                                if k.lower() not in ("transfer-encoding",)]
+                                if k.lower() not in ("transfer-encoding", "content-length", "content-encoding")]
                 await send({"type": "http.response.start", "status": resp.status_code, "headers": resp_headers})
                 await send({"type": "http.response.body", "body": resp.content})
                 return
