@@ -29,7 +29,7 @@ def _resolve_sender(request: Request) -> tuple[str | None, str | None]:
 
 
 @router.post("/api/v1/messages", status_code=201)
-def send_message(req: MessageRequest, request: Request):
+async def send_message(req: MessageRequest, request: Request):
     """Send a message to another agent, a role, or all agents.
 
     The sender's ``X-Agent-Id`` (and role, looked up from the registry) is
@@ -58,6 +58,17 @@ def send_message(req: MessageRequest, request: Request):
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
+    # Broadcast from async context so the loop is guaranteed available.
+    try:
+        from .. import ws as ws_mod
+        ws_mod.broadcaster.broadcast({
+            "type": "message_received",
+            "id": msg["id"],
+            "to": msg["to"],
+            "from_role": msg.get("from_role"),
+        })
+    except Exception:
+        pass
     return msg
 
 

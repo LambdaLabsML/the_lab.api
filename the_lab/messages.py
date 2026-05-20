@@ -156,7 +156,7 @@ def add_message(
             "to": to,
             "from_role": from_role,
         })
-    except Exception:
+    except Exception:  # noqa: BLE001
         pass
     return msg
 
