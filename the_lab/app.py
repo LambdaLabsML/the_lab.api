@@ -491,13 +491,14 @@ async def ws_endpoint(websocket: WebSocket, since: int = 0, token: str = ""):
         finally:
             for t in (send_task, recv_task, ping_task):
                 t.cancel()
-            # Drain any cancel exceptions.
+            # Drain cancellation. CancelledError is BaseException in Python
+            # 3.8+, not Exception — must be caught explicitly.
             for t in (send_task, recv_task, ping_task):
                 try:
                     await t
-                except Exception:
+                except (asyncio.CancelledError, Exception):
                     pass
-    except WebSocketDisconnect:
+    except (WebSocketDisconnect, asyncio.CancelledError):
         pass
     finally:
         _ws_mod.broadcaster.unsubscribe(q)
