@@ -150,57 +150,78 @@ class DevProxy:
     async def proxy_websocket(self, scope, receive, send):
         """Transparently proxy a WebSocket connection to the backend.
 
-        Accepts the ASGI handshake then opens a matching WS connection to the
-        internal backend and relays frames in both directions concurrently.
-        On backend disconnect, the client connection is closed cleanly.
+        The browser cannot send an Authorization header on a WebSocket
+        connection, so the proxy injects the auth token itself when
+        connecting to the internal backend (using THE_LAB_USER /
+        THE_LAB_PASSWORD from env, if set).  The browser-facing side has
+        no extra auth requirement — the HTTP Basic Auth gate already
+        validated the session before the upgrade.
         """
+        import base64 as _b64
         import websockets
 
-        # Build the backend WS URL from the incoming request path + query.
+        # Build the backend WS URL. Preserve any query params the client
+        # sent (e.g. ?since=42), then append the auth token so the internal
+        # backend accepts the connection.
         path = scope.get("path", "/")
         qs   = scope.get("query_string", b"").decode()
-        url  = f"ws://127.0.0.1:{self.internal_port}{path}"
-        if qs:
-            url += f"?{qs}"
+        params = dict(p.split("=", 1) for p in qs.split("&") if "=" in p)
+        # Inject auth token for the proxy→backend leg.
+        _user = os.environ.get("THE_LAB_USER", "").strip()
+        _pw   = os.environ.get("THE_LAB_PASSWORD", "").strip()
+        if _user and _pw:
+            params["token"] = _b64.b64encode(f"{_user}:{_pw}".encode()).decode()
+        backend_qs = "&".join(f"{k}={v}" for k, v in params.items())
+        url = f"ws://127.0.0.1:{self.internal_port}{path}"
+        if backend_qs:
+            url += f"?{backend_qs}"
 
-        # Forward client headers (skip host — set by websockets automatically).
+        # Forward safe client headers only.
+        _skip = {b"host", b"connection", b"upgrade", b"sec-websocket-key",
+                 b"sec-websocket-version", b"sec-websocket-extensions",
+                 b"authorization"}
         extra_headers = [
             (k.decode(), v.decode())
             for k, v in scope.get("headers", [])
-            if k.lower() not in (b"host", b"connection", b"upgrade",
-                                  b"sec-websocket-key", b"sec-websocket-version",
-                                  b"sec-websocket-extensions")
+            if k.lower() not in _skip
         ]
 
-        # Wait for the ASGI "websocket.connect" message before accepting.
+        # Consume the ASGI "websocket.connect" before accepting.
         await receive()
 
         try:
             async with websockets.connect(url, additional_headers=extra_headers) as backend:
-                # Send the ASGI accept so the client side completes its handshake.
                 await send({"type": "websocket.accept", "subprotocol": None})
 
                 async def client_to_backend():
-                    while True:
-                        msg = await receive()
-                        if msg["type"] == "websocket.disconnect":
-                            await backend.close()
-                            return
-                        if msg["type"] == "websocket.receive":
-                            data = msg.get("text") or msg.get("bytes")
-                            if isinstance(data, str):
-                                await backend.send(data)
-                            elif data:
-                                await backend.send(data)
+                    try:
+                        while True:
+                            msg = await receive()
+                            if msg["type"] == "websocket.disconnect":
+                                return
+                            if msg["type"] == "websocket.receive":
+                                data = msg.get("text") or msg.get("bytes")
+                                if isinstance(data, str):
+                                    await backend.send(data)
+                                elif data:
+                                    await backend.send(data)
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        pass
 
                 async def backend_to_client():
-                    async for message in backend:
-                        if isinstance(message, str):
-                            await send({"type": "websocket.send", "text": message})
-                        else:
-                            await send({"type": "websocket.send", "bytes": message})
+                    try:
+                        async for message in backend:
+                            if isinstance(message, str):
+                                await send({"type": "websocket.send", "text": message})
+                            else:
+                                await send({"type": "websocket.send", "bytes": message})
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        pass
 
-                # Run both relay tasks; stop when either side disconnects.
                 done, pending = await asyncio.wait(
                     [
                         asyncio.create_task(client_to_backend()),
@@ -212,10 +233,11 @@ class DevProxy:
                     t.cancel()
                     try:
                         await t
-                    except Exception:
+                    except (asyncio.CancelledError, Exception):
                         pass
         except (OSError, websockets.exceptions.WebSocketException):
-            # Backend unavailable — close the client connection.
+            pass
+        except Exception:
             pass
         finally:
             try:
