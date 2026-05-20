@@ -147,6 +147,82 @@ class DevProxy:
         ]})
         await send({"type": "http.response.body", "body": b'{"error": "backend unavailable after retry"}'})
 
+    async def proxy_websocket(self, scope, receive, send):
+        """Transparently proxy a WebSocket connection to the backend.
+
+        Accepts the ASGI handshake then opens a matching WS connection to the
+        internal backend and relays frames in both directions concurrently.
+        On backend disconnect, the client connection is closed cleanly.
+        """
+        import websockets
+
+        # Build the backend WS URL from the incoming request path + query.
+        path = scope.get("path", "/")
+        qs   = scope.get("query_string", b"").decode()
+        url  = f"ws://127.0.0.1:{self.internal_port}{path}"
+        if qs:
+            url += f"?{qs}"
+
+        # Forward client headers (skip host — set by websockets automatically).
+        extra_headers = [
+            (k.decode(), v.decode())
+            for k, v in scope.get("headers", [])
+            if k.lower() not in (b"host", b"connection", b"upgrade",
+                                  b"sec-websocket-key", b"sec-websocket-version",
+                                  b"sec-websocket-extensions")
+        ]
+
+        # Wait for the ASGI "websocket.connect" message before accepting.
+        await receive()
+
+        try:
+            async with websockets.connect(url, additional_headers=extra_headers) as backend:
+                # Send the ASGI accept so the client side completes its handshake.
+                await send({"type": "websocket.accept", "subprotocol": None})
+
+                async def client_to_backend():
+                    while True:
+                        msg = await receive()
+                        if msg["type"] == "websocket.disconnect":
+                            await backend.close()
+                            return
+                        if msg["type"] == "websocket.receive":
+                            data = msg.get("text") or msg.get("bytes")
+                            if isinstance(data, str):
+                                await backend.send(data)
+                            elif data:
+                                await backend.send(data)
+
+                async def backend_to_client():
+                    async for message in backend:
+                        if isinstance(message, str):
+                            await send({"type": "websocket.send", "text": message})
+                        else:
+                            await send({"type": "websocket.send", "bytes": message})
+
+                # Run both relay tasks; stop when either side disconnects.
+                done, pending = await asyncio.wait(
+                    [
+                        asyncio.create_task(client_to_backend()),
+                        asyncio.create_task(backend_to_client()),
+                    ],
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for t in pending:
+                    t.cancel()
+                    try:
+                        await t
+                    except Exception:
+                        pass
+        except (OSError, websockets.exceptions.WebSocketException):
+            # Backend unavailable — close the client connection.
+            pass
+        finally:
+            try:
+                await send({"type": "websocket.close", "code": 1001})
+            except Exception:
+                pass
+
     def asgi_app(self):
         """Return an ASGI app that proxies to the real server."""
         proxy = self
@@ -166,6 +242,8 @@ class DevProxy:
                         return
             elif scope["type"] == "http":
                 await proxy.proxy_request(scope, receive, send)
+            elif scope["type"] == "websocket":
+                await proxy.proxy_websocket(scope, receive, send)
 
         return app
 
