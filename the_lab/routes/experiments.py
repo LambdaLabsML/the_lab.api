@@ -91,6 +91,15 @@ async def create_experiment(idea_id: int, req: NewExperimentRequest):
         queued_at=datetime.now(timezone.utc).isoformat(),
     )
     exp = store.get_experiment(exp.get("label") or str(exp["id"])) or exp
+    try:
+        from .. import ws as ws_mod
+        ws_mod.broadcaster.broadcast_soon({
+            "type": "experiment_queued",
+            "label": exp.get("label") or str(exp["id"]),
+            "idea_id": exp.get("idea_id"),
+        })
+    except Exception:
+        pass
     runner.wake_scheduler()
 
     # Surface the queue position so callers know roughly when to expect it
@@ -712,6 +721,16 @@ async def start_experiment(exp_ref: str, req: StartExperimentRequest | None = No
         finished_at=None,
         queued_at=datetime.now(timezone.utc).isoformat(),
     )
+    exp_queued = store.get_experiment(label) or exp_check
+    try:
+        from .. import ws as ws_mod
+        ws_mod.broadcaster.broadcast_soon({
+            "type": "experiment_queued",
+            "label": label,
+            "idea_id": exp_queued.get("idea_id"),
+        })
+    except Exception:
+        pass
     runner.wake_scheduler()
 
     # Build the response in the same shape /rerun returns: include
@@ -790,6 +809,15 @@ async def rerun_experiment(exp_ref: str):
         queued_at=datetime.now(timezone.utc).isoformat(),
     )
     new_exp = store.get_experiment(label) or new_exp
+    try:
+        from .. import ws as ws_mod
+        ws_mod.broadcaster.broadcast_soon({
+            "type": "experiment_queued",
+            "label": label,
+            "idea_id": new_exp.get("idea_id"),
+        })
+    except Exception:
+        pass
     runner.wake_scheduler()
 
     # Surface queue position so the caller sees where they sit.

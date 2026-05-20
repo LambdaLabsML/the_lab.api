@@ -37,6 +37,7 @@ class ExperimentRunner:
         self._allocator = Allocator()
         self._scheduler_task: asyncio.Task | None = None
         self._scheduler_wake: asyncio.Event | None = None  # set when something queueable changes
+        self._last_queue_broadcast: float = 0.0  # throttle for queue_changed events
 
         # Recover orphaned experiments on startup.
         # If the process is still alive, re-attach to it. Otherwise mark as failed.
@@ -176,6 +177,13 @@ class ExperimentRunner:
         """Nudge the scheduler — call when an experiment is queued/finished."""
         if self._scheduler_wake is not None:
             self._scheduler_wake.set()
+        # Emit queue_changed at most once per second.
+        import time as _time
+        now = _time.monotonic()
+        if now - self._last_queue_broadcast > 1.0:
+            self._last_queue_broadcast = now
+            from . import ws as ws_mod
+            ws_mod.broadcaster.broadcast_soon({"type": "queue_changed"})
 
     async def _scheduler_loop(self) -> None:
         """Tick on a configurable interval (or when woken) and dispatch
@@ -295,6 +303,14 @@ class ExperimentRunner:
                 if result.get("status") == "error":
                     # Release the units we held; the start failed.
                     self._allocator.release(label)
+                else:
+                    from . import ws as ws_mod
+                    ws_mod.broadcaster.broadcast({
+                        "type": "experiment_started",
+                        "label": label,
+                        "idea_id": exp.get("idea_id"),
+                        "assigned_resource": resource.name,
+                    })
             except Exception as e:
                 self._allocator.release(label)
                 print(f"[the-lab] failed to start exp {label}: {e}")
@@ -322,6 +338,8 @@ class ExperimentRunner:
 
         output = log_path.read_text() if log_path.exists() else ""
         result, result_idx = self._extract_json(output)
+        _label = exp.get("label") or str(exp_id)
+        _idea_id = exp.get("idea_id")
         if result is not None:
             metrics = result.get("metrics", {})
             meta = {**exp.get("meta", {}), **result.get("meta", {})}
@@ -337,6 +355,10 @@ class ExperimentRunner:
             if result_idx is not None:
                 self._strip_result_line(log_path, result_idx)
             self._cleanup_worktree(exp)
+            from . import ws as ws_mod
+            ws_mod.broadcaster.broadcast_soon({"type": "experiment_finished", "label": _label,
+                                               "idea_id": _idea_id, "status": "completed",
+                                               "metrics": metrics})
             return True
 
         if progress_path.exists():
@@ -354,6 +376,10 @@ class ExperimentRunner:
                     finished_at=now,
                 )
                 self._cleanup_worktree(exp)
+                from . import ws as ws_mod
+                ws_mod.broadcaster.broadcast_soon({"type": "experiment_finished", "label": _label,
+                                                   "idea_id": _idea_id, "status": "completed",
+                                                   "metrics": exp.get("metrics")})
                 return True
 
         return False
@@ -575,12 +601,18 @@ class ExperimentRunner:
         output = log_path.read_text() if log_path.exists() else ""
         now = datetime.now(timezone.utc).isoformat()
 
+        from . import ws as ws_mod
+        _label = exp.get("label") or str(exp_id)
+        _idea_id = exp.get("idea_id")
+
         if timed_out:
             error = f"killed: exceeded timeout of {timeout}s"
             self._store.update_experiment(
                 exp_id, status="failed", error=error, pid=None, finished_at=now,
             )
             err_path.write_text(f"{error}\n\n{output[-2000:]}")
+            ws_mod.broadcaster.broadcast({"type": "experiment_finished", "label": _label,
+                                          "idea_id": _idea_id, "status": "failed", "metrics": None})
         elif process.returncode == 0:
             result, result_idx = self._extract_json(output)
             if result is not None:
@@ -592,17 +624,25 @@ class ExperimentRunner:
                 )
                 if result_idx is not None:
                     self._strip_result_line(log_path, result_idx)
+                ws_mod.broadcaster.broadcast({"type": "experiment_finished", "label": _label,
+                                              "idea_id": _idea_id, "status": "completed",
+                                              "metrics": metrics})
             else:
                 self._store.update_experiment(
                     exp_id, status="completed", metrics=None,
                     pid=None, finished_at=now,
                 )
+                ws_mod.broadcaster.broadcast({"type": "experiment_finished", "label": _label,
+                                              "idea_id": _idea_id, "status": "completed",
+                                              "metrics": None})
         else:
             error = f"exit code {process.returncode}"
             self._store.update_experiment(
                 exp_id, status="failed", error=error, pid=None, finished_at=now,
             )
             err_path.write_text(f"{error}\n\n{output[-2000:]}")
+            ws_mod.broadcaster.broadcast({"type": "experiment_finished", "label": _label,
+                                          "idea_id": _idea_id, "status": "failed", "metrics": None})
 
         # Clean up worktree
         wt = (exp.get("meta") or {}).get("worktree")
@@ -698,20 +738,25 @@ class ExperimentRunner:
         return text
 
     async def cancel(self, exp_id) -> dict | None:
+        from . import ws as ws_mod
         exp = self._store.get_experiment(exp_id)
         if not exp:
             return None
         # Release any resource the experiment held in the allocator (queued
         # exps don't hold any, but doesn't hurt to call).
         label = exp.get("label") or str(exp_id)
+        idea_id = exp.get("idea_id")
         self._allocator.release(label)
         if exp["status"] in ("queued", "pending"):
             self.wake_scheduler()
-            return self._store.update_experiment(
+            result = self._store.update_experiment(
                 exp_id,
                 status="cancelled",
                 finished_at=datetime.now(timezone.utc).isoformat(),
             )
+            ws_mod.broadcaster.broadcast({"type": "experiment_cancelled",
+                                          "label": label, "idea_id": idea_id})
+            return result
         if exp["status"] != "running":
             return exp
 
@@ -728,12 +773,15 @@ class ExperimentRunner:
             except Exception:
                 pass
 
-        return self._store.update_experiment(
+        result = self._store.update_experiment(
             exp_id,
             status="cancelled",
             pid=None,
             finished_at=datetime.now(timezone.utc).isoformat(),
         )
+        ws_mod.broadcaster.broadcast({"type": "experiment_cancelled",
+                                      "label": label, "idea_id": idea_id})
+        return result
 
     def get_log(self, exp_id: int, tail: int | None = None) -> str | None:
         """Read the .log file for an experiment, optionally tail N lines.

@@ -10,7 +10,7 @@ from pathlib import Path
 
 import math
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import GZipMiddleware
@@ -38,6 +38,7 @@ from .runner import ExperimentRunner
 from .stats import ApiStats, normalize_path as _normalize_path
 from . import deps
 from . import perf_log
+from . import ws as _ws_mod
 
 # --- Configuration ---
 REPO_DIR = Path(os.environ.get("THE_LAB_REPO", os.getcwd())).resolve()
@@ -423,6 +424,79 @@ app.include_router(prompts_router)
 app.include_router(agents_router)
 app.include_router(queue_router)
 app.include_router(messages_router)
+
+
+# --- WebSocket endpoint ---
+
+@app.websocket("/api/v1/ws")
+async def ws_endpoint(websocket: WebSocket, since: int = 0, token: str = ""):
+    """Server-push WebSocket channel.
+
+    Connect with ``ws[s]://host/api/v1/ws?since=N`` to receive all events
+    with seq > N from the ring buffer, then live events as they occur.
+
+    When auth is enabled pass ``?token=<base64 user:pass>`` (same value as
+    the HTTP Basic Auth credential).  Connections with invalid tokens are
+    rejected with close code 1008.
+
+    The server sends a ``{"type": "ping", "seq": -1}`` frame every 30 s to
+    keep the connection alive through proxies.  Client→server messages are
+    accepted but discarded.
+    """
+    import asyncio as _asyncio
+
+    # Auth gate — mirror the HTTP Basic Auth logic.
+    if _AUTH_ENABLED:
+        if not secrets.compare_digest(token, _AUTH_EXPECTED):
+            await websocket.close(code=1008)
+            return
+
+    await websocket.accept()
+
+    # Replay any missed events.
+    for event in _ws_mod.broadcaster.replay_since(since):
+        try:
+            await websocket.send_json(event)
+        except Exception:
+            return
+
+    q = _ws_mod.broadcaster.subscribe()
+    try:
+        async def _send_loop():
+            while True:
+                event = await q.get()
+                await websocket.send_json(event)
+
+        async def _recv_loop():
+            while True:
+                await websocket.receive_text()
+
+        async def _ping_loop():
+            while True:
+                await _asyncio.sleep(30)
+                await websocket.send_json({"type": "ping", "seq": -1})
+
+        send_task = _asyncio.create_task(_send_loop())
+        recv_task = _asyncio.create_task(_recv_loop())
+        ping_task = _asyncio.create_task(_ping_loop())
+        try:
+            done, pending = await _asyncio.wait(
+                [send_task, recv_task, ping_task],
+                return_when=_asyncio.FIRST_EXCEPTION,
+            )
+        finally:
+            for t in (send_task, recv_task, ping_task):
+                t.cancel()
+            # Drain any cancel exceptions.
+            for t in (send_task, recv_task, ping_task):
+                try:
+                    await t
+                except Exception:
+                    pass
+    except WebSocketDisconnect:
+        pass
+    finally:
+        _ws_mod.broadcaster.unsubscribe(q)
 
 
 # --- SPA Fallback (must be last) ---

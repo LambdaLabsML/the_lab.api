@@ -148,6 +148,16 @@ def add_message(
         data["messages"].append(msg)
         _write(repo_dir, data)
     notify_wake()
+    try:
+        from . import ws as ws_mod
+        ws_mod.broadcaster.broadcast_soon({
+            "type": "message_received",
+            "id": msg["id"],
+            "to": to,
+            "from_role": from_role,
+        })
+    except Exception:
+        pass
     return msg
 
 

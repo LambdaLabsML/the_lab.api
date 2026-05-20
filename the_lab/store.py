@@ -275,6 +275,7 @@ class Store:
         if not notes_path.exists():
             _write_json(notes_path, [])
         # Update cache
+        is_new = idea_id not in self._ideas
         with self._lock:
             self._ideas[idea_id] = idea
             if idea_id not in self._notes:
@@ -282,6 +283,16 @@ class Store:
             if idea_id not in self._exp_by_idea:
                 self._exp_by_idea[idea_id] = set()
             self._version += 1
+        if is_new:
+            try:
+                from . import ws as ws_mod
+                ws_mod.broadcaster.broadcast_soon({
+                    "type": "idea_changed",
+                    "idea_id": idea_id,
+                    "change": "created",
+                })
+            except Exception:
+                pass
 
     def get_idea(self, idea_id: int) -> dict | None:
         return self._ideas.get(idea_id)
@@ -290,11 +301,29 @@ class Store:
         idea = self.get_idea(idea_id)
         if not idea:
             return None
+        old_status = idea.get("status")
         idea.update(fields)
         _write_json(self._idea_dir(idea_id) / "idea.json", idea)
         with self._lock:
             self._ideas[idea_id] = idea
             self._version += 1
+        # Determine change type for WebSocket emit.
+        new_status = idea.get("status")
+        if new_status == "concluded":
+            change = "concluded"
+        elif new_status == "abandoned":
+            change = "abandoned"
+        else:
+            change = "updated"
+        try:
+            from . import ws as ws_mod
+            ws_mod.broadcaster.broadcast_soon({
+                "type": "idea_changed",
+                "idea_id": idea_id,
+                "change": change,
+            })
+        except Exception:
+            pass
         return idea
 
     def list_ideas(self, status: str | None = None, source: str | None = None) -> list[dict]:
@@ -330,6 +359,15 @@ class Store:
             self._notes[idea_id] = notes
             _write_json(notes_path, notes)
             self._version += 1
+        try:
+            from . import ws as ws_mod
+            ws_mod.broadcaster.broadcast_soon({
+                "type": "note_added",
+                "idea_id": idea_id,
+                "level": level,
+            })
+        except Exception:
+            pass
         return note
 
     def get_notes(self, idea_id: int, levels: set[str] | None = None) -> list[dict]:
