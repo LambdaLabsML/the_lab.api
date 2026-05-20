@@ -44,13 +44,13 @@ class DevProxy:
             "--log-level", "warning",
             env=env,
         )
-        # Wait for it to be ready
+        # Wait for it to be ready — any HTTP response (including 401 when
+        # auth is enabled) means the server is up and accepting connections.
         for _ in range(50):  # up to 5 seconds
             try:
                 async with httpx.AsyncClient() as client:
-                    resp = await client.get(f"http://127.0.0.1:{self.internal_port}/api/v1/backlog", timeout=0.5)
-                    if resp.status_code == 200:
-                        return True
+                    await client.get(f"http://127.0.0.1:{self.internal_port}/api/v1/backlog", timeout=0.5)
+                    return True  # got a response — server is alive
             except (httpx.ConnectError, httpx.ReadError, httpx.ConnectTimeout):
                 pass
             await asyncio.sleep(0.1)
