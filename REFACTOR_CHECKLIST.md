@@ -22,12 +22,19 @@ Tasks:
 
 ## Level 1 — Entry points & application factory
 
-- [ ] 🔴 **`the_lab/app.py`** *(395 LOC)*
+- [ ] 🔴 **`the_lab/app.py`** *(~430 LOC)*
   - FastAPI application factory. Creates `Store`, `ExperimentRunner`,
     `ApiStats`; calls `deps.init()`; registers all 8 routers; mounts the
     Vite SPA bundle.
-  - Hosts four `@app.middleware("http")` functions plus the
+  - Hosts four `@app.middleware("http")` functions, the
+    `@app.websocket("/api/v1/ws")` endpoint, and the
     `@app.get("/{path:path}")` SPA fallback.
+  - **Recent**: added `from . import ws as _ws_mod` at startup so the
+    broadcaster singleton is initialised before any route handler runs.
+  - **Recent**: WebSocket endpoint with token auth (`?token=<base64>`),
+    missed-event replay via `?since=N`, 30s ping, and per-subscriber
+    queue. Token auth is separate from the HTTP Basic Auth middleware
+    (browsers can't set headers on WebSocket connections).
   - **Gotcha**: `build_notifications()` and `GET /api/v1/notifications`
     live here rather than in a dedicated router — they ended up
     here to avoid import cycles but belong elsewhere.
@@ -87,9 +94,32 @@ Tasks:
 
 ---
 
+## Level 2.5 — WebSocket push layer
+
+- [ ] 🟢 **`the_lab/ws.py`** *(~110 LOC)*
+  - `Broadcaster` singleton. Ring buffer (deque maxlen=500), list of
+    per-subscriber `asyncio.Queue`s, monotonic seq counter.
+  - `broadcast(event)` — async-context callers (routes, runner tasks).
+    Stamps seq, appends to ring, fans out to queues; drops oldest item
+    if a queue exceeds 100 items (prevents slow clients back-pressuring).
+  - `broadcast_soon(event)` — sync-context callers (store, messages).
+    Uses `loop.call_soon_threadsafe`; silently drops if no loop is
+    captured yet (safe: no subscribers can exist at that point either).
+  - `subscribe() / unsubscribe(q)` — register/deregister a Queue for the
+    lifetime of a WebSocket connection.
+  - `replay_since(seq) → list[dict]` — returns buffered events with
+    seq > given value; used to catch up reconnecting clients.
+  - **Gotcha**: `_loop` is captured lazily on the first `broadcast()` /
+    `subscribe()` call from inside the event loop. If `broadcast_soon`
+    is called before the loop is running, it drops silently. Routes that
+    need guaranteed delivery (like `send_message`) should be `async def`
+    so they call `broadcast()` directly.
+
+---
+
 ## Level 3 — Execution engine
 
-- [ ] 🔴 **`the_lab/runner.py`** *(865 LOC — largest file)*
+- [ ] 🔴 **`the_lab/runner.py`** *(~900 LOC — largest file)*
   - `ExperimentRunner` owns the scheduler asyncio task, the allocator
     reference, subprocess monitoring, PID recovery, and worktree cleanup.
   - Three concerns that would each make a clean separate class:
@@ -103,6 +133,11 @@ Tasks:
        API consumed by routes.
   - **Gotcha**: `_extract_json` now returns `(dict | None, int | None)` —
     the int is the line index to strip. Every call site must unpack.
+  - **Recent**: emits WebSocket events at key lifecycle points:
+    `experiment_queued` (in routes/experiments.py), `experiment_started`
+    (after scheduler dispatch), `experiment_finished`/`experiment_cancelled`
+    (in monitor/cancel paths), `queue_changed` throttled to 1/s from
+    `wake_scheduler()`.
   - **Gotcha**: `wait_any` races `_finished_queue.get()` vs.
     `messages._wake_event().wait()`. The wake event is cleared inside the
     loop after reading it; if you add another listener you must handle the
@@ -204,7 +239,7 @@ All routers are registered in `app.py` under `/api/v1`.
   - `find_branch_holder()` scans `git worktree list --porcelain` to detect
     concurrency conflicts; returns the registry entry or `None`.
 
-- [ ] 🟡 **`the_lab/messages.py`** *(258 LOC)*
+- [ ] 🟡 **`the_lab/messages.py`** *(~270 LOC)*
   - Persistent inbox at `.the_lab/messages.json`. Lock is
     `threading.Lock` (sync routes run in threadpool).
   - `notify_wake()` is thread-safe via `loop.call_soon_threadsafe`.
@@ -213,6 +248,10 @@ All routers are registered in `app.py` under `/api/v1`.
   - `unread_for()` excludes the sender from their own inbox.
   - `clear_all()` is called on first agent registration in a new session
     (clears stale session messages).
+  - **Gotcha**: `broadcast_soon` in `add_message` is best-effort for
+    sync callers. The route (`routes/messages.py`) is `async def` and
+    calls `broadcaster.broadcast()` directly for guaranteed delivery —
+    don't remove that `async` annotation.
 
 - [ ] 🟢 **`the_lab/prompts.py`** *(145 LOC)*
   - Reads/writes role-specific prompt files. `list_roles()` scans the
@@ -335,17 +374,42 @@ bundle. Hard-reload required after any rebuild.
 - [ ] 🟡 **`dashboard/src/views/agents-view.tsx`** *(~350 LOC)*
   - Agent cards + message log. Polls `/agents` and `/messages` every 5s.
 
-- [ ] 🟢 **`dashboard/src/state/api.ts`** *(~400 LOC)*
+- [ ] 🟢 **`dashboard/src/state/ws.ts`** *(~200 LOC — new)*
+  - WebSocket connection manager. Connects to `/api/v1/ws?since=<seq>&token=<b64>`.
+  - Exponential backoff on reconnect (1→2→4→8→16→30s cap); resets on
+    successful open.
+  - `lastSeq` tracks the highest seq seen; sent as `?since=` on reconnect
+    so the server can replay missed events.
+  - On reconnect: flushes all three pollers once for a catch-up refresh,
+    then resumes WS-driven mode.
+  - Event→handler dispatch table: experiment events → `refreshChartData`,
+    idea/graph events → `refreshGraphData` + `refreshBacklogData`.
+  - `wsConnected` / `wsAuthFailed` — Preact signals for the topbar dot.
+  - Auth: reads `localStorage.getItem("the-lab:wsToken")` (base64
+    `user:pass`). If absent, connects without token (works when auth is
+    disabled). Close code 1008 → sets `wsAuthFailed`, stops retrying.
+  - **Gotcha**: queue-related and message events are intentionally no-ops
+    in the handler map — the Queue pane self-polls at 3s, and
+    notifications surface via the next backlog fetch.
+
+- [ ] 🟢 **`dashboard/src/state/api.ts`** *(~420 LOC)*
   - Typed `fetchJson<T>` wrappers for every API endpoint.
   - All requests add `X-The-Lab-Source: dashboard` so they're excluded
     from `api_stats.json`.
+  - `getAllIdeas(fields?)` — accepts optional `?fields=` projection to
+    reduce payload on the log-view poll.
 
-- [ ] 🟡 **`dashboard/src/state/polling.ts`** *(~300 LOC)*
+- [ ] 🟡 **`dashboard/src/state/polling.ts`** *(~310 LOC)*
   - Centralised polling: backlog (10s), graph (15s), chart-data (30s),
     log (15s). In-flight coalescing (concurrent callers share one request).
-  - `chartTimer` is the budget carrier; if the tab is backgrounded,
-    browsers throttle `setInterval` to ~1 per minute — the chart can
-    look stale without a browser-side fix.
+  - **Recent**: `LOG_IDEA_FIELDS` — log-view poll requests only the fields
+    it actually uses (`id,status,description,created_at,conclusion,notes`),
+    skipping `experiment_summary` and `latest_metrics`. Cut the /ideas
+    polling response from ~4 MB to ~70 KB on a large lab.
+  - **Recent**: `refreshBacklogData()` exported for WS invalidation.
+  - With WS active the timers become safety-net fallbacks; most updates
+    arrive event-driven. Tab-backgrounding (browser throttles setInterval
+    to ~1/min) no longer matters for latency since WS is always open.
 
 - [ ] 🟢 **`dashboard/src/lib/chart-data.ts`** *(~300 LOC)*
   - Pure chart-building functions: `resolveNumericValue` (dot-notation
@@ -357,6 +421,22 @@ bundle. Hard-reload required after any rebuild.
     with backend schemas when adding fields.
 
 ---
+
+## Performance notes
+
+- **`/chart-data` was the main bottleneck** (6.8 MB, 1400ms avg on a
+  486-experiment lab). Root cause: `**exp` included `meta` which held
+  full ARC scorecards (~11.7 KB/experiment). Fixed by using an explicit
+  `_CHART_FIELDS` allowlist — drops response to ~0.3 MB.
+- **WebSocket replaces most polling**. With WS connected the dashboard
+  only fetches when events arrive. The old timers (10s/15s/30s) become
+  fallbacks triggered by WS disconnect.
+- **`/ideas` log poll** was ~4 MB/call. Fixed with `?fields=` projection
+  in `polling.ts`.
+- **`/ideas/{id}`** at 108K dashboard calls (208ms avg) is the remaining
+  hotspot. It's the detail panel polling the selected idea. Switching to
+  WS-invalidated signal (only re-fetch on `idea_changed` for the open
+  idea) would cut this to near-zero.
 
 ## Cross-cutting concerns
 
