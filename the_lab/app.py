@@ -445,13 +445,17 @@ async def ws_endpoint(websocket: WebSocket, since: int = 0, token: str = ""):
     """
     import asyncio as _asyncio
 
+    # Complete the HTTP→WS handshake unconditionally first — ASGI requires
+    # the 101 response to be sent before any WebSocket-level frame (including
+    # a close frame). Rejecting before accept() triggers the uvicorn error
+    # "ASGI callable returned without sending handshake".
+    await websocket.accept()
+
     # Auth gate — mirror the HTTP Basic Auth logic.
     if _AUTH_ENABLED:
         if not secrets.compare_digest(token, _AUTH_EXPECTED):
             await websocket.close(code=1008)
             return
-
-    await websocket.accept()
 
     # Replay any missed events.
     for event in _ws_mod.broadcaster.replay_since(since):
