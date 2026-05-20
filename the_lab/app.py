@@ -496,9 +496,9 @@ async def ws_endpoint(websocket: WebSocket, since: int = 0, token: str = ""):
             for t in (send_task, recv_task, ping_task):
                 try:
                     await t
-                except (asyncio.CancelledError, Exception):
+                except (_asyncio.CancelledError, Exception):
                     pass
-    except (WebSocketDisconnect, asyncio.CancelledError):
+    except (WebSocketDisconnect, _asyncio.CancelledError):
         pass
     finally:
         _ws_mod.broadcaster.unsubscribe(q)
