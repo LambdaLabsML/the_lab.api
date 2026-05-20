@@ -249,6 +249,11 @@ export function refreshChartData(): Promise<void> {
   return pollChartData();
 }
 
+/** Re-fetch backlog data immediately. */
+export function refreshBacklogData(): Promise<void> {
+  return pollBacklog();
+}
+
 // ---------------------------------------------------------------------------
 // Public: start / stop
 // ---------------------------------------------------------------------------

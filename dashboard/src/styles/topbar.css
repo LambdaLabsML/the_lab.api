@@ -15,6 +15,19 @@
 #topbar .stat { color: #8b949e; }
 #topbar .stat b { color: #c9d1d9; font-weight: 600; }
 
+/* WebSocket connection status dot */
+.ws-dot {
+  display: inline-block;
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-left: -16px; /* pull it closer after the title gap */
+  align-self: center;
+}
+.ws-dot--on  { background: #3fb950; box-shadow: 0 0 4px #3fb95088; }
+.ws-dot--off { background: #484f58; }
+.ws-dot--auth { background: #f85149; }
+
 .time-direction-btn {
   background: #161b22; border: 1px solid #30363d; color: #8b949e;
   border-radius: 4px; padding: 2px 8px; font-family: inherit;

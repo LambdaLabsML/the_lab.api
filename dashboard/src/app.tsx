@@ -57,6 +57,7 @@ import {
   dashboardLayout,
 } from "./state/settings";
 import { startPolling, stopPolling } from "./state/polling";
+import { startWs, stopWs } from "./state/ws";
 import { setActivatePanel, setCloneChartPanel, setUpdatePanelTitle, setSendToTray } from "./state/signals";
 import { initTouchMoveMenu } from "./lib/touch-move-menu";
 
@@ -809,10 +810,12 @@ export function App() {
     applyServerDefaults().then(() => readFiltersFromUrl());
     window.addEventListener("popstate", readFiltersFromUrl);
     startPolling();
+    startWs();
     const dispose = effect(syncUrlFromSignals);
     return () => {
       window.removeEventListener("popstate", readFiltersFromUrl);
       stopPolling();
+      stopWs();
       dispose();
     };
   }, []);

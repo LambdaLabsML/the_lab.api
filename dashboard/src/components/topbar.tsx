@@ -1,6 +1,7 @@
 import { useState } from "preact/hooks";
 import { backlogData } from "../state/signals";
 import { reverseTime, colorMode } from "../state/settings";
+import { wsConnected, wsAuthFailed } from "../state/ws";
 
 interface LayoutActions {
   onResetLayout?: () => void;
@@ -13,6 +14,8 @@ interface LayoutActions {
 export function Topbar(props: LayoutActions) {
   const data = backlogData.value;
   const reversed = reverseTime.value;
+  const isWsConnected = wsConnected.value;
+  const isWsAuthFailed = wsAuthFailed.value;
   const [showLayoutMenu, setShowLayoutMenu] = useState(false);
   const [saveName, setSaveName] = useState("");
   const [layoutVersion, setLayoutVersion] = useState(0);
@@ -23,6 +26,10 @@ export function Topbar(props: LayoutActions) {
   return (
     <div id="topbar">
       <span class="title">The Lab</span>
+      <span
+        class={`ws-dot ${isWsAuthFailed ? "ws-dot--auth" : isWsConnected ? "ws-dot--on" : "ws-dot--off"}`}
+        title={isWsAuthFailed ? "WebSocket: auth failed" : isWsConnected ? "WebSocket: connected" : "WebSocket: reconnecting..."}
+      />
       <span class="stat">
         Active ideas: <b>{data ? data.active_ideas.length : "--"}</b>
       </span>
