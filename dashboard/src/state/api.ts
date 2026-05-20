@@ -72,9 +72,16 @@ export async function getIdea(
   return fetchJson<IdeaDetail>(`/api/v1/ideas/${id}${qs}`);
 }
 
-/** GET /api/v1/ideas — returns the full list of ideas (summary form). */
-export async function getAllIdeas(): Promise<IdeaDetail[]> {
-  return fetchJson<IdeaDetail[]>("/api/v1/ideas");
+/** GET /api/v1/ideas — returns the full list of ideas (summary form).
+ *
+ * Pass `fields` to project down to a specific subset of keys, reducing
+ * payload size significantly on large labs. The `?fields=` param is
+ * handled server-side and also skips building fields that weren't
+ * requested (e.g. experiment_summary).
+ */
+export async function getAllIdeas(fields?: string): Promise<IdeaDetail[]> {
+  const qs = fields ? `?fields=${encodeURIComponent(fields)}` : "";
+  return fetchJson<IdeaDetail[]>(`/api/v1/ideas${qs}`);
 }
 
 /** POST /api/v1/ideas/suggest */

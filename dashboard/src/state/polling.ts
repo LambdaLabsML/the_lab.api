@@ -55,11 +55,17 @@ let logInflight: Promise<void> | null = null;
 // the same list-response if one is already in flight.
 let ideasListInflight: Promise<IdeaDetail[]> | null = null;
 
+// Fields the log view actually needs — everything else (experiment_summary,
+// latest_metrics, tags, branch, parent_ids, …) is fetched on demand when the
+// detail panel opens. On a large lab this cuts the /ideas response from
+// several MB down to a few KB.
+const LOG_IDEA_FIELDS = "id,status,description,created_at,conclusion,notes";
+
 async function fetchIdeasList(): Promise<IdeaDetail[]> {
   if (ideasListInflight) return ideasListInflight;
   ideasListInflight = (async () => {
     try {
-      return await getAllIdeas();
+      return await getAllIdeas(LOG_IDEA_FIELDS);
     } finally {
       ideasListInflight = null;
     }

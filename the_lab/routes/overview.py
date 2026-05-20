@@ -1023,6 +1023,15 @@ def get_chart_data():
         """Strip non-numeric values so the dashboard chart never gets objects/strings."""
         return {k: v for k, v in metrics.items() if isinstance(v, (int, float))}
 
+    # Only the fields the dashboard chart actually needs. Critically, we
+    # omit ``meta`` — it carries large per-experiment blobs (scorecards,
+    # worktree paths, etc.) that are not used for plotting. On a lab with
+    # 486 experiments the meta alone was 5.6 MB of the 6.8 MB response.
+    _CHART_FIELDS = (
+        "id", "label", "idea_id", "description", "status",
+        "started_at", "finished_at", "created_at", "runtime", "tags",
+    )
+
     for exp in all_exps:
         idea_id = exp["idea_id"]
         if idea_id not in idea_cache:
@@ -1031,13 +1040,12 @@ def get_chart_data():
         idea = idea_cache[idea_id]
         if not idea:
             continue
+        base = {f: exp.get(f) for f in _CHART_FIELDS}
+        base["idea_description"] = idea["description"]
+        base["idea_status"] = idea["status"]
         if exp.get("status") == "completed" and exp.get("metrics"):
-            completed_exps.append({
-                **exp,
-                "metrics": _numeric_metrics(exp["metrics"]),
-                "idea_description": idea["description"],
-                "idea_status": idea["status"],
-            })
+            base["metrics"] = _numeric_metrics(exp["metrics"])
+            completed_exps.append(base)
         elif exp.get("status") == "running":
             progress_path = REPO_DIR / exp["script"].replace(".sh", ".progress")
             progress = None
@@ -1047,11 +1055,7 @@ def get_chart_data():
                 except (json.JSONDecodeError, OSError):
                     pass
             if progress and len(progress) > 0:
-                running_progress.append({
-                    **exp,
-                    "metrics": _numeric_metrics(progress) if isinstance(progress, dict) else progress,
-                    "_running": True,
-                    "idea_description": idea["description"],
-                    "idea_status": idea["status"],
-                })
+                base["metrics"] = _numeric_metrics(progress) if isinstance(progress, dict) else progress
+                base["_running"] = True
+                running_progress.append(base)
     return {"experiments": completed_exps, "running": running_progress}
