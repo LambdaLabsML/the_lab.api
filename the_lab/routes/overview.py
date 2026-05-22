@@ -1019,9 +1019,19 @@ def get_chart_data():
     # Build idea lookup once
     idea_cache: dict[int, dict] = {}
 
-    def _numeric_metrics(metrics: dict) -> dict:
-        """Strip non-numeric values so the dashboard chart never gets objects/strings."""
-        return {k: v for k, v in metrics.items() if isinstance(v, (int, float))}
+    def _numeric_metrics(metrics: dict, _prefix: str = "") -> dict:
+        """Flatten nested dicts with dot notation, keeping only numeric leaves.
+        e.g. {"context": {"peak_kchars": 146.1}} → {"context.peak_kchars": 146.1}
+        Capped at two levels of nesting to avoid exploding per-game dicts."""
+        out: dict = {}
+        for k, v in metrics.items():
+            key = f"{_prefix}.{k}" if _prefix else k
+            if isinstance(v, (int, float)):
+                out[key] = v
+            elif isinstance(v, dict) and _prefix.count(".") < 1:
+                # Recurse one level deep only (level-0 → level-1 dot keys)
+                out.update(_numeric_metrics(v, key))
+        return out
 
     # Only the fields the dashboard chart actually needs. Critically, we
     # omit ``meta`` — it carries large per-experiment blobs (scorecards,
