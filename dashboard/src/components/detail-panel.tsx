@@ -7,6 +7,7 @@ import { navigateToIdea, navigateFromExperiment } from "../lib/navigate";
 import { Lightbox } from "./lightbox";
 import { JsonView } from "./json-view";
 import type { IdeaDetail, Experiment, Note } from "../lib/types";
+import { getStatusColor } from "../lib/colors";
 
 // ---------------------------------------------------------------------------
 // URL hash helpers — encode/decode lightbox state as shareable deep links.
@@ -1344,15 +1345,6 @@ function renderMarkdown(md: string, basePath = ""): string {
   return html;
 }
 
-// dynamic — driven by experiment status; hex kept for direct style prop use
-const STATUS_COLORS: Record<string, string> = {
-  running: "#d29922",
-  completed: "#3fb950",
-  failed: "#f85149",
-  cancelled: "#8b949e",
-  pending: "#58a6ff",
-};
-
 function ExperimentItem({
   exp,
   progress,
@@ -1366,7 +1358,8 @@ function ExperimentItem({
   onShowScript: () => void;
   onShowOutput?: () => void;
 }) {
-  const statusColor = STATUS_COLORS[exp.status] || "#8b949e";
+  // Runtime-resolved so the colour follows the active theme
+  const statusColor = getStatusColor(exp.status);
   const metricKey = selectedMetric.value;
   const highlights = metricKey ? [metricKey] : [];
 

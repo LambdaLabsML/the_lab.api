@@ -62,13 +62,10 @@ export const STATUS_ORDER: Record<string, number> = {
   suggested: 3,
 };
 
-// Internal flat status-to-color map used by _colorForExp.
-const _STATUS_COLORS: Record<string, string> = {
-  active: '#3fb950',
-  concluded: '#58a6ff',
-  abandoned: '#f85149',
-  running: '#d29922',
-};
+// Internal helper — resolves experiment/idea status to a theme-aware color.
+function _expStatusColor(status: string): string {
+  return getStatusColor(status);
+}
 
 // ---------------------------------------------------------------------------
 // Metric direction heuristic — mirrors the backend's metric_direction().
@@ -225,26 +222,26 @@ export function _colorForExp(
   if (mode === 'lane') {
     if (currentLayout && currentLayout.ideaLane[exp.idea_id] !== undefined)
       return IDEA_PALETTE[currentLayout.ideaLane[exp.idea_id] % IDEA_PALETTE.length];
-    return '#8b949e';
+    return getCssVar('--text-muted');
   }
   if (mode === 'status') {
-    return _STATUS_COLORS[exp.idea_status || 'active'] || '#8b949e';
+    return _expStatusColor(exp.idea_status || 'active');
   }
   if (mode === 'status+improve') {
-    const base = _STATUS_COLORS[exp.idea_status || 'active'] || '#8b949e';
+    const base = _expStatusColor(exp.idea_status || 'active');
     if (!exp.metrics || typeof exp.metrics[metricKey] !== 'number' || exp._running) return base;
     const lower = isLowerBetter(metricKey);
     const bestBefore = _computeGlobalBestBefore(metricKey, allExperiments);
     const prev = bestBefore[exp.id];
     if (prev === null || prev === undefined || _better(exp.metrics[metricKey], prev, lower))
-      return '#e078f0'; // purple — new global best at time of running
+      return getCssVar('--purple'); // new global best at time of running
     return base;
   }
   if (mode === 'improvement') {
-    if (!exp.metrics || typeof exp.metrics[metricKey] !== 'number') return '#8b949e';
+    if (!exp.metrics || typeof exp.metrics[metricKey] !== 'number') return getCssVar('--text-muted');
     const parentBest = _parentBestMetric(exp.idea_id, metricKey, allIdeas, allExperiments);
-    if (parentBest === null) return '#d29922';
-    return _better(exp.metrics[metricKey], parentBest, isLowerBetter(metricKey)) ? '#3fb950' : '#f85149';
+    if (parentBest === null) return getCssVar('--yellow');
+    return _better(exp.metrics[metricKey], parentBest, isLowerBetter(metricKey)) ? getCssVar('--green') : getCssVar('--red');
   }
   return null; // 'idea' — handled by ideaColorMap in caller
 }
@@ -264,29 +261,29 @@ export function _colorForIdea(
   if (mode === 'lane') {
     if (currentLayout && currentLayout.ideaLane[ideaId] !== undefined)
       return IDEA_PALETTE[currentLayout.ideaLane[ideaId] % IDEA_PALETTE.length];
-    return '#8b949e';
+    return getCssVar('--text-muted');
   }
   if (mode === 'status') {
     const idea = allIdeas[ideaId];
     const st = idea ? (idea.has_running ? 'running' : (idea.has_queued ? 'queued' : idea.status)) : 'active';
-    return STATUS_BAR_COLORS[st] || '#8b949e';
+    return getStatusColor(st);
   }
   if (mode === 'status+improve') {
     const idea = allIdeas[ideaId];
     const st = idea ? (idea.has_running ? 'running' : (idea.has_queued ? 'queued' : idea.status)) : 'active';
-    const base = STATUS_BAR_COLORS[st] || '#8b949e';
+    const base = getStatusColor(st);
     if (!metricKey) return base;
     if (_ideaHasGlobalImprovement(ideaId, metricKey, allExperiments))
-      return '#e078f0'; // purple — set a new global best
+      return getCssVar('--purple'); // new global best
     return base;
   }
   if (mode === 'improvement') {
-    if (!metricKey) return '#8b949e';
+    if (!metricKey) return getCssVar('--text-muted');
     const myBest = _ideaBestMetric(ideaId, metricKey, allExperiments);
-    if (myBest === null) return '#8b949e';
+    if (myBest === null) return getCssVar('--text-muted');
     const parentBest = _parentBestMetric(ideaId, metricKey, allIdeas, allExperiments);
-    if (parentBest === null) return '#d29922';
-    return _better(myBest, parentBest, isLowerBetter(metricKey)) ? '#3fb950' : '#f85149';
+    if (parentBest === null) return getCssVar('--yellow');
+    return _better(myBest, parentBest, isLowerBetter(metricKey)) ? getCssVar('--green') : getCssVar('--red');
   }
   // 'idea' — palette by ID
   return IDEA_PALETTE[(ideaId - 1) % IDEA_PALETTE.length];
