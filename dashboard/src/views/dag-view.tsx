@@ -37,6 +37,7 @@ const colWidthOverrides = useSetting<Record<string, number>>("dagColWidths", {})
 export function DagView() {
   const containerRef = useRef<HTMLDivElement>(null);
 
+  const theme = colorTheme.value;  // subscribe so graph redraws on theme change
   const data = graphData.value;
   const layout = currentLayout.value;
   const mode = colorMode.value;
@@ -640,7 +641,7 @@ export function DagView() {
 
     // Apply current highlight state (in case it was set before render)
     applyHighlight(highlightedIdea.value);
-  }, [data, layout, mode, metric, ideas, experiments, effectiveCompactMode, tags, tagMode, reversed, showAbandoned.value, showConcluded.value, showRunning.value, colorTheme.value]);
+  }, [data, layout, mode, metric, ideas, experiments, effectiveCompactMode, tags, tagMode, reversed, showAbandoned.value, showConcluded.value, showRunning.value, theme]);
 
   // =========================================================================
   // HIGHLIGHT EFFECT — reacts to highlightedIdea changes without full re-render
