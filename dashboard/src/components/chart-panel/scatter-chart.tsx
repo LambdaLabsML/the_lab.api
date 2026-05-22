@@ -6,6 +6,7 @@ import {
   selectedMetric,
   selectedIdea,
   colorMode,
+  colorTheme,
   improvementsOnly,
   activeTagFilters,
   tagFilterMode,
@@ -19,6 +20,7 @@ import {
 } from "../../state/settings";
 import { filterMetricExperiments, collectChartKeys, resolveNumericValue } from "../../lib/chart-data";
 import { IDEA_PALETTE, _colorForExp, isLowerBetter } from "../../lib/colors";
+import { resolveColor } from "../../lib/css-vars";
 import { getCssVar } from "../../lib/css-vars";
 import type { Experiment, IdeaNode, SubwayLayout } from "../../lib/types";
 
@@ -97,6 +99,7 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric }: { i
   const metricKeys = [...grouped.metrics, ...grouped.meta, ...grouped.timing];
   const ideas = allIdeas.value;
   const layout = currentLayout.value;
+  const theme = colorTheme.value;  // subscribe — chart recreates on theme switch
   const mode = colorMode.value;
   const impOnly = improvementsOnly.value;
   const tags = activeTagFilters.value;
@@ -191,7 +194,7 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric }: { i
 
     function getColor(exp: Experiment): string {
       const colorMetric = selectedMetric.value || yMetric;
-      const c = _colorForExp(exp, colorMetric, mode, layout, ideas, metricFiltered);
+      const c = resolveColor(_colorForExp(exp, colorMetric, mode, layout, ideas, metricFiltered));
       return c || ideaColorMap[exp.idea_id] || "#8b949e";
     }
 

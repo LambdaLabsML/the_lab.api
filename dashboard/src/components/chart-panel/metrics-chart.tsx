@@ -4,6 +4,7 @@ import { allExperiments, allIdeas, currentLayout, highlightedIdea, cloneChartPan
 import {
   selectedMetric,
   colorMode,
+  colorTheme,
   improvementsOnly,
   activeTagFilters,
   tagFilterMode,
@@ -40,6 +41,7 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
   const reversed = reverseTime.value;
   const clip = clipOutliers.value;
   const mean = ideaMean.value;
+  const theme = colorTheme.value;  // subscribe — chart recreates on theme switch
 
   // Idea-status filters (abandoned/concluded). The "running" toggle is
   // experiment-level — see hideRunning below — so completed experiments

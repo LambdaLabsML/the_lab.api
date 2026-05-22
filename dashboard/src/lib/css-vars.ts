@@ -7,3 +7,15 @@ export function getCssVar(name: string): string {
     .getPropertyValue(name)
     .trim();
 }
+
+/**
+ * Resolve any color string to a concrete value.
+ * - 'var(--green)' → resolved hex from current theme (for Canvas / Chart.js)
+ * - '#3fb950'      → returned as-is
+ * Use this wherever Canvas 2D or Chart.js need a concrete color string.
+ */
+export function resolveColor(color: string): string {
+  if (!color.startsWith('var(')) return color;
+  const name = color.slice(4, -1); // strip 'var(' and ')'
+  return getCssVar(name);
+}

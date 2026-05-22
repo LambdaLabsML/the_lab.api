@@ -169,7 +169,7 @@
 
 .agents-pid-status.alive .agents-dot {
   background: var(--green);
-  box-shadow: 0 0 6px rgba(63, 185, 80, 0.55);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--green) 55%, transparent);
 }
 
 .agents-pid-status.dead .agents-dot {

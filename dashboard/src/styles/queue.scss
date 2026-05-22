@@ -240,7 +240,7 @@
 }
 
 .queue-capbar-seg + .queue-capbar-seg {
-  border-left: 1px solid rgba(13, 17, 23, 0.6);
+  border-left: 1px solid color-mix(in srgb, var(--bg) 60%, transparent);
 }
 
 .queue-capbar-free {

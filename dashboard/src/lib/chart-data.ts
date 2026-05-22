@@ -6,6 +6,7 @@
 import type { Experiment, IdeaNode, SubwayLayout } from './types';
 export type { ChartDataResult } from './types';
 import { IDEA_PALETTE, _colorForExp, isLowerBetter } from './colors';
+import { resolveColor } from './css-vars';
 
 /** Internal meta keys that should not appear in the dropdown. */
 const HIDDEN_META_KEYS = new Set(["git_branch", "git_commit", "worktree", "outdir"]);
@@ -321,7 +322,7 @@ export function buildChartData(
       const statusBase = ({'concluded': '#58a6ff', 'abandoned': '#f85149', 'active': '#d29922'} as Record<string, string>)[exp.idea_status || 'active'] || base;
       return meanMilestones.has(exp.idea_id) ? '#e078f0' : statusBase;
     }
-    const c = _colorForExp(exp, metricKey, colorMode, currentLayout, allIdeas, metricFiltered);
+    const c = resolveColor(_colorForExp(exp, metricKey, colorMode, currentLayout, allIdeas, metricFiltered));
     return c || ideaColorMap[exp.idea_id] || '#8b949e';
   }
 
