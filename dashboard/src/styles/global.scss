@@ -20,7 +20,7 @@ body {
 }
 
 /* Badges */
-.badge { display: inline-block; padding: 2px 8px; border-radius: var(--radius-lg); font-size: var(--text-sm); font-weight: 600; white-space: nowrap; }
+.badge { display: inline-flex; align-items: center; gap: 3px; padding: 2px 8px; border-radius: var(--radius-lg); font-size: var(--text-sm); font-weight: 600; white-space: nowrap; }
 .badge-active { background: var(--badge-green-bg); color: var(--badge-green-fg); }
 .badge-concluded { background: var(--badge-blue-bg); color: var(--badge-blue-fg); }
 .badge-abandoned { background: var(--badge-red-bg); color: var(--badge-red-fg); }

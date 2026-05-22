@@ -40,9 +40,17 @@
   overflow-y: auto;
 }
 #metric-selector select {
-  background: #161b22; color: #c9d1d9; border: 1px solid #30363d;
-  padding: 2px 6px; font-family: inherit; font-size: 11px; border-radius: 4px;
+  background: var(--bg-elev);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font);
+  font-size: var(--text-sm);
+  padding: 2px 6px;
+  cursor: pointer;
+  outline: none;
 }
+#metric-selector select:focus { border-color: var(--accent); }
 
 /* Compact toolbar inside the metrics chart pane */
 .chart-toolbar {
@@ -57,18 +65,17 @@
   flex-wrap: wrap;
 }
 .chart-toolbar select {
-  background: #161b22; color: #c9d1d9; border: 1px solid #30363d;
-  padding: 1px 4px; font-family: inherit; font-size: 10px; border-radius: 3px;
+  background: var(--bg-elev);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font);
+  font-size: var(--text-sm);
+  padding: 2px 6px;
+  cursor: pointer;
+  outline: none;
 }
-.chart-toggle-btn {
-  display: inline-flex; align-items: center; gap: 3px;
-  padding: 2px 7px; border: 1px solid #30363d; border-radius: 10px;
-  background: #161b22; color: #8b949e; cursor: pointer;
-  font-family: inherit; font-size: 10px; font-weight: 600;
-  transition: border-color 0.1s, color 0.1s;
-}
-.chart-toggle-btn:hover { border-color: #58a6ff; color: #c9d1d9; }
-.chart-toggle-btn.active { border-color: #f2cc60; color: #f2cc60; background: #241d0f; }
+.chart-toolbar select:focus { border-color: var(--accent); }
 
 .improvements-toggle {
   display: inline-flex;
@@ -126,6 +133,32 @@
   font-weight: 700;
   letter-spacing: 0.02em;
   color: #f0f6fc;
+}
+
+/* chart-toggle-btn — theming for the improvements/idea-mean/outlier toggle buttons */
+.chart-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  font-family: var(--font);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color var(--transition-fast), border-color var(--transition-fast), background var(--transition-fast);
+}
+.chart-toggle-btn:hover {
+  color: var(--text);
+  border-color: var(--text-muted);
+}
+.chart-toggle-btn.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
 /* ---- Collapsible filter bar ---- */
@@ -187,9 +220,17 @@
   flex-wrap: wrap;
 }
 .chart-col-toolbar select {
-  background: #161b22; color: #c9d1d9; border: 1px solid #30363d;
-  padding: 2px 6px; font-family: inherit; font-size: 11px; border-radius: 4px;
+  background: var(--bg-elev);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font);
+  font-size: var(--text-sm);
+  padding: 2px 6px;
+  cursor: pointer;
+  outline: none;
 }
+.chart-col-toolbar select:focus { border-color: var(--accent); }
 
 .chart-col-canvas {
   position: relative;

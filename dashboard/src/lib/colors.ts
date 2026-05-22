@@ -5,6 +5,7 @@
 // ------------------------------------------------------------
 
 import type { Experiment, IdeaNode, SubwayLayout } from './types';
+import { getCssVar } from './css-vars';
 
 /** Per-status background / border / font colors for station nodes. */
 export const STATUS_COLORS: Record<string, { bg: string; border: string; font: string }> = {
@@ -16,7 +17,10 @@ export const STATUS_COLORS: Record<string, { bg: string; border: string; font: s
   suggested: { bg: '#2d1a00', border: '#d29922', font: '#ffffff' },
 };
 
-/** Flat status → accent color used for bar borders and dots. */
+/**
+ * Flat status → accent color used for bar borders and dots.
+ * @deprecated Use getStatusColor(status) instead for theme-aware runtime resolution.
+ */
 export const STATUS_BAR_COLORS: Record<string, string> = {
   active: '#3fb950',
   running: '#d29922',
@@ -25,6 +29,23 @@ export const STATUS_BAR_COLORS: Record<string, string> = {
   abandoned: '#f85149',
   suggested: '#d29922',
 };
+
+/** Maps status keys to their CSS custom property names. */
+const STATUS_VAR_MAP: Record<string, string> = {
+  active:    '--green',
+  running:   '--yellow',
+  concluded: '--accent',
+  abandoned: '--red',
+  suggested: '--text-muted',
+  pending:   '--text-faint',
+  queued:    '--text-muted',
+};
+
+/** Returns the theme-aware color for a given status by resolving the appropriate CSS variable at runtime. */
+export function getStatusColor(status: string): string {
+  const varName = STATUS_VAR_MAP[status] ?? '--text-faint';
+  return getCssVar(varName);
+}
 
 /** Sequential palette used for lane/idea coloring. */
 export const IDEA_PALETTE: string[] = [

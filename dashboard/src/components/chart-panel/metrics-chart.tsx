@@ -16,6 +16,7 @@ import {
 } from "../../state/settings";
 import { buildChartData, collectChartKeys } from "../../lib/chart-data";
 import { navigateToIdea } from "../../lib/navigate";
+import { getCssVar } from "../../lib/css-vars";
 import type { ChartDataResult } from "../../lib/chart-data";
 
 export function MetricsChart({ instanceId, initialMetric }: { instanceId?: string; initialMetric?: string } = {}) {
@@ -101,7 +102,7 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
       chartRef.current.data.labels = chartData.labels;
       const yBounds = clip ? computeYBounds(chartData.values) : {};
       const yScale = chartRef.current.options.scales!.y!;
-      yScale.title = { display: true, text: metric, color: "#8b949e", font: { size: 10 } }; // dynamic Chart.js option — hex required
+      yScale.title = { display: true, text: metric, color: getCssVar("--text-muted"), font: { size: 10 } };
       yScale.min = yBounds.min;
       yScale.max = yBounds.max;
       (yScale as any).type = logScale ? "logarithmic" : "linear";
@@ -208,9 +209,6 @@ function computeYBounds(values: number[]): { min?: number; max?: number } {
   return { min: lo - pad, max: hi + pad };
 }
 
-// NOTE: hex color strings below are Chart.js configuration options (not JSX style={{}} props).
-// They must remain as hex for Chart.js to parse them. lib/colors.ts could be updated
-// separately to resolve CSS vars at runtime and pass resolved values here.
 function createChart(
   canvas: HTMLCanvasElement,
   metricKey: string,
@@ -255,25 +253,25 @@ function createChart(
         x: {
           display: true,
           ticks: {
-            color: "#8b949e",
+            color: getCssVar("--text-muted"),
             font: {
               size: 10,
               family: "SF Mono, Fira Code, Consolas, monospace",
             },
             autoSkip: true,
           },
-          grid: { color: "#21262d" },
+          grid: { color: getCssVar("--border") },
         },
         y: {
           ...(clipOutliers.value ? computeYBounds(chartData.values) : {}),
           title: {
             display: true,
             text: metricKey,
-            color: "#8b949e",
+            color: getCssVar("--text-muted"),
             font: { size: 10 },
           },
-          ticks: { color: "#484f58", font: { size: 10 } },
-          grid: { color: "#21262d" },
+          ticks: { color: getCssVar("--text-muted"), font: { size: 10 } },
+          grid: { color: getCssVar("--border") },
         },
       },
       onHover(_evt, elements) {
@@ -289,10 +287,10 @@ function createChart(
       plugins: {
         legend: { display: false },
         tooltip: {
-          backgroundColor: "#161b22",
-          titleColor: "#58a6ff",
-          bodyColor: "#c9d1d9",
-          borderColor: "#30363d",
+          backgroundColor: getCssVar("--bg-elev"),
+          titleColor: getCssVar("--text"),
+          bodyColor: getCssVar("--text-muted"),
+          borderColor: getCssVar("--border"),
           borderWidth: 1,
           maxWidth: 350,
           titleFont: {

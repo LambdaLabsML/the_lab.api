@@ -15,8 +15,8 @@ import { colorMode, selectedIdea, selectedMetric, improvementsOnly, activeTagFil
 import { useSetting } from "../state/settings";
 import { _ideaHasGlobalImprovement, resetGlobalBestBeforeCache } from "../lib/colors";
 import { drawSubwayLines } from "../lib/subway-lines";
-// dynamic — driven by lib/colors.ts (IDEA_PALETTE, STATUS_BAR_COLORS, _colorForIdea)
-import { IDEA_PALETTE, STATUS_BAR_COLORS, STATUS_ORDER, _colorForIdea } from "../lib/colors";
+// dynamic — driven by lib/colors.ts (IDEA_PALETTE, getStatusColor, _colorForIdea)
+import { IDEA_PALETTE, STATUS_ORDER, _colorForIdea, getStatusColor } from "../lib/colors";
 import { filterMetricExperiments } from "../lib/chart-data";
 import { escapeHtml, ideaTitle, badgeHtml } from "../lib/format";
 
@@ -130,7 +130,7 @@ export function DagView() {
       let mHtml = '<div style="position:absolute;visibility:hidden;top:0;left:0">';
       for (const n of needsMeasure) {
         const ds = n.has_running ? "running" : (n.has_queued ? "queued" : n.status);
-        const sc = STATUS_BAR_COLORS[ds] || STATUS_BAR_COLORS.active;
+        const sc = getStatusColor(ds);
         const lc = IDEA_PALETTE[layout.ideaLane[n.id] % IDEA_PALETTE.length];
         mHtml +=
           '<div class="subway-station" data-id="' + n.id +

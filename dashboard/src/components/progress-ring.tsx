@@ -14,7 +14,7 @@ export function ProgressRing({ pct, size = 16 }: { pct: number; size?: number })
     <svg
       width={size}
       height={size}
-      style="vertical-align: middle; display: inline-block; margin-right: 3px;"
+      style="vertical-align: middle; display: inline-block;"
     >
       <circle
         cx={center} cy={center} r={r}

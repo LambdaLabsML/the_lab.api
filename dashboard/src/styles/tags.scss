@@ -13,7 +13,7 @@
   user-select: none; transition: all var(--transition-base);
 }
 .tag-toggle:hover { border-color: var(--text-muted); color: var(--text); }
-.tag-toggle.active { background: #0c2d6b; border-color: var(--accent-dim); color: var(--accent-dim); }
+.tag-toggle.active { background: var(--badge-blue-bg); border-color: var(--accent); color: var(--badge-blue-fg); }
 
 .tag-rename-input {
   background: var(--bg); color: var(--text); border: 1px solid var(--accent-dim);

@@ -19,6 +19,7 @@ import {
 } from "../../state/settings";
 import { filterMetricExperiments, collectChartKeys, resolveNumericValue } from "../../lib/chart-data";
 import { IDEA_PALETTE, _colorForExp, isLowerBetter } from "../../lib/colors";
+import { getCssVar } from "../../lib/css-vars";
 import type { Experiment, IdeaNode, SubwayLayout } from "../../lib/types";
 
 /**
@@ -218,8 +219,8 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric }: { i
       ds._expData = filtered;
       const xScale = chartRef.current.options.scales!.x!;
       const yScale = chartRef.current.options.scales!.y!;
-      xScale.title = { display: true, text: xMetric, color: "#8b949e", font: { size: 10 } }; // dynamic Chart.js option — hex required
-      yScale.title = { display: true, text: yMetric, color: "#8b949e", font: { size: 10 } }; // dynamic Chart.js option — hex required
+      xScale.title = { display: true, text: xMetric, color: getCssVar("--text-muted"), font: { size: 10 } };
+      yScale.title = { display: true, text: yMetric, color: getCssVar("--text-muted"), font: { size: 10 } };
       xScale.min = xBounds.min;
       xScale.max = xBounds.max;
       yScale.min = yBounds.min;
@@ -229,9 +230,6 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric }: { i
       return;
     }
 
-    // NOTE: hex color strings below are Chart.js configuration options (not JSX style={{}} props).
-    // They must remain as hex for Chart.js to parse them. lib/colors.ts could be updated
-    // separately to resolve CSS vars at runtime and pass resolved values here.
     chartRef.current = new Chart(canvasRef.current, {
       type: "scatter",
       data: {
@@ -266,15 +264,15 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric }: { i
         scales: {
           x: {
             ...xBounds,
-            title: { display: true, text: xMetric, color: "#8b949e", font: { size: 10 } },
-            ticks: { color: "#484f58", font: { size: 10 } },
-            grid: { color: "#21262d" },
+            title: { display: true, text: xMetric, color: getCssVar("--text-muted"), font: { size: 10 } },
+            ticks: { color: getCssVar("--text-muted"), font: { size: 10 } },
+            grid: { color: getCssVar("--border") },
           },
           y: {
             ...yBounds,
-            title: { display: true, text: yMetric, color: "#8b949e", font: { size: 10 } },
-            ticks: { color: "#484f58", font: { size: 10 } },
-            grid: { color: "#21262d" },
+            title: { display: true, text: yMetric, color: getCssVar("--text-muted"), font: { size: 10 } },
+            ticks: { color: getCssVar("--text-muted"), font: { size: 10 } },
+            grid: { color: getCssVar("--border") },
           },
         },
         onHover(_evt, elements) {
@@ -290,10 +288,10 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric }: { i
         plugins: {
           legend: { display: false },
           tooltip: {
-            backgroundColor: "#161b22",
-            titleColor: "#58a6ff",
-            bodyColor: "#c9d1d9",
-            borderColor: "#30363d",
+            backgroundColor: getCssVar("--bg-elev"),
+            titleColor: getCssVar("--text"),
+            bodyColor: getCssVar("--text-muted"),
+            borderColor: getCssVar("--border"),
             borderWidth: 1,
             maxWidth: 350,
             titleFont: {

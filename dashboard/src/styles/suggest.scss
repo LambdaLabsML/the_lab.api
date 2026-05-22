@@ -29,12 +29,24 @@
 #suggest-panel .suggest-form { max-width: 600px; }
 #suggest-panel textarea,
 #suggest-panel input[type="text"],
-#suggest-panel input[type="url"],
-#suggest-panel select {
+#suggest-panel input[type="url"] {
   background: var(--bg-elev); color: var(--text); border: 1px solid var(--border);
   border-radius: var(--radius-sm); padding: 6px 10px; font-family: inherit;
   font-size: 12px; width: 100%;
 }
+#suggest-panel select {
+  background: var(--bg-elev);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font);
+  font-size: var(--text-sm);
+  padding: 2px 6px;
+  cursor: pointer;
+  outline: none;
+  width: 100%;
+}
+#suggest-panel select:focus { border-color: var(--accent); }
 #suggest-panel textarea { min-height: 60px; resize: vertical; }
 #suggest-panel .form-group { margin-bottom: 10px; }
 #suggest-panel .form-label {

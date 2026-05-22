@@ -8,9 +8,9 @@
   border-bottom: 1px solid #30363d; font-weight: 600;
   white-space: nowrap; user-select: none;
 }
-.table-panel th:hover { color: #c9d1d9; }
-.table-panel th.sorted { color: #58a6ff; }
-.table-panel th.metric-selected { background: #58a6ff11; }
+.table-panel th:hover { color: var(--text); }
+.table-panel th.sorted { color: var(--accent); }
+.table-panel th.metric-selected { background: color-mix(in srgb, var(--accent) 8%, transparent); }
 .table-panel td { padding: 3px 8px; border-bottom: 1px solid #21262d; color: #c9d1d9; white-space: nowrap; }
 .table-panel tr:hover { background: #21262d; }
 .table-panel tr { cursor: pointer; }
@@ -19,5 +19,5 @@
 .table-panel .color-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; }
 .table-panel .metric-val { font-family: 'SF Mono', 'Fira Code', Consolas, monospace; text-align: right; }
 .table-panel td.metric-selected { background: #58a6ff08; }
-.table-panel .idea-desc { max-width: 200px; overflow: hidden; text-overflow: ellipsis; display: inline-block; color: #8b949e; font-size: 10px; vertical-align: middle; }
+.table-panel .idea-desc { max-width: 200px; overflow: hidden; text-overflow: ellipsis; display: inline-block; color: var(--text-muted); font-size: 10px; vertical-align: middle; }
 .table-panel .status-badge { font-size: 10px; padding: 1px 5px; border-radius: 3px; color: #fff; }
