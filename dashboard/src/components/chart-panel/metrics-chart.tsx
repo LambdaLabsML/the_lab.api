@@ -262,7 +262,7 @@ function createChart(
             },
             autoSkip: true,
           },
-          grid: { color: getCssVar("--border") },
+          grid: { color: getCssVar("--border-soft") },
         },
         y: {
           ...(clipOutliers.value ? computeYBounds(chartData.values) : {}),
@@ -273,7 +273,7 @@ function createChart(
             font: { size: 10 },
           },
           ticks: { color: getCssVar("--text-muted"), font: { size: 10 } },
-          grid: { color: getCssVar("--border") },
+          grid: { color: getCssVar("--border-soft") },
         },
       },
       onHover(_evt, elements) {

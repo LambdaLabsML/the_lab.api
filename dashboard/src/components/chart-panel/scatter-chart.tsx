@@ -269,13 +269,13 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric }: { i
             ...xBounds,
             title: { display: true, text: xMetric, color: getCssVar("--text-muted"), font: { size: 10 } },
             ticks: { color: getCssVar("--text-muted"), font: { size: 10 } },
-            grid: { color: getCssVar("--border") },
+            grid: { color: getCssVar("--border-soft") },
           },
           y: {
             ...yBounds,
             title: { display: true, text: yMetric, color: getCssVar("--text-muted"), font: { size: 10 } },
             ticks: { color: getCssVar("--text-muted"), font: { size: 10 } },
-            grid: { color: getCssVar("--border") },
+            grid: { color: getCssVar("--border-soft") },
           },
         },
         onHover(_evt, elements) {
