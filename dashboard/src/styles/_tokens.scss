@@ -44,11 +44,11 @@
   --radius-md: 6px;
   --radius-lg: 10px;
   // Font sizes
-  --text-xs:   10px;
-  --text-sm:   11px;
-  --text-base: 13px;
-  --text-lg:   15px;
-  --text-xl:   18px;
+  --text-xs:   9px;
+  --text-sm:   10px;
+  --text-base: 11px;
+  --text-lg:   13px;
+  --text-xl:   16px;
   // Badge semantic colours
   --badge-green-bg:   #{$badge-green-bg};
   --badge-green-fg:   #{$badge-green-fg};
@@ -199,6 +199,7 @@
 
 [data-font-size="xs"] { --text-xs:7px;  --text-sm:8px;  --text-base:9px;  --text-lg:11px; --text-xl:14px; }
 [data-font-size="s"]  { --text-xs:8px;  --text-sm:9px;  --text-base:10px; --text-lg:12px; --text-xl:15px; }
-[data-font-size="l"]  { --text-xs:11px; --text-sm:12px; --text-base:13px; --text-lg:15px; --text-xl:18px; }
-[data-font-size="xl"] { --text-xs:12px; --text-sm:13px; --text-base:14px; --text-lg:16px; --text-xl:20px; }
-[data-font-size="xxl"]{ --text-xs:13px; --text-sm:14px; --text-base:16px; --text-lg:18px; --text-xl:22px; }
+// m = default (9/10/11/13/16) — no override needed
+[data-font-size="l"]  { --text-xs:10px; --text-sm:11px; --text-base:12px; --text-lg:14px; --text-xl:17px; }
+[data-font-size="xl"] { --text-xs:11px; --text-sm:12px; --text-base:13px; --text-lg:15px; --text-xl:18px; }
+[data-font-size="xxl"]{ --text-xs:12px; --text-sm:13px; --text-base:15px; --text-lg:17px; --text-xl:20px; }
