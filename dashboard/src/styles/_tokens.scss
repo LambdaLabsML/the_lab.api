@@ -260,6 +260,70 @@
   );
 }
 
+[data-theme="solarized-light"] {
+  @include theme-vars(
+    #FDF6E3, #EEE8D5, #E0D9C3,
+    #CDC4A8, #D5C9AE,
+    #657B83, #839496, #93A1A1,
+    #268BD2, #1A71B5,
+    #859900, #B58900, #DC322F, #6C71C4,
+    "'JetBrains Mono','SF Mono','Fira Code',Consolas,monospace",
+    #D4E6A6, #546E00,
+    #C3DFF0, #1A71B5,
+    #F7D0CF, #CC1A17,
+    #F5E8C0, #9C7200,
+    #EEE8D5, #839496
+  );
+}
+
+[data-theme="gruvbox-light"] {
+  @include theme-vars(
+    #FBF1C7, #EBDBB2, #D5C4A1,
+    #BDAE93, #CEC2A3,
+    #3C3836, #665C54, #928374,
+    #458588, #306E71,
+    #98971A, #D79921, #CC241D, #B16286,
+    "'JetBrains Mono','SF Mono','Fira Code',Consolas,monospace",
+    #D5E4A0, #79740E,
+    #C8DDE0, #306E71,
+    #ECCCC0, #9D1A15,
+    #F0E4B2, #B07C15,
+    #EBDBB2, #665C54
+  );
+}
+
+[data-theme="linen"] {
+  @include theme-vars(
+    #FFFFF8, #F5F5EE, #EAEAE0,
+    #CCCCC0, #D8D8CC,
+    #2C2C24, #6B6B5E, #9B9B8E,
+    #5B8DB8, #4A7499,
+    #5A8A5A, #B07020, #B05050, #7A70A8,
+    "'JetBrains Mono','SF Mono','Fira Code',Consolas,monospace",
+    #D0E8D0, #4A7A4A,
+    #CCDCE8, #4A7499,
+    #E8CCCC, #924040,
+    #E8DCCC, #905C18,
+    #E8E8E0, #6B6B5E
+  );
+}
+
+[data-theme="crimson"] {
+  @include theme-vars(
+    #120608, #1C0A0E, #261014,
+    #3D1520, #30101A,
+    #F0DCE0, #B08898, #6A4452,
+    #FF6B81, #DD5060,
+    #7EC8A4, #F5A623, #FF4040, #C084FC,
+    "'JetBrains Mono','SF Mono','Fira Code',Consolas,monospace",
+    #0D2A1E, #7EC8A4,
+    #0D1A30, #8BC4E8,
+    #300A10, #FF6B81,
+    #2A1E08, #F5A623,
+    #200C12, #B08898
+  );
+}
+
 // ── Font-family overrides ──────────────────────────────────────────────────
 // Each pairing sets both --font (UI) and --font-mono (code/terminal).
 
