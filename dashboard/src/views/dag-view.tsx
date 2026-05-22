@@ -11,7 +11,7 @@ import { useRef, useEffect } from "preact/hooks";
 import { navigateToIdea } from "../lib/navigate";
 import type { IdeaNode, StationPos, SubwayLayout } from "../lib/types";
 import { graphData, currentLayout, highlightedIdea, allIdeas, allExperiments, runningProgress } from "../state/signals";
-import { colorMode, selectedIdea, selectedMetric, improvementsOnly, activeTagFilters, tagFilterMode, reverseTime, showAbandoned, showConcluded, showRunning } from "../state/settings";
+import { colorMode, selectedIdea, selectedMetric, improvementsOnly, activeTagFilters, tagFilterMode, reverseTime, showAbandoned, showConcluded, showRunning, colorTheme } from "../state/settings";
 import { useSetting } from "../state/settings";
 import { _ideaHasGlobalImprovement, resetGlobalBestBeforeCache } from "../lib/colors";
 import { drawSubwayLines } from "../lib/subway-lines";
@@ -640,7 +640,7 @@ export function DagView() {
 
     // Apply current highlight state (in case it was set before render)
     applyHighlight(highlightedIdea.value);
-  }, [data, layout, mode, metric, ideas, experiments, effectiveCompactMode, tags, tagMode, reversed, showAbandoned.value, showConcluded.value, showRunning.value]);
+  }, [data, layout, mode, metric, ideas, experiments, effectiveCompactMode, tags, tagMode, reversed, showAbandoned.value, showConcluded.value, showRunning.value, colorTheme.value]);
 
   // =========================================================================
   // HIGHLIGHT EFFECT — reacts to highlightedIdea changes without full re-render

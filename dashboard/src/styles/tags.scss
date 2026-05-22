@@ -2,8 +2,9 @@
 
 .tag-pill {
   display: inline-block; padding: 1px 7px; border-radius: 10px;
-  font-size: var(--text-xs); font-weight: 600; background: #0c2d6b;
-  color: var(--accent-dim); margin-right: 4px; margin-top: 2px;
+  font-size: var(--text-xs); font-weight: 600;
+  background: var(--badge-blue-bg); color: var(--badge-blue-fg);
+  margin-right: 4px; margin-top: 2px;
 }
 
 .tag-toggle {
