@@ -26,6 +26,8 @@ from ..schemas import (
     RenameTagRequest,
     UpdateTagsRequest,
     AnalyzeRequest,
+    RequeueRequest,
+    SlurmDoneRequest,
 )
 
 router = APIRouter(prefix="/api/v1")
@@ -1055,6 +1057,93 @@ async def cancel_experiment_via_idea(idea_id: int, exp_ref: str):
 async def rerun_experiment_via_idea(idea_id: int, exp_ref: str):
     """Convenience alias — redirects to POST /experiments/{exp_ref}/rerun."""
     return await rerun_experiment(exp_ref)
+
+
+@router.post("/experiments/{exp_ref}/requeue")
+async def requeue_experiment(exp_ref: str, req: RequeueRequest | None = None):
+    """Mark a running or failed experiment as queued for re-dispatch.
+
+    Called by the Slurm wrapper when the job is preempted (SIGTERM received).
+    Records the event in meta.slurm_attempts, resets status to 'queued',
+    and wakes the scheduler.
+    """
+    exp = _resolve_exp(exp_ref)
+    label = exp.get("label") or str(exp["id"])
+    now = datetime.now(timezone.utc).isoformat()
+    reason = (req.reason if req else None) or "preempted"
+
+    meta = dict(exp.get("meta") or {})
+    slurm_attempts = list(meta.get("slurm_attempts") or [])
+    slurm_attempts.append({
+        "job_id": meta.get("slurm_job_id"),
+        "reason": reason,
+        "at": now,
+    })
+    meta["slurm_attempts"] = slurm_attempts
+    meta.pop("slurm_job_id", None)
+
+    updated = store.update_experiment(
+        label,
+        status="queued",
+        queued_at=now,
+        meta=meta,
+        error=None,
+    )
+    runner.wake_scheduler()
+
+    try:
+        from .. import ws as ws_mod
+        ws_mod.broadcaster.broadcast_soon({
+            "type": "experiment_queued",
+            "label": label,
+            "idea_id": exp.get("idea_id"),
+        })
+    except Exception:
+        pass
+
+    return updated or store.get_experiment(label) or exp
+
+
+@router.post("/experiments/{exp_ref}/slurm_done")
+async def slurm_done(exp_ref: str, req: SlurmDoneRequest | None = None):
+    """Hint from Slurm wrapper that the job completed normally.
+
+    Called by the wrapper script on the compute node when the experiment
+    script exits without preemption. The monitor task is the authoritative
+    completion path (it rsyncs results and parses metrics); this endpoint
+    is a fast-path hint so the lab marks failures quickly.
+
+    - exit_code == 0: leave as-is (monitor will complete it after rsync)
+    - exit_code != 0: mark as failed with the exit code
+    """
+    exp = _resolve_exp(exp_ref)
+    label = exp.get("label") or str(exp["id"])
+    exit_code = (req.exit_code if req else None) or 0
+    now = datetime.now(timezone.utc).isoformat()
+
+    if exit_code != 0:
+        updated = store.update_experiment(
+            label,
+            status="failed",
+            error=f"slurm job exited with code {exit_code}",
+            pid=None,
+            finished_at=now,
+        )
+        runner.wake_scheduler()
+        try:
+            from .. import ws as ws_mod
+            ws_mod.broadcaster.broadcast_soon({
+                "type": "experiment_finished",
+                "label": label,
+                "idea_id": exp.get("idea_id"),
+                "status": "failed",
+                "metrics": None,
+            })
+        except Exception:
+            pass
+        return updated or store.get_experiment(label) or exp
+    # exit_code == 0: monitor handles real completion; just acknowledge
+    return store.get_experiment(label) or exp
 
 
 @router.get("/ideas/{idea_id}/experiments/{exp_ref}/progress")

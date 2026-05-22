@@ -269,8 +269,8 @@ def _validate_resource(r: Resource) -> None:
         raise ValueError(
             "jobs_per_unit > 1.0 (unit sharing) is not supported in v1"
         )
-    if r.kind != "local":
-        raise ValueError(f"resource kind '{r.kind}' is not supported in v1 (only 'local')")
+    if r.kind not in ("local", "slurm"):
+        raise ValueError(f"resource kind '{r.kind}' is not supported (use 'local' or 'slurm')")
     if r.unit_kind not in ("gpu", "cpu", "none"):
         raise ValueError(f"unit_kind must be one of: gpu, cpu, none")
 

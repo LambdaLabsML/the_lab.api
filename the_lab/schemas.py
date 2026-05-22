@@ -130,3 +130,11 @@ class MessageRequest(BaseModel):
     # to: 'agent:<id>' | 'role:<role>' | 'all'
     to: str
     text: str
+
+
+class RequeueRequest(BaseModel):
+    reason: str = "preempted"
+
+
+class SlurmDoneRequest(BaseModel):
+    exit_code: int = 0

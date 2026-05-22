@@ -162,6 +162,28 @@ class ExperimentRunner:
         self._git_lock = asyncio.Lock()
         self._scheduler_wake = asyncio.Event()
         for exp in self._reattach_running:
+            meta = exp.get("meta") or {}
+            slurm_job_id = meta.get("slurm_job_id")
+            if slurm_job_id:
+                # Re-attach Slurm job monitor
+                from .executors.slurm import SlurmExecutor
+                from .queue import load_config
+                resources, _ = load_config(self._store.repo_dir)
+                resource_name = meta.get("assigned_resource")
+                resource = next((r for r in resources if r.name == resource_name), None)
+                if resource and resource.kind == "slurm":
+                    ssh_host = resource.executor_config.get("ssh_host", "slurm")
+                    executor = SlurmExecutor(ssh_host, resource.executor_config)
+                    label = exp.get("label") or str(exp["id"])
+                    script_path = self._store.repo_dir / exp["script"]
+                    local_exp_dir = script_path.parent
+                    task = asyncio.create_task(
+                        self._monitor_slurm_job(
+                            exp["id"], executor, slurm_job_id, label, local_exp_dir
+                        )
+                    )
+                    self._tasks[exp["id"]] = task
+                    continue
             task = asyncio.create_task(self._monitor_pid(exp))
             self._tasks[exp["id"]] = task
         if self._reattach_running:
@@ -300,7 +322,10 @@ class ExperimentRunner:
                 start_timeout = None
 
             try:
-                result = await self.start(label, env_extra=extra_env, timeout=start_timeout)
+                if resource.kind == "slurm":
+                    result = await self._start_slurm(label, exp, resource, assigned, extra_env)
+                else:
+                    result = await self.start(label, env_extra=extra_env, timeout=start_timeout)
                 if result.get("status") == "error":
                     # Release the units we held; the start failed.
                     self._allocator.release(label)
@@ -674,6 +699,216 @@ class ExperimentRunner:
         if run_token:
             token_registry.unregister(run_token)
 
+    async def _start_slurm(
+        self,
+        label: str,
+        exp: dict,
+        resource,
+        assigned: list[int],
+        env_extra: dict[str, str],
+    ) -> dict:
+        """Submit an experiment to Slurm via SSH and start monitoring."""
+        import base64
+        from .executors.slurm import SlurmExecutor
+
+        ssh_host = resource.executor_config.get("ssh_host", "slurm")
+        executor = SlurmExecutor(ssh_host, resource.executor_config)
+
+        # Build env dict that the wrapper script will expose to the experiment
+        lab_user = os.environ.get("THE_LAB_USER", "")
+        lab_password = os.environ.get("THE_LAB_PASSWORD", "")
+        lab_auth = base64.b64encode(f"{lab_user}:{lab_password}".encode()).decode()
+        lab_api_url = os.environ.get(
+            "THE_LAB_API_URL",
+            f"http://localhost:{os.environ.get('THE_LAB_PORT', '8000')}/api/v1",
+        )
+
+        script_path = self._store.repo_dir / exp["script"]
+        local_exp_dir = script_path.parent
+
+        now = datetime.now(timezone.utc).isoformat()
+        try:
+            job_id = executor.submit(
+                label,
+                script_path,
+                env_extra,
+                local_exp_dir,
+                unit_kind=resource.unit_kind,
+            )
+        except Exception as e:
+            print(f"[the-lab] slurm submit for {label} failed: {e}")
+            return {"status": "error", "reason": str(e)}
+
+        meta = {
+            **(exp.get("meta") or {}),
+            "slurm_job_id": job_id,
+            "assigned_resource": resource.name,
+            "assigned_units": assigned,
+        }
+        exp_id = exp["id"]
+        self._store.update_experiment(
+            exp_id,
+            status="running",
+            started_at=now,
+            meta=meta,
+            pid=None,
+            error=None,
+            finished_at=None,
+        )
+
+        task = asyncio.create_task(
+            self._monitor_slurm_job(exp_id, executor, job_id, label, local_exp_dir)
+        )
+        self._tasks[exp_id] = task
+
+        return {"status": "running", "slurm_job_id": job_id}
+
+    async def _monitor_slurm_job(
+        self,
+        exp_id: int,
+        executor,
+        job_id: str,
+        label: str,
+        local_exp_dir: Path,
+    ) -> None:
+        """Poll squeue until the Slurm job finishes, then pull results."""
+        from . import ws as ws_mod
+
+        poll_interval = 30
+        while True:
+            await asyncio.sleep(poll_interval)
+
+            try:
+                state = executor.poll_status(job_id)
+            except Exception as e:
+                print(f"[the-lab] poll_status for job {job_id} failed: {e}")
+                state = ""  # treat as gone
+
+            if state in ("RUNNING", "PENDING"):
+                poll_interval = 30
+                continue
+            elif state == "COMPLETING":
+                poll_interval = 5
+                continue
+            elif state == "PREEMPTED":
+                # Wrapper should have called /requeue already; handle it
+                # defensively in case the HTTP call failed.
+                exp = self._store.get_experiment(exp_id)
+                if exp and exp.get("status") == "running":
+                    now = datetime.now(timezone.utc).isoformat()
+                    meta = dict(exp.get("meta") or {})
+                    slurm_attempts = list(meta.get("slurm_attempts") or [])
+                    slurm_attempts.append({
+                        "job_id": job_id,
+                        "reason": "preempted",
+                        "at": now,
+                    })
+                    meta["slurm_attempts"] = slurm_attempts
+                    meta.pop("slurm_job_id", None)
+                    self._store.update_experiment(
+                        exp_id,
+                        status="queued",
+                        queued_at=now,
+                        meta=meta,
+                        error=None,
+                    )
+                    self._allocator.release(label)
+                    self.wake_scheduler()
+                self._tasks.pop(exp_id, None)
+                self._finished_queue.put_nowait(exp_id)
+                return
+            elif state in ("COMPLETED", ""):
+                # Pull results from remote
+                executor.pull_results(label, local_exp_dir)
+                exp = self._store.get_experiment(exp_id)
+                if not exp or exp.get("status") == "cancelled":
+                    executor.cleanup_remote(label)
+                    self._allocator.release(label)
+                    self.wake_scheduler()
+                    self._tasks.pop(exp_id, None)
+                    self._finished_queue.put_nowait(exp_id)
+                    return
+                now = datetime.now(timezone.utc).isoformat()
+                log_path = local_exp_dir / "script.log"
+                output = log_path.read_text() if log_path.exists() else ""
+                result, result_idx = self._extract_json(output)
+                if result is not None:
+                    metrics = result.get("metrics", {})
+                    meta = {**(exp.get("meta") or {}), **result.get("meta", {})}
+                    self._store.update_experiment(
+                        exp_id,
+                        status="completed",
+                        metrics=metrics,
+                        meta=meta,
+                        pid=None,
+                        finished_at=now,
+                    )
+                    if result_idx is not None:
+                        self._strip_result_line(log_path, result_idx)
+                    ws_mod.broadcaster.broadcast_soon({
+                        "type": "experiment_finished",
+                        "label": label,
+                        "idea_id": exp.get("idea_id"),
+                        "status": "completed",
+                        "metrics": metrics,
+                    })
+                else:
+                    self._store.update_experiment(
+                        exp_id,
+                        status="completed",
+                        metrics=None,
+                        pid=None,
+                        finished_at=now,
+                    )
+                    ws_mod.broadcaster.broadcast_soon({
+                        "type": "experiment_finished",
+                        "label": label,
+                        "idea_id": exp.get("idea_id"),
+                        "status": "completed",
+                        "metrics": None,
+                    })
+                executor.cleanup_remote(label)
+                self._allocator.release(label)
+                self.wake_scheduler()
+                self._tasks.pop(exp_id, None)
+                self._finished_queue.put_nowait(exp_id)
+                return
+            elif state in ("FAILED", "TIMEOUT", "OUT_OF_MEMORY", "NODE_FAIL", "CANCELLED"):
+                executor.pull_results(label, local_exp_dir)
+                exp = self._store.get_experiment(exp_id)
+                if not exp or exp.get("status") == "cancelled":
+                    executor.cleanup_remote(label)
+                    self._allocator.release(label)
+                    self.wake_scheduler()
+                    self._tasks.pop(exp_id, None)
+                    self._finished_queue.put_nowait(exp_id)
+                    return
+                now = datetime.now(timezone.utc).isoformat()
+                error = f"slurm job {job_id} ended with state {state}"
+                self._store.update_experiment(
+                    exp_id,
+                    status="failed",
+                    error=error,
+                    pid=None,
+                    finished_at=now,
+                )
+                from . import ws as ws_mod
+                ws_mod.broadcaster.broadcast_soon({
+                    "type": "experiment_finished",
+                    "label": label,
+                    "idea_id": exp.get("idea_id"),
+                    "status": "failed",
+                    "metrics": None,
+                })
+                executor.cleanup_remote(label)
+                self._allocator.release(label)
+                self.wake_scheduler()
+                self._tasks.pop(exp_id, None)
+                self._finished_queue.put_nowait(exp_id)
+                return
+            # Unknown state — keep polling
+            poll_interval = 30
+
     def _extract_json(self, output: str) -> tuple[dict | None, int | None]:
         """Find the last non-empty line that parses as a JSON object.
 
@@ -770,7 +1005,22 @@ class ExperimentRunner:
         if exp["status"] != "running":
             return exp
 
-        if exp.get("pid"):
+        # Handle Slurm jobs
+        slurm_job_id = (exp.get("meta") or {}).get("slurm_job_id")
+        if slurm_job_id:
+            try:
+                from .executors.slurm import SlurmExecutor
+                from .queue import load_config
+                resources, _ = load_config(self._store.repo_dir)
+                resource_name = (exp.get("meta") or {}).get("assigned_resource")
+                resource = next((r for r in resources if r.name == resource_name), None)
+                if resource and resource.kind == "slurm":
+                    ssh_host = resource.executor_config.get("ssh_host", "slurm")
+                    executor = SlurmExecutor(ssh_host, resource.executor_config)
+                    executor.cancel(slurm_job_id)
+            except Exception as e:
+                print(f"[the-lab] scancel for {label} failed: {e}")
+        elif exp.get("pid"):
             self._signal_experiment(exp["pid"], signal.SIGTERM)
             await asyncio.sleep(10)
             self._signal_experiment(exp["pid"], signal.SIGKILL)
