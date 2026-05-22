@@ -95,20 +95,20 @@
   );
 }
 
-[data-theme="lambda"] {
+[data-theme="oled"] {
   @include theme-vars(
-    #0b0b0b, #18181d, #262625,
-    #262625, #1e1e22,
-    #e7e6d9, #95948c, #4a4a52,
-    #6236f4, #815ef6,
-    #00e600, #e7e600, #e70000, #a186f8,
-    "'IBM Plex Mono', 'Fira Code', monospace",
-    // badges — lambda
-    #002800, #00e600,
-    #1a0d4a, #6236f4,
-    #3a0000, #e70000,
-    #2a1e00, #e7e600,
-    #1a1a1e, #95948c
+    #000000, #0a0a0a, #141414,
+    #222222, #191919,
+    #c8c8c8, #808080, #404040,
+    #58a6ff, #388bfd,
+    #3fb950, #d29922, #f85149, #bc8cff,
+    "'JetBrains Mono','SF Mono','Fira Code',Consolas,monospace",
+    // badges — oled (tinted but not harsh)
+    #091a0c, #3fb950,
+    #091525, #58a6ff,
+    #1a0909, #f85149,
+    #1a1300, #d29922,
+    #141414, #808080
   );
 }
 

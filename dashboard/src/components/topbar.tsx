@@ -2,7 +2,19 @@ import { useState } from "preact/hooks";
 import { backlogData } from "../state/signals";
 import { reverseTime, colorMode, colorTheme, fontFamily, fontSize } from "../state/settings";
 import { wsConnected, wsAuthFailed } from "../state/ws";
-import { ALL_PAIRINGS } from "../lib/fonts";
+// Font display data lives here — NOT imported from fonts.ts.
+// Importing fonts.ts created a topbar → fonts → lazy-chunk TDZ in Vite's
+// bundle that crashed dockview's fromJSON and killed the WebSocket setup.
+// fonts.ts is still used by main.tsx for the actual lazy CSS loading.
+interface FontPickerDef { id: string; label: string; uiFont: string; }
+const FONT_PICKER: FontPickerDef[] = [
+  { id: "mono",   label: "JetBrains Mono",  uiFont: "'JetBrains Mono','SF Mono',monospace" },
+  { id: "geist",  label: "Geist",           uiFont: "'Geist',system-ui,sans-serif" },
+  { id: "ibm",    label: "IBM Plex",        uiFont: "'IBM Plex Sans',Helvetica,sans-serif" },
+  { id: "mona",   label: "Mona Sans",       uiFont: "'Mona Sans',system-ui,sans-serif" },
+  { id: "sora",   label: "Sora",            uiFont: "'Sora',system-ui,sans-serif" },
+  { id: "space",  label: "Space Grotesk",   uiFont: "'Space Grotesk',system-ui,sans-serif" },
+];
 
 interface LayoutActions {
   onResetLayout?: () => void;
@@ -32,7 +44,7 @@ const THEMES: ThemeDef[] = [
   { id: "nord",      name: "Nord",      swatches: ["#2e3440", "#88c0d0", "#a3be8c"] },
   { id: "dracula",   name: "Dracula",   swatches: ["#282a36", "#bd93f9", "#50fa7b"] },
   { id: "ocean",     name: "Ocean",     swatches: ["#0d1b2a", "#2ea8ff", "#3fb950"] },
-  { id: "lambda",    name: "Lambda",    swatches: ["#0b0b0b", "#6236f4", "#00e600"] },
+  { id: "oled",      name: "OLED",      swatches: ["#000000", "#58a6ff", "#3fb950"] },
   { id: "charcoal",  name: "Charcoal",  swatches: ["#12110F", "#A3B18A", "#D4A373"] },
   { id: "graphite",  name: "Graphite",  swatches: ["#111015", "#8B8CF6", "#D8A03D"] },
   { id: "petroleum", name: "Petroleum", swatches: ["#071013", "#2DD4BF", "#F59E0B"] },
@@ -120,13 +132,13 @@ export function Topbar(props: LayoutActions) {
             <div class="layout-menu-section">
               <div class="layout-menu-label">Font:</div>
               <div class="font-picker-grid">
-                {ALL_PAIRINGS.map((p) => (
+                {FONT_PICKER.map((p) => (
                   <button
                     key={p.id}
                     class={`font-swatch${activeFont === p.id ? " font-swatch--active" : ""}`}
                     style={`font-family:${p.uiFont}`}
                     onClick={() => { fontFamily.value = p.id; }}
-                    title={`${p.uiFont} / ${p.monoFont}`}
+                    title={p.label}
                   >
                     {p.label}
                   </button>
