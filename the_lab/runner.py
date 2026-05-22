@@ -356,6 +356,8 @@ class ExperimentRunner:
             if result_idx is not None:
                 self._strip_result_line(log_path, result_idx)
             self._cleanup_worktree(exp)
+            self._allocator.release(_label)
+            self.wake_scheduler()
             from . import ws as ws_mod
             ws_mod.broadcaster.broadcast_soon({"type": "experiment_finished", "label": _label,
                                                "idea_id": _idea_id, "status": "completed",
@@ -377,6 +379,8 @@ class ExperimentRunner:
                     finished_at=now,
                 )
                 self._cleanup_worktree(exp)
+                self._allocator.release(_label)
+                self.wake_scheduler()
                 from . import ws as ws_mod
                 ws_mod.broadcaster.broadcast_soon({"type": "experiment_finished", "label": _label,
                                                    "idea_id": _idea_id, "status": "completed",
