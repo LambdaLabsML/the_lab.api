@@ -148,6 +148,8 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric }: { i
   // Create or update chart
   useEffect(() => {
     if (!xMetric || !yMetric || !canvasRef.current) return;
+    // Skip if panel is hidden — let metrics chart have this frame
+    if (!canvasRef.current.offsetParent) return;
 
     const themeOrSizeChanged = theme !== prevThemeRef.current || _fz !== prevFzRef.current;
     prevThemeRef.current = theme;
@@ -241,8 +243,14 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric }: { i
       xScale.max = xBounds.max;
       yScale.min = yBounds.min;
       yScale.max = yBounds.max;
-      chartRef.current.resize();
-      chartRef.current.update("none");
+      // Defer canvas draw to next frame so MetricsChart gets this frame
+      const chart = chartRef.current;
+      requestAnimationFrame(() => {
+        if (chart && chart === chartRef.current) {
+          chart.resize();
+          chart.update("none");
+        }
+      });
       return;
     }
 

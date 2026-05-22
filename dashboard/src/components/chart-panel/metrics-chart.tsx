@@ -67,6 +67,8 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
   // Create or update chart when data/settings change
   useEffect(() => {
     if (!metric || !canvasRef.current) return;
+    // Skip update if the panel is hidden (collapsed, tray, or display:none ancestor)
+    if (!canvasRef.current.offsetParent) return;
 
     const themeOrSizeChanged = theme !== prevThemeRef.current || _fz !== prevFzRef.current;
     prevThemeRef.current = theme;
