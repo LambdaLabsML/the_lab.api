@@ -29,8 +29,6 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const chartRef = useRef<Chart | null>(null);
   const innerRef = useRef<HTMLDivElement>(null);
-  const prevThemeRef = useRef(theme);
-  const prevFzRef = useRef(_fz);
 
   const experiments = allExperiments.value;
   const ideas = allIdeas.value;
@@ -45,7 +43,10 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
   const clip = clipOutliers.value;
   const mean = ideaMean.value;
   const theme = colorTheme.value;  // subscribe — chart recreates on theme/size switch
-  const _fz = fontSize.value;  // subscribe — chart recreates on font-size switch
+  const _fz = fontSize.value;      // subscribe — chart recreates on font-size switch
+  // Refs must be declared AFTER theme/_fz to avoid TDZ (const not hoisted)
+  const prevThemeRef = useRef(theme);
+  const prevFzRef = useRef(_fz);
 
   // Idea-status filters (abandoned/concluded). The "running" toggle is
   // experiment-level — see hideRunning below — so completed experiments
