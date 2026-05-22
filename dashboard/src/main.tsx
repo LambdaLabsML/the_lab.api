@@ -2,6 +2,15 @@ import { render } from "preact";
 import { App } from "./app";
 import { colorTheme, fontFamily, fontSize } from "./state/settings";
 import { effect } from "@preact/signals";
+// Fonts — all OFL-1.1 open-source, loaded from npm via @fontsource
+import "@fontsource/jetbrains-mono/400.css";
+import "@fontsource/jetbrains-mono/700.css";
+import "@fontsource/fira-code/400.css";
+import "@fontsource/fira-code/700.css";
+import "@fontsource/space-grotesk/400.css";
+import "@fontsource/space-grotesk/600.css";
+import "@fontsource/outfit/400.css";
+import "@fontsource/outfit/600.css";
 import "dockview-core/dist/styles/dockview.css";
 import "./styles/tailwind.css";
 import "./styles/dockview-overrides.scss";

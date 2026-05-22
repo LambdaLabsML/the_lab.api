@@ -48,6 +48,7 @@
   --text-sm:   11px;
   --text-base: 13px;
   --text-lg:   15px;
+  --text-xl:   18px;
   // Badge semantic colours
   --badge-green-bg:   #{$badge-green-bg};
   --badge-green-fg:   #{$badge-green-fg};
@@ -83,7 +84,7 @@
     #c9d1d9, #8b949e, #484f58,
     #58a6ff, #388bfd,
     #3fb950, #d29922, #f85149, #bc8cff,
-    "'SF Mono', 'Fira Code', 'Consolas', monospace",
+    "'JetBrains Mono','SF Mono','Fira Code',Consolas,monospace",
     // badges — default (GitHub Dark)
     #0f5323, #3fb950,
     #0c2d6b, #58a6ff,
@@ -117,7 +118,7 @@
     #24292f, #57606a, #818b98,
     #0969da, #0550ae,
     #1a7f37, #bf8700, #cf222e, #8250df,
-    "'SF Mono', 'Fira Code', 'Consolas', monospace",
+    "'JetBrains Mono','SF Mono','Fira Code',Consolas,monospace",
     // badges — light
     #dcfce7, #16a34a,
     #dbeafe, #1d4ed8,
@@ -151,7 +152,7 @@
     #cdd9e5, #768aa0, #4d6478,
     #2ea8ff, #1a8fe0,
     #3fb950, #e3a040, #f47067, #b08ee8,
-    "'SF Mono', 'Fira Code', 'Consolas', monospace",
+    "'JetBrains Mono','SF Mono','Fira Code',Consolas,monospace",
     // badges — ocean
     #0d2e1a, #3fb950,
     #0d2040, #2ea8ff,
@@ -178,24 +179,26 @@
   );
 }
 
-// ── Font-family overrides (data-font-family on <html>) ──────────────────────
-// Default (mono) needs no override — already set in :root via @mixin theme-vars.
+// ── Font-family overrides ──────────────────────────────────────────────────
 
-[data-font-family="inter"] {
-  --font: 'Inter', system-ui, -apple-system, sans-serif;
+[data-font-family="fira"] {
+  --font: 'Fira Code', 'Fira Mono', monospace;
 }
-[data-font-family="ibm"] {
-  --font: 'IBM Plex Sans', Helvetica, Arial, sans-serif;
+[data-font-family="space"] {
+  --font: 'Space Grotesk', system-ui, sans-serif;
+}
+[data-font-family="outfit"] {
+  --font: 'Outfit', system-ui, sans-serif;
 }
 [data-font-family="system"] {
   --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 }
 
-// ── Font-size scale overrides (data-font-size on <html>) ────────────────────
-// Default "m" matches the existing token values — no override needed.
+// ── Font-size scale overrides ──────────────────────────────────────────────
+// "m" is the default — no override, avoids redundant attribute.
 
-[data-font-size="xs"] { --text-xs:7px;  --text-sm:8px;  --text-base:9px;  --text-lg:11px; }
-[data-font-size="s"]  { --text-xs:8px;  --text-sm:9px;  --text-base:10px; --text-lg:12px; }
-[data-font-size="l"]  { --text-xs:11px; --text-sm:12px; --text-base:13px; --text-lg:15px; }
-[data-font-size="xl"] { --text-xs:12px; --text-sm:13px; --text-base:14px; --text-lg:16px; }
-[data-font-size="xxl"]{ --text-xs:13px; --text-sm:14px; --text-base:16px; --text-lg:18px; }
+[data-font-size="xs"] { --text-xs:7px;  --text-sm:8px;  --text-base:9px;  --text-lg:11px; --text-xl:14px; }
+[data-font-size="s"]  { --text-xs:8px;  --text-sm:9px;  --text-base:10px; --text-lg:12px; --text-xl:15px; }
+[data-font-size="l"]  { --text-xs:11px; --text-sm:12px; --text-base:13px; --text-lg:15px; --text-xl:18px; }
+[data-font-size="xl"] { --text-xs:12px; --text-sm:13px; --text-base:14px; --text-lg:16px; --text-xl:20px; }
+[data-font-size="xxl"]{ --text-xs:13px; --text-sm:14px; --text-base:16px; --text-lg:18px; --text-xl:22px; }

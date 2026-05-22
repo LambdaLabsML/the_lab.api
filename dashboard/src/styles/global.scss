@@ -6,6 +6,7 @@
 
 body {
   font-family: var(--font);
+  font-size: var(--text-base);
   background: var(--bg);
   color: var(--text);
   margin: 0;
@@ -54,7 +55,7 @@ body {
 }
 .view-tab {
   padding: 8px 16px;
-  font-size: 12px;
+  font-size: var(--text-base);
   color: var(--text-muted);
   cursor: pointer;
   border-bottom: 2px solid transparent;
@@ -102,6 +103,6 @@ body {
 
 /* Mobile: general */
 @media (max-width: 800px) {
-  #topbar { gap: var(--space-3); padding: 8px 12px; font-size: 12px; }
+  #topbar { gap: var(--space-3); padding: 8px 12px; font-size: var(--text-base); }
   #topbar .title { font-size: var(--text-base); margin-right: 4px; }
 }

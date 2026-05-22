@@ -20,10 +20,10 @@ interface ThemeDef {
 interface FontDef { id: string; name: string; stack: string; }
 
 const FONTS: FontDef[] = [
-  { id: "mono",   name: "Mono",   stack: "'JetBrains Mono','SF Mono','Fira Code',monospace" },
-  { id: "inter",  name: "Inter",  stack: "'Inter',system-ui,sans-serif" },
-  { id: "ibm",    name: "IBM",    stack: "'IBM Plex Sans',Helvetica,sans-serif" },
-  { id: "system", name: "System", stack: "-apple-system,'Segoe UI',Roboto,sans-serif" },
+  { id: "mono",   name: "JetBrains", stack: "'JetBrains Mono', monospace" },
+  { id: "fira",   name: "Fira Code", stack: "'Fira Code', monospace" },
+  { id: "space",  name: "Grotesk",   stack: "'Space Grotesk', sans-serif" },
+  { id: "outfit", name: "Outfit",    stack: "'Outfit', sans-serif" },
 ];
 
 const FONT_SIZES = ["xs", "s", "m", "l", "xl", "xxl"] as const;

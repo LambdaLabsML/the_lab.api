@@ -15,6 +15,10 @@
     "preact": "^10.25.0"
   },
   "devDependencies": {
+    "@fontsource/fira-code": "^5.2.7",
+    "@fontsource/jetbrains-mono": "^5.2.8",
+    "@fontsource/outfit": "^5.2.8",
+    "@fontsource/space-grotesk": "^5.2.10",
     "@preact/preset-vite": "^2.9.3",
     "@tailwindcss/postcss": "^4.3.0",
     "autoprefixer": "^10.5.0",

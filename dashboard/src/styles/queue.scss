@@ -24,7 +24,7 @@
 
 .queue-header-left h2 {
   margin: 0 0 var(--space-2) 0;
-  font-size: 18px;
+  font-size: var(--text-xl);
 }
 
 .queue-header-left p {
@@ -32,7 +32,7 @@
   color: var(--text-muted);
   max-width: 760px;
   line-height: 1.45;
-  font-size: 12px;
+  font-size: var(--text-base);
 }
 
 .queue-header-right {
@@ -44,7 +44,7 @@
 }
 
 .queue-summary {
-  font-size: 12px;
+  font-size: var(--text-base);
   color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -62,7 +62,7 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: var(--text-base);
   color: var(--text);
   cursor: pointer;
 }
@@ -86,7 +86,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--text-base);
   font-family: inherit;
 }
 
@@ -101,7 +101,7 @@
   border: 1px solid var(--red);
   background: var(--badge-red-bg);
   color: var(--red);
-  font-size: 12px;
+  font-size: var(--text-base);
 }
 
 .queue-empty {
@@ -111,7 +111,7 @@
   padding: var(--space-4);
   text-align: center;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--text-base);
 }
 
 /* Section + headers */
@@ -177,7 +177,7 @@
 
 .queue-resource-name {
   font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
-  font-size: 14px;
+  font-size: var(--text-lg);
   font-weight: 700;
   color: var(--text);
   letter-spacing: 0.03em;
@@ -257,7 +257,7 @@
 
 .queue-capbar-frac {
   font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
-  font-size: 12px;
+  font-size: var(--text-base);
   color: var(--text);
 }
 
@@ -351,7 +351,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--text-base);
   font-family: inherit;
 }
 
@@ -395,7 +395,7 @@
   border-radius: var(--radius-md);
   color: var(--text);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--text-base);
   cursor: pointer;
 }
 
@@ -465,7 +465,7 @@
 
 .queue-row-label {
   font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
-  font-size: 12px;
+  font-size: var(--text-base);
   font-weight: 600;
   color: var(--text);
 }
@@ -485,7 +485,7 @@
 }
 
 .queue-row-desc {
-  font-size: 12px;
+  font-size: var(--text-base);
   color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -543,7 +543,7 @@
   min-width: 32px;
   padding: 2px var(--space-2);
   font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
-  font-size: 12px;
+  font-size: var(--text-base);
   font-weight: 700;
   color: var(--text);
   background: var(--bg);
@@ -566,7 +566,7 @@
   border-radius: var(--radius-md);
   color: var(--text);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--text-base);
   cursor: pointer;
   white-space: nowrap;
 }

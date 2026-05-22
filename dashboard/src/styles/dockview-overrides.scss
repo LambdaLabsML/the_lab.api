@@ -120,7 +120,7 @@
   color: var(--text-faint);
   border-radius: var(--radius-sm);
   cursor: pointer;
-  font-size: 12px;
+  font-size: var(--text-base);
   line-height: 1;
   transition: color var(--transition-fast), background var(--transition-fast);
 }
@@ -190,7 +190,7 @@
   color: var(--text-faint); letter-spacing: 0.5px; border-bottom: 1px solid var(--border-soft);
 }
 .dv-move-menu-item {
-  padding: 8px 12px; font-size: 12px; color: var(--text); cursor: pointer;
+  padding: 8px 12px; font-size: var(--text-base); color: var(--text); cursor: pointer;
 }
 .dv-move-menu-item:hover { background: var(--bg-hi); color: var(--accent); }
 
