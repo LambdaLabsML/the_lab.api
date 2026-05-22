@@ -30,21 +30,25 @@ export const STATUS_BAR_COLORS: Record<string, string> = {
   suggested: '#d29922',
 };
 
-/** Maps status keys to their CSS custom property names. */
+/** Maps status → CSS var() reference strings.
+ *  Returning var(--token) instead of a resolved hex lets the browser
+ *  re-evaluate the colour automatically when [data-theme] changes,
+ *  with no JS re-render required. */
 const STATUS_VAR_MAP: Record<string, string> = {
-  active:    '--green',
-  running:   '--yellow',
-  concluded: '--accent',
-  abandoned: '--red',
-  suggested: '--text-muted',
-  pending:   '--text-faint',
-  queued:    '--text-muted',
+  active:    'var(--green)',
+  running:   'var(--yellow)',
+  concluded: 'var(--accent)',
+  abandoned: 'var(--red)',
+  suggested: 'var(--text-muted)',
+  pending:   'var(--text-faint)',
+  queued:    'var(--text-muted)',
 };
 
-/** Returns the theme-aware color for a given status by resolving the appropriate CSS variable at runtime. */
+/** Returns a CSS var() reference for the given status.
+ *  Use this in inline style= attributes so the browser resolves the
+ *  colour live; use getCssVar() when you need a resolved hex (Chart.js). */
 export function getStatusColor(status: string): string {
-  const varName = STATUS_VAR_MAP[status] ?? '--text-faint';
-  return getCssVar(varName);
+  return STATUS_VAR_MAP[status] ?? 'var(--text-faint)';
 }
 
 /** Sequential palette used for lane/idea coloring. */
@@ -222,7 +226,7 @@ export function _colorForExp(
   if (mode === 'lane') {
     if (currentLayout && currentLayout.ideaLane[exp.idea_id] !== undefined)
       return IDEA_PALETTE[currentLayout.ideaLane[exp.idea_id] % IDEA_PALETTE.length];
-    return getCssVar('--text-muted');
+    return 'var(--text-muted)';
   }
   if (mode === 'status') {
     return _expStatusColor(exp.idea_status || 'active');
@@ -234,14 +238,14 @@ export function _colorForExp(
     const bestBefore = _computeGlobalBestBefore(metricKey, allExperiments);
     const prev = bestBefore[exp.id];
     if (prev === null || prev === undefined || _better(exp.metrics[metricKey], prev, lower))
-      return getCssVar('--purple'); // new global best at time of running
+      return 'var(--purple)'; // new global best
     return base;
   }
   if (mode === 'improvement') {
-    if (!exp.metrics || typeof exp.metrics[metricKey] !== 'number') return getCssVar('--text-muted');
+    if (!exp.metrics || typeof exp.metrics[metricKey] !== 'number') return 'var(--text-muted)';
     const parentBest = _parentBestMetric(exp.idea_id, metricKey, allIdeas, allExperiments);
-    if (parentBest === null) return getCssVar('--yellow');
-    return _better(exp.metrics[metricKey], parentBest, isLowerBetter(metricKey)) ? getCssVar('--green') : getCssVar('--red');
+    if (parentBest === null) return 'var(--yellow)';
+    return _better(exp.metrics[metricKey], parentBest, isLowerBetter(metricKey)) ? 'var(--green)' : 'var(--red)';
   }
   return null; // 'idea' — handled by ideaColorMap in caller
 }
@@ -261,7 +265,7 @@ export function _colorForIdea(
   if (mode === 'lane') {
     if (currentLayout && currentLayout.ideaLane[ideaId] !== undefined)
       return IDEA_PALETTE[currentLayout.ideaLane[ideaId] % IDEA_PALETTE.length];
-    return getCssVar('--text-muted');
+    return 'var(--text-muted)';
   }
   if (mode === 'status') {
     const idea = allIdeas[ideaId];
@@ -274,16 +278,16 @@ export function _colorForIdea(
     const base = getStatusColor(st);
     if (!metricKey) return base;
     if (_ideaHasGlobalImprovement(ideaId, metricKey, allExperiments))
-      return getCssVar('--purple'); // new global best
+      return 'var(--purple)'; // new global best
     return base;
   }
   if (mode === 'improvement') {
-    if (!metricKey) return getCssVar('--text-muted');
+    if (!metricKey) return 'var(--text-muted)';
     const myBest = _ideaBestMetric(ideaId, metricKey, allExperiments);
-    if (myBest === null) return getCssVar('--text-muted');
+    if (myBest === null) return 'var(--text-muted)';
     const parentBest = _parentBestMetric(ideaId, metricKey, allIdeas, allExperiments);
-    if (parentBest === null) return getCssVar('--yellow');
-    return _better(myBest, parentBest, isLowerBetter(metricKey)) ? getCssVar('--green') : getCssVar('--red');
+    if (parentBest === null) return 'var(--yellow)';
+    return _better(myBest, parentBest, isLowerBetter(metricKey)) ? 'var(--green)' : 'var(--red)';
   }
   // 'idea' — palette by ID
   return IDEA_PALETTE[(ideaId - 1) % IDEA_PALETTE.length];

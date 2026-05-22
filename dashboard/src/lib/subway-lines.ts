@@ -173,7 +173,7 @@ export function drawSubwayLines(
       '<circle cx="' + dotX +
       '" cy="' + pos[n.id].cy +
       '" r="6" fill="' + dotColor +
-      '" stroke="#0d1117" stroke-width="2.5"' +
+      '" stroke="var(--bg)" stroke-width="2.5"' +
       ' data-idea="' + n.id + '" class="svg-dot"/>';
   }
 

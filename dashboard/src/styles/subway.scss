@@ -1,4 +1,4 @@
-/* subway.css — DAG / subway graph view styles */
+/* subway.scss — DAG / subway graph view styles */
 
 #graph-container { flex: 1 1 0%; position: relative; overflow: auto; min-height: 0; }
 #graph { position: relative; min-height: 100%; }
@@ -6,22 +6,22 @@
 .subway-station {
   position: absolute;
   padding: 4px 10px;
-  background: #161b22;
-  border: 2px solid #30363d;
-  border-radius: 6px;
+  background: var(--bg-elev);
+  border: 2px solid var(--border);
+  border-radius: var(--radius-md);
   cursor: pointer;
-  font-size: 12px;
-  transition: background 0.15s;
+  font-size: var(--text-base);
+  transition: background var(--transition-fast);
   white-space: nowrap;
   z-index: 1;
 }
-.subway-station:hover, .subway-station.highlighted { background: #1c2333; }
-.subway-station.highlighted { box-shadow: 0 0 0 2px #58a6ff; z-index: 3; }
+.subway-station:hover, .subway-station.highlighted { background: var(--bg-hi); }
+.subway-station.highlighted { box-shadow: 0 0 0 2px var(--accent); z-index: 3; }
 .subway-station.dimmed { opacity: 0.3; }
 .subway-station .subway-header { display: flex; align-items: center; gap: 6px; overflow: hidden; }
-.subway-station .subway-id { font-weight: 700; color: #58a6ff; font-size: 11px; flex-shrink: 0; }
+.subway-station .subway-id { font-weight: 700; color: var(--accent); font-size: var(--text-sm); flex-shrink: 0; }
 .subway-station .subway-desc {
-  color: #c9d1d9; font-size: 12px; display: inline; margin-left: 6px;
+  color: var(--text); font-size: var(--text-base); display: inline; margin-left: 6px;
   overflow: hidden; white-space: nowrap;
   mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
   -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
@@ -30,22 +30,22 @@
 /* Compact pill node (used in "improvements only" mode) */
 .subway-dot {
   position: absolute;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   z-index: 1;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.15s;
+  transition: background var(--transition-fast);
   border: 2px solid rgba(0,0,0,0.3);
 }
 .subway-dot:hover, .subway-dot.highlighted {
-  box-shadow: 0 0 0 2px #58a6ff;
+  box-shadow: 0 0 0 2px var(--accent);
   z-index: 3;
 }
 .subway-dot.dimmed { opacity: 0.25; }
 .subway-dot .subway-dot-id {
-  font-size: 9px;
+  font-size: var(--text-xs);
   font-weight: 700;
   color: rgba(255,255,255,0.9);
   text-shadow: 0 0 2px rgba(0,0,0,0.8);
@@ -62,6 +62,6 @@
 }
 .dag-col-resize:hover,
 .dag-col-resize:active {
-  background: rgba(88, 166, 255, 0.3);
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
   border-radius: 2px;
 }
