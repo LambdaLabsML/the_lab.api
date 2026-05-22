@@ -70,7 +70,14 @@ def fetch_openapi_spec():
             base = base[: -len(suffix)]
             break
     url = f"{base}/openapi.json"
-    req = urllib.request.Request(url)
+    headers = {}
+    _user = os.environ.get("THE_LAB_USER", "").strip()
+    _pw   = os.environ.get("THE_LAB_PASSWORD", "").strip()
+    if _user and _pw:
+        headers["Authorization"] = "Basic " + _base64.b64encode(
+            f"{_user}:{_pw}".encode()
+        ).decode()
+    req = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(req, timeout=15) as resp:
         return json.loads(resp.read())
 
