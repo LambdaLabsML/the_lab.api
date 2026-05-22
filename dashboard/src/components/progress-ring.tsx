@@ -18,11 +18,11 @@ export function ProgressRing({ pct, size = 16 }: { pct: number; size?: number })
     >
       <circle
         cx={center} cy={center} r={r}
-        fill="none" stroke="#30363d" stroke-width={strokeWidth}
+        fill="none" stroke="var(--border)" stroke-width={strokeWidth}
       />
       <circle
         cx={center} cy={center} r={r}
-        fill="none" stroke="#d29922" stroke-width={strokeWidth}
+        fill="none" stroke="var(--yellow)" stroke-width={strokeWidth}
         stroke-dasharray={circumference} stroke-dashoffset={offset}
         stroke-linecap="round"
         transform={`rotate(-90 ${center} ${center})`}
@@ -31,7 +31,7 @@ export function ProgressRing({ pct, size = 16 }: { pct: number; size?: number })
         <text
           x={center} y={center}
           text-anchor="middle" dominant-baseline="central"
-          fill="#d29922" font-size={size * 0.35}
+          fill="var(--yellow)" font-size={size * 0.35}
           font-family="SF Mono, Fira Code, Consolas, monospace"
         >
           {Math.round(pct)}

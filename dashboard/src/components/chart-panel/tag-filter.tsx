@@ -49,7 +49,7 @@ export function TagFilter() {
         </span>
       )}
       {tags.length === 0 && (
-        <span style={{ color: "#484f58", fontSize: "11px" }}>none</span>
+        <span style={{ color: "var(--text-faint)", fontSize: "11px" }}>none</span>
       )}
       {tags.map((tag) => (
         <TagPill

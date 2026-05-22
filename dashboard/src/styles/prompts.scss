@@ -3,8 +3,8 @@
   display: flex;
   height: 100%;
   min-height: 0;
-  background: #0d1117;
-  color: #c9d1d9;
+  background: var(--bg);
+  color: var(--text);
 }
 
 .prompts-sidebar {
@@ -12,22 +12,22 @@
   flex: 0 0 220px;
   display: flex;
   flex-direction: column;
-  border-right: 1px solid #21262d;
+  border-right: 1px solid var(--border-soft);
   background: #0f141b;
   min-height: 0;
 }
 
 .prompts-sidebar-header {
-  padding: 14px 16px 8px;
-  border-bottom: 1px solid #21262d;
+  padding: 14px var(--space-4) var(--space-2);
+  border-bottom: 1px solid var(--border-soft);
 }
 
 .prompts-sidebar-header h3 {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--text-base);
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: #8b949e;
+  color: var(--text-muted);
   font-weight: 600;
 }
 
@@ -45,32 +45,32 @@
   background: transparent;
   border: none;
   border-left: 3px solid transparent;
-  color: #c9d1d9;
+  color: var(--text);
   cursor: pointer;
   font: inherit;
 }
 
 .prompts-role-row:hover {
-  background: #161b22;
+  background: var(--bg-elev);
 }
 
 .prompts-role-row.selected {
-  background: #161b22;
-  border-left-color: #58a6ff;
+  background: var(--bg-elev);
+  border-left-color: var(--accent);
 }
 
 .prompts-role-name {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 13px;
+  font-size: var(--text-base);
   font-weight: 600;
-  color: #c9d1d9;
+  color: var(--text);
   font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
 }
 
 .prompts-role-badge {
-  font-size: 10px;
+  font-size: var(--text-xs);
   text-transform: uppercase;
   letter-spacing: 0.06em;
   padding: 1px 6px;
@@ -83,51 +83,51 @@
 }
 
 .prompts-role-meta {
-  font-size: 11px;
-  color: #8b949e;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
   margin-top: 3px;
 }
 
 .prompts-empty {
-  padding: 16px;
-  color: #8b949e;
+  padding: var(--space-4);
+  color: var(--text-muted);
   font-size: 12px;
 }
 
 .prompts-add-btn {
-  margin: 8px;
-  padding: 8px 10px;
+  margin: var(--space-2);
+  padding: var(--space-2) 10px;
   background: transparent;
-  border: 1px dashed #30363d;
-  border-radius: 8px;
-  color: #8b949e;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-lg);
+  color: var(--text-muted);
   font: inherit;
   font-size: 12px;
   cursor: pointer;
 }
 
 .prompts-add-btn:hover {
-  border-color: #58a6ff;
-  color: #58a6ff;
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .prompts-add-form {
-  margin: 8px;
+  margin: var(--space-2);
   padding: 10px;
-  border: 1px solid #30363d;
-  border-radius: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
   background: #11161d;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .prompts-add-form input {
-  padding: 6px 8px;
-  background: #0d1117;
-  border: 1px solid #30363d;
-  border-radius: 6px;
-  color: #c9d1d9;
+  padding: 6px var(--space-2);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text);
   font: inherit;
   font-size: 12px;
   font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
@@ -135,12 +135,12 @@
 
 .prompts-add-form input:focus {
   outline: none;
-  border-color: #58a6ff;
+  border-color: var(--accent);
 }
 
 .prompts-add-error {
-  color: #f85149;
-  font-size: 11px;
+  color: var(--red);
+  font-size: var(--text-sm);
   line-height: 1.35;
 }
 
@@ -155,53 +155,53 @@
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  padding: 16px;
-  gap: 12px;
+  padding: var(--space-4);
+  gap: var(--space-3);
 }
 
 .prompts-placeholder {
   margin: auto;
-  color: #8b949e;
-  font-size: 13px;
+  color: var(--text-muted);
+  font-size: var(--text-base);
 }
 
 .prompts-main-header {
   display: flex;
   justify-content: space-between;
-  gap: 16px;
+  gap: var(--space-4);
   align-items: flex-start;
-  border: 1px solid #30363d;
+  border: 1px solid var(--border);
   background: linear-gradient(180deg, #141a22 0%, #0f141b 100%);
-  border-radius: 10px;
-  padding: 14px 16px;
+  border-radius: var(--radius-lg);
+  padding: 14px var(--space-4);
 }
 
 .prompts-main-title h2 {
   margin: 0 0 6px 0;
   font-size: 18px;
   font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
-  color: #c9d1d9;
+  color: var(--text);
 }
 
 .prompts-main-subtitle {
-  color: #8b949e;
+  color: var(--text-muted);
   font-size: 12px;
   line-height: 1.4;
 }
 
 .prompts-main-actions {
   display: flex;
-  gap: 8px;
+  gap: var(--space-2);
   flex-wrap: wrap;
   justify-content: flex-end;
 }
 
 .prompts-btn {
   padding: 7px 12px;
-  background: #161b22;
-  border: 1px solid #30363d;
-  border-radius: 6px;
-  color: #c9d1d9;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text);
   font: inherit;
   font-size: 12px;
   cursor: pointer;
@@ -209,8 +209,8 @@
 }
 
 .prompts-btn:hover:not(:disabled) {
-  background: #21262d;
-  border-color: #8b949e;
+  background: var(--bg-hi);
+  border-color: var(--text-muted);
 }
 
 .prompts-btn:disabled {
@@ -225,20 +225,20 @@
 }
 
 .prompts-btn.primary:hover:not(:disabled) {
-  background: #388bfd;
-  border-color: #388bfd;
+  background: var(--accent-dim);
+  border-color: var(--accent-dim);
 }
 
 .prompts-btn.primary:not(.dirty):not(:disabled) {
-  background: #161b22;
-  border-color: #30363d;
-  color: #8b949e;
+  background: var(--bg-elev);
+  border-color: var(--border);
+  color: var(--text-muted);
 }
 
 .prompts-btn.danger {
-  background: #21262d;
+  background: var(--bg-hi);
   border-color: #6e1e23;
-  color: #f85149;
+  color: var(--red);
 }
 
 .prompts-btn.danger:hover {
@@ -250,7 +250,7 @@
   padding: 6px 10px;
   background: #1f6feb;
   border: 1px solid #1f6feb;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   color: #ffffff;
   font: inherit;
   font-size: 12px;
@@ -264,9 +264,9 @@
 }
 
 .prompts-save-saving {
-  background: #d29922 !important;
-  border-color: #d29922 !important;
-  color: #0d1117 !important;
+  background: var(--yellow) !important;
+  border-color: var(--yellow) !important;
+  color: var(--bg) !important;
 }
 
 .prompts-save-saved {
@@ -277,7 +277,7 @@
 
 .prompts-save-error {
   background: #5a1e23 !important;
-  border-color: #f85149 !important;
+  border-color: var(--red) !important;
   color: #ffb3ba !important;
 }
 
@@ -285,10 +285,10 @@
   flex: 1 1 auto;
   min-height: 200px;
   resize: none;
-  border: 1px solid #30363d;
-  background: #0d1117;
-  color: #c9d1d9;
-  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  border-radius: var(--radius-lg);
   padding: 14px;
   font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
   font-size: 12px;
@@ -297,29 +297,29 @@
 
 .prompts-textarea:focus {
   outline: none;
-  border-color: #58a6ff;
+  border-color: var(--accent);
 }
 
 .prompts-footer {
-  font-size: 11px;
-  color: #8b949e;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
 }
 
 .prompts-footer code {
   font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
   padding: 3px 6px;
-  background: #161b22;
-  border: 1px solid #21262d;
-  border-radius: 4px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
   color: #79c0ff;
 }
 
 .prompts-error {
-  margin: 8px 12px;
-  padding: 10px 12px;
+  margin: var(--space-2) var(--space-3);
+  padding: 10px var(--space-3);
   background: #5a1e23;
-  border: 1px solid #f85149;
-  border-radius: 8px;
+  border: 1px solid var(--red);
+  border-radius: var(--radius-lg);
   color: #ffb3ba;
   font-size: 12px;
 }
@@ -333,6 +333,6 @@
     flex: 0 0 auto;
     max-height: 40%;
     border-right: none;
-    border-bottom: 1px solid #21262d;
+    border-bottom: 1px solid var(--border-soft);
   }
 }

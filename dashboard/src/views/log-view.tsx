@@ -5,12 +5,12 @@ import { formatTime, escapeHtml } from "../lib/format";
 import type { LogEntry } from "../lib/types";
 
 const FILTERS = [
-  { key: "idea", label: "Ideas", color: "#58a6ff", defaultOn: true },
-  { key: "experiment", label: "Experiments", color: "#3fb950", defaultOn: true },
-  { key: "note-insight", label: "Insight", color: "#58a6ff", defaultOn: true },
-  { key: "note-milestone", label: "Milestone", color: "#d29922", defaultOn: true },
-  { key: "note-observation", label: "Observation", color: "#8b949e", defaultOn: true },
-  { key: "note-debug", label: "Debug", color: "#f85149", defaultOn: false },
+  { key: "idea", label: "Ideas", color: "var(--accent)", defaultOn: true },
+  { key: "experiment", label: "Experiments", color: "var(--green)", defaultOn: true },
+  { key: "note-insight", label: "Insight", color: "var(--accent)", defaultOn: true },
+  { key: "note-milestone", label: "Milestone", color: "var(--yellow)", defaultOn: true },
+  { key: "note-observation", label: "Observation", color: "var(--text-muted)", defaultOn: true },
+  { key: "note-debug", label: "Debug", color: "var(--red)", defaultOn: false },
 ];
 
 export function LogView() {
@@ -44,13 +44,13 @@ export function LogView() {
             {" "}{f.label}
           </label>
         ))}
-        <span style={{ color: "#484f58", marginLeft: "auto", fontSize: "10px" }}>
+        <span style={{ color: "var(--text-faint)", marginLeft: "auto", fontSize: "10px" }}>
           {filtered.length} entries{truncated ? ` (showing ${MAX_VISIBLE})` : ""}
         </span>
       </div>
       <div id="log-entries">
         {filtered.length === 0 && (
-          <div style={{ padding: "40px", color: "#484f58", textAlign: "center" }}>
+          <div style={{ padding: "40px", color: "var(--text-faint)", textAlign: "center" }}>
             No log entries yet
           </div>
         )}
@@ -58,7 +58,7 @@ export function LogView() {
           <LogEntryRow key={i} entry={entry} />
         ))}
         {truncated && (
-          <div style={{ padding: "12px", color: "#484f58", textAlign: "center", fontSize: "11px" }}>
+          <div style={{ padding: "12px", color: "var(--text-faint)", textAlign: "center", fontSize: "11px" }}>
             Showing {MAX_VISIBLE} of {filtered.length} entries
           </div>
         )}
@@ -88,8 +88,8 @@ function LogEntryRow({ entry }: { entry: LogEntry }) {
       {entry.metrics && Object.keys(entry.metrics).length > 0 && (
         <div class="log-metrics">{JSON.stringify(entry.metrics)}</div>
       )}
-      {entry.extra && <div class="log-body" style={{ fontStyle: "italic", color: "#8b949e" }}>{entry.extra}</div>}
-      {entry.runtime && <div class="log-body" style={{ color: "#484f58", fontSize: "10px" }}>runtime: {entry.runtime}</div>}
+      {entry.extra && <div class="log-body" style={{ fontStyle: "italic", color: "var(--text-muted)" }}>{entry.extra}</div>}
+      {entry.runtime && <div class="log-body" style={{ color: "var(--text-faint)", fontSize: "10px" }}>runtime: {entry.runtime}</div>}
     </div>
   );
 }

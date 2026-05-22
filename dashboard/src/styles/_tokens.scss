@@ -9,7 +9,13 @@
   $text, $text-muted, $text-faint,
   $accent, $accent-dim,
   $green, $yellow, $red, $purple,
-  $font
+  $font,
+  // Badge semantic colours (bg / fg pairs)
+  $badge-green-bg, $badge-green-fg,
+  $badge-blue-bg,  $badge-blue-fg,
+  $badge-red-bg,   $badge-red-fg,
+  $badge-yellow-bg,$badge-yellow-fg,
+  $badge-neutral-bg,$badge-neutral-fg
 ) {
   --bg:          #{$bg};
   --bg-elev:     #{$bg-elev};
@@ -42,6 +48,29 @@
   --text-sm:   11px;
   --text-base: 13px;
   --text-lg:   15px;
+  // Badge semantic colours
+  --badge-green-bg:   #{$badge-green-bg};
+  --badge-green-fg:   #{$badge-green-fg};
+  --badge-blue-bg:    #{$badge-blue-bg};
+  --badge-blue-fg:    #{$badge-blue-fg};
+  --badge-red-bg:     #{$badge-red-bg};
+  --badge-red-fg:     #{$badge-red-fg};
+  --badge-yellow-bg:  #{$badge-yellow-bg};
+  --badge-yellow-fg:  #{$badge-yellow-fg};
+  --badge-neutral-bg: #{$badge-neutral-bg};
+  --badge-neutral-fg: #{$badge-neutral-fg};
+  // Transitions
+  --transition-fast: 0.1s ease;
+  --transition-base: 0.15s ease;
+  --transition-slow: 0.3s ease;
+  // Shadows
+  --shadow-sm: 0 2px 8px rgba(0,0,0,0.3);
+  --shadow-md: 0 4px 16px rgba(0,0,0,0.4);
+  --shadow-lg: 0 8px 32px rgba(0,0,0,0.5);
+  // Z-index
+  --z-dropdown: 100;
+  --z-modal:    300;
+  --z-topbar:   1000;
 }
 
 // ── Themes ────────────────────────────────────────────────────────────────
@@ -54,7 +83,13 @@
     #c9d1d9, #8b949e, #484f58,
     #58a6ff, #388bfd,
     #3fb950, #d29922, #f85149, #bc8cff,
-    "'SF Mono', 'Fira Code', 'Consolas', monospace"
+    "'SF Mono', 'Fira Code', 'Consolas', monospace",
+    // badges — default (GitHub Dark)
+    #0f5323, #3fb950,
+    #0c2d6b, #58a6ff,
+    #5a1e23, #f85149,
+    #2d1a00, #d29922,
+    #1c1d1f, #8b949e
   );
 }
 
@@ -65,7 +100,13 @@
     #e7e6d9, #95948c, #4a4a52,
     #6236f4, #815ef6,
     #00e600, #e7e600, #e70000, #a186f8,
-    "'IBM Plex Mono', 'Fira Code', monospace"
+    "'IBM Plex Mono', 'Fira Code', monospace",
+    // badges — lambda
+    #002800, #00e600,
+    #1a0d4a, #6236f4,
+    #3a0000, #e70000,
+    #2a1e00, #e7e600,
+    #1a1a1e, #95948c
   );
 }
 
@@ -76,7 +117,13 @@
     #24292f, #57606a, #818b98,
     #0969da, #0550ae,
     #1a7f37, #bf8700, #cf222e, #8250df,
-    "'SF Mono', 'Fira Code', 'Consolas', monospace"
+    "'SF Mono', 'Fira Code', 'Consolas', monospace",
+    // badges — light
+    #dcfce7, #16a34a,
+    #dbeafe, #1d4ed8,
+    #fee2e2, #dc2626,
+    #fef3c7, #d97706,
+    #f3f4f6, #6b7280
   );
 }
 
@@ -87,7 +134,13 @@
     #f8f8f2, #6272a4, #4d5374,
     #bd93f9, #9f6fdd,
     #50fa7b, #f1fa8c, #ff5555, #bd93f9,
-    "'Fira Code', 'Consolas', monospace"
+    "'Fira Code', 'Consolas', monospace",
+    // badges — dracula
+    #1a3a27, #50fa7b,
+    #2a1f4a, #bd93f9,
+    #3a1c1c, #ff5555,
+    #3a3000, #f1fa8c,
+    #21222c, #6272a4
   );
 }
 
@@ -98,7 +151,13 @@
     #cdd9e5, #768aa0, #4d6478,
     #2ea8ff, #1a8fe0,
     #3fb950, #e3a040, #f47067, #b08ee8,
-    "'SF Mono', 'Fira Code', 'Consolas', monospace"
+    "'SF Mono', 'Fira Code', 'Consolas', monospace",
+    // badges — ocean
+    #0d2e1a, #3fb950,
+    #0d2040, #2ea8ff,
+    #2e1218, #f47067,
+    #2a1e00, #e3a040,
+    #16232e, #768aa0
   );
 }
 
@@ -109,6 +168,12 @@
     #eceff4, #d8dee9, #8fbcbb,
     #88c0d0, #6fafc4,
     #a3be8c, #ebcb8b, #bf616a, #b48ead,
-    "'Fira Code', 'Consolas', monospace"
+    "'Fira Code', 'Consolas', monospace",
+    // badges — nord
+    #2a3d2a, #a3be8c,
+    #253347, #88c0d0,
+    #3b2525, #bf616a,
+    #3d3520, #ebcb8b,
+    #3b4252, #d8dee9
   );
 }

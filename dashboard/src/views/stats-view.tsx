@@ -85,7 +85,7 @@ export function StatsView() {
     return findExamples(hist, selected, patternLen);
   }, [selected, stats?.history, patternLen]);
 
-  if (!stats) return <div style={{ padding: 20, color: "#484f58" }}>Loading stats...</div>;
+  if (!stats) return <div style={{ padding: 20, color: "var(--text-faint)" }}>Loading stats...</div>;
 
   return (
     <div class="stats-view">

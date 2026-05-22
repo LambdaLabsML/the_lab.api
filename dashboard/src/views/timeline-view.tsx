@@ -48,8 +48,8 @@ export function TimelineView() {
       return labelW + (reversed ? (1 - frac) : frac) * chartW;
     }
 
-    // Time axis
-    ctx.strokeStyle = "#30363d";
+    // Time axis — Canvas 2D API requires resolved color strings (not CSS vars)
+    ctx.strokeStyle = "#30363d"; // var(--border)
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(labelW, h - padBottom);
@@ -65,12 +65,12 @@ export function TimelineView() {
     else tickInterval = 86400000;
 
     const firstTick = Math.ceil(tMin / tickInterval) * tickInterval;
-    ctx.fillStyle = "#8b949e";
+    ctx.fillStyle = "#8b949e"; // var(--text-muted)
     ctx.font = "10px SF Mono, Fira Code, Consolas, monospace";
     ctx.textAlign = "center";
     for (let t = firstTick; t <= tMax; t += tickInterval) {
       const x = tToX(t);
-      ctx.strokeStyle = "#21262d";
+      ctx.strokeStyle = "#21262d"; // var(--bg-hi)
       ctx.beginPath();
       ctx.moveTo(x, padTop);
       ctx.lineTo(x, h - padBottom);
@@ -97,7 +97,7 @@ export function TimelineView() {
         const toStart = tToX(new Date(n.first_start).getTime());
         const toY = padTop + toIdx * rowH + rowH / 2;
         ctx.save();
-        ctx.strokeStyle = "#484f58";
+        ctx.strokeStyle = "#484f58"; // var(--text-faint)
         ctx.lineWidth = 1;
         ctx.setLineDash([4, 4]);
         ctx.beginPath();
@@ -140,7 +140,7 @@ export function TimelineView() {
       ctx.roundRect(x1, barY, barW, barH, 3);
       ctx.fill();
       ctx.stroke();
-      ctx.fillStyle = "#c9d1d9";
+      ctx.fillStyle = "#c9d1d9"; // var(--text)
       ctx.font = "11px SF Mono, Fira Code, Consolas, monospace";
       ctx.textAlign = "right";
       ctx.fillText("#" + n.id + ": " + truncate(n.description, 25), labelW - 8, y + rowH / 2 + 4);

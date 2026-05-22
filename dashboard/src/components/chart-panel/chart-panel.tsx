@@ -140,9 +140,9 @@ export function ChartPanel() {
           <TagFilter />
           <span class="status-filters" style={{ display: "inline-flex", gap: "4px", alignItems: "center", marginLeft: "12px" }}>
             Show:
-            <StatusToggle label="concluded" signal={showConcluded} color="#58a6ff" />
-            <StatusToggle label="abandoned" signal={showAbandoned} color="#f85149" />
-            <StatusToggle label="running" signal={showRunning} color="#d29922" />
+            <StatusToggle label="concluded" signal={showConcluded} color="var(--accent)" />
+            <StatusToggle label="abandoned" signal={showAbandoned} color="var(--red)" />
+            <StatusToggle label="running" signal={showRunning} color="var(--yellow)" />
           </span>
         </div>
 

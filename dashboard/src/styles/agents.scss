@@ -4,9 +4,9 @@
   padding: 20px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  background: #0d1117;
-  color: #c9d1d9;
+  gap: var(--space-4);
+  background: var(--bg);
+  color: var(--text);
 }
 
 .agents-header {
@@ -15,19 +15,19 @@
   gap: 20px;
   align-items: flex-start;
   padding: 18px 20px;
-  border: 1px solid #30363d;
+  border: 1px solid var(--border);
   background: linear-gradient(180deg, #141a22 0%, #0f141b 100%);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
 }
 
 .agents-header-left h2 {
-  margin: 0 0 8px 0;
+  margin: 0 0 var(--space-2) 0;
   font-size: 18px;
 }
 
 .agents-header-left p {
   margin: 0;
-  color: #8b949e;
+  color: var(--text-muted);
   max-width: 760px;
   line-height: 1.45;
   font-size: 12px;
@@ -36,11 +36,11 @@
 .agents-header-left code {
   font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
   padding: 1px 5px;
-  background: #161b22;
-  border: 1px solid #21262d;
-  border-radius: 4px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
   color: #79c0ff;
-  font-size: 11px;
+  font-size: var(--text-sm);
 }
 
 .agents-header-right {
@@ -52,33 +52,33 @@
 
 .agents-summary {
   font-size: 12px;
-  color: #8b949e;
+  color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.06em;
 }
 
 .agents-error {
-  border-radius: 10px;
-  padding: 12px 14px;
-  border: 1px solid #f85149;
+  border-radius: var(--radius-lg);
+  padding: var(--space-3) 14px;
+  border: 1px solid var(--red);
   background: #5a1e23;
   color: #ffb3ba;
   font-size: 12px;
 }
 
 .agents-empty {
-  border: 1px dashed #30363d;
+  border: 1px dashed var(--border);
   background: #11161d;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   padding: 28px 20px;
   text-align: center;
-  color: #8b949e;
+  color: var(--text-muted);
 }
 
 .agents-empty-title {
   font-size: 14px;
   font-weight: 600;
-  color: #c9d1d9;
+  color: var(--text);
   margin-bottom: 6px;
 }
 
@@ -90,11 +90,11 @@
 .agents-empty code {
   font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
   padding: 2px 6px;
-  background: #161b22;
-  border: 1px solid #21262d;
-  border-radius: 4px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
   color: #79c0ff;
-  font-size: 11px;
+  font-size: var(--text-sm);
 }
 
 .agents-grid {
@@ -104,10 +104,10 @@
 }
 
 .agents-card {
-  border: 1px solid #30363d;
+  border: 1px solid var(--border);
   background: #11161d;
-  border-radius: 12px;
-  padding: 14px 16px;
+  border-radius: var(--radius-lg);
+  padding: 14px var(--space-4);
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -133,13 +133,13 @@
   font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
   font-size: 18px;
   font-weight: 700;
-  color: #c9d1d9;
+  color: var(--text);
   letter-spacing: 0.04em;
 }
 
 .agents-chip {
   display: inline-block;
-  font-size: 10px;
+  font-size: var(--text-xs);
   text-transform: uppercase;
   letter-spacing: 0.06em;
   padding: 2px 7px;
@@ -154,8 +154,8 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 11px;
-  color: #8b949e;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
   font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
 }
 
@@ -168,12 +168,12 @@
 }
 
 .agents-pid-status.alive .agents-dot {
-  background: #3fb950;
+  background: var(--green);
   box-shadow: 0 0 6px rgba(63, 185, 80, 0.55);
 }
 
 .agents-pid-status.dead .agents-dot {
-  background: #f85149;
+  background: var(--red);
 }
 
 .agents-card-row {
@@ -185,10 +185,10 @@
 
 .agents-card-label {
   flex: 0 0 76px;
-  font-size: 11px;
+  font-size: var(--text-sm);
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: #8b949e;
+  color: var(--text-muted);
   padding-top: 2px;
 }
 
@@ -196,25 +196,25 @@
   flex: 1 1 auto;
   min-width: 0;
   font-size: 12px;
-  color: #c9d1d9;
+  color: var(--text);
 }
 
 .agents-branch {
   font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
   font-size: 12px;
-  color: #c9d1d9;
+  color: var(--text);
   word-break: break-all;
 }
 
 .agents-branch-parent {
-  font-size: 11px;
-  color: #8b949e;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
   margin-top: 2px;
 }
 
 .agents-branch-parent code {
   font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
-  font-size: 11px;
+  font-size: var(--text-sm);
   color: #79c0ff;
   background: transparent;
   border: none;
@@ -223,12 +223,12 @@
 
 .agents-worktree {
   font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
-  font-size: 11px;
+  font-size: var(--text-sm);
   padding: 2px 6px;
-  background: #0d1117;
-  border: 1px solid #21262d;
-  border-radius: 4px;
-  color: #c9d1d9;
+  background: var(--bg);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  color: var(--text);
   display: inline-block;
   max-width: 100%;
   overflow: hidden;
@@ -238,7 +238,7 @@
 
 .agents-card-actions {
   display: flex;
-  gap: 8px;
+  gap: var(--space-2);
   flex-wrap: wrap;
   margin-top: auto;
   padding-top: 6px;
@@ -246,10 +246,10 @@
 
 .agents-btn {
   padding: 6px 11px;
-  background: #161b22;
-  border: 1px solid #30363d;
-  border-radius: 6px;
-  color: #c9d1d9;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text);
   font: inherit;
   font-size: 12px;
   cursor: pointer;
@@ -257,8 +257,8 @@
 }
 
 .agents-btn:hover:not(:disabled) {
-  background: #21262d;
-  border-color: #8b949e;
+  background: var(--bg-hi);
+  border-color: var(--text-muted);
 }
 
 .agents-btn:disabled {
@@ -267,9 +267,9 @@
 }
 
 .agents-btn.danger {
-  background: #21262d;
+  background: var(--bg-hi);
   border-color: #6e1e23;
-  color: #f85149;
+  color: var(--red);
 }
 
 .agents-btn.danger:hover:not(:disabled) {
@@ -289,9 +289,9 @@
 
 /* ── Message log ────────────────────────────────────────── */
 .agents-messages {
-  margin-top: 24px;
-  border-top: 1px solid #30363d;
-  padding-top: 16px;
+  margin-top: var(--space-6);
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-4);
 }
 .agents-messages-header {
   display: flex;
@@ -301,25 +301,25 @@
 }
 .agents-messages-header h3 {
   margin: 0;
-  font-size: 13px;
-  color: #c9d1d9;
+  font-size: var(--text-base);
+  color: var(--text);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
 .agents-messages-meta {
-  font-size: 11px;
-  color: #8b949e;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
 }
 .agents-messages-empty {
-  color: #8b949e;
+  color: var(--text-muted);
   font-size: 12px;
-  padding: 12px 0;
+  padding: var(--space-3) 0;
 }
 .agents-messages-empty code {
-  background: #161b22;
+  background: var(--bg-elev);
   padding: 1px 4px;
   border-radius: 3px;
-  font-size: 11px;
+  font-size: var(--text-sm);
 }
 .agents-messages-list {
   list-style: none;
@@ -327,46 +327,46 @@
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-2);
   max-height: 480px;
   overflow-y: auto;
 }
 .agents-message {
-  background: #161b22;
-  border: 1px solid #30363d;
-  border-radius: 6px;
-  padding: 8px 10px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) 10px;
 }
 .agents-message-head {
   display: flex;
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
-  font-size: 11px;
-  color: #8b949e;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
   margin-bottom: 4px;
 }
 .agents-message-from {
-  color: #c9d1d9;
+  color: var(--text);
   font-weight: 600;
 }
 .agents-message-arrow {
   color: #6e7681;
 }
 .agents-message-to {
-  color: #58a6ff;
+  color: var(--accent);
 }
 .agents-message-time {
   margin-left: auto;
 }
 .agents-message-read {
-  color: #3fb950;
+  color: var(--green);
 }
 .agents-message-unread {
-  color: #d29922;
+  color: var(--yellow);
 }
 .agents-message-body {
-  color: #c9d1d9;
+  color: var(--text);
   font-size: 12px;
   white-space: pre-wrap;
   word-break: break-word;

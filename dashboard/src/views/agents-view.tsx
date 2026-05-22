@@ -207,7 +207,7 @@ export function AgentsView() {
                       </>
                     )}
                     {agent.unread_messages != null && agent.unread_messages > 0 && (
-                      <div class="agents-branch-parent" style={{ marginTop: 4, color: "#d29922" }}>
+                      <div class="agents-branch-parent" style={{ marginTop: 4, color: "var(--yellow)" }}>
                         ✉ {agent.unread_messages} unread message{agent.unread_messages === 1 ? "" : "s"}
                       </div>
                     )}

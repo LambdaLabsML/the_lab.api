@@ -325,7 +325,7 @@ export function DetailPanel() {
           console.warn("mermaid render failed:", e);
           mermaidNodes.forEach((n) => {
             n.setAttribute("data-processed", "true");
-            n.style.color = "#f85149";
+            n.style.color = "var(--red)";
             n.textContent = `(mermaid render failed: ${e?.message || e})\n` + (n.textContent || "");
           });
         });
@@ -511,7 +511,7 @@ export function DetailPanel() {
     return (
       <div id="detail-panel" class="open">
         <div id="detail-content">
-          <div style={{ padding: "20px", color: "#8b949e", fontSize: "12px" }}>
+          <div style={{ padding: "20px", color: "var(--text-muted)", fontSize: "12px" }}>
             Select an idea from the graph, timeline, or chart to see details here.
           </div>
         </div>
@@ -563,7 +563,7 @@ export function DetailPanel() {
           </h2>
 
           {loading && !idea && (
-            <div style={{ padding: "20px 0", color: "#8b949e", fontSize: "12px" }}>Loading...</div>
+            <div style={{ padding: "20px 0", color: "var(--text-muted)", fontSize: "12px" }}>Loading...</div>
           )}
 
           {idea && (
@@ -738,7 +738,7 @@ export function DetailPanel() {
             </button>
           }
         >
-          {logLoading && <div style={{ color: "#8b949e" }}>Loading...</div>}
+          {logLoading && <div style={{ color: "var(--text-muted)" }}>Loading...</div>}
           {logContent !== null && <pre>{logContent || "(empty)"}</pre>}
         </Lightbox>
       )}
@@ -749,7 +749,7 @@ export function DetailPanel() {
           title={`Script — exp/${scriptExp.label || scriptExp.id}`}
           onClose={() => { setScriptExp(null); setHash({ view: null, exp: null }); }}
         >
-          {scriptLoading && <div style={{ color: "#8b949e" }}>Loading...</div>}
+          {scriptLoading && <div style={{ color: "var(--text-muted)" }}>Loading...</div>}
           {scriptContent !== null && (
             <pre dangerouslySetInnerHTML={{ __html: colorizeScript(scriptContent || "(empty)") }} />
           )}
@@ -839,10 +839,10 @@ export function DetailPanel() {
               </>
             }
           >
-            {(outputLoading || outputFileLoading) && <div style={{ color: "#8b949e" }}>Loading...</div>}
+            {(outputLoading || outputFileLoading) && <div style={{ color: "var(--text-muted)" }}>Loading...</div>}
             {displayedContent !== null && (
               displayedContent.startsWith("(") ? (
-                <div style={{ color: "#8b949e", fontStyle: "italic" }}>{displayedContent}</div>
+                <div style={{ color: "var(--text-muted)", fontStyle: "italic" }}>{displayedContent}</div>
               ) : (
                 <div
                   class="md-output"
@@ -870,10 +870,10 @@ export function DetailPanel() {
             </label>
           }
         >
-          {diffLoading && <div style={{ color: "#8b949e" }}>Loading diff...</div>}
+          {diffLoading && <div style={{ color: "var(--text-muted)" }}>Loading diff...</div>}
           {diffData && (
             <>
-              <pre style={{ marginBottom: "8px", color: "#8b949e" }}>{diffData.stat || "No changes"}</pre>
+              <pre style={{ marginBottom: "8px", color: "var(--text-muted)" }}>{diffData.stat || "No changes"}</pre>
               {diffData.diff && (
                 <pre dangerouslySetInnerHTML={{ __html: colorizeDiff(diffData.diff) }} />
               )}
@@ -1344,6 +1344,7 @@ function renderMarkdown(md: string, basePath = ""): string {
   return html;
 }
 
+// dynamic — driven by experiment status; hex kept for direct style prop use
 const STATUS_COLORS: Record<string, string> = {
   running: "#d29922",
   completed: "#3fb950",

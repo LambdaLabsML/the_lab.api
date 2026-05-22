@@ -101,7 +101,7 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
       chartRef.current.data.labels = chartData.labels;
       const yBounds = clip ? computeYBounds(chartData.values) : {};
       const yScale = chartRef.current.options.scales!.y!;
-      yScale.title = { display: true, text: metric, color: "#8b949e", font: { size: 10 } };
+      yScale.title = { display: true, text: metric, color: "#8b949e", font: { size: 10 } }; // dynamic Chart.js option — hex required
       yScale.min = yBounds.min;
       yScale.max = yBounds.max;
       (yScale as any).type = logScale ? "logarithmic" : "linear";
@@ -208,6 +208,9 @@ function computeYBounds(values: number[]): { min?: number; max?: number } {
   return { min: lo - pad, max: hi + pad };
 }
 
+// NOTE: hex color strings below are Chart.js configuration options (not JSX style={{}} props).
+// They must remain as hex for Chart.js to parse them. lib/colors.ts could be updated
+// separately to resolve CSS vars at runtime and pass resolved values here.
 function createChart(
   canvas: HTMLCanvasElement,
   metricKey: string,

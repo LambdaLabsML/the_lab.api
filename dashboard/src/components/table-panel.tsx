@@ -25,6 +25,7 @@ function fmtNum(n: number): string {
 // Status badge color
 // ---------------------------------------------------------------------------
 
+// dynamic — driven by idea status; hex kept for inline background style
 const STATUS_BADGE_COLORS: Record<string, string> = {
   active: "#238636",
   running: "#6e4b00",
@@ -292,7 +293,7 @@ export function TablePanel() {
                     e.preventDefault();
                     setHiddenCols(new Set([...hiddenCols, mk]));
                   }}
-                  style={`${dragOverCol === mk ? "border-left: 2px solid #58a6ff;" : ""}cursor: grab;`}
+                  style={`${dragOverCol === mk ? "border-left: 2px solid var(--accent);" : ""}cursor: grab;`}
                 >
                   {mk}{sortArrow(mk)}
                 </th>
@@ -300,30 +301,30 @@ export function TablePanel() {
               {hiddenCols.size > 0 && (
                 <th style="width: 24px; position: relative;">
                   <span
-                    style="cursor: pointer; color: #58a6ff; font-size: 12px;"
+                    style="cursor: pointer; color: var(--accent); font-size: 12px;"
                     onClick={() => setShowColMenu(!showColMenu)}
                     title="Show hidden columns"
                   >+</span>
                   {showColMenu && (
-                    <div style="position: absolute; top: 100%; right: 0; background: #161b22; border: 1px solid #30363d; border-radius: 4px; padding: 4px; z-index: 10; min-width: 120px;">
+                    <div style="position: absolute; top: 100%; right: 0; background: var(--bg-elev); border: 1px solid var(--border); border-radius: 4px; padding: 4px; z-index: 10; min-width: 120px;">
                       {[...hiddenCols].sort().map((col) => (
                         <div
                           key={col}
-                          style="padding: 2px 8px; cursor: pointer; font-size: 10px; color: #8b949e; white-space: nowrap;"
+                          style="padding: 2px 8px; cursor: pointer; font-size: 10px; color: var(--text-muted); white-space: nowrap;"
                           onClick={() => {
                             const next = new Set(hiddenCols);
                             next.delete(col);
                             setHiddenCols(next);
                             setShowColMenu(false);
                           }}
-                          onMouseEnter={(e) => { (e.target as HTMLElement).style.color = '#c9d1d9'; }}
-                          onMouseLeave={(e) => { (e.target as HTMLElement).style.color = '#8b949e'; }}
+                          onMouseEnter={(e) => { (e.target as HTMLElement).style.color = 'var(--text)'; }}
+                          onMouseLeave={(e) => { (e.target as HTMLElement).style.color = 'var(--text-muted)'; }}
                         >
                           {col}
                         </div>
                       ))}
                       <div
-                        style="padding: 2px 8px; cursor: pointer; font-size: 10px; color: #58a6ff; border-top: 1px solid #30363d; margin-top: 2px; padding-top: 4px;"
+                        style="padding: 2px 8px; cursor: pointer; font-size: 10px; color: var(--accent); border-top: 1px solid var(--border); margin-top: 2px; padding-top: 4px;"
                         onClick={() => { setHiddenCols(new Set()); setShowColMenu(false); }}
                       >
                         Show all
@@ -340,7 +341,7 @@ export function TablePanel() {
               return (
                 <tr
                   key={exp.id}
-                  style={isHighlighted ? "background: #30363d" : undefined}
+                  style={isHighlighted ? "background: var(--bg-hi)" : undefined}
                   onMouseEnter={() => { highlightedIdea.value = exp.idea_id; }}
                   onMouseLeave={() => { if (highlightedIdea.value === exp.idea_id) highlightedIdea.value = null; }}
                   onClick={() => navigateToIdea(exp.idea_id, exp.label)}
@@ -393,7 +394,7 @@ export function TablePanel() {
               <tr>
                 <td
                   colspan={4 + visibleMetrics.length + (hiddenCols.size > 0 ? 1 : 0)}
-                  style="text-align: center; color: #8b949e; padding: 20px;"
+                  style="text-align: center; color: var(--text-muted); padding: 20px;"
                 >
                   No experiments match current filters
                 </td>

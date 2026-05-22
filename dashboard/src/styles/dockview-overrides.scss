@@ -7,7 +7,7 @@
   --dv-group-view-background-color: var(--bg);
   --dv-tabs-and-actions-container-background-color: var(--bg-elev);
   --dv-tabs-and-actions-container-height: 28px;
-  --dv-tabs-and-actions-container-font-size: 11px;
+  --dv-tabs-and-actions-container-font-size: var(--text-sm);
 
   /* Active group, visible tab */
   --dv-activegroup-visiblepanel-tab-background-color: var(--bg);
@@ -28,14 +28,14 @@
   --dv-paneview-header-border-color: var(--border);
 
   /* Drag & drop */
-  --dv-drag-over-background-color: rgba(88, 166, 255, 0.08);
+  --dv-drag-over-background-color: var(--accent-dim);
   --dv-drag-over-border-color: var(--accent);
   --dv-floating-box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
 
   /* Splitters */
   --dv-sash-color: var(--border-soft);
   --dv-active-sash-color: var(--accent);
-  --dv-active-sash-transition-duration: 0.1s;
+  --dv-active-sash-transition-duration: var(--transition-fast);
   --dv-active-sash-transition-delay: 0s;
 
   /* Icons */
@@ -43,7 +43,7 @@
 
   /* Font */
   font-family: var(--font);
-  font-size: 11px;
+  font-size: var(--text-sm);
 }
 
 /* ---- Tab styling ---- */
@@ -51,7 +51,7 @@
 .dockview-theme-dark .dv-tab {
   font-weight: 600;
   letter-spacing: 0.02em;
-  transition: color 0.1s, background 0.1s;
+  transition: color var(--transition-fast), background var(--transition-fast);
 }
 
 .dockview-theme-dark .dv-tab:hover {
@@ -69,7 +69,7 @@
 /* Tab close button — subtle */
 .dockview-theme-dark .dv-default-tab-action {
   opacity: 0;
-  transition: opacity 0.15s;
+  transition: opacity var(--transition-base);
 }
 .dockview-theme-dark .dv-tab:hover .dv-default-tab-action { opacity: 0.6; }
 .dockview-theme-dark .dv-default-tab-action:hover { opacity: 1; color: var(--red); }
@@ -86,7 +86,7 @@
 
 .dockview-theme-dark .dv-overlay-render-container .dv-groupview {
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
   overflow: hidden;
 }
@@ -94,9 +94,9 @@
 /* ---- Drop target indicators ---- */
 
 .dockview-theme-dark .dv-drop-target-anchor {
-  background: rgba(88, 166, 255, 0.1) !important;
+  background: var(--accent-dim) !important;
   border: 2px solid var(--accent) !important;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 /* ---- Custom header action buttons (maximize, float) ---- */
@@ -118,11 +118,11 @@
   border: none;
   background: transparent;
   color: var(--text-faint);
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   font-size: 12px;
   line-height: 1;
-  transition: color 0.1s, background 0.1s;
+  transition: color var(--transition-fast), background var(--transition-fast);
 }
 
 .dv-header-action-btn:hover {
@@ -166,7 +166,7 @@
 
 .dv-panel .filter-bar-standalone {
   padding: 6px 12px;
-  font-size: 11px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
   display: flex;
   align-items: center;
@@ -181,12 +181,12 @@
 /* ---- Long-press move menu ---- */
 .dv-move-menu {
   position: fixed; z-index: 99999;
-  background: var(--bg-elev); border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius-lg);
   box-shadow: 0 8px 32px rgba(0,0,0,0.5); min-width: 180px;
   padding: 4px 0; font-family: var(--font);
 }
 .dv-move-menu-title {
-  padding: 6px 12px; font-size: 10px; text-transform: uppercase;
+  padding: 6px 12px; font-size: var(--text-xs); text-transform: uppercase;
   color: var(--text-faint); letter-spacing: 0.5px; border-bottom: 1px solid var(--border-soft);
 }
 .dv-move-menu-item {
@@ -233,10 +233,10 @@
 
 /* ---- Mobile / narrow ---- */
 @media (max-width: 800px) {
-  .dockview-theme-dark { font-size: 10px; }
-  .dockview-theme-dark .dv-tab { font-size: 10px; }
-  #topbar { padding: 6px 10px; gap: 8px; font-size: 11px; flex-wrap: wrap; }
-  #topbar .title { font-size: 13px; }
+  .dockview-theme-dark { font-size: var(--text-xs); }
+  .dockview-theme-dark .dv-tab { font-size: var(--text-xs); }
+  #topbar { padding: 6px 10px; gap: var(--space-2); font-size: var(--text-sm); flex-wrap: wrap; }
+  #topbar .title { font-size: var(--text-base); }
   .layout-menu-container { position: static; }
   .layout-menu { position: fixed; left: 10px; right: 10px; top: auto; bottom: 10px; }
 }

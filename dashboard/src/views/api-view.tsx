@@ -168,7 +168,7 @@ export function ApiView() {
     <>
       <div id="api-container">
         <div id="api-list">
-          {!spec && <div style={{ padding: "20px", color: "#484f58" }}>Loading API spec...</div>}
+          {!spec && <div style={{ padding: "20px", color: "var(--text-faint)" }}>Loading API spec...</div>}
           {TAG_ORDER.map((tag) => {
             const items = groups[tag];
             if (!items?.length) return null;
@@ -216,7 +216,7 @@ export function ApiView() {
               <div key={param.name}>
                 <label>
                   {param.name}
-                  {param.required && <span style={{ color: "#f85149" }}> *</span>}
+                  {param.required && <span style={{ color: "var(--red)" }}> *</span>}
                   {" "}({param.in})
                 </label>
                 <input

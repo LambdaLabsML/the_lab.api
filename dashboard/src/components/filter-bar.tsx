@@ -30,11 +30,11 @@ function FilterInput() {
           filterText.value = v;
           setHasText(!!v);
         }}
-        style={{ background: "#161b22", color: "#c9d1d9", border: "1px solid #30363d", borderRadius: "3px", padding: "2px 6px", fontSize: "10px", fontFamily: "inherit", width: "120px", outline: "none" }}
+        style={{ background: "var(--bg-elev)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: "3px", padding: "2px 6px", fontSize: "10px", fontFamily: "inherit", width: "120px", outline: "none" }}
       />
       {hasText && (
         <span
-          style={{ color: "#8b949e", cursor: "pointer", fontSize: "12px", lineHeight: "1" }}
+          style={{ color: "var(--text-muted)", cursor: "pointer", fontSize: "12px", lineHeight: "1" }}
           onClick={() => {
             filterText.value = "";
             if (inputRef.current) inputRef.current.value = "";
@@ -51,13 +51,13 @@ export function FilterBar() {
   return (
     <div class="filter-bar-standalone">
       <FilterInput />
-      <span style={{ width: "1px", height: "18px", background: "#30363d", margin: "0 4px" }} />
+      <span style={{ width: "1px", height: "18px", background: "var(--border)", margin: "0 4px" }} />
       <span>
         Color:{" "}
         <select
           value={colorMode.value}
           onChange={(e) => { colorMode.value = (e.target as HTMLSelectElement).value; }}
-          style={{ background: "#161b22", color: "#c9d1d9", border: "1px solid #30363d", borderRadius: "3px", padding: "1px 4px", fontFamily: "inherit", fontSize: "10px" }}
+          style={{ background: "var(--bg-elev)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: "3px", padding: "1px 4px", fontFamily: "inherit", fontSize: "10px" }}
         >
           <option value="status+improve">status + improve</option>
           <option value="lane">by lane</option>
@@ -66,14 +66,14 @@ export function FilterBar() {
           <option value="idea">by idea</option>
         </select>
       </span>
-      <span style={{ width: "1px", height: "18px", background: "#30363d", margin: "0 4px" }} />
+      <span style={{ width: "1px", height: "18px", background: "var(--border)", margin: "0 4px" }} />
       <TagFilter />
-      <span style={{ width: "1px", height: "18px", background: "#30363d", margin: "0 4px" }} />
+      <span style={{ width: "1px", height: "18px", background: "var(--border)", margin: "0 4px" }} />
       <span class="status-filters" style={{ display: "inline-flex", gap: "4px", alignItems: "center" }}>
         Show:
-        <StatusToggle label="concluded" signal={showConcluded} color="#58a6ff" />
-        <StatusToggle label="abandoned" signal={showAbandoned} color="#f85149" />
-        <StatusToggle label="running" signal={showRunning} color="#d29922" />
+        <StatusToggle label="concluded" signal={showConcluded} color="var(--accent)" />
+        <StatusToggle label="abandoned" signal={showAbandoned} color="var(--red)" />
+        <StatusToggle label="running" signal={showRunning} color="var(--yellow)" />
       </span>
     </div>
   );

@@ -17,7 +17,7 @@ import type {
   ResourceUpsertBody,
 } from "../lib/types";
 
-// Color palette used to colour holder segments in capacity bars.
+// dynamic — driven by holder index; hex required for template-string style injection
 const HOLDER_PALETTE = [
   "#3fb950", // green
   "#79c0ff", // blue
@@ -764,7 +764,7 @@ export function QueueView() {
                       </span>
                     )}
                     {exp.error && (
-                      <span class="queue-meta-item" style={{ color: "#f85149" }} title={exp.error}>
+                      <span class="queue-meta-item" style={{ color: "var(--red)" }} title={exp.error}>
                         error: {truncate(exp.error, 80)}
                       </span>
                     )}

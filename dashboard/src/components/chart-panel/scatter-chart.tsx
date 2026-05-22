@@ -218,8 +218,8 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric }: { i
       ds._expData = filtered;
       const xScale = chartRef.current.options.scales!.x!;
       const yScale = chartRef.current.options.scales!.y!;
-      xScale.title = { display: true, text: xMetric, color: "#8b949e", font: { size: 10 } };
-      yScale.title = { display: true, text: yMetric, color: "#8b949e", font: { size: 10 } };
+      xScale.title = { display: true, text: xMetric, color: "#8b949e", font: { size: 10 } }; // dynamic Chart.js option — hex required
+      yScale.title = { display: true, text: yMetric, color: "#8b949e", font: { size: 10 } }; // dynamic Chart.js option — hex required
       xScale.min = xBounds.min;
       xScale.max = xBounds.max;
       yScale.min = yBounds.min;
@@ -229,6 +229,9 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric }: { i
       return;
     }
 
+    // NOTE: hex color strings below are Chart.js configuration options (not JSX style={{}} props).
+    // They must remain as hex for Chart.js to parse them. lib/colors.ts could be updated
+    // separately to resolve CSS vars at runtime and pass resolved values here.
     chartRef.current = new Chart(canvasRef.current, {
       type: "scatter",
       data: {
