@@ -401,9 +401,10 @@ exit $_EXIT
         local_dir = str(local_exp_dir).rstrip("/") + "/"
         result = subprocess.run(
             ["rsync", "-az", "--timeout=30",
-             # Exclude the worktree — it can be hundreds of MB and is already
-             # in the local repo; we only want the generated artefacts.
+             # Exclude the worktree (already in the local repo) and the
+             # per-job venv (can be hundreds of MB; not useful on the lab server).
              "--exclude=worktree/",
+             "--exclude=venv/",
              f"{self.ssh_host}:{self._rsync_base}/{label}/",
              local_dir],
             capture_output=True, text=True,
