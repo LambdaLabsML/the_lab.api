@@ -305,7 +305,13 @@ class ExperimentRunner:
 
             # Build env additions for the executor.
             extra_env: dict[str, str] = {}
-            if resource.unit_kind == "gpu":
+            if resource.unit_kind == "gpu" and resource.kind == "local":
+                # For local GPU resources: set CUDA_VISIBLE_DEVICES so the
+                # subprocess only sees its allocated GPU unit(s).
+                # For slurm resources: omit this — slurm's --gres=gpu:N binding
+                # exposes the allocated GPU as index 0 inside the job; setting
+                # a higher index (from our logical unit counter) would cause
+                # NVMLError_InvalidArgument.
                 extra_env["CUDA_VISIBLE_DEVICES"] = ",".join(str(u) for u in assigned)
             extra_env["THE_LAB_ASSIGNED_RESOURCE"] = resource.name
             extra_env["THE_LAB_ASSIGNED_UNITS"] = ",".join(str(u) for u in assigned)
