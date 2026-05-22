@@ -66,6 +66,11 @@ class SlurmExecutor:
         # each job gets a lightweight per-job venv that inherits from the base
         # via --system-site-packages and installs experiment-specific packages.
         self.base_venv_path = config.get("base_venv_path")  # None → skip
+        # Static env vars injected into every job wrapper from this resource.
+        # Useful for cluster-wide settings like HF_HOME, CUDA_VISIBLE_DEVICES
+        # overrides, proxy URLs, etc.  Merged before per-experiment env_extra
+        # so experiment-level values always win.
+        self.env_vars: dict = config.get("env_vars") or {}
         # $HOME in remote_base is embedded into sbatch directives; Slurm's
         # sbatch parser doesn't expand shell variables so we resolve it to an
         # absolute path at submit time via _resolve_remote_base().
@@ -347,10 +352,13 @@ exit $_EXIT
             self._scp_to_remote(local_script_path, f"{remote_job_dir}/script.sh")
             worktree_dir = remote_job_dir  # fall back to job dir as cwd
 
-        # 3. Build and upload wrapper
+        # 3. Build and upload wrapper.
+        # Merge resource-level env_vars (e.g. HF_HOME) with per-experiment
+        # env_extra; experiment values take precedence.
+        merged_env = {**self.env_vars, **(env_extra or {})}
         wrapper_content = self._build_wrapper(
             label, remote_job_dir, worktree_dir, unit_kind=unit_kind,
-            env_vars=env_extra,
+            env_vars=merged_env,
         )
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".sh", prefix="thelab_wrapper_", delete=False,
