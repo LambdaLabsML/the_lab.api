@@ -11,8 +11,9 @@ import { resolveColor } from './css-vars';
 /** Internal meta keys that should not appear in the dropdown. */
 const HIDDEN_META_KEYS = new Set(["git_branch", "git_commit", "worktree", "outdir"]);
 
-/** Maximum depth we recurse into nested metric dicts when building dotted keys. */
-const MAX_METRIC_DEPTH = 3;
+/** Maximum depth we recurse into nested metric dicts when building dotted keys.
+ *  1 = collect level-0 (flat) and level-1 (one dot) keys only. */
+const MAX_METRIC_DEPTH = 1;
 
 /**
  * Look up a key in a metric/meta dict, honouring dot-notation traversal so
@@ -60,9 +61,10 @@ export function resolveNumericValue(exp: Experiment, key: string): number | unde
 }
 
 export interface GroupedKeys {
-  metrics: string[];
-  meta: string[];
-  timing: string[];
+  metrics: string[];  // level-0 (no dots) — shown first
+  nested:  string[];  // level-1 (one dot, e.g. context.peak_kchars)
+  meta:    string[];
+  timing:  string[];
 }
 
 /** Walk a nested dict and collect every numeric leaf path (dotted). Capped depth. */
@@ -107,11 +109,11 @@ export function collectChartKeys(experiments: Experiment[]): GroupedKeys {
   if (hasFinished) timing.push("finished_at");
   if (experiments.some((e) => e.created_at)) timing.push("created_at");
 
-  return {
-    metrics: [...metricSet].sort(),
-    meta: [...metaSet].sort(),
-    timing,
-  };
+  const allMetrics = [...metricSet].sort();
+  const flat   = allMetrics.filter(k => !k.includes('.'));
+  const nested = allMetrics.filter(k =>  k.includes('.'));
+
+  return { metrics: flat, nested, meta: [...metaSet].sort(), timing };
 }
 
 export function filterMetricExperiments(

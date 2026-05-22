@@ -99,7 +99,7 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric }: { i
 
   // Compute chartable keys grouped by source
   const grouped = useMemo(() => collectChartKeys(experiments), [experiments]);
-  const metricKeys = [...grouped.metrics, ...grouped.meta, ...grouped.timing];
+  const metricKeys = [...grouped.metrics, ...grouped.nested, ...grouped.meta, ...grouped.timing];
   const ideas = allIdeas.value;
   const layout = currentLayout.value;
   const theme = colorTheme.value;  // subscribe — chart recreates on theme/size switch
@@ -377,12 +377,14 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric }: { i
         X:{" "}
         <select value={xMetric} onChange={(e) => { setX((e.target as HTMLSelectElement).value); }}>
           {grouped.metrics.length > 0 && <optgroup label="Metrics">{grouped.metrics.map((k) => <option key={k} value={k}>{k}</option>)}</optgroup>}
+          {grouped.nested.length > 0 && <optgroup label="Nested">{grouped.nested.map((k) => <option key={k} value={k}>{k}</option>)}</optgroup>}
           {grouped.timing.length > 0 && <optgroup label="Timing">{grouped.timing.map((k) => <option key={k} value={k}>{k}</option>)}</optgroup>}
           {grouped.meta.length > 0 && <optgroup label="Meta">{grouped.meta.map((k) => <option key={k} value={k}>{k}</option>)}</optgroup>}
         </select>
         {" "}Y:{" "}
         <select value={yMetric} onChange={(e) => { setY((e.target as HTMLSelectElement).value); }}>
           {grouped.metrics.length > 0 && <optgroup label="Metrics">{grouped.metrics.map((k) => <option key={k} value={k}>{k}</option>)}</optgroup>}
+          {grouped.nested.length > 0 && <optgroup label="Nested">{grouped.nested.map((k) => <option key={k} value={k}>{k}</option>)}</optgroup>}
           {grouped.timing.length > 0 && <optgroup label="Timing">{grouped.timing.map((k) => <option key={k} value={k}>{k}</option>)}</optgroup>}
           {grouped.meta.length > 0 && <optgroup label="Meta">{grouped.meta.map((k) => <option key={k} value={k}>{k}</option>)}</optgroup>}
         </select>

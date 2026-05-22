@@ -153,7 +153,7 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
 
   // Collect chartable keys grouped by source
   const grouped = useMemo(() => collectChartKeys(experiments), [experiments]);
-  const allKeys = [...grouped.metrics, ...grouped.meta, ...grouped.timing];
+  const allKeys = [...grouped.metrics, ...grouped.nested, ...grouped.meta, ...grouped.timing];
 
   const setMetric = isClone
     ? (v: string) => { setLocalMetric(v); if (instanceId && updatePanelTitle) updatePanelTitle(instanceId, `Metrics: ${v}`); }
@@ -172,6 +172,7 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
           Metric:{" "}
           <select value={metric} onChange={(e) => { setMetric((e.target as HTMLSelectElement).value); }}>
             {grouped.metrics.length > 0 && <optgroup label="Metrics">{grouped.metrics.map((k) => <option key={k} value={k}>{k}</option>)}</optgroup>}
+            {grouped.nested.length > 0 && <optgroup label="Nested">{grouped.nested.map((k) => <option key={k} value={k}>{k}</option>)}</optgroup>}
             {grouped.timing.length > 0 && <optgroup label="Timing">{grouped.timing.map((k) => <option key={k} value={k}>{k}</option>)}</optgroup>}
             {grouped.meta.length > 0 && <optgroup label="Meta">{grouped.meta.map((k) => <option key={k} value={k}>{k}</option>)}</optgroup>}
           </select>
