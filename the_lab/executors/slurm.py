@@ -221,10 +221,16 @@ class SlurmExecutor:
         if self.base_venv_path:
             venv_setup = f"""\
 # ── per-job isolated venv ────────────────────────────────────────────────────
-# Inherits heavy shared packages (vllm, torch, triton) from base venv.
-# Experiment-specific packages (transformers, autoawq, …) go here only.
+# --system-site-packages only inherits from the *system* Python, not from a
+# parent venv.  We instead create a plain venv and drop a .pth file that adds
+# the base venv's site-packages to sys.path — the standard "layered venvs"
+# pattern.  Heavy packages (vllm/torch/triton) come from the base; the
+# experiment installs its own packages/ here without touching the base.
 export _PJVENV="{remote_job_dir}/venv"
-python3 -m venv --system-site-packages "$_PJVENV"
+python3 -m venv "$_PJVENV"
+_BASE_SP=$("{self.base_venv_path}/bin/python" -c "import site; print(site.getsitepackages()[0])")
+_PJ_SP=$("$_PJVENV/bin/python"               -c "import site; print(site.getsitepackages()[0])")
+echo "$_BASE_SP" > "$_PJ_SP/base-venv.pth"
 export VENV_DIR="$_PJVENV"
 export UV="{self.base_venv_path}/bin/uv"
 # ─────────────────────────────────────────────────────────────────────────────
