@@ -15,6 +15,10 @@ logger = logging.getLogger("the-lab.slurm")
 
 
 class SlurmExecutor:
+    # Default SLURM_CONF path discovered on the ml-16 cluster head node.
+    # Can be overridden via executor_config["slurm_conf"].
+    DEFAULT_SLURM_CONF = "/data/slurm/etc/slurm.conf"
+
     def __init__(self, ssh_host: str, config: dict):
         self.ssh_host = ssh_host
         self.partition = config.get("partition", "lowprio")
@@ -24,15 +28,20 @@ class SlurmExecutor:
         self.mem = config.get("mem")                  # optional, e.g. "32G"
         self.time_limit = config.get("time")          # optional, e.g. "08:00:00"
         self.remote_base = config.get("remote_base", "~/.thelab/jobs")
+        # SLURM_CONF must be set so sbatch/squeue/scancel can find the controller.
+        self.slurm_conf = config.get("slurm_conf", self.DEFAULT_SLURM_CONF)
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
     def _ssh(self, cmd: str, check: bool = True) -> subprocess.CompletedProcess:
-        """Run a command on the remote host via SSH."""
+        """Run a command on the remote host via SSH with SLURM_CONF set."""
+        # Prefix every remote command with SLURM_CONF so sbatch/squeue/scancel
+        # can locate the controller without a DNS SRV record.
+        full_cmd = f"SLURM_CONF={self.slurm_conf} {cmd}"
         result = subprocess.run(
-            ["ssh", self.ssh_host, cmd],
+            ["ssh", self.ssh_host, full_cmd],
             capture_output=True,
             text=True,
         )
