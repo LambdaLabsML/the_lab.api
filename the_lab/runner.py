@@ -784,6 +784,10 @@ class ExperimentRunner:
             "slurm_job_id": job_id,
             "assigned_resource": resource.name,
             "assigned_units": assigned,
+            # Persist the resolved git context so the dashboard + PROMPT.md
+            # can show which branch/commit the job ran on.
+            **({"git_branch": git_branch} if git_branch else {}),
+            **({"git_commit": git_commit} if git_commit else {}),
         }
         exp_id = exp["id"]
         self._store.update_experiment(
