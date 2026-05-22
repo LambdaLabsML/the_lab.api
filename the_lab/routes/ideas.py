@@ -120,6 +120,7 @@ def create_idea(req: NewIdeaRequest, request: Request):
                 idea["checked_out"] = False
         return idea
     except GitError as e:
+        store.release_unused_idea_id(idea_id)
         raise HTTPException(500, str(e))
 
 

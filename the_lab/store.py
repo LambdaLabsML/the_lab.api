@@ -265,6 +265,14 @@ class Store:
         }
         return idea
 
+    def release_unused_idea_id(self, idea_id: int) -> None:
+        """Roll back an allocated but unsaved idea ID so the next create_idea()
+        reuses it.  Only takes effect when idea_id was the most recently
+        allocated ID and has not yet been persisted."""
+        with self._lock:
+            if idea_id not in self._ideas and self._next_idea_id == idea_id + 1:
+                self._next_idea_id = idea_id
+
     def save_idea(self, idea: dict):
         """Write idea.json + initialize notes.json."""
         idea_id = idea["id"]
