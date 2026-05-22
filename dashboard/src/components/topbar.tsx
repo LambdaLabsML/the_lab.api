@@ -34,23 +34,22 @@ interface ThemeDef {
 const FONT_SIZES = ["xs", "s", "m", "l", "xl", "xxl"] as const;
 
 const THEMES: ThemeDef[] = [
-  // ── Light themes ──────────────────────────────────────────────────────────
-  { id: "linen",          name: "Linen",          swatches: ["#FFFFF8", "#5B8DB8", "#5A8A5A"] },
-  { id: "light",          name: "Light",           swatches: ["#ffffff", "#0969da", "#1a7f37"] },
-  { id: "gruvbox-light",  name: "Gruvbox",         swatches: ["#FBF1C7", "#458588", "#98971A"] },
-  { id: "solarized-light",name: "Solarized",       swatches: ["#FDF6E3", "#268BD2", "#859900"] },
-  // ── Dark themes ───────────────────────────────────────────────────────────
-  { id: "default",   name: "Default",   swatches: ["#0d1117", "#58a6ff", "#3fb950"] },
-  { id: "nord",      name: "Nord",      swatches: ["#2e3440", "#88c0d0", "#a3be8c"] },
-  { id: "dracula",   name: "Dracula",   swatches: ["#282a36", "#bd93f9", "#50fa7b"] },
-  { id: "ocean",     name: "Ocean",     swatches: ["#0d1b2a", "#2ea8ff", "#3fb950"] },
-  { id: "oled",      name: "OLED",      swatches: ["#000000", "#58a6ff", "#3fb950"] },
-  { id: "charcoal",  name: "Charcoal",  swatches: ["#12110F", "#A3B18A", "#D4A373"] },
-  { id: "graphite",  name: "Graphite",  swatches: ["#111015", "#8B8CF6", "#D8A03D"] },
-  { id: "petroleum", name: "Petroleum", swatches: ["#071013", "#2DD4BF", "#F59E0B"] },
-  { id: "ink",       name: "Ink + Ice", swatches: ["#080B0F", "#7DD3FC", "#B7E35F"] },
-  { id: "orchid",    name: "Orchid",    swatches: ["#070B18", "#6EA8FE", "#C084FC"] },
-  { id: "crimson",   name: "Crimson",   swatches: ["#120608", "#FF6B81", "#7EC8A4"] },
+  // Sorted brightest → darkest by perceived luminance of the background swatch
+  { id: "light",          name: "Light",      swatches: ["#ffffff", "#0969da", "#1a7f37"] },   // 1.000
+  { id: "linen",          name: "Linen",      swatches: ["#FFFFF8", "#5B8DB8", "#5A8A5A"] },   // 0.997
+  { id: "solarized-light",name: "Solarized",  swatches: ["#FDF6E3", "#268BD2", "#859900"] },   // 0.964
+  { id: "gruvbox-light",  name: "Gruvbox",    swatches: ["#FBF1C7", "#458588", "#98971A"] },   // 0.938
+  { id: "nord",      name: "Nord",      swatches: ["#2e3440", "#88c0d0", "#a3be8c"] },         // 0.202
+  { id: "dracula",   name: "Dracula",   swatches: ["#282a36", "#bd93f9", "#50fa7b"] },         // 0.168
+  { id: "ocean",     name: "Ocean",     swatches: ["#0d1b2a", "#2ea8ff", "#3fb950"] },         // 0.096
+  { id: "charcoal",  name: "Charcoal",  swatches: ["#12110F", "#A3B18A", "#D4A373"] },         // 0.067
+  { id: "graphite",  name: "Graphite",  swatches: ["#111015", "#8B8CF6", "#D8A03D"] },         // 0.066
+  { id: "default",   name: "Default",   swatches: ["#0d1117", "#58a6ff", "#3fb950"] },         // 0.065
+  { id: "petroleum", name: "Petroleum", swatches: ["#071013", "#2DD4BF", "#F59E0B"] },         // 0.054
+  { id: "orchid",    name: "Orchid",    swatches: ["#070B18", "#6EA8FE", "#C084FC"] },         // 0.044
+  { id: "ink",       name: "Ink + Ice", swatches: ["#080B0F", "#7DD3FC", "#B7E35F"] },         // 0.041
+  { id: "crimson",   name: "Crimson",   swatches: ["#120608", "#FF6B81", "#7EC8A4"] },         // 0.038
+  { id: "oled",      name: "OLED",      swatches: ["#000000", "#58a6ff", "#3fb950"] },         // 0.000
 ];
 
 export function Topbar(props: LayoutActions) {
