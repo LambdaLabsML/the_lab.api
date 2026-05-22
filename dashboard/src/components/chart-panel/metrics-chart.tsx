@@ -224,7 +224,7 @@ function createChart(
         {
           label: metricKey,
           data: chartData.values,
-          borderColor: "#8b949e44",
+          borderColor: `color-mix(in srgb, ${getCssVar("--text-muted")} 27%, transparent)`,
           pointBackgroundColor: chartData.pointBgColors,
           pointBorderColor: chartData.pointColors,
           pointBorderWidth: chartData.pointBorderWidths,
