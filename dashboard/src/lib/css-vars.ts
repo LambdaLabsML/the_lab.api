@@ -9,6 +9,15 @@ export function getCssVar(name: string): string {
 }
 
 /**
+ * Resolve a CSS custom property that holds a px value to a plain number.
+ * Use this for Chart.js font.size which requires a number, not a string.
+ * e.g. getCssVarPx("--text-xs") → 10
+ */
+export function getCssVarPx(name: string): number {
+  return parseInt(getCssVar(name), 10) || 10;
+}
+
+/**
  * Resolve any color string to a concrete value.
  * - 'var(--green)' → resolved hex from current theme (for Canvas / Chart.js)
  * - '#3fb950'      → returned as-is

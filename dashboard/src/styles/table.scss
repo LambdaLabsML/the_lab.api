@@ -1,6 +1,6 @@
 .table-panel { height: 100%; display: flex; flex-direction: column; overflow: hidden; }
 .table-wrap { flex: 1; overflow: auto; }
-.table-panel table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.table-panel table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
 .table-panel th {
   position: sticky; top: 0; z-index: 1;
   background: #161b22; color: #8b949e;
@@ -19,5 +19,5 @@
 .table-panel .color-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; }
 .table-panel .metric-val { font-family: 'SF Mono', 'Fira Code', Consolas, monospace; text-align: right; }
 .table-panel td.metric-selected { background: #58a6ff08; }
-.table-panel .idea-desc { max-width: 200px; overflow: hidden; text-overflow: ellipsis; display: inline-block; color: var(--text-muted); font-size: 10px; vertical-align: middle; }
-.table-panel .status-badge { font-size: 10px; padding: 1px 5px; border-radius: 3px; color: #fff; }
+.table-panel .idea-desc { max-width: 200px; overflow: hidden; text-overflow: ellipsis; display: inline-block; color: var(--text-muted); font-size: var(--text-xs); vertical-align: middle; }
+.table-panel .status-badge { font-size: var(--text-xs); padding: 1px 5px; border-radius: 3px; color: #fff; }

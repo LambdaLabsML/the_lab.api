@@ -17,7 +17,7 @@ import {
 } from "../../state/settings";
 import { buildChartData, collectChartKeys } from "../../lib/chart-data";
 import { navigateToIdea } from "../../lib/navigate";
-import { getCssVar } from "../../lib/css-vars";
+import { getCssVar, getCssVarPx } from "../../lib/css-vars";
 import type { ChartDataResult } from "../../lib/chart-data";
 
 export function MetricsChart({ instanceId, initialMetric }: { instanceId?: string; initialMetric?: string } = {}) {
@@ -104,7 +104,7 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
       chartRef.current.data.labels = chartData.labels;
       const yBounds = clip ? computeYBounds(chartData.values) : {};
       const yScale = chartRef.current.options.scales!.y!;
-      yScale.title = { display: true, text: metric, color: getCssVar("--text-muted"), font: { size: 10 } };
+      yScale.title = { display: true, text: metric, color: getCssVar("--text-muted"), font: { size: getCssVarPx("--text-xs") } };
       yScale.min = yBounds.min;
       yScale.max = yBounds.max;
       (yScale as any).type = logScale ? "logarithmic" : "linear";
@@ -270,9 +270,9 @@ function createChart(
             display: true,
             text: metricKey,
             color: getCssVar("--text-muted"),
-            font: { size: 10 },
+            font: { size: getCssVarPx("--text-xs") },
           },
-          ticks: { color: getCssVar("--text-muted"), font: { size: 10 } },
+          ticks: { color: getCssVar("--text-muted"), font: { size: getCssVarPx("--text-xs") } },
           grid: { color: getCssVar("--border-soft") },
         },
       },
