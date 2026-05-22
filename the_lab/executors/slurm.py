@@ -27,9 +27,17 @@ class SlurmExecutor:
         self.gpus = int(config.get("gpus", 1))
         self.mem = config.get("mem")                  # optional, e.g. "32G"
         self.time_limit = config.get("time")          # optional, e.g. "08:00:00"
-        self.remote_base = config.get("remote_base", "~/.thelab/jobs")
+        # remote_base is embedded verbatim inside the sbatch wrapper script, so
+        # use $HOME (which bash expands at runtime) rather than ~ (which bash
+        # does NOT expand inside double-quoted strings — causes exit 127).
+        # rsync uses _rsync_base which converts $HOME → ~ (rsync expands ~ but
+        # not shell variables in remote paths).
+        self.remote_base = config.get("remote_base", "$HOME/.thelab/jobs")
         # SLURM_CONF must be set so sbatch/squeue/scancel can find the controller.
         self.slurm_conf = config.get("slurm_conf", self.DEFAULT_SLURM_CONF)
+        # QOS to request — defaults to the partition name (lowprio → qos=lowprio).
+        # Set explicitly via executor_config["qos"] to override.
+        self.qos = config.get("qos", self.partition)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -71,6 +79,7 @@ class SlurmExecutor:
         mem_line = f"#SBATCH --mem={self.mem}" if self.mem else ""
         time_line = f"#SBATCH --time={self.time_limit}" if self.time_limit else ""
         account_line = f"#SBATCH --account={self.account}" if self.account else ""
+        qos_line = f"#SBATCH --qos={self.qos}" if self.qos else ""
 
         return f"""#!/bin/bash
 #SBATCH --partition={self.partition}
@@ -82,6 +91,7 @@ class SlurmExecutor:
 {mem_line}
 {time_line}
 {account_line}
+{qos_line}
 #SBATCH --export=ALL
 #SBATCH --requeue
 
@@ -130,7 +140,10 @@ exit $_EXIT
         unit_kind: str = "gpu",
     ) -> str:
         """Submit an experiment to Slurm. Returns the job_id string."""
-        remote_job_dir = f"{self.remote_base}/{label}"
+        # Resolve $HOME to an absolute path — Slurm's sbatch parser does not
+        # expand shell variables in #SBATCH directives (only %j/%u/etc. work).
+        resolved_base = self._resolve_remote_base()
+        remote_job_dir = f"{resolved_base}/{label}"
 
         # 1. Create remote directory
         self._ssh(f"mkdir -p {remote_job_dir}")
@@ -186,13 +199,38 @@ exit $_EXIT
         state = result.stdout.strip()
         return state
 
+    def _resolve_remote_base(self) -> str:
+        """Return remote_base with $HOME expanded to the actual remote home path.
+
+        Slurm's sbatch parser does NOT expand $HOME in #SBATCH directives —
+        only its own %-tokens (like %j, %u) work there. We SSH-resolve the
+        real path once at submit time so every path in the wrapper is absolute.
+        """
+        if "$HOME" not in self.remote_base:
+            return self.remote_base
+        home = self._ssh("echo $HOME", check=True).stdout.strip()
+        return self.remote_base.replace("$HOME", home)
+
+    @property
+    def _rsync_base(self) -> str:
+        """remote_base with $HOME replaced by ~ for use in rsync remote paths.
+
+        rsync expands ~ in remote paths but does not evaluate shell variables
+        like $HOME — the inverse of bash's double-quote behaviour.
+        """
+        return self.remote_base.replace("$HOME", "~")
+
+    def _remote_job_dir(self, label: str) -> str:
+        """Absolute path to the job dir on the remote host (resolved $HOME)."""
+        return f"{self._resolve_remote_base()}/{label}"
+
     def pull_results(self, label: str, local_exp_dir: str | Path) -> None:
         """rsync results from remote job dir to local experiment dir. Best-effort."""
         local_dir = str(local_exp_dir).rstrip("/") + "/"
         result = subprocess.run(
             [
                 "rsync", "-az", "--timeout=30",
-                f"{self.ssh_host}:{self.remote_base}/{label}/",
+                f"{self.ssh_host}:{self._rsync_base}/{label}/",
                 local_dir,
             ],
             capture_output=True,
