@@ -589,13 +589,15 @@ export function App() {
       }
     }
 
-    // Save layout on changes
+    // Save layout on changes — debounced so rapid in-flight events during
+    // fromJSON() initialization (or CSS-injection reflows) don't write a
+    // partially-initialized layout to localStorage.
+    let _layoutSaveTimer: ReturnType<typeof setTimeout> | null = null;
     const layoutDisposable = dv.onDidLayoutChange(() => {
-      try {
-        dashboardLayout.value = dv.toJSON();
-      } catch {
-        // Ignore serialization errors
-      }
+      if (_layoutSaveTimer) clearTimeout(_layoutSaveTimer);
+      _layoutSaveTimer = setTimeout(() => {
+        try { dashboardLayout.value = dv.toJSON(); } catch { /* ignore */ }
+      }, 400);
     });
 
     function updateAvailablePanels() {
