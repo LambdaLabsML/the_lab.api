@@ -31,6 +31,13 @@ executor_config keys
   git_repo_path   : path of bare repo on remote  (default: "~/.thelab/repo.git")
   remote_base     : parent dir for job dirs       (default: "$HOME/.thelab/jobs")
   slurm_conf      : path to slurm.conf on remote  (default: /data/slurm/etc/slurm.conf)
+  base_venv_path  : shared venv with heavy packages (vllm, torch, triton) that
+                    should NOT change between experiments.  When set, the wrapper
+                    creates a lightweight per-job venv with --system-site-packages
+                    so each experiment can install its own version of packages/
+                    without racing against parallel jobs.  The per-job venv lives
+                    inside the job dir and is removed by cleanup_remote().
+                    Leave unset to skip venv management entirely (default: None)
 """
 from __future__ import annotations
 
@@ -55,6 +62,10 @@ class SlurmExecutor:
         self.time_limit  = config.get("time")
         self.slurm_conf  = config.get("slurm_conf", self.DEFAULT_SLURM_CONF)
         self.qos         = config.get("qos",        self.partition)
+        # Two-tier venv: base holds heavy read-only packages (vllm/torch/triton);
+        # each job gets a lightweight per-job venv that inherits from the base
+        # via --system-site-packages and installs experiment-specific packages.
+        self.base_venv_path = config.get("base_venv_path")  # None → skip
         # $HOME in remote_base is embedded into sbatch directives; Slurm's
         # sbatch parser doesn't expand shell variables so we resolve it to an
         # absolute path at submit time via _resolve_remote_base().
@@ -202,6 +213,25 @@ class SlurmExecutor:
             f"export {k}={v!r}" for k, v in (env_vars or {}).items()
         )
 
+        # Per-job venv setup — only emitted when base_venv_path is configured.
+        # Creates a lightweight venv that inherits heavy packages (vllm/torch)
+        # from the shared base via --system-site-packages, then exports VENV_DIR
+        # and UV so the experiment script installs its own packages/  into the
+        # isolated per-job venv.  The per-job venv is deleted by cleanup_remote.
+        if self.base_venv_path:
+            venv_setup = f"""\
+# ── per-job isolated venv ────────────────────────────────────────────────────
+# Inherits heavy shared packages (vllm, torch, triton) from base venv.
+# Experiment-specific packages (transformers, autoawq, …) go here only.
+export _PJVENV="{remote_job_dir}/venv"
+python3 -m venv --system-site-packages "$_PJVENV"
+export VENV_DIR="$_PJVENV"
+export UV="{self.base_venv_path}/bin/uv"
+# ─────────────────────────────────────────────────────────────────────────────
+"""
+        else:
+            venv_setup = ""
+
         return f"""#!/bin/bash
 #SBATCH --partition={self.partition}
 #SBATCH --job-name=thelab-{label}
@@ -219,6 +249,7 @@ class SlurmExecutor:
 # Inject env vars that must survive the sbatch → compute node hop.
 {env_exports}
 
+{venv_setup}
 # Preemption handler — Slurm sends SIGTERM before killing the job
 _PREEMPTED=0
 _lab_requeue() {{
