@@ -366,10 +366,7 @@ export function TablePanel() {
                     {exp._running ? (
                       <span dangerouslySetInnerHTML={{ __html: badgeHtml("running", runningProgress.value[exp.label || String(exp.id)]) }} />
                     ) : (
-                      <span
-                        class="status-badge"
-                        style={`background: ${STATUS_BADGE_COLORS[exp.idea_status || "active"] || "#333"}`}
-                      >
+                      <span class={`badge badge-${exp.idea_status || "active"}`}>
                         {exp.idea_status || "active"}
                       </span>
                     )}

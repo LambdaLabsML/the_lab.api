@@ -7,6 +7,7 @@ import {
   selectedIdea,
   colorMode,
   colorTheme,
+  fontSize,
   improvementsOnly,
   activeTagFilters,
   tagFilterMode,
@@ -99,7 +100,8 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric }: { i
   const metricKeys = [...grouped.metrics, ...grouped.meta, ...grouped.timing];
   const ideas = allIdeas.value;
   const layout = currentLayout.value;
-  const theme = colorTheme.value;  // subscribe — chart recreates on theme switch
+  const theme = colorTheme.value;  // subscribe — chart recreates on theme/size switch
+  const _fz = fontSize.value;  // subscribe — chart recreates on font-size switch
   const mode = colorMode.value;
   const impOnly = improvementsOnly.value;
   const tags = activeTagFilters.value;

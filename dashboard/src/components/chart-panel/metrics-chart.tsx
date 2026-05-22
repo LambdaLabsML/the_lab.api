@@ -5,6 +5,7 @@ import {
   selectedMetric,
   colorMode,
   colorTheme,
+  fontSize,
   improvementsOnly,
   activeTagFilters,
   tagFilterMode,
@@ -41,7 +42,8 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
   const reversed = reverseTime.value;
   const clip = clipOutliers.value;
   const mean = ideaMean.value;
-  const theme = colorTheme.value;  // subscribe — chart recreates on theme switch
+  const theme = colorTheme.value;  // subscribe — chart recreates on theme/size switch
+  const _fz = fontSize.value;  // subscribe — chart recreates on font-size switch
 
   // Idea-status filters (abandoned/concluded). The "running" toggle is
   // experiment-level — see hideRunning below — so completed experiments
@@ -114,7 +116,7 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
     }
 
     chartRef.current = createChart(canvasRef.current, metric, chartData);
-  }, [metric, mode, impOnly, tags, tagMode, experiments, reversed, showAbandoned.value, showConcluded.value, showRunning.value, clip, mean, logScale]);
+  }, [metric, mode, impOnly, tags, tagMode, experiments, reversed, showAbandoned.value, showConcluded.value, showRunning.value, clip, mean, logScale, theme, _fz]);
 
   // Handle highlight changes separately (just update point sizes)
   useEffect(() => {
