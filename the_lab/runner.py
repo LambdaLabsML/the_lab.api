@@ -726,19 +726,49 @@ class ExperimentRunner:
         script_path = self._store.repo_dir / exp["script"]
         local_exp_dir = script_path.parent
 
-        # Git context — idea branch + commit SHA are stored in meta by the
-        # local runner's start() method.  Pass them to the executor so it can
-        # push the branch and create an isolated worktree on the slurm machine.
-        exp_meta   = exp.get("meta") or {}
+        # Git context: resolve branch + commit from the idea so the executor
+        # can push the right branch and create an isolated worktree.
+        # (The local runner resolves this in start(); for slurm we do it here.)
+        exp_meta = exp.get("meta") or {}
         git_branch = exp_meta.get("git_branch")
         git_commit = exp_meta.get("git_commit")
+        if not git_branch or not git_commit:
+            try:
+                idea = self._store.get_idea(exp["idea_id"])
+                git_branch = idea["branch"] if idea else get_current_branch(cwd=self._store.repo_dir)
+                git_commit = resolve_branch_commit(git_branch, cwd=self._store.repo_dir)
+                # Commit to auto-save any local changes on the idea branch.
+                try:
+                    auto_commit(cwd=self._store.repo_dir,
+                                message=f"exp {label}: pre-slurm submit")
+                    git_commit = resolve_branch_commit(git_branch, cwd=self._store.repo_dir)
+                except Exception:
+                    pass
+            except Exception as e:
+                print(f"[the-lab] could not resolve git context for {label}: {e}")
+
+        # Generate a run token — the SCRIPT_GUARD in every experiment script
+        # requires THE_LAB_TOKEN to be set (prevents accidental direct execution).
+        import secrets as _secrets
+        run_token = _secrets.token_hex(16)
+
+        # Env vars the wrapper embeds as explicit exports so the job has them
+        # even though it runs in a separate SSH/sbatch environment.
+        wrapper_env = {
+            "THE_LAB_TOKEN":   run_token,
+            "THE_LAB_API_URL": lab_api_url,
+            "THE_LAB_AUTH":    lab_auth,
+            "THE_LAB_EXP_ID":  str(exp["id"]),
+            "THE_LAB_IDEA_ID": str(exp.get("idea_id", "")),
+            **{k: str(v) for k, v in env_extra.items()},
+        }
 
         now = datetime.now(timezone.utc).isoformat()
         try:
             job_id = executor.submit(
                 label,
                 script_path,
-                env_extra,
+                wrapper_env,
                 local_exp_dir,
                 unit_kind=resource.unit_kind,
                 local_repo_dir=self._store.repo_dir,

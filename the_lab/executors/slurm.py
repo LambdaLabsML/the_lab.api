@@ -187,12 +187,20 @@ class SlurmExecutor:
     # ------------------------------------------------------------------
 
     def _build_wrapper(self, label: str, remote_job_dir: str,
-                       worktree_dir: str, unit_kind: str = "gpu") -> str:
+                       worktree_dir: str, unit_kind: str = "gpu",
+                       env_vars: dict | None = None) -> str:
         gpu_line     = f"#SBATCH --gres=gpu:{self.gpus}" if unit_kind == "gpu" else ""
         mem_line     = f"#SBATCH --mem={self.mem}"        if self.mem        else ""
         time_line    = f"#SBATCH --time={self.time_limit}" if self.time_limit else ""
         account_line = f"#SBATCH --account={self.account}" if self.account   else ""
         qos_line     = f"#SBATCH --qos={self.qos}"         if self.qos       else ""
+
+        # Build explicit export lines so env vars survive the sbatch→compute hop.
+        # --export=ALL only carries the submitter's shell env; vars set later
+        # (like THE_LAB_TOKEN) never make it to the compute node otherwise.
+        env_exports = "\n".join(
+            f"export {k}={v!r}" for k, v in (env_vars or {}).items()
+        )
 
         return f"""#!/bin/bash
 #SBATCH --partition={self.partition}
@@ -207,6 +215,9 @@ class SlurmExecutor:
 {qos_line}
 #SBATCH --export=ALL
 #SBATCH --requeue
+
+# Inject env vars that must survive the sbatch → compute node hop.
+{env_exports}
 
 # Preemption handler — Slurm sends SIGTERM before killing the job
 _PREEMPTED=0
@@ -302,6 +313,7 @@ exit $_EXIT
         # 3. Build and upload wrapper
         wrapper_content = self._build_wrapper(
             label, remote_job_dir, worktree_dir, unit_kind=unit_kind,
+            env_vars=env_extra,
         )
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".sh", prefix="thelab_wrapper_", delete=False,
