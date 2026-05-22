@@ -11,6 +11,7 @@ from pathlib import Path
 import math
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from . import token_registry as _token_registry
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import GZipMiddleware
@@ -95,6 +96,12 @@ async def basic_auth(request: Request, call_next):
     if auth_header.startswith("Basic "):
         provided = auth_header[len("Basic "):].strip()
         if secrets.compare_digest(provided, _AUTH_EXPECTED):
+            return await call_next(request)
+    # Also accept Bearer tokens issued by the runner for experiment processes.
+    # This lets preamble/scripts call the API without needing admin credentials.
+    if auth_header.startswith("Bearer "):
+        token = auth_header[len("Bearer "):].strip()
+        if _token_registry.is_valid(token):
             return await call_next(request)
     return Response(
         content="Unauthorized",

@@ -21,6 +21,7 @@ from .git_ops import (
 from .queue import Allocator, load_config, match_resource
 from .sandbox import build_sandbox_command, load_sandbox_config, sandbox_capabilities
 from .store import Store
+from . import token_registry
 
 
 class ExperimentRunner:
@@ -515,6 +516,7 @@ class ExperimentRunner:
                 p.unlink()
 
         run_token = secrets.token_hex(16)
+        token_registry.register(run_token)
         env = {
             **os.environ,
             "THE_LAB_TOKEN": run_token,
@@ -565,7 +567,7 @@ class ExperimentRunner:
         )
 
         task = asyncio.create_task(
-            self._monitor(exp_id, process, err_path, timeout=timeout)
+            self._monitor(exp_id, process, err_path, timeout=timeout, run_token=run_token)
         )
         self._tasks[exp_id] = task
 
@@ -577,6 +579,7 @@ class ExperimentRunner:
         process: asyncio.subprocess.Process,
         err_path: Path,
         timeout: float | None = None,
+        run_token: str = "",
     ):
         timed_out = False
         if timeout is not None:
@@ -663,6 +666,9 @@ class ExperimentRunner:
 
         self._tasks.pop(exp_id, None)
         self._finished_queue.put_nowait(exp_id)
+        # Revoke the per-experiment bearer token now that the process is done.
+        if run_token:
+            token_registry.unregister(run_token)
 
     def _extract_json(self, output: str) -> tuple[dict | None, int | None]:
         """Find the last non-empty line that parses as a JSON object.
