@@ -180,6 +180,86 @@
   );
 }
 
+[data-theme="petroleum"] {
+  @include theme-vars(
+    #071013, #0D171B, #132329,
+    #20343B, #172831,
+    #E6F1EF, #8AA0A0, #4A6066,
+    #2DD4BF, #22A896,
+    #60A5FA, #F59E0B, #F97367, #A78BFA,
+    "'JetBrains Mono','SF Mono','Fira Code',Consolas,monospace",
+    #0A2A28, #2DD4BF,
+    #0A1E2E, #60A5FA,
+    #2E0F0B, #F97367,
+    #2A1E00, #F59E0B,
+    #132329, #8AA0A0
+  );
+}
+
+[data-theme="graphite"] {
+  @include theme-vars(
+    #111015, #17151D, #211E29,
+    #342C3E, #2A2433,
+    #ECE7F4, #A39AAA, #5D5566,
+    #8B8CF6, #6B6CD4,
+    #7EA16B, #D8A03D, #C47A3A, #8B8CF6,
+    "'JetBrains Mono','SF Mono','Fira Code',Consolas,monospace",
+    #1C2A18, #7EA16B,
+    #141025, #6BB6D6,
+    #2A1510, #C47A3A,
+    #2A1E08, #D8A03D,
+    #1D1927, #A39AAA
+  );
+}
+
+[data-theme="charcoal"] {
+  @include theme-vars(
+    #12110F, #1A1814, #232018,
+    #343024, #2A2720,
+    #F1E9D6, #AAA08D, #5D5749,
+    #A3B18A, #849370,
+    #83C5BE, #D4A373, #E76F51, #C9B8D0,
+    "'JetBrains Mono','SF Mono','Fira Code',Consolas,monospace",
+    #1A2A27, #83C5BE,
+    #1A2230, #84A9C0,
+    #2E1510, #E76F51,
+    #2E2015, #D4A373,
+    #201E1A, #AAA08D
+  );
+}
+
+[data-theme="ink"] {
+  @include theme-vars(
+    #080B0F, #10141B, #171D26,
+    #222A36, #1A2230,
+    #E6EDF3, #8B949E, #484F58,
+    #7DD3FC, #5AB9E8,
+    #B7E35F, #FBBF24, #F87171, #C084FC,
+    "'JetBrains Mono','SF Mono','Fira Code',Consolas,monospace",
+    #1A2E15, #B7E35F,
+    #0D1F30, #7DD3FC,
+    #2E1515, #F87171,
+    #2E2000, #FBBF24,
+    #141B26, #8B949E
+  );
+}
+
+[data-theme="orchid"] {
+  @include theme-vars(
+    #070B18, #0D1324, #141B2F,
+    #27324D, #1E293F,
+    #E7ECFF, #929DB8, #4F5A73,
+    #6EA8FE, #4F8FE8,
+    #44D7B6, #F5B041, #EF6F6C, #C084FC,
+    "'JetBrains Mono','SF Mono','Fira Code',Consolas,monospace",
+    #0D2B26, #44D7B6,
+    #0D1B38, #6EA8FE,
+    #2B0F0F, #EF6F6C,
+    #2B1E08, #F5B041,
+    #131C30, #929DB8
+  );
+}
+
 // ── Font-family overrides ──────────────────────────────────────────────────
 // Each pairing sets both --font (UI) and --font-mono (code/terminal).
 

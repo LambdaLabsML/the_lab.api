@@ -27,7 +27,12 @@ const THEMES: ThemeDef[] = [
   { id: "light",   name: "Light",    swatches: ["#ffffff", "#0969da", "#1a7f37"] },
   { id: "dracula", name: "Dracula",  swatches: ["#282a36", "#bd93f9", "#50fa7b"] },
   { id: "ocean",   name: "Ocean",    swatches: ["#0d1b2a", "#2ea8ff", "#3fb950"] },
-  { id: "nord",    name: "Nord",     swatches: ["#2e3440", "#88c0d0", "#a3be8c"] },
+  { id: "nord",      name: "Nord",     swatches: ["#2e3440", "#88c0d0", "#a3be8c"] },
+  { id: "petroleum", name: "Petroleum", swatches: ["#071013", "#2DD4BF", "#F59E0B"] },
+  { id: "graphite",  name: "Graphite",  swatches: ["#111015", "#8B8CF6", "#D8A03D"] },
+  { id: "charcoal",  name: "Charcoal",  swatches: ["#12110F", "#A3B18A", "#D4A373"] },
+  { id: "ink",       name: "Ink + Ice", swatches: ["#080B0F", "#7DD3FC", "#B7E35F"] },
+  { id: "orchid",    name: "Orchid",    swatches: ["#070B18", "#6EA8FE", "#C084FC"] },
 ];
 
 export function Topbar(props: LayoutActions) {
