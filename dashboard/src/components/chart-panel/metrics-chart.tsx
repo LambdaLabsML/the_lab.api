@@ -29,6 +29,8 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const chartRef = useRef<Chart | null>(null);
   const innerRef = useRef<HTMLDivElement>(null);
+  const prevThemeRef = useRef(theme);
+  const prevFzRef = useRef(_fz);
 
   const experiments = allExperiments.value;
   const ideas = allIdeas.value;
@@ -64,6 +66,15 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
   // Create or update chart when data/settings change
   useEffect(() => {
     if (!metric || !canvasRef.current) return;
+
+    const themeOrSizeChanged = theme !== prevThemeRef.current || _fz !== prevFzRef.current;
+    prevThemeRef.current = theme;
+    prevFzRef.current = _fz;
+
+    if (chartRef.current && themeOrSizeChanged) {
+      chartRef.current.destroy();
+      chartRef.current = null;
+    }
 
     const chartData = buildChartData(
       metric,

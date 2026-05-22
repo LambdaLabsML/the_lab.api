@@ -2,15 +2,7 @@ import { render } from "preact";
 import { App } from "./app";
 import { colorTheme, fontFamily, fontSize } from "./state/settings";
 import { effect } from "@preact/signals";
-// Fonts — all OFL-1.1 open-source, loaded from npm via @fontsource
-import "@fontsource/jetbrains-mono/400.css";
-import "@fontsource/jetbrains-mono/700.css";
-import "@fontsource/fira-code/400.css";
-import "@fontsource/fira-code/700.css";
-import "@fontsource/space-grotesk/400.css";
-import "@fontsource/space-grotesk/600.css";
-import "@fontsource/outfit/400.css";
-import "@fontsource/outfit/600.css";
+import { ALL_PAIRINGS, DEFAULT_PAIRING } from "./lib/fonts";
 import "dockview-core/dist/styles/dockview.css";
 import "./styles/tailwind.css";
 import "./styles/dockview-overrides.scss";
@@ -37,9 +29,13 @@ effect(() => {
   document.documentElement.setAttribute("data-theme", colorTheme.value);
 });
 effect(() => {
-  const f = fontFamily.value;
-  if (f === "mono") document.documentElement.removeAttribute("data-font-family");
-  else document.documentElement.setAttribute("data-font-family", f);
+  const id = fontFamily.value;
+  // Set data-font-family attribute (drives CSS variable overrides in _tokens.scss)
+  if (id === "mono") document.documentElement.removeAttribute("data-font-family");
+  else document.documentElement.setAttribute("data-font-family", id);
+  // Lazy-load the font files for this pairing
+  const pairing = ALL_PAIRINGS.find((p) => p.id === id) ?? DEFAULT_PAIRING;
+  pairing.load().catch(() => {}); // silently ignore load failures
 });
 effect(() => {
   const s = fontSize.value;

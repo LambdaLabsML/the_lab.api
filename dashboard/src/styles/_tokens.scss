@@ -32,6 +32,7 @@
   --red:         #{$red};
   --purple:      #{$purple};
   --font:        #{$font};
+  --font-mono:   #{$font}; // default: same as --font (mono themes use mono for both)
   // Spacing scale
   --space-1: 4px;
   --space-2: 8px;
@@ -180,19 +181,18 @@
 }
 
 // ── Font-family overrides ──────────────────────────────────────────────────
+// Each pairing sets both --font (UI) and --font-mono (code/terminal).
 
-[data-font-family="fira"] {
-  --font: 'Fira Code', 'Fira Mono', monospace;
-}
-[data-font-family="space"] {
-  --font: 'Space Grotesk', system-ui, sans-serif;
-}
-[data-font-family="outfit"] {
-  --font: 'Outfit', system-ui, sans-serif;
-}
-[data-font-family="system"] {
-  --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-}
+[data-font-family="geist"]  { --font: 'Geist', system-ui, sans-serif;         --font-mono: 'Geist Mono', monospace; }
+[data-font-family="ibm"]    { --font: 'IBM Plex Sans', Helvetica, sans-serif;  --font-mono: 'IBM Plex Mono', monospace; }
+[data-font-family="mona"]   { --font: 'Mona Sans', system-ui, sans-serif;      --font-mono: 'JetBrains Mono', monospace; }
+[data-font-family="sora"]   { --font: 'Sora', system-ui, sans-serif;           --font-mono: 'JetBrains Mono', monospace; }
+[data-font-family="space"]  { --font: 'Space Grotesk', system-ui, sans-serif;  --font-mono: 'IBM Plex Mono', monospace; }
+
+// Legacy overrides kept for backwards compatibility
+[data-font-family="fira"]   { --font: 'Fira Code', 'Fira Mono', monospace;     --font-mono: 'Fira Code', monospace; }
+[data-font-family="outfit"] { --font: 'Outfit', system-ui, sans-serif;          --font-mono: 'JetBrains Mono', monospace; }
+[data-font-family="system"] { --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; --font-mono: 'SF Mono', 'Fira Code', monospace; }
 
 // ── Font-size scale overrides ──────────────────────────────────────────────
 // "m" is the default — no override, avoids redundant attribute.

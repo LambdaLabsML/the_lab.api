@@ -1,11 +1,21 @@
+// Cache getComputedStyle() for the duration of one synchronous callstack.
+// Cleared after the current microtask so theme changes always get fresh values.
+let _cachedStyle: CSSStyleDeclaration | null = null;
+
+function _getStyle(): CSSStyleDeclaration {
+  if (!_cachedStyle) {
+    _cachedStyle = getComputedStyle(document.documentElement);
+    Promise.resolve().then(() => { _cachedStyle = null; });
+  }
+  return _cachedStyle;
+}
+
 /**
  * Resolve a CSS custom property value from the current theme at runtime.
  * Needed by Chart.js and canvas renderers that cannot use var(--token) strings.
  */
 export function getCssVar(name: string): string {
-  return getComputedStyle(document.documentElement)
-    .getPropertyValue(name)
-    .trim();
+  return _getStyle().getPropertyValue(name).trim();
 }
 
 /**

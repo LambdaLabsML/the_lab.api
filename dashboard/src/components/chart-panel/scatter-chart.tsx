@@ -92,6 +92,8 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric }: { i
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const chartRef = useRef<Chart | null>(null);
+  const prevThemeRef = useRef(colorTheme.value);
+  const prevFzRef = useRef(fontSize.value);
 
   const experiments = allExperiments.value;
 
@@ -146,6 +148,15 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric }: { i
   // Create or update chart
   useEffect(() => {
     if (!xMetric || !yMetric || !canvasRef.current) return;
+
+    const themeOrSizeChanged = theme !== prevThemeRef.current || _fz !== prevFzRef.current;
+    prevThemeRef.current = theme;
+    prevFzRef.current = _fz;
+
+    if (chartRef.current && themeOrSizeChanged) {
+      chartRef.current.destroy();
+      chartRef.current = null;
+    }
 
     // Get experiments that have BOTH metrics
     let filtered: Experiment[];
@@ -333,7 +344,7 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric }: { i
         },
       },
     });
-  }, [xMetric, yMetric, mode, impOnly, tags, tagMode, experiments, showAbandoned.value, showConcluded.value, showRunning.value, clip, mean]);
+  }, [xMetric, yMetric, mode, impOnly, tags, tagMode, experiments, showAbandoned.value, showConcluded.value, showRunning.value, clip, mean, theme, _fz]);
 
   // Handle highlight changes separately
   useEffect(() => {

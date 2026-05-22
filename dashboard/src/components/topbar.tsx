@@ -2,6 +2,7 @@ import { useState } from "preact/hooks";
 import { backlogData } from "../state/signals";
 import { reverseTime, colorMode, colorTheme, fontFamily, fontSize } from "../state/settings";
 import { wsConnected, wsAuthFailed } from "../state/ws";
+import { ALL_PAIRINGS } from "../lib/fonts";
 
 interface LayoutActions {
   onResetLayout?: () => void;
@@ -17,14 +18,6 @@ interface ThemeDef {
   swatches: string[]; // 3 colours: bg, accent, green
 }
 
-interface FontDef { id: string; name: string; stack: string; }
-
-const FONTS: FontDef[] = [
-  { id: "mono",   name: "JetBrains", stack: "'JetBrains Mono', monospace" },
-  { id: "fira",   name: "Fira Code", stack: "'Fira Code', monospace" },
-  { id: "space",  name: "Grotesk",   stack: "'Space Grotesk', sans-serif" },
-  { id: "outfit", name: "Outfit",    stack: "'Outfit', sans-serif" },
-];
 
 const FONT_SIZES = ["xs", "s", "m", "l", "xl", "xxl"] as const;
 
@@ -116,15 +109,15 @@ export function Topbar(props: LayoutActions) {
             <div class="layout-menu-section">
               <div class="layout-menu-label">Font:</div>
               <div class="font-picker-grid">
-                {FONTS.map((f) => (
+                {ALL_PAIRINGS.map((p) => (
                   <button
-                    key={f.id}
-                    class={`font-swatch${activeFont === f.id ? " font-swatch--active" : ""}`}
-                    style={`font-family:${f.stack}`}
-                    onClick={() => { fontFamily.value = f.id; }}
-                    title={f.name}
+                    key={p.id}
+                    class={`font-swatch${activeFont === p.id ? " font-swatch--active" : ""}`}
+                    style={`font-family:${p.uiFont}`}
+                    onClick={() => { fontFamily.value = p.id; }}
+                    title={`${p.uiFont} / ${p.monoFont}`}
                   >
-                    {f.name}
+                    {p.label}
                   </button>
                 ))}
               </div>
