@@ -122,3 +122,71 @@
   letter-spacing: 0.03em;
   text-transform: uppercase;
 }
+
+/* ---- Font family picker ---- */
+
+.font-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 5px;
+  padding: 4px 0;
+}
+
+.font-swatch {
+  padding: 5px 8px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  text-align: left;
+  transition: border-color var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.font-swatch:hover {
+  border-color: var(--text-muted);
+  color: var(--text);
+  background: var(--bg-hi);
+}
+.font-swatch--active {
+  border-color: var(--accent) !important;
+  color: var(--accent) !important;
+  background: var(--bg-hi) !important;
+}
+
+/* ---- Font size picker ---- */
+
+.font-size-row {
+  display: flex;
+  gap: 4px;
+  padding: 4px 0;
+}
+
+.font-size-btn {
+  flex: 1;
+  padding: 4px 2px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  font-family: var(--font);
+  text-align: center;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  transition: border-color var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
+}
+.font-size-btn:hover {
+  border-color: var(--text-muted);
+  color: var(--text);
+  background: var(--bg-hi);
+}
+.font-size-btn--active {
+  border-color: var(--accent) !important;
+  color: var(--accent) !important;
+  background: var(--bg-hi) !important;
+}

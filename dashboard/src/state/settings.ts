@@ -146,3 +146,9 @@ export async function applyServerDefaults(): Promise<void> {
     // Config endpoint not available — use hardcoded defaults.
   }
 }
+
+/** Active font family. Applied as data-font-family on <html>. "mono" = default (no override). */
+export const fontFamily = useSetting<string>("fontFamily", "mono");
+
+/** Active font size step. Applied as data-font-size on <html>. "m" = default (no override). */
+export const fontSize = useSetting<string>("fontSize", "m");

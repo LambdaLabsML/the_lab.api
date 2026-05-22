@@ -1,6 +1,6 @@
 import { useState } from "preact/hooks";
 import { backlogData } from "../state/signals";
-import { reverseTime, colorMode, colorTheme } from "../state/settings";
+import { reverseTime, colorMode, colorTheme, fontFamily, fontSize } from "../state/settings";
 import { wsConnected, wsAuthFailed } from "../state/ws";
 
 interface LayoutActions {
@@ -16,6 +16,17 @@ interface ThemeDef {
   name: string;
   swatches: string[]; // 3 colours: bg, accent, green
 }
+
+interface FontDef { id: string; name: string; stack: string; }
+
+const FONTS: FontDef[] = [
+  { id: "mono",   name: "Mono",   stack: "'JetBrains Mono','SF Mono','Fira Code',monospace" },
+  { id: "inter",  name: "Inter",  stack: "'Inter',system-ui,sans-serif" },
+  { id: "ibm",    name: "IBM",    stack: "'IBM Plex Sans',Helvetica,sans-serif" },
+  { id: "system", name: "System", stack: "-apple-system,'Segoe UI',Roboto,sans-serif" },
+];
+
+const FONT_SIZES = ["xs", "s", "m", "l", "xl", "xxl"] as const;
 
 const THEMES: ThemeDef[] = [
   { id: "default", name: "Default",  swatches: ["#0d1117", "#58a6ff", "#3fb950"] },
@@ -39,7 +50,9 @@ export function Topbar(props: LayoutActions) {
   void layoutVersion; // trigger re-render when layouts change
   void colorMode; // used elsewhere
 
-  const activeTheme = colorTheme.value;
+  const activeTheme  = colorTheme.value;
+  const activeFont   = fontFamily.value;
+  const activeFontSz = fontSize.value;
 
   return (
     <div id="topbar">
@@ -99,6 +112,40 @@ export function Topbar(props: LayoutActions) {
                 ))}
               </div>
             </div>
+            {/* Font family */}
+            <div class="layout-menu-section">
+              <div class="layout-menu-label">Font:</div>
+              <div class="font-picker-grid">
+                {FONTS.map((f) => (
+                  <button
+                    key={f.id}
+                    class={`font-swatch${activeFont === f.id ? " font-swatch--active" : ""}`}
+                    style={`font-family:${f.stack}`}
+                    onClick={() => { fontFamily.value = f.id; }}
+                    title={f.name}
+                  >
+                    {f.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Font size */}
+            <div class="layout-menu-section">
+              <div class="layout-menu-label">Size:</div>
+              <div class="font-size-row">
+                {FONT_SIZES.map((sz) => (
+                  <button
+                    key={sz}
+                    class={`font-size-btn${activeFontSz === sz ? " font-size-btn--active" : ""}`}
+                    onClick={() => { fontSize.value = sz; }}
+                  >
+                    {sz}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             <div class="layout-menu-section">
               <button class="layout-menu-btn" onClick={() => { props.onResetLayout?.(); setShowLayoutMenu(false); }}>
                 Reset to Default

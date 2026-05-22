@@ -177,3 +177,25 @@
     #3b4252, #d8dee9
   );
 }
+
+// ── Font-family overrides (data-font-family on <html>) ──────────────────────
+// Default (mono) needs no override — already set in :root via @mixin theme-vars.
+
+[data-font-family="inter"] {
+  --font: 'Inter', system-ui, -apple-system, sans-serif;
+}
+[data-font-family="ibm"] {
+  --font: 'IBM Plex Sans', Helvetica, Arial, sans-serif;
+}
+[data-font-family="system"] {
+  --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+// ── Font-size scale overrides (data-font-size on <html>) ────────────────────
+// Default "m" matches the existing token values — no override needed.
+
+[data-font-size="xs"] { --text-xs:7px;  --text-sm:8px;  --text-base:9px;  --text-lg:11px; }
+[data-font-size="s"]  { --text-xs:8px;  --text-sm:9px;  --text-base:10px; --text-lg:12px; }
+[data-font-size="l"]  { --text-xs:11px; --text-sm:12px; --text-base:13px; --text-lg:15px; }
+[data-font-size="xl"] { --text-xs:12px; --text-sm:13px; --text-base:14px; --text-lg:16px; }
+[data-font-size="xxl"]{ --text-xs:13px; --text-sm:14px; --text-base:16px; --text-lg:18px; }
