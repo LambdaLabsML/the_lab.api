@@ -92,7 +92,7 @@ def get_queue(
         "queued": queued,
         "running": running,
         "recent": recent,
-        "resources": [runner._allocator.utilization(r) for r in resources],
+        "resources": [{**r.to_dict(), "utilization": runner._allocator.utilization(r)} for r in resources],
         "config": asdict(qc),
     }
 
