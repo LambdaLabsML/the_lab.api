@@ -111,7 +111,13 @@ export function collectChartKeys(experiments: Experiment[]): GroupedKeys {
 
   const allMetrics = [...metricSet].sort();
   const flat   = allMetrics.filter(k => !k.includes('.'));
-  const nested = allMetrics.filter(k =>  k.includes('.'));
+  // Sort nested keys by depth (fewest dots first), then alphabetically
+  const nested = allMetrics
+    .filter(k => k.includes('.'))
+    .sort((a, b) => {
+      const d = a.split('.').length - b.split('.').length;
+      return d !== 0 ? d : a.localeCompare(b);
+    });
 
   return { metrics: flat, nested, meta: [...metaSet].sort(), timing };
 }
