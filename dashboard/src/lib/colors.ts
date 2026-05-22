@@ -99,9 +99,16 @@ function _better(a: number, b: number, lower: boolean): boolean {
 // ---------------------------------------------------------------------------
 let _globalBestBefore: Record<string, Record<number, number | null>> = {};
 
+// Memo layer for _computeGlobalBestBefore: the filter+sort+key-build is O(n log n)
+// and was running 149 times per graph render (once per idea). With reference
+// equality on allExperiments + metricKey, the preparation runs only once per
+// render, dropping 149 × O(n log n) → 1 × O(n log n).
+let _sortedMemo: { exps: Experiment[]; metric: string; sorted: Experiment[]; key: string } | null = null;
+
 /** Invalidate the global-best-before cache (call after new chart-data load). */
 export function resetGlobalBestBeforeCache(): void {
   _globalBestBefore = {};
+  _sortedMemo = null;  // also clear the sort memo
 }
 
 // ---------------------------------------------------------------------------
@@ -163,16 +170,28 @@ export function _computeGlobalBestBefore(
   metricKey: string,
   allExperiments: Experiment[],
 ): Record<number, number | null> {
-  const sorted = allExperiments
-    .filter((e) => e.metrics && typeof e.metrics[metricKey] === 'number' && !e._running)
-    .slice()
-    .sort((a, b) =>
-      (a.finished_at || a.started_at || '').localeCompare(b.finished_at || b.started_at || ''),
-    );
+  // Use memoised sorted array + cacheKey when called repeatedly with the
+  // same experiments array (same render cycle). 149 idea-colour calls in
+  // the graph would otherwise each run an O(n log n) sort + O(n) key build.
+  let sorted: Experiment[];
+  let cacheKey: string;
 
-  const cacheKey = metricKey + "::" + sorted
-    .map((e) => `${e.id}:${e.finished_at || e.started_at || ''}:${e.metrics![metricKey]}`)
-    .join("|");
+  if (_sortedMemo && _sortedMemo.exps === allExperiments && _sortedMemo.metric === metricKey) {
+    sorted   = _sortedMemo.sorted;
+    cacheKey = _sortedMemo.key;
+  } else {
+    sorted = allExperiments
+      .filter((e) => e.metrics && typeof e.metrics[metricKey] === 'number' && !e._running)
+      .slice()
+      .sort((a, b) =>
+        (a.finished_at || a.started_at || '').localeCompare(b.finished_at || b.started_at || ''),
+      );
+    cacheKey = metricKey + "::" + sorted
+      .map((e) => `${e.id}:${e.finished_at || e.started_at || ''}:${e.metrics![metricKey]}`)
+      .join("|");
+    _sortedMemo = { exps: allExperiments, metric: metricKey, sorted, key: cacheKey };
+  }
+
   if (_globalBestBefore[cacheKey]) return _globalBestBefore[cacheKey];
 
   const lower = isLowerBetter(metricKey);
