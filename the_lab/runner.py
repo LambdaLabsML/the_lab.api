@@ -726,6 +726,13 @@ class ExperimentRunner:
         script_path = self._store.repo_dir / exp["script"]
         local_exp_dir = script_path.parent
 
+        # Git context — idea branch + commit SHA are stored in meta by the
+        # local runner's start() method.  Pass them to the executor so it can
+        # push the branch and create an isolated worktree on the slurm machine.
+        exp_meta   = exp.get("meta") or {}
+        git_branch = exp_meta.get("git_branch")
+        git_commit = exp_meta.get("git_commit")
+
         now = datetime.now(timezone.utc).isoformat()
         try:
             job_id = executor.submit(
@@ -734,6 +741,9 @@ class ExperimentRunner:
                 env_extra,
                 local_exp_dir,
                 unit_kind=resource.unit_kind,
+                local_repo_dir=self._store.repo_dir,
+                git_branch=git_branch,
+                git_commit=git_commit,
             )
         except Exception as e:
             print(f"[the-lab] slurm submit for {label} failed: {e}")
@@ -822,7 +832,7 @@ class ExperimentRunner:
                 executor.pull_results(label, local_exp_dir)
                 exp = self._store.get_experiment(exp_id)
                 if not exp or exp.get("status") == "cancelled":
-                    executor.cleanup_remote(label)
+                    executor.cleanup_remote(label, abs_bare_path=getattr(executor, "_resolved_bare_path", None))
                     self._allocator.release(label)
                     self.wake_scheduler()
                     self._tasks.pop(exp_id, None)
@@ -867,7 +877,7 @@ class ExperimentRunner:
                         "status": "completed",
                         "metrics": None,
                     })
-                executor.cleanup_remote(label)
+                executor.cleanup_remote(label, abs_bare_path=getattr(executor, "_resolved_bare_path", None))
                 self._allocator.release(label)
                 self.wake_scheduler()
                 self._tasks.pop(exp_id, None)
@@ -877,7 +887,7 @@ class ExperimentRunner:
                 executor.pull_results(label, local_exp_dir)
                 exp = self._store.get_experiment(exp_id)
                 if not exp or exp.get("status") == "cancelled":
-                    executor.cleanup_remote(label)
+                    executor.cleanup_remote(label, abs_bare_path=getattr(executor, "_resolved_bare_path", None))
                     self._allocator.release(label)
                     self.wake_scheduler()
                     self._tasks.pop(exp_id, None)
@@ -900,7 +910,7 @@ class ExperimentRunner:
                     "status": "failed",
                     "metrics": None,
                 })
-                executor.cleanup_remote(label)
+                executor.cleanup_remote(label, abs_bare_path=getattr(executor, "_resolved_bare_path", None))
                 self._allocator.release(label)
                 self.wake_scheduler()
                 self._tasks.pop(exp_id, None)
