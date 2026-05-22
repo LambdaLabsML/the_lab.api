@@ -21,8 +21,7 @@ import {
 } from "../../state/settings";
 import { filterMetricExperiments, collectChartKeys, resolveNumericValue } from "../../lib/chart-data";
 import { IDEA_PALETTE, _colorForExp, isLowerBetter } from "../../lib/colors";
-import { resolveColor } from "../../lib/css-vars";
-import { getCssVar } from "../../lib/css-vars";
+import { resolveColor, getCssVar, getCssVarPx } from "../../lib/css-vars";
 import type { Experiment, IdeaNode, SubwayLayout } from "../../lib/types";
 
 /**
