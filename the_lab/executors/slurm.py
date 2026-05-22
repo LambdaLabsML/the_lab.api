@@ -233,9 +233,18 @@ class SlurmExecutor:
 # experiment installs its own packages/ here without touching the base.
 export _PJVENV="{remote_job_dir}/venv"
 python3 -m venv "$_PJVENV"
+# Add base venv's site-packages to child venv via .pth so heavy packages
+# (vllm, torch, triton) are importable from the per-job Python.
 _BASE_SP=$("{self.base_venv_path}/bin/python" -c "import site; print(site.getsitepackages()[0])")
 _PJ_SP=$("$_PJVENV/bin/python"               -c "import site; print(site.getsitepackages()[0])")
 echo "$_BASE_SP" > "$_PJ_SP/base-venv.pth"
+# Symlink the base venv's bin/ executables (vllm, etc.) into the per-job venv
+# so scripts that call .venv/bin/vllm find it.  The per-job Python and uv are
+# already present from the venv create above.
+for _bin in "{self.base_venv_path}/bin/"*; do
+  _name="$(basename "$_bin")"
+  [ -e "$_PJVENV/bin/$_name" ] || ln -sf "$_bin" "$_PJVENV/bin/$_name"
+done
 export VENV_DIR="$_PJVENV"
 export UV="{self.base_venv_path}/bin/uv"
 # ─────────────────────────────────────────────────────────────────────────────
