@@ -64,72 +64,69 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
     };
   }, []);
 
-  // Create or update chart when data/settings change
+  // Create or update chart when data/settings change.
+  // Heavy work (buildChartData + canvas draw) is deferred to the next
+  // animation frame so the browser can repaint the toggled button state
+  // first — otherwise useEffect blocks the repaint for 50-200ms and the
+  // button appears frozen until the chart finishes updating.
   useEffect(() => {
     if (!metric || !canvasRef.current) return;
-    // Skip update if the panel is hidden (collapsed, tray, or display:none ancestor)
-    if (!canvasRef.current.offsetParent) return;
 
+    // Sync: update theme/size refs and destroy chart if needed.
+    // Must happen before the rAF so createChart gets fresh CSS vars.
     const themeOrSizeChanged = theme !== prevThemeRef.current || _fz !== prevFzRef.current;
     prevThemeRef.current = theme;
     prevFzRef.current = _fz;
-
     if (chartRef.current && themeOrSizeChanged) {
       chartRef.current.destroy();
       chartRef.current = null;
     }
 
-    const chartData = buildChartData(
-      metric,
-      experiments,
-      tags,
-      tagMode,
-      impOnly,
-      mode,
-      ideas,
-      layout,
-      reversed,
-      hiddenStatuses,
-      mean,
-      hideRunning,
-    );
+    // Capture mutable refs for the rAF closure
+    const canvas = canvasRef.current;
+    const inner  = innerRef.current;
 
-    if (!chartData) return;
+    const rafId = requestAnimationFrame(() => {
+      if (!canvas.offsetParent) return; // panel hidden — skip
+      if (!canvas.isConnected) return;  // component unmounted
 
-    // Size the container for horizontal scroll, capped to avoid
-    // exceeding mobile browser canvas size limits (~4096px).
-    if (innerRef.current) {
-      const parent = innerRef.current.parentElement;
-      const parentW = parent ? parent.clientWidth : 400;
-      const maxCanvasW = 4000;
-      const idealW = chartData.labels.length * 50;
-      const minW = Math.max(parentW, Math.min(idealW, maxCanvasW));
-      innerRef.current.style.width = minW + "px";
-    }
+      const chartData = buildChartData(
+        metric, experiments, tags, tagMode, impOnly, mode,
+        ideas, layout, reversed, hiddenStatuses, mean, hideRunning,
+      );
+      if (!chartData) return;
 
-    if (chartRef.current) {
-      // Update in-place
-      const ds = chartRef.current.data.datasets[0];
-      ds.data = chartData.values;
-      ds.pointBackgroundColor = chartData.pointBgColors as any;
-      ds.pointBorderColor = chartData.pointColors as any;
-      ds.pointBorderWidth = chartData.pointBorderWidths as any;
-      ds.pointStyle = chartData.pointStyles as any;
-      ds.pointRadius = chartData.pointRadii as any;
-      (ds as any)._expData = chartData.expData;
-      chartRef.current.data.labels = chartData.labels;
-      const yBounds = clip ? computeYBounds(chartData.values) : {};
-      const yScale = chartRef.current.options.scales!.y!;
-      yScale.title = { display: true, text: metric, color: getCssVar("--text-muted"), font: { size: getCssVarPx("--text-xs") } };
-      yScale.min = yBounds.min;
-      yScale.max = yBounds.max;
-      (yScale as any).type = logScale ? "logarithmic" : "linear";
-      chartRef.current.resize();
-      chartRef.current.update("none");
-      return;
-    }
+      if (inner) {
+        const parentW = inner.parentElement?.clientWidth ?? 400;
+        const minW = Math.max(parentW, Math.min(chartData.labels.length * 50, 4000));
+        inner.style.width = minW + "px";
+      }
 
-    chartRef.current = createChart(canvasRef.current, metric, chartData);
+      if (chartRef.current) {
+        const ds = chartRef.current.data.datasets[0];
+        ds.data = chartData.values;
+        ds.pointBackgroundColor = chartData.pointBgColors as any;
+        ds.pointBorderColor    = chartData.pointColors as any;
+        ds.pointBorderWidth    = chartData.pointBorderWidths as any;
+        ds.pointStyle          = chartData.pointStyles as any;
+        ds.pointRadius         = chartData.pointRadii as any;
+        (ds as any)._expData   = chartData.expData;
+        chartRef.current.data.labels = chartData.labels;
+        const yBounds = clip ? computeYBounds(chartData.values) : {};
+        const yScale  = chartRef.current.options.scales!.y!;
+        yScale.title  = { display: true, text: metric, color: getCssVar("--text-muted"), font: { size: getCssVarPx("--text-xs") } };
+        yScale.min    = yBounds.min;
+        yScale.max    = yBounds.max;
+        (yScale as any).type = logScale ? "logarithmic" : "linear";
+        chartRef.current.resize();
+        chartRef.current.update("none");
+        return;
+      }
+
+      chartRef.current = createChart(canvas, metric, chartData);
+    }); // end requestAnimationFrame
+
+    return () => cancelAnimationFrame(rafId);
   }, [metric, mode, impOnly, tags, tagMode, experiments, reversed, showAbandoned.value, showConcluded.value, showRunning.value, clip, mean, logScale, theme, _fz]);
 
   // Handle highlight changes separately (just update point sizes)

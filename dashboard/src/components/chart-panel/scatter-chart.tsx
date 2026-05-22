@@ -148,17 +148,19 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric }: { i
   // Create or update chart
   useEffect(() => {
     if (!xMetric || !yMetric || !canvasRef.current) return;
-    // Skip if panel is hidden — let metrics chart have this frame
-    if (!canvasRef.current.offsetParent) return;
 
+    // Sync: update refs and destroy if needed — must run before rAF
     const themeOrSizeChanged = theme !== prevThemeRef.current || _fz !== prevFzRef.current;
     prevThemeRef.current = theme;
     prevFzRef.current = _fz;
-
     if (chartRef.current && themeOrSizeChanged) {
       chartRef.current.destroy();
       chartRef.current = null;
     }
+
+    const canvas = canvasRef.current;
+    const rafId = requestAnimationFrame(() => {
+    if (!canvas.offsetParent || !canvas.isConnected) return;
 
     // Get experiments that have BOTH metrics
     let filtered: Experiment[];
@@ -243,18 +245,12 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric }: { i
       xScale.max = xBounds.max;
       yScale.min = yBounds.min;
       yScale.max = yBounds.max;
-      // Defer canvas draw to next frame so MetricsChart gets this frame
-      const chart = chartRef.current;
-      requestAnimationFrame(() => {
-        if (chart && chart === chartRef.current) {
-          chart.resize();
-          chart.update("none");
-        }
-      });
+      chartRef.current.resize();
+      chartRef.current.update("none");
       return;
     }
 
-    chartRef.current = new Chart(canvasRef.current, {
+    chartRef.current = new Chart(canvas, {
       type: "scatter",
       data: {
         datasets: [
@@ -352,6 +348,9 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric }: { i
         },
       },
     });
+    }); // end requestAnimationFrame
+
+    return () => cancelAnimationFrame(rafId);
   }, [xMetric, yMetric, mode, impOnly, tags, tagMode, experiments, showAbandoned.value, showConcluded.value, showRunning.value, clip, mean, theme, _fz]);
 
   // Handle highlight changes separately
