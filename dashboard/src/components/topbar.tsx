@@ -1,6 +1,6 @@
 import { useState } from "preact/hooks";
 import { backlogData } from "../state/signals";
-import { reverseTime, colorMode } from "../state/settings";
+import { reverseTime, colorMode, colorTheme } from "../state/settings";
 import { wsConnected, wsAuthFailed } from "../state/ws";
 
 interface LayoutActions {
@@ -10,6 +10,21 @@ interface LayoutActions {
   onDeleteLayout?: (name: string) => void;
   getSavedLayouts?: () => string[];
 }
+
+interface ThemeDef {
+  id: string;
+  name: string;
+  swatches: string[]; // 3 colours: bg, accent, green
+}
+
+const THEMES: ThemeDef[] = [
+  { id: "default", name: "Default",  swatches: ["#0d1117", "#58a6ff", "#3fb950"] },
+  { id: "lambda",  name: "Lambda",   swatches: ["#0b0b0b", "#6236f4", "#00e600"] },
+  { id: "light",   name: "Light",    swatches: ["#ffffff", "#0969da", "#1a7f37"] },
+  { id: "dracula", name: "Dracula",  swatches: ["#282a36", "#bd93f9", "#50fa7b"] },
+  { id: "ocean",   name: "Ocean",    swatches: ["#0d1b2a", "#2ea8ff", "#3fb950"] },
+  { id: "nord",    name: "Nord",     swatches: ["#2e3440", "#88c0d0", "#a3be8c"] },
+];
 
 export function Topbar(props: LayoutActions) {
   const data = backlogData.value;
@@ -22,6 +37,9 @@ export function Topbar(props: LayoutActions) {
 
   const savedLayouts = props.getSavedLayouts?.() || [];
   void layoutVersion; // trigger re-render when layouts change
+  void colorMode; // used elsewhere
+
+  const activeTheme = colorTheme.value;
 
   return (
     <div id="topbar">
@@ -47,7 +65,7 @@ export function Topbar(props: LayoutActions) {
         onClick={() => { reverseTime.value = !reversed; }}
         title={reversed ? "Newest left/top (click to reverse)" : "Oldest left/top (click to reverse)"}
       >
-        {reversed ? "\u2190 newest" : "oldest \u2192"}
+        {reversed ? "← newest" : "oldest →"}
       </button>
 
       {/* Layout management */}
@@ -61,6 +79,26 @@ export function Topbar(props: LayoutActions) {
         </button>
         {showLayoutMenu && (
           <div class="layout-menu">
+            <div class="layout-menu-section">
+              <div class="layout-menu-label">Color theme:</div>
+              <div class="theme-picker-grid">
+                {THEMES.map((t) => (
+                  <button
+                    key={t.id}
+                    class={`theme-swatch${activeTheme === t.id ? " theme-swatch--active" : ""}`}
+                    onClick={() => { colorTheme.value = t.id; }}
+                    title={t.name}
+                  >
+                    <span class="theme-swatch-colors">
+                      {t.swatches.map((c, i) => (
+                        <span key={i} class="theme-swatch-dot" style={`background:${c}`} />
+                      ))}
+                    </span>
+                    <span class="theme-swatch-name">{t.name}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
             <div class="layout-menu-section">
               <button class="layout-menu-btn" onClick={() => { props.onResetLayout?.(); setShowLayoutMenu(false); }}>
                 Reset to Default

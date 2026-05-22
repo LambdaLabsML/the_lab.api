@@ -106,6 +106,9 @@ export const detailTimeline = useSetting("detailTimeline", true);
 /** When true, newest items appear first in the detail panel. */
 export const detailSortNewest = useSetting("detailSortNewest", true);
 
+/** Active colour theme name. Applied as data-theme on <html>. */
+export const colorTheme = useSetting<string>("colorTheme", "default");
+
 // ---------------------------------------------------------------------------
 // Server-provided defaults from GET /api/v1/config
 // ---------------------------------------------------------------------------

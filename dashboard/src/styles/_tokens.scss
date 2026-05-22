@@ -1,0 +1,114 @@
+// _tokens.scss — Design tokens for the_lab dashboard
+// Each theme overrides CSS custom properties. Default = GitHub Dark.
+
+// ── Mixins ──────────────────────────────────────────────────────────────────
+
+@mixin theme-vars(
+  $bg, $bg-elev, $bg-hi,
+  $border, $border-soft,
+  $text, $text-muted, $text-faint,
+  $accent, $accent-dim,
+  $green, $yellow, $red, $purple,
+  $font
+) {
+  --bg:          #{$bg};
+  --bg-elev:     #{$bg-elev};
+  --bg-hi:       #{$bg-hi};
+  --border:      #{$border};
+  --border-soft: #{$border-soft};
+  --text:        #{$text};
+  --text-muted:  #{$text-muted};
+  --text-faint:  #{$text-faint};
+  --accent:      #{$accent};
+  --accent-dim:  #{$accent-dim};
+  --green:       #{$green};
+  --yellow:      #{$yellow};
+  --red:         #{$red};
+  --purple:      #{$purple};
+  --font:        #{$font};
+  // Spacing scale
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+  // Radius
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  // Font sizes
+  --text-xs:   10px;
+  --text-sm:   11px;
+  --text-base: 13px;
+  --text-lg:   15px;
+}
+
+// ── Themes ────────────────────────────────────────────────────────────────
+
+:root,
+[data-theme="default"] {
+  @include theme-vars(
+    #0d1117, #161b22, #21262d,
+    #30363d, #21262d,
+    #c9d1d9, #8b949e, #484f58,
+    #58a6ff, #388bfd,
+    #3fb950, #d29922, #f85149, #bc8cff,
+    "'SF Mono', 'Fira Code', 'Consolas', monospace"
+  );
+}
+
+[data-theme="lambda"] {
+  @include theme-vars(
+    #0b0b0b, #18181d, #262625,
+    #262625, #1e1e22,
+    #e7e6d9, #95948c, #4a4a52,
+    #6236f4, #815ef6,
+    #00e600, #e7e600, #e70000, #a186f8,
+    "'IBM Plex Mono', 'Fira Code', monospace"
+  );
+}
+
+[data-theme="light"] {
+  @include theme-vars(
+    #ffffff, #f6f8fa, #eaeef2,
+    #d0d7de, #e0e6ec,
+    #24292f, #57606a, #818b98,
+    #0969da, #0550ae,
+    #1a7f37, #bf8700, #cf222e, #8250df,
+    "'SF Mono', 'Fira Code', 'Consolas', monospace"
+  );
+}
+
+[data-theme="dracula"] {
+  @include theme-vars(
+    #282a36, #1e1f29, #44475a,
+    #44475a, #383a4a,
+    #f8f8f2, #6272a4, #4d5374,
+    #bd93f9, #9f6fdd,
+    #50fa7b, #f1fa8c, #ff5555, #bd93f9,
+    "'Fira Code', 'Consolas', monospace"
+  );
+}
+
+[data-theme="ocean"] {
+  @include theme-vars(
+    #0d1b2a, #1b2838, #243447,
+    #2a3f5f, #1e3050,
+    #cdd9e5, #768aa0, #4d6478,
+    #2ea8ff, #1a8fe0,
+    #3fb950, #e3a040, #f47067, #b08ee8,
+    "'SF Mono', 'Fira Code', 'Consolas', monospace"
+  );
+}
+
+[data-theme="nord"] {
+  @include theme-vars(
+    #2e3440, #3b4252, #434c5e,
+    #4c566a, #3d4454,
+    #eceff4, #d8dee9, #8fbcbb,
+    #88c0d0, #6fafc4,
+    #a3be8c, #ebcb8b, #bf616a, #b48ead,
+    "'Fira Code', 'Consolas', monospace"
+  );
+}

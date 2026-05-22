@@ -1,48 +1,48 @@
-/* dockview-overrides.css — Match dockview dark theme to our color scheme */
+/* dockview-overrides.scss — Match dockview dark theme to our color scheme */
 
 .dockview-theme-dark.dockview-theme-dark {
   /* Doubled selector for specificity over base dockview.css */
   /* Core backgrounds — blueish-gray, not brownish */
-  --dv-background-color: #0d1117;
-  --dv-group-view-background-color: #0d1117;
-  --dv-tabs-and-actions-container-background-color: #161b22;
+  --dv-background-color: var(--bg);
+  --dv-group-view-background-color: var(--bg);
+  --dv-tabs-and-actions-container-background-color: var(--bg-elev);
   --dv-tabs-and-actions-container-height: 28px;
   --dv-tabs-and-actions-container-font-size: 11px;
 
   /* Active group, visible tab */
-  --dv-activegroup-visiblepanel-tab-background-color: #0d1117;
-  --dv-activegroup-visiblepanel-tab-color: #58a6ff;
+  --dv-activegroup-visiblepanel-tab-background-color: var(--bg);
+  --dv-activegroup-visiblepanel-tab-color: var(--accent);
   /* Active group, hidden tab */
-  --dv-activegroup-hiddenpanel-tab-background-color: #161b22;
-  --dv-activegroup-hiddenpanel-tab-color: #8b949e;
+  --dv-activegroup-hiddenpanel-tab-background-color: var(--bg-elev);
+  --dv-activegroup-hiddenpanel-tab-color: var(--text-muted);
   /* Inactive group, visible tab */
-  --dv-inactivegroup-visiblepanel-tab-background-color: #161b22;
-  --dv-inactivegroup-visiblepanel-tab-color: #8b949e;
+  --dv-inactivegroup-visiblepanel-tab-background-color: var(--bg-elev);
+  --dv-inactivegroup-visiblepanel-tab-color: var(--text-muted);
   /* Inactive group, hidden tab */
-  --dv-inactivegroup-hiddenpanel-tab-background-color: #161b22;
-  --dv-inactivegroup-hiddenpanel-tab-color: #484f58;
+  --dv-inactivegroup-hiddenpanel-tab-background-color: var(--bg-elev);
+  --dv-inactivegroup-hiddenpanel-tab-color: var(--text-faint);
 
   /* Borders & dividers */
-  --dv-tab-divider-color: #21262d;
-  --dv-separator-border: #21262d;
-  --dv-paneview-header-border-color: #30363d;
+  --dv-tab-divider-color: var(--border-soft);
+  --dv-separator-border: var(--border-soft);
+  --dv-paneview-header-border-color: var(--border);
 
   /* Drag & drop */
   --dv-drag-over-background-color: rgba(88, 166, 255, 0.08);
-  --dv-drag-over-border-color: #58a6ff;
+  --dv-drag-over-border-color: var(--accent);
   --dv-floating-box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
 
   /* Splitters */
-  --dv-sash-color: #21262d;
-  --dv-active-sash-color: #58a6ff;
+  --dv-sash-color: var(--border-soft);
+  --dv-active-sash-color: var(--accent);
   --dv-active-sash-transition-duration: 0.1s;
   --dv-active-sash-transition-delay: 0s;
 
   /* Icons */
-  --dv-icon-hover-background-color: #21262d;
+  --dv-icon-hover-background-color: var(--bg-hi);
 
   /* Font */
-  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-family: var(--font);
   font-size: 11px;
 }
 
@@ -55,11 +55,11 @@
 }
 
 .dockview-theme-dark .dv-tab:hover {
-  background: #21262d !important;
+  background: var(--bg-hi) !important;
 }
 
 .dockview-theme-dark .dv-active-tab {
-  border-bottom: 2px solid #58a6ff !important;
+  border-bottom: 2px solid var(--accent) !important;
 }
 
 .dockview-theme-dark .dv-inactive-tab {
@@ -72,20 +72,20 @@
   transition: opacity 0.15s;
 }
 .dockview-theme-dark .dv-tab:hover .dv-default-tab-action { opacity: 0.6; }
-.dockview-theme-dark .dv-default-tab-action:hover { opacity: 1; color: #f85149; }
+.dockview-theme-dark .dv-default-tab-action:hover { opacity: 1; color: var(--red); }
 
 /* ---- Void container (empty tab-bar space) — clickable to collapse ---- */
 .dockview-theme-dark .dv-void-container {
   cursor: pointer;
 }
 .dockview-theme-dark .dv-void-container:hover {
-  background: #21262d;
+  background: var(--bg-hi);
 }
 
 /* ---- Floating panels ---- */
 
 .dockview-theme-dark .dv-overlay-render-container .dv-groupview {
-  border: 1px solid #30363d;
+  border: 1px solid var(--border);
   border-radius: 6px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
   overflow: hidden;
@@ -95,7 +95,7 @@
 
 .dockview-theme-dark .dv-drop-target-anchor {
   background: rgba(88, 166, 255, 0.1) !important;
-  border: 2px solid #58a6ff !important;
+  border: 2px solid var(--accent) !important;
   border-radius: 4px;
 }
 
@@ -117,7 +117,7 @@
   height: 22px;
   border: none;
   background: transparent;
-  color: #484f58;
+  color: var(--text-faint);
   border-radius: 3px;
   cursor: pointer;
   font-size: 12px;
@@ -126,12 +126,12 @@
 }
 
 .dv-header-action-btn:hover {
-  background: #21262d;
-  color: #c9d1d9;
+  background: var(--bg-hi);
+  color: var(--text);
 }
 
 .dv-header-action-btn.active {
-  color: #58a6ff;
+  color: var(--accent);
 }
 
 /* ---- Panel content wrapper ---- */
@@ -140,8 +140,8 @@
   width: 100%;
   height: 100%;
   overflow: auto;
-  background: #0d1117;
-  color: #c9d1d9;
+  background: var(--bg);
+  color: var(--text);
 }
 
 .dv-panel #subway-container,
@@ -167,7 +167,7 @@
 .dv-panel .filter-bar-standalone {
   padding: 6px 12px;
   font-size: 11px;
-  color: #8b949e;
+  color: var(--text-muted);
   display: flex;
   align-items: center;
   gap: 8px;
@@ -181,18 +181,18 @@
 /* ---- Long-press move menu ---- */
 .dv-move-menu {
   position: fixed; z-index: 99999;
-  background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+  background: var(--bg-elev); border: 1px solid var(--border); border-radius: 8px;
   box-shadow: 0 8px 32px rgba(0,0,0,0.5); min-width: 180px;
-  padding: 4px 0; font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  padding: 4px 0; font-family: var(--font);
 }
 .dv-move-menu-title {
   padding: 6px 12px; font-size: 10px; text-transform: uppercase;
-  color: #484f58; letter-spacing: 0.5px; border-bottom: 1px solid #21262d;
+  color: var(--text-faint); letter-spacing: 0.5px; border-bottom: 1px solid var(--border-soft);
 }
 .dv-move-menu-item {
-  padding: 8px 12px; font-size: 12px; color: #c9d1d9; cursor: pointer;
+  padding: 8px 12px; font-size: 12px; color: var(--text); cursor: pointer;
 }
-.dv-move-menu-item:hover { background: #21262d; color: #58a6ff; }
+.dv-move-menu-item:hover { background: var(--bg-hi); color: var(--accent); }
 
 /* ---- Touch support ---- */
 
