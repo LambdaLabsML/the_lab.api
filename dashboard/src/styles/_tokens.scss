@@ -97,18 +97,18 @@
 
 [data-theme="oled"] {
   @include theme-vars(
-    #000000, #0a0a0a, #141414,
-    #222222, #191919,
+    #000000, #040404, #080808,
+    #111111, #080808,
     #c8c8c8, #808080, #404040,
     #58a6ff, #388bfd,
     #3fb950, #d29922, #f85149, #bc8cff,
     "'JetBrains Mono','SF Mono','Fira Code',Consolas,monospace",
-    // badges — oled (tinted but not harsh)
-    #091a0c, #3fb950,
-    #091525, #58a6ff,
-    #1a0909, #f85149,
-    #1a1300, #d29922,
-    #141414, #808080
+    // badges — oled (very dark tints)
+    #020d04, #3fb950,
+    #020810, #58a6ff,
+    #0d0202, #f85149,
+    #0d0900, #d29922,
+    #080808, #808080
   );
 }
 
