@@ -247,12 +247,7 @@ for _bin in "{self.base_venv_path}/bin/"*; do
 done
 export VENV_DIR="$_PJVENV"
 export UV="{self.base_venv_path}/bin/uv"
-# Install tokenizers==0.21.4 into the per-job venv so it takes precedence
-# over the base venv's 0.22.2 via Python's site-packages search order.
-# packages/transformers (Gemma 4 support) requires tokenizers<0.22.
-# The base venv keeps 0.22.2 for its own transformers; the per-job Python
-# uses the per-job site-packages first, so sees 0.21.4.
-"$UV" pip install --python "$_PJVENV/bin/python" "tokenizers==0.21.4" -q
+# tokenizers: base venv 0.22.2 is compatible with the relaxed >=0.21 constraint
 # ─────────────────────────────────────────────────────────────────────────────
 """
         else:
