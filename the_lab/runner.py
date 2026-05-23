@@ -462,6 +462,10 @@ class ExperimentRunner:
             except Exception:
                 pass
 
+        label = exp.get("label") or str(exp_id)
+        self._allocator.release(label)
+        self.wake_scheduler()
+
         self._tasks.pop(exp_id, None)
         self._finished_queue.put_nowait(exp_id)
 
