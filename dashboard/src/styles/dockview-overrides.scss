@@ -238,5 +238,9 @@
   #topbar { padding: 6px 10px; gap: var(--space-2); font-size: var(--text-sm); flex-wrap: wrap; }
   #topbar .title { font-size: var(--text-base); }
   .layout-menu-container { position: static; }
-  .layout-menu { position: fixed; left: 10px; right: 10px; top: auto; bottom: 10px; }
+  .layout-menu {
+    position: fixed; left: 10px; right: 10px; top: auto; bottom: 10px;
+    z-index: var(--z-topbar);
+    max-height: calc(100dvh - 60px); overflow-y: auto;
+  }
 }

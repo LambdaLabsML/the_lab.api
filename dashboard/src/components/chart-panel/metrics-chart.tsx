@@ -87,7 +87,6 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
     const inner  = innerRef.current;
 
     const rafId = requestAnimationFrame(() => {
-      if (!canvas.offsetParent) return; // panel hidden — skip
       if (!canvas.isConnected) return;  // component unmounted
 
       const chartData = buildChartData(
