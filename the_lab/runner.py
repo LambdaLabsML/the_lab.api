@@ -77,7 +77,10 @@ def _parse_log_progress(lines: list[str]) -> dict | None:
             duration = int(dm.group(1))
             break
 
-    pct_complete = max(0.0, min(1.0, 1.0 - last_t_remaining / duration)) if duration else 0.0
+    # Cap at 0.99 while still running — t_remaining hits 0 while cleanup/GIF
+    # encoding is still in progress, so 1.0 would be misleading for "running".
+    # The runner sets _final=True and pct_complete=1.0 on actual completion.
+    pct_complete = max(0.0, min(0.99, 1.0 - last_t_remaining / duration)) if duration else 0.0
 
     # ── latency stats (last 500 samples) ──
     lats = sorted(latencies[-500:])
