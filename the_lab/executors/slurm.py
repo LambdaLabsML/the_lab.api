@@ -52,8 +52,9 @@ logger = logging.getLogger("the-lab.slurm")
 class SlurmExecutor:
     DEFAULT_SLURM_CONF = "/data/slurm/etc/slurm.conf"
 
-    def __init__(self, ssh_host: str, config: dict):
+    def __init__(self, ssh_host: str, config: dict, instance_id: str | None = None):
         self.ssh_host    = ssh_host
+        self.instance_id = instance_id or ""
         self.partition   = config.get("partition",  "lowprio")
         self.account     = config.get("account")
         self.ntasks      = int(config.get("ntasks",  1))
@@ -125,23 +126,27 @@ class SlurmExecutor:
     # ------------------------------------------------------------------
 
     def _resolve_remote_base(self) -> str:
-        """Expand $HOME in remote_base to the real absolute path via SSH."""
-        if "$HOME" not in self.remote_base:
-            return self.remote_base
-        home = self._ssh_plain("echo $HOME").stdout.strip()
-        return self.remote_base.replace("$HOME", home)
+        """Expand $HOME in remote_base and append instance_id subdirectory."""
+        base = self.remote_base
+        if "$HOME" in base:
+            home = self._ssh_plain("echo $HOME").stdout.strip()
+            base = base.replace("$HOME", home)
+        return f"{base}/{self.instance_id}" if self.instance_id else base
 
     def _resolve_git_repo_path(self) -> str:
-        """Expand ~ in git_repo_path to the real absolute path via SSH."""
-        if not self.git_repo_path.startswith("~"):
-            return self.git_repo_path
-        home = self._ssh_plain("echo $HOME").stdout.strip()
-        return self.git_repo_path.replace("~", home, 1)
+        """Expand ~ in git_repo_path and namespace by instance_id."""
+        path = self.git_repo_path
+        if path.startswith("~"):
+            home = self._ssh_plain("echo $HOME").stdout.strip()
+            path = path.replace("~", home, 1)
+        # Keep bare repo path as-is when no instance_id (backwards compat)
+        return path
 
     @property
     def _rsync_base(self) -> str:
-        """remote_base with $HOME → ~ for rsync (rsync expands ~, not $HOME)."""
-        return self.remote_base.replace("$HOME", "~")
+        """remote_base (with $HOME→~) plus instance_id for rsync."""
+        base = self.remote_base.replace("$HOME", "~")
+        return f"{base}/{self.instance_id}" if self.instance_id else base
 
     # ------------------------------------------------------------------
     # Git helpers
@@ -183,7 +188,31 @@ class SlurmExecutor:
 
     def create_worktree(self, abs_bare_path: str, worktree_path: str,
                         commit_sha: str) -> None:
-        """Create an isolated worktree at *worktree_path* for *commit_sha*."""
+        """Create an isolated worktree at *worktree_path* for *commit_sha*.
+
+        Prunes stale worktree registrations first so retries after a failed
+        job don't hit 'already exists' errors.
+        """
+        # Prune stale worktree registrations, then force-remove any live
+        # worktree at the same path (happens when a rerun uses the same label).
+        try:
+            self._ssh_plain(
+                f"git -C {abs_bare_path} worktree prune 2>/dev/null || true"
+            )
+        except Exception:
+            pass
+        try:
+            self._ssh_plain(
+                f"git -C {abs_bare_path} worktree remove --force {worktree_path} "
+                f"2>/dev/null || true"
+            )
+        except Exception:
+            pass
+        # Also remove the directory if it still exists (defensive)
+        try:
+            self._ssh_plain(f"rm -rf {worktree_path} 2>/dev/null || true")
+        except Exception:
+            pass
         self._ssh_plain(
             f"git -C {abs_bare_path} worktree add --detach -q "
             f"{worktree_path} {commit_sha}"
@@ -286,6 +315,27 @@ trap _lab_requeue SIGTERM SIGUSR1
 export THE_LAB_PROGRESS="{remote_job_dir}/script.progress"
 export THE_LAB_METRICS="{remote_job_dir}/script.metrics.jsonl"
 
+# Background watcher: push progress updates to the API whenever the progress
+# file changes, so the dashboard gets live updates without rsync polling lag.
+_push_progress() {{
+    local _last_mtime="" _cur_mtime
+    while true; do
+        if [ -f "$THE_LAB_PROGRESS" ]; then
+            _cur_mtime=$(stat -c %Y "$THE_LAB_PROGRESS" 2>/dev/null || echo "")
+            if [ "$_cur_mtime" != "$_last_mtime" ] && [ -n "$_cur_mtime" ]; then
+                _last_mtime="$_cur_mtime"
+                curl -s -X POST "$THE_LAB_API_URL/experiments/{label}/progress" \\
+                     -H "Authorization: Bearer $THE_LAB_TOKEN" \\
+                     -H "Content-Type: application/json" \\
+                     --data-binary "@$THE_LAB_PROGRESS" || true
+            fi
+        fi
+        sleep 2
+    done
+}}
+_push_progress &
+_WATCHER_PID=$!
+
 # Run the experiment script from the worktree so relative paths
 # (python, hooks, prompts, ...) resolve against the committed code.
 cd "{worktree_dir}"
@@ -293,6 +343,15 @@ bash "{remote_job_dir}/script.sh" &
 _SCRIPT_PID=$!
 wait $_SCRIPT_PID
 _EXIT=$?
+
+# Stop watcher and do one final push
+kill $_WATCHER_PID 2>/dev/null || true
+if [ -f "$THE_LAB_PROGRESS" ]; then
+    curl -s -X POST "$THE_LAB_API_URL/experiments/{label}/progress" \\
+         -H "Authorization: Bearer $THE_LAB_TOKEN" \\
+         -H "Content-Type: application/json" \\
+         --data-binary "@$THE_LAB_PROGRESS" || true
+fi
 
 if [ $_PREEMPTED -eq 0 ]; then
     curl -s -X POST "$THE_LAB_API_URL/experiments/{label}/slurm_done" \\
@@ -411,8 +470,10 @@ exit $_EXIT
         local_dir = str(local_exp_dir).rstrip("/") + "/"
         result = subprocess.run(
             ["rsync", "-az", "--timeout=30",
-             # Exclude the worktree (already in the local repo) and the
-             # per-job venv (can be hundreds of MB; not useful on the lab server).
+             # The worktree is git-tracked code the local machine already has —
+             # no need to sync it back. Only pull the job-root output files:
+             # script.log, script.progress, script.metrics.jsonl, *.gpu_stats,
+             # and any artifacts the script copies to the job root.
              "--exclude=worktree/",
              "--exclude=venv/",
              f"{self.ssh_host}:{self._rsync_base}/{label}/",

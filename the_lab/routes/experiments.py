@@ -3,11 +3,12 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from datetime import datetime, timezone
 
 import mimetypes
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 
 from ..deps import (
@@ -789,10 +790,16 @@ async def rerun_experiment(exp_ref: str):
         raise HTTPException(400, f"script file not found: {source['script']}")
     script_content = script_path.read_text()
 
-    # Create the new experiment
-    desc = f"rerun: {source['description']}"
+    # Create the new experiment — strip stale "rerun: " prefixes so they don't accumulate
+    base_desc = re.sub(r'^(rerun: )+', '', source['description'])
+    desc = f"rerun: {base_desc}"
+    # Strip stale executor fields from meta so the new run gets a fresh git
+    # worktree (old git_commit caused worktrees with pre-fix code to be used).
+    stale_keys = {"slurm_job_id", "worktree", "pid", "git_commit", "git_branch"}
+    clean_meta = {k: v for k, v in (source.get("meta") or {}).items()
+                  if k not in stale_keys}
     new_exp = store.create_experiment(
-        idea_id, desc, meta=source.get("meta"), tags=source.get("tags"),
+        idea_id, desc, meta=clean_meta, tags=source.get("tags"),
     )
 
     # Write the script (reuse content as-is — it's already wrapped)
@@ -980,6 +987,47 @@ def get_experiment_progress(exp_ref: str):
         except (json.JSONDecodeError, OSError):
             pass
     return result
+
+
+@router.post("/experiments/{exp_ref}/progress")
+async def post_experiment_progress(exp_ref: str, request: Request):
+    """Push a live progress update from within a running experiment.
+
+    Called by the experiment wrapper script using THE_LAB_TOKEN auth.
+    The body is any JSON object. It is written to the local progress file
+    and immediately broadcast via WebSocket so the dashboard updates in
+    real-time without waiting for the next rsync poll.
+
+    Example (from bash):
+        curl -s -X POST "$THE_LAB_API_URL/experiments/$LABEL/progress" \\
+             -H "Authorization: Bearer $THE_LAB_TOKEN" \\
+             -H "Content-Type: application/json" \\
+             -d '{"step": 42, "loss": 0.34}'
+    """
+    from .. import ws as ws_mod
+
+    exp = _resolve_exp(exp_ref)
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "body must be valid JSON")
+
+    # Write to the local progress file so GET /progress still works.
+    progress_path = REPO_DIR / exp["script"].replace(".sh", ".progress")
+    try:
+        progress_path.write_text(json.dumps(body))
+    except OSError as exc:
+        raise HTTPException(500, f"could not write progress file: {exc}")
+
+    # Broadcast immediately — no rsync lag.
+    ws_mod.broadcaster.broadcast_soon({
+        "type": "experiment_progress_updated",
+        "label": exp.get("label", exp_ref),
+        "idea_id": exp.get("idea_id"),
+        "progress": body,
+    })
+
+    return {"ok": True}
 
 
 # --- Timeseries ---

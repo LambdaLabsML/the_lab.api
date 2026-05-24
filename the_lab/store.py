@@ -103,6 +103,7 @@ class Store:
         self.repo_dir = repo_dir
         self.lab_dir = repo_dir / ".the_lab" / "experiments"
         self.lab_dir.mkdir(parents=True, exist_ok=True)
+        self.instance_id = self._load_or_create_instance_id()
         self._ensure_gitignore()
         self._lock = threading.Lock()
         self._next_idea_id = 1
@@ -117,6 +118,16 @@ class Store:
         self._version = 0
 
         self._load_all()
+
+    def _load_or_create_instance_id(self) -> str:
+        """Return the 8-char instance ID, creating it on first run."""
+        id_path = self.repo_dir / ".the_lab" / "instance.id"
+        if id_path.exists():
+            return id_path.read_text().strip()
+        import secrets
+        instance_id = secrets.token_hex(4)  # 8 hex chars
+        id_path.write_text(instance_id + "\n")
+        return instance_id
 
     @property
     def version(self) -> int:

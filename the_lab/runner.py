@@ -46,7 +46,12 @@ class ExperimentRunner:
         running_worktrees = set()
         for exp in self._store.list_experiments_by_status("running"):
             pid = exp.get("pid")
-            if pid and self._pid_alive(pid):
+            slurm_job_id = (exp.get("meta") or {}).get("slurm_job_id")
+            if slurm_job_id:
+                # Slurm experiment — always reattach via _monitor_slurm_job,
+                # never mark as failed based on local PID (there is none).
+                self._reattach_running.append(exp)
+            elif pid and self._pid_alive(pid):
                 self._reattach_running.append(exp)
                 wt = (exp.get("meta") or {}).get("worktree")
                 if wt:
@@ -173,7 +178,7 @@ class ExperimentRunner:
                 resource = next((r for r in resources if r.name == resource_name), None)
                 if resource and resource.kind == "slurm":
                     ssh_host = resource.executor_config.get("ssh_host", "slurm")
-                    executor = SlurmExecutor(ssh_host, resource.executor_config)
+                    executor = SlurmExecutor(ssh_host, resource.executor_config, instance_id=self._store.instance_id)
                     label = exp.get("label") or str(exp["id"])
                     script_path = self._store.repo_dir / exp["script"]
                     local_exp_dir = script_path.parent
@@ -722,7 +727,7 @@ class ExperimentRunner:
         from .executors.slurm import SlurmExecutor
 
         ssh_host = resource.executor_config.get("ssh_host", "slurm")
-        executor = SlurmExecutor(ssh_host, resource.executor_config)
+        executor = SlurmExecutor(ssh_host, resource.executor_config, instance_id=self._store.instance_id)
 
         # Build env dict that the wrapper script will expose to the experiment
         lab_user = os.environ.get("THE_LAB_USER", "")
@@ -829,6 +834,7 @@ class ExperimentRunner:
         from . import ws as ws_mod
 
         poll_interval = 30
+        _live_pull_counter = 0
         while True:
             await asyncio.sleep(poll_interval)
 
@@ -840,6 +846,18 @@ class ExperimentRunner:
 
             if state in ("RUNNING", "PENDING"):
                 poll_interval = 30
+                # Pull live logs every 30s so the dashboard shows progress
+                _live_pull_counter += 1
+                if _live_pull_counter % 1 == 0:
+                    try:
+                        await asyncio.get_event_loop().run_in_executor(None, lambda: executor.pull_results(label, local_exp_dir))
+                        ws_mod.broadcaster.broadcast_soon({
+                            "type": "experiment_log_updated",
+                            "label": label,
+                            "idea_id": exp_id,
+                        })
+                    except Exception:
+                        pass
                 continue
             elif state == "COMPLETING":
                 poll_interval = 5
@@ -873,10 +891,10 @@ class ExperimentRunner:
                 return
             elif state in ("COMPLETED", ""):
                 # Pull results from remote
-                executor.pull_results(label, local_exp_dir)
+                await asyncio.get_event_loop().run_in_executor(None, lambda: executor.pull_results(label, local_exp_dir))
                 exp = self._store.get_experiment(exp_id)
                 if not exp or exp.get("status") == "cancelled":
-                    executor.cleanup_remote(label, abs_bare_path=getattr(executor, "_resolved_bare_path", None))
+                    asyncio.get_event_loop().run_in_executor(None, lambda: executor.cleanup_remote(label, abs_bare_path=getattr(executor, "_resolved_bare_path", None)))
                     self._allocator.release(label)
                     self.wake_scheduler()
                     self._tasks.pop(exp_id, None)
@@ -887,7 +905,24 @@ class ExperimentRunner:
                 output = log_path.read_text() if log_path.exists() else ""
                 result, result_idx = self._extract_json(output)
                 if result is not None:
-                    metrics = result.get("metrics", {})
+                    # If result has a nested "metrics" key use it; otherwise
+                    # treat the whole result as metrics (e.g. Tetris format
+                    # where keys like "turns", "latency_mean_ms" are top-level).
+                    if "metrics" in result:
+                        metrics = result.get("metrics", {})
+                    else:
+                        metrics = {k: v for k, v in result.items()
+                                   if k not in ("meta",)}
+                    # Rewrite remote artifact paths to local pulled copies.
+                    # Job root is the only sync target now (worktree excluded).
+                    # Scripts must copy artifacts to the job root before exit.
+                    for _key in ("gif",):
+                        _remote = (metrics or {}).get(_key)
+                        if _remote and isinstance(_remote, str):
+                            _name = Path(_remote).name
+                            _local = local_exp_dir / _name
+                            if _local.exists():
+                                metrics[_key] = str(_local)
                     meta = {**(exp.get("meta") or {}), **result.get("meta", {})}
                     self._store.update_experiment(
                         exp_id,
@@ -921,17 +956,17 @@ class ExperimentRunner:
                         "status": "completed",
                         "metrics": None,
                     })
-                executor.cleanup_remote(label, abs_bare_path=getattr(executor, "_resolved_bare_path", None))
+                asyncio.get_event_loop().run_in_executor(None, lambda: executor.cleanup_remote(label, abs_bare_path=getattr(executor, "_resolved_bare_path", None)))
                 self._allocator.release(label)
                 self.wake_scheduler()
                 self._tasks.pop(exp_id, None)
                 self._finished_queue.put_nowait(exp_id)
                 return
             elif state in ("FAILED", "TIMEOUT", "OUT_OF_MEMORY", "NODE_FAIL", "CANCELLED"):
-                executor.pull_results(label, local_exp_dir)
+                await asyncio.get_event_loop().run_in_executor(None, lambda: executor.pull_results(label, local_exp_dir))
                 exp = self._store.get_experiment(exp_id)
                 if not exp or exp.get("status") == "cancelled":
-                    executor.cleanup_remote(label, abs_bare_path=getattr(executor, "_resolved_bare_path", None))
+                    asyncio.get_event_loop().run_in_executor(None, lambda: executor.cleanup_remote(label, abs_bare_path=getattr(executor, "_resolved_bare_path", None)))
                     self._allocator.release(label)
                     self.wake_scheduler()
                     self._tasks.pop(exp_id, None)
@@ -954,7 +989,7 @@ class ExperimentRunner:
                     "status": "failed",
                     "metrics": None,
                 })
-                executor.cleanup_remote(label, abs_bare_path=getattr(executor, "_resolved_bare_path", None))
+                asyncio.get_event_loop().run_in_executor(None, lambda: executor.cleanup_remote(label, abs_bare_path=getattr(executor, "_resolved_bare_path", None)))
                 self._allocator.release(label)
                 self.wake_scheduler()
                 self._tasks.pop(exp_id, None)
@@ -964,27 +999,23 @@ class ExperimentRunner:
             poll_interval = 30
 
     def _extract_json(self, output: str) -> tuple[dict | None, int | None]:
-        """Find the last non-empty line that parses as a JSON object.
+        """Find the last line that parses as a JSON object, scanning from end.
 
-        Returns ``(parsed_dict, line_index)`` so callers can both consume the
-        parsed result and (optionally) strip that line from the on-disk log.
-        Returns ``(None, None)`` if no JSON-object line exists. Scans from
-        the end; the first non-JSON non-empty line stops the search.
+        Returns ``(parsed_dict, line_index)`` or ``(None, None)``. Skips
+        non-JSON lines (log messages, separators, etc.) so the result dict
+        is found even when trailing log output appears after it.
         """
         lines = output.split("\n")
         for i in range(len(lines) - 1, -1, -1):
             stripped = lines[i].strip()
-            if not stripped:
+            if not stripped or stripped.startswith("{") is False:
                 continue
             try:
                 parsed = json.loads(stripped)
             except json.JSONDecodeError:
-                # Tail content isn't the result line — stop searching, the
-                # result line (if any) must be the very last non-empty one.
-                return None, None
+                continue
             if isinstance(parsed, dict):
                 return parsed, i
-            return None, None
         return None, None
 
     @staticmethod
@@ -1070,7 +1101,7 @@ class ExperimentRunner:
                 resource = next((r for r in resources if r.name == resource_name), None)
                 if resource and resource.kind == "slurm":
                     ssh_host = resource.executor_config.get("ssh_host", "slurm")
-                    executor = SlurmExecutor(ssh_host, resource.executor_config)
+                    executor = SlurmExecutor(ssh_host, resource.executor_config, instance_id=self._store.instance_id)
                     executor.cancel(slurm_job_id)
             except Exception as e:
                 print(f"[the-lab] scancel for {label} failed: {e}")
