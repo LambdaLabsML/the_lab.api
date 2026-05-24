@@ -24,6 +24,34 @@ from .store import Store
 from . import token_registry
 
 
+def _parse_log_progress(lines: list[str]) -> dict | None:
+    """Scan the last 200 log lines for structured progress markers.
+
+    Looks for lines matching common patterns:
+      - Tetris: "[  42] move=LEFT  score=100  restarts=2  ... t_remaining=230s"
+      - Generic: lines containing "progress:" or JSON with known keys.
+
+    Returns a dict suitable for writing to script.progress, or None if nothing
+    useful was found.
+    """
+    import re
+    tetris_pat = re.compile(
+        r'\[\s*(\d+)\]\s+move=(\S+)\s+score=(\d+)\s+restarts=(\d+)'
+        r'.*?t_remaining=([0-9.]+)s'
+    )
+    for line in reversed(lines[-200:]):
+        m = tetris_pat.search(line)
+        if m:
+            return {
+                "turn": int(m.group(1)),
+                "move": m.group(2),
+                "score": int(m.group(3)),
+                "restarts": int(m.group(4)),
+                "t_remaining": float(m.group(5)),
+            }
+    return None
+
+
 class ExperimentRunner:
     def __init__(self, store: Store):
         self._store = store
@@ -893,6 +921,20 @@ class ExperimentRunner:
                 if _live_pull_counter % 1 == 0:
                     try:
                         await asyncio.get_event_loop().run_in_executor(None, lambda: executor.pull_results(label, local_exp_dir))
+                        # After pulling, synthesize a progress snapshot from the
+                        # most recent log lines so GET /progress is always useful
+                        # even when the script doesn't write to $THE_LAB_PROGRESS.
+                        _log_path = local_exp_dir / "script.log"
+                        _prog_path = local_exp_dir / "script.progress"
+                        if _log_path.exists():
+                            try:
+                                _lines = _log_path.read_text().splitlines()
+                                _snap = _parse_log_progress(_lines)
+                                if _snap:
+                                    import json as _json
+                                    _prog_path.write_text(_json.dumps(_snap))
+                            except Exception:
+                                pass
                         ws_mod.broadcaster.broadcast_soon({
                             "type": "experiment_log_updated",
                             "label": label,
