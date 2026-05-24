@@ -107,7 +107,7 @@
 .queue-empty {
   border: 1px dashed var(--border);
   background: var(--bg);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   padding: var(--space-4);
   text-align: center;
   color: var(--text-muted);
@@ -228,7 +228,7 @@
 .queue-capbar-track {
   display: flex;
   height: 14px;
-  border-radius: 7px;
+  border-radius: var(--radius-md);
   background: var(--bg);
   border: 1px solid var(--border-soft);
   overflow: hidden;
@@ -282,7 +282,7 @@
 .queue-holder-swatch {
   width: 10px;
   height: 10px;
-  border-radius: 2px;
+  border-radius: var(--radius-sm);
   flex-shrink: 0;
 }
 
