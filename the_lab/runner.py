@@ -733,10 +733,25 @@ class ExperimentRunner:
         lab_user = os.environ.get("THE_LAB_USER", "")
         lab_password = os.environ.get("THE_LAB_PASSWORD", "")
         lab_auth = base64.b64encode(f"{lab_user}:{lab_password}".encode()).decode()
-        lab_api_url = os.environ.get(
-            "THE_LAB_API_URL",
-            f"http://localhost:{os.environ.get('THE_LAB_PORT', '8000')}/api/v1",
-        )
+
+        # The callback URL must be reachable from the *compute node*, not just
+        # localhost.  Priority order:
+        #   1. THE_LAB_API_URL env var (explicit override)
+        #   2. callback_url in the resource executor_config (per-resource config)
+        #   3. Auto-detect: server's primary network IP + THE_LAB_PORT
+        port = os.environ.get("THE_LAB_PORT", "9000")
+        _callback_default = resource.executor_config.get("callback_url")
+        if not _callback_default:
+            try:
+                import socket as _socket
+                _s = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
+                _s.connect(("8.8.8.8", 80))
+                _ip = _s.getsockname()[0]
+                _s.close()
+                _callback_default = f"http://{_ip}:{port}/api/v1"
+            except Exception:
+                _callback_default = f"http://localhost:{port}/api/v1"
+        lab_api_url = os.environ.get("THE_LAB_API_URL", _callback_default)
 
         script_path = self._store.repo_dir / exp["script"]
         local_exp_dir = script_path.parent
@@ -764,8 +779,10 @@ class ExperimentRunner:
 
         # Generate a run token — the SCRIPT_GUARD in every experiment script
         # requires THE_LAB_TOKEN to be set (prevents accidental direct execution).
+        # Register it so slurm jobs can call back to the API (push progress etc.)
         import secrets as _secrets
         run_token = _secrets.token_hex(16)
+        token_registry.register(run_token)
 
         # Env vars the wrapper embeds as explicit exports so the job has them
         # even though it runs in a separate SSH/sbatch environment.
@@ -797,6 +814,7 @@ class ExperimentRunner:
         meta = {
             **(exp.get("meta") or {}),
             "slurm_job_id": job_id,
+            "slurm_run_token": run_token,  # stored so monitor can unregister on completion
             "assigned_resource": resource.name,
             "assigned_units": assigned,
             # Persist the resolved git context so the dashboard + PROMPT.md
@@ -833,6 +851,30 @@ class ExperimentRunner:
         """Poll squeue until the Slurm job finishes, then pull results."""
         from . import ws as ws_mod
 
+        # Unregister the run token when the job finishes so the auth registry
+        # stays clean.  The token is persisted in meta at dispatch time.
+        _run_token: str = ""
+        exp = self._store.get_experiment(exp_id)
+        if exp:
+            _run_token = (exp.get("meta") or {}).get("slurm_run_token", "")
+
+        try:
+            await self._monitor_slurm_job_inner(
+                exp_id, executor, job_id, label, local_exp_dir, ws_mod
+            )
+        finally:
+            if _run_token:
+                token_registry.unregister(_run_token)
+
+    async def _monitor_slurm_job_inner(
+        self,
+        exp_id: int,
+        executor,
+        job_id: str,
+        label: str,
+        local_exp_dir: Path,
+        ws_mod,
+    ) -> None:
         poll_interval = 30
         _live_pull_counter = 0
         while True:
