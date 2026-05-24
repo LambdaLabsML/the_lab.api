@@ -327,9 +327,9 @@
 }
 
 .queue-form-tags { flex: 2 1 160px; }
-.queue-form-cfg  { flex: 1 1 100%; }
 
-.queue-resource-form input {
+.queue-resource-form input,
+.queue-resource-form select {
   padding: 3px var(--space-2);
   background: var(--bg);
   border: 1px solid var(--border);
@@ -339,14 +339,35 @@
   font-family: inherit;
 }
 
-.queue-resource-form input:focus {
+.queue-resource-form input:focus,
+.queue-resource-form select:focus {
   outline: none;
   border-color: var(--accent);
 }
 
-.queue-resource-form input:disabled {
+.queue-resource-form input:disabled,
+.queue-resource-form select:disabled {
   opacity: 0.55;
   cursor: not-allowed;
+}
+
+/* Slurm executor config section */
+.queue-form-slurm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+}
+
+.queue-form-slurm-label {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
 }
 
 .queue-form-error {

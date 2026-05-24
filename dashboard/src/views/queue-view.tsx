@@ -65,10 +65,23 @@ interface ResourceFormState {
   capacity: string;
   jobs_per_unit: string;
   tags: string;
-  executor_config: string;
+  // Slurm-specific fields (assembled into executor_config on submit)
+  slurm_ssh_host: string;
+  slurm_partition: string;
+  slurm_qos: string;
+  slurm_account: string;
+  slurm_ntasks: string;
+  slurm_gpus: string;
+  slurm_mem: string;
+  slurm_time: string;
+  slurm_git_repo_path: string;
+  slurm_remote_base: string;
+  slurm_slurm_conf: string;
+  slurm_base_venv_path: string;
 }
 
 function resourceToFormState(r: ResourceState | null): ResourceFormState {
+  const cfg: Record<string, unknown> = (r?.executor_config as Record<string, unknown>) ?? {};
   return {
     name: r?.name ?? "",
     kind: r?.kind ?? "local",
@@ -76,7 +89,18 @@ function resourceToFormState(r: ResourceState | null): ResourceFormState {
     capacity: String(r?.capacity ?? 1),
     jobs_per_unit: String(r?.jobs_per_unit ?? 1),
     tags: (r?.tags ?? []).join(","),
-    executor_config: r ? JSON.stringify(r.executor_config ?? {}) : "{}",
+    slurm_ssh_host:       String(cfg.ssh_host       ?? ""),
+    slurm_partition:      String(cfg.partition       ?? ""),
+    slurm_qos:            String(cfg.qos             ?? ""),
+    slurm_account:        String(cfg.account         ?? ""),
+    slurm_ntasks:         cfg.ntasks   != null ? String(cfg.ntasks)   : "",
+    slurm_gpus:           cfg.gpus     != null ? String(cfg.gpus)     : "",
+    slurm_mem:            String(cfg.mem             ?? ""),
+    slurm_time:           String(cfg.time            ?? ""),
+    slurm_git_repo_path:  String(cfg.git_repo_path   ?? ""),
+    slurm_remote_base:    String(cfg.remote_base     ?? ""),
+    slurm_slurm_conf:     String(cfg.slurm_conf      ?? ""),
+    slurm_base_venv_path: String(cfg.base_venv_path  ?? ""),
   };
 }
 
@@ -94,28 +118,30 @@ function validateForm(
   if (!Number.isFinite(jpu) || jpu <= 0 || jpu > 1.0) {
     return { ok: false, error: "jobs_per_unit must be > 0 and ≤ 1.0." };
   }
+  const tags = form.tags.split(",").map((t) => t.trim()).filter(Boolean);
+
   let executor_config: Record<string, unknown> = {};
-  if (form.executor_config.trim()) {
-    try {
-      const parsed = JSON.parse(form.executor_config);
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        executor_config = parsed as Record<string, unknown>;
-      } else {
-        return { ok: false, error: "executor_config must be a JSON object." };
-      }
-    } catch {
-      return { ok: false, error: "executor_config is not valid JSON." };
-    }
+  if (form.kind === "slurm") {
+    const s = form;
+    if (s.slurm_ssh_host.trim())       executor_config.ssh_host        = s.slurm_ssh_host.trim();
+    if (s.slurm_partition.trim())      executor_config.partition        = s.slurm_partition.trim();
+    if (s.slurm_qos.trim())            executor_config.qos              = s.slurm_qos.trim();
+    if (s.slurm_account.trim())        executor_config.account          = s.slurm_account.trim();
+    if (s.slurm_ntasks.trim())         executor_config.ntasks           = parseInt(s.slurm_ntasks, 10);
+    if (s.slurm_gpus.trim())           executor_config.gpus             = parseInt(s.slurm_gpus, 10);
+    if (s.slurm_mem.trim())            executor_config.mem              = s.slurm_mem.trim();
+    if (s.slurm_time.trim())           executor_config.time             = s.slurm_time.trim();
+    if (s.slurm_git_repo_path.trim())  executor_config.git_repo_path    = s.slurm_git_repo_path.trim();
+    if (s.slurm_remote_base.trim())    executor_config.remote_base      = s.slurm_remote_base.trim();
+    if (s.slurm_slurm_conf.trim())     executor_config.slurm_conf       = s.slurm_slurm_conf.trim();
+    if (s.slurm_base_venv_path.trim()) executor_config.base_venv_path   = s.slurm_base_venv_path.trim();
   }
-  const tags = form.tags
-    .split(",")
-    .map((t) => t.trim())
-    .filter(Boolean);
+
   return {
     ok: true,
     body: {
       name,
-      kind: form.kind.trim() || "local",
+      kind: form.kind || "local",
       unit_kind: form.unit_kind.trim() || "none",
       capacity,
       jobs_per_unit: jpu,
@@ -205,87 +231,129 @@ function ResourceForm({
     Promise.resolve(onSubmit(v.body)).finally(() => setBusy(false));
   }
 
+  const f = (key: keyof ResourceFormState) => (e: Event) =>
+    setForm({ ...form, [key]: (e.target as HTMLInputElement).value });
+
   return (
     <form class="queue-resource-form" onSubmit={handleSubmit}>
+      {/* ── Row 1: name / kind / unit_kind ── */}
       <div class="queue-form-row">
         <label>
           <span>Name</span>
-          <input
-            type="text"
-            value={form.name}
-            disabled={!isNew}
-            onInput={(e) => setForm({ ...form, name: (e.target as HTMLInputElement).value })}
-            placeholder="local-h100"
-          />
+          <input type="text" value={form.name} disabled={!isNew}
+            onInput={f("name")} placeholder="slurm-h100" />
         </label>
         <label>
           <span>Kind</span>
-          <input
-            type="text"
-            value={form.kind}
-            onInput={(e) => setForm({ ...form, kind: (e.target as HTMLInputElement).value })}
-            placeholder="local"
-          />
+          <select value={form.kind}
+            onChange={(e) => setForm({ ...form, kind: (e.target as HTMLSelectElement).value })}>
+            <option value="local">local</option>
+            <option value="slurm">slurm</option>
+          </select>
         </label>
         <label>
           <span>Unit kind</span>
-          <input
-            type="text"
-            value={form.unit_kind}
-            onInput={(e) =>
-              setForm({ ...form, unit_kind: (e.target as HTMLInputElement).value })
-            }
-            placeholder="gpu | cpu | none"
-          />
+          <select value={form.unit_kind}
+            onChange={(e) => setForm({ ...form, unit_kind: (e.target as HTMLSelectElement).value })}>
+            <option value="gpu">gpu</option>
+            <option value="cpu">cpu</option>
+            <option value="none">none</option>
+          </select>
         </label>
       </div>
+
+      {/* ── Row 2: capacity / jobs_per_unit / tags ── */}
       <div class="queue-form-row">
         <label>
           <span>Capacity</span>
-          <input
-            type="number"
-            min={1}
-            step={1}
-            value={form.capacity}
-            onInput={(e) =>
-              setForm({ ...form, capacity: (e.target as HTMLInputElement).value })
-            }
-          />
+          <input type="number" min={1} step={1} value={form.capacity} onInput={f("capacity")} />
         </label>
         <label>
           <span>jobs_per_unit</span>
-          <input
-            type="number"
-            min={0}
-            max={1}
-            step={0.05}
-            value={form.jobs_per_unit}
-            onInput={(e) =>
-              setForm({ ...form, jobs_per_unit: (e.target as HTMLInputElement).value })
-            }
-          />
+          <input type="number" min={0.05} max={1} step={0.05} value={form.jobs_per_unit}
+            onInput={f("jobs_per_unit")} />
         </label>
         <label class="queue-form-tags">
           <span>Tags (comma-separated)</span>
-          <input
-            type="text"
-            value={form.tags}
-            onInput={(e) => setForm({ ...form, tags: (e.target as HTMLInputElement).value })}
-            placeholder="h100,80gb"
-          />
+          <input type="text" value={form.tags} onInput={f("tags")} placeholder="h100,80gb" />
         </label>
       </div>
-      <label class="queue-form-cfg">
-        <span>executor_config (JSON)</span>
-        <input
-          type="text"
-          value={form.executor_config}
-          onInput={(e) =>
-            setForm({ ...form, executor_config: (e.target as HTMLInputElement).value })
-          }
-          placeholder='{}'
-        />
-      </label>
+
+      {/* ── Slurm executor config ── */}
+      {form.kind === "slurm" && (
+        <div class="queue-form-slurm">
+          <div class="queue-form-slurm-label">Slurm executor</div>
+          <div class="queue-form-row">
+            <label>
+              <span>SSH host</span>
+              <input type="text" value={form.slurm_ssh_host} onInput={f("slurm_ssh_host")}
+                placeholder="slurm (default)" />
+            </label>
+            <label>
+              <span>Partition</span>
+              <input type="text" value={form.slurm_partition} onInput={f("slurm_partition")}
+                placeholder="lowprio (default)" />
+            </label>
+            <label>
+              <span>QOS</span>
+              <input type="text" value={form.slurm_qos} onInput={f("slurm_qos")}
+                placeholder="(defaults to partition)" />
+            </label>
+            <label>
+              <span>Account</span>
+              <input type="text" value={form.slurm_account} onInput={f("slurm_account")}
+                placeholder="optional" />
+            </label>
+          </div>
+          <div class="queue-form-row">
+            <label>
+              <span>ntasks</span>
+              <input type="number" min={1} step={1} value={form.slurm_ntasks}
+                onInput={f("slurm_ntasks")} placeholder="1 (default)" />
+            </label>
+            <label>
+              <span>GPUs per job</span>
+              <input type="number" min={0} step={1} value={form.slurm_gpus}
+                onInput={f("slurm_gpus")} placeholder="1 (default)" />
+            </label>
+            <label>
+              <span>Memory (--mem)</span>
+              <input type="text" value={form.slurm_mem} onInput={f("slurm_mem")}
+                placeholder="e.g. 80G" />
+            </label>
+            <label>
+              <span>Time limit (--time)</span>
+              <input type="text" value={form.slurm_time} onInput={f("slurm_time")}
+                placeholder="e.g. 12:00:00" />
+            </label>
+          </div>
+          <div class="queue-form-row">
+            <label class="queue-form-tags">
+              <span>Remote git repo path</span>
+              <input type="text" value={form.slurm_git_repo_path}
+                onInput={f("slurm_git_repo_path")} placeholder="~/.thelab/repo.git (default)" />
+            </label>
+            <label class="queue-form-tags">
+              <span>Remote job base dir</span>
+              <input type="text" value={form.slurm_remote_base}
+                onInput={f("slurm_remote_base")} placeholder="~/.thelab/jobs (default)" />
+            </label>
+          </div>
+          <div class="queue-form-row">
+            <label class="queue-form-tags">
+              <span>slurm.conf path on remote</span>
+              <input type="text" value={form.slurm_slurm_conf}
+                onInput={f("slurm_slurm_conf")} placeholder="/data/slurm/etc/slurm.conf (default)" />
+            </label>
+            <label class="queue-form-tags">
+              <span>Shared venv path (optional)</span>
+              <input type="text" value={form.slurm_base_venv_path}
+                onInput={f("slurm_base_venv_path")} placeholder="e.g. /shared/.venv" />
+            </label>
+          </div>
+        </div>
+      )}
+
       {err && <div class="queue-form-error">{err}</div>}
       <div class="queue-form-actions">
         <button type="submit" class="queue-btn primary" disabled={busy}>
