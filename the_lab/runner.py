@@ -25,31 +25,84 @@ from . import token_registry
 
 
 def _parse_log_progress(lines: list[str]) -> dict | None:
-    """Scan the last 200 log lines for structured progress markers.
+    """Scan log lines and return a progress snapshot with the same schema as
+    the final metrics, plus ``pct_complete`` (0–1).
 
-    Looks for lines matching common patterns:
-      - Tetris: "[  42] move=LEFT  score=100  restarts=2  ... t_remaining=230s"
-      - Generic: lines containing "progress:" or JSON with known keys.
+    Parses Tetris turn lines:
+      [  42] move=LEFT  score=100  restarts=2  tick=0.1s  latency=144ms  t_remaining=230s
 
-    Returns a dict suitable for writing to script.progress, or None if nothing
-    useful was found.
+    Collects latencies from the last 500 turn lines to compute live percentiles.
+    Extracts model name and duration from earlier log lines.
     """
     import re
-    tetris_pat = re.compile(
+    import statistics
+
+    turn_pat = re.compile(
         r'\[\s*(\d+)\]\s+move=(\S+)\s+score=(\d+)\s+restarts=(\d+)'
-        r'.*?t_remaining=([0-9.]+)s'
+        r'.*?latency=(\d+)ms.*?t_remaining=([0-9.]+)s'
     )
-    for line in reversed(lines[-200:]):
-        m = tetris_pat.search(line)
+    model_pat  = re.compile(r"model='([^']+)'|serve\s+([\w/.\-]+)\s+--host")
+    dur_pat    = re.compile(r"'duration':\s*(\d+)")
+
+    # ── collect all turn lines (scan whole log, keep last 500 latencies) ──
+    latencies: list[int] = []
+    last_turn = last_score = last_restarts = 0
+    last_t_remaining = 0.0
+    for line in lines:
+        m = turn_pat.search(line)
         if m:
-            return {
-                "turn": int(m.group(1)),
-                "move": m.group(2),
-                "score": int(m.group(3)),
-                "restarts": int(m.group(4)),
-                "t_remaining": float(m.group(5)),
-            }
-    return None
+            last_turn      = int(m.group(1))
+            last_score     = int(m.group(3))
+            last_restarts  = int(m.group(4))
+            latencies.append(int(m.group(5)))
+            last_t_remaining = float(m.group(6))
+
+    if not latencies:
+        return None
+
+    # ── model name ──
+    model = ""
+    for line in lines:
+        mm = model_pat.search(line)
+        if mm:
+            model = mm.group(1) or mm.group(2) or ""
+            if model:
+                break
+
+    # ── duration (from server-ready state line) ──
+    duration = 300
+    for line in lines:
+        dm = dur_pat.search(line)
+        if dm:
+            duration = int(dm.group(1))
+            break
+
+    pct_complete = max(0.0, min(1.0, 1.0 - last_t_remaining / duration)) if duration else 0.0
+
+    # ── latency stats (last 500 samples) ──
+    lats = sorted(latencies[-500:])
+    def pct(p: float) -> int:
+        if not lats: return 0
+        return lats[min(int(len(lats) * p / 100), len(lats) - 1)]
+
+    return {
+        "model":                  model,
+        "score":                  last_score,
+        "lines":                  0,          # not tracked live
+        "level":                  1,
+        "restarts":               last_restarts,
+        "turns":                  last_turn,
+        "latency_mean_ms":        int(statistics.mean(lats)) if lats else 0,
+        "latency_p50_ms":         pct(50),
+        "latency_p90_ms":         pct(90),
+        "latency_p95_ms":         pct(95),
+        "latency_p99_ms":         pct(99),
+        "latency_min_ms":         lats[0]  if lats else 0,
+        "latency_max_ms":         lats[-1] if lats else 0,
+        # ── progress-specific ──
+        "pct_complete":           round(pct_complete, 4),
+        "t_remaining":            last_t_remaining,
+    }
 
 
 class ExperimentRunner:
