@@ -237,10 +237,4 @@
   .dockview-theme-dark .dv-tab { font-size: var(--text-xs); }
   #topbar { padding: 6px 10px; gap: var(--space-2); font-size: var(--text-sm); flex-wrap: wrap; }
   #topbar .title { font-size: var(--text-base); }
-  .layout-menu-container { position: static; }
-  .layout-menu {
-    position: fixed; left: 10px; right: 10px; top: 56px; bottom: auto;
-    z-index: 9999;
-    max-height: 80vh; overflow-y: auto;
-  }
 }

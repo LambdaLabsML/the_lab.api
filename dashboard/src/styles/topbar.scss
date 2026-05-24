@@ -190,3 +190,12 @@
   color: var(--accent) !important;
   background: var(--bg-hi) !important;
 }
+
+@media (max-width: 800px) {
+  .layout-menu-container { position: static; }
+  .layout-menu {
+    position: fixed; left: 10px; right: 10px; top: 56px; bottom: auto;
+    z-index: 9999;
+    max-height: 80vh; overflow-y: auto;
+  }
+}

@@ -392,6 +392,15 @@ _STATIC_DIR = Path(__file__).parent / "static"
 # Serve Vite build output if it exists, otherwise fall back to legacy dashboard.html
 if _STATIC_DIR.exists() and (_STATIC_DIR / "index.html").exists():
     _SPA_HTML = (_STATIC_DIR / "index.html").read_text()
+    # Inject the WS auth token so the dashboard can authenticate WebSocket
+    # connections. Browsers cannot send Authorization headers on WebSocket
+    # upgrades, so the token is passed as a query param; the dashboard reads
+    # it from localStorage["the-lab:wsToken"].
+    if _AUTH_ENABLED:
+        _token_script = (
+            f'<script>try{{localStorage.setItem("the-lab:wsToken","{_AUTH_EXPECTED}")}}catch(e){{}}</script>'
+        )
+        _SPA_HTML = _SPA_HTML.replace("</head>", f"{_token_script}</head>", 1)
     _ASSETS_DIR = _STATIC_DIR / "assets"
     if _ASSETS_DIR.exists():
         app.mount("/assets", StaticFiles(directory=_ASSETS_DIR), name="assets")
