@@ -64,6 +64,22 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
     };
   }, []);
 
+  // When the canvas transitions from hidden (display:none dockview tab) to
+  // visible, Chart.js's internal ResizeObserver doesn't always fire. Use an
+  // IntersectionObserver to detect visibility and force a resize+redraw.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const observer = new IntersectionObserver((entries) => {
+      if (entries[0].isIntersecting && chartRef.current) {
+        chartRef.current.resize();
+        chartRef.current.update("none");
+      }
+    }, { threshold: 0.01 });
+    observer.observe(canvas);
+    return () => observer.disconnect();
+  }, []);
+
   // Create or update chart when data/settings change.
   // Heavy work (buildChartData + canvas draw) is deferred to the next
   // animation frame so the browser can repaint the toggled button state

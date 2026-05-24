@@ -239,8 +239,8 @@
   #topbar .title { font-size: var(--text-base); }
   .layout-menu-container { position: static; }
   .layout-menu {
-    position: fixed; left: 10px; right: 10px; top: auto; bottom: 10px;
-    z-index: var(--z-topbar);
-    max-height: calc(100dvh - 60px); overflow-y: auto;
+    position: fixed; left: 10px; right: 10px; top: 56px; bottom: auto;
+    z-index: 9999;
+    max-height: 80vh; overflow-y: auto;
   }
 }
