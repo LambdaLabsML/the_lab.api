@@ -974,6 +974,16 @@ class ExperimentRunner:
                         pid=None,
                         finished_at=now,
                     )
+                    # Overwrite the progress file with final state so GET /progress
+                    # never returns stale intermediate data after completion.
+                    _progress_path = local_exp_dir / "script.progress"
+                    try:
+                        import json as _json
+                        _progress_path.write_text(_json.dumps({
+                            "_final": True, **(metrics or {})
+                        }))
+                    except OSError:
+                        pass
                     if result_idx is not None:
                         self._strip_result_line(log_path, result_idx)
                     ws_mod.broadcaster.broadcast_soon({

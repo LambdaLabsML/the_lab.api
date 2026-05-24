@@ -979,8 +979,19 @@ def get_experiment_progress(exp_ref: str):
         -> {"status": "running", "progress": {"epoch": 25, "total_epochs": 50, "loss": 0.34}}
     """
     exp = _resolve_exp(exp_ref)
+    status = exp["status"]
+    result: dict = {"status": status}
+
+    # For terminal states return metrics as the final progress snapshot so the
+    # UI never shows stale "starting" data from an earlier write.
+    if status in ("completed", "failed", "cancelled"):
+        metrics = exp.get("metrics")
+        if metrics:
+            result["progress"] = {"_final": True, **metrics}
+        return result
+
+    # Running / queued — return whatever the script last wrote.
     progress_path = REPO_DIR / exp["script"].replace(".sh", ".progress")
-    result = {"status": exp["status"]}
     if progress_path.exists():
         try:
             result["progress"] = json.loads(progress_path.read_text())
