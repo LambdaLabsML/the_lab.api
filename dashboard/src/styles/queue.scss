@@ -176,7 +176,7 @@
 }
 
 .queue-resource-name {
-  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-family: var(--font-mono);
   font-size: var(--text-lg);
   font-weight: 700;
   color: var(--text);
@@ -256,7 +256,7 @@
 }
 
 .queue-capbar-frac {
-  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-family: var(--font-mono);
   font-size: var(--text-base);
   color: var(--text);
 }
@@ -287,7 +287,7 @@
 }
 
 .queue-holder-label {
-  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-family: var(--font-mono);
   font-size: var(--text-sm);
   color: var(--text);
   flex: 1 1 auto;
@@ -297,7 +297,7 @@
 }
 
 .queue-holder-units {
-  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-family: var(--font-mono);
   font-size: var(--text-sm);
   color: var(--text-muted);
 }
@@ -464,14 +464,14 @@
 }
 
 .queue-row-label {
-  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-family: var(--font-mono);
   font-size: var(--text-base);
   font-weight: 600;
   color: var(--text);
 }
 
 .queue-link {
-  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-family: var(--font-mono);
   font-size: var(--text-sm);
   color: var(--accent);
   background: transparent;
@@ -508,14 +508,14 @@
 
 .queue-row-resource,
 .queue-row-units {
-  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-family: var(--font-mono);
   font-size: var(--text-sm);
   color: var(--text);
 }
 
 .queue-dep-chip {
   display: inline-block;
-  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-family: var(--font-mono);
   font-size: var(--text-xs);
   padding: 1px 6px;
   border-radius: var(--radius-sm);
@@ -542,7 +542,7 @@
 .queue-priority-value {
   min-width: 32px;
   padding: 2px var(--space-2);
-  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-family: var(--font-mono);
   font-size: var(--text-base);
   font-weight: 700;
   color: var(--text);

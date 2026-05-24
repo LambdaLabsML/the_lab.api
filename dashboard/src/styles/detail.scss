@@ -46,20 +46,20 @@
 .exp-item { padding: var(--space-2); margin-bottom: 6px; border-radius: var(--radius-sm); background: var(--bg); border: 1px solid var(--border); }
 .exp-item .exp-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--space-1); }
 .exp-item .exp-id { font-weight: 600; color: var(--accent); font-size: 12px; transition: color var(--transition-fast); }
-.exp-item .exp-id:hover { color: #79c0ff; text-decoration: underline; }
-.exp-item.exp-highlight { background: #58a6ff15; outline: 1px solid #58a6ff44; border-radius: var(--radius-sm); transition: background var(--transition-slow), outline var(--transition-slow); }
+.exp-item .exp-id:hover { color: var(--accent-dim); text-decoration: underline; }
+.exp-item.exp-highlight { background: color-mix(in srgb, var(--accent) 8%, transparent); outline: 1px solid color-mix(in srgb, var(--accent) 27%, transparent); border-radius: var(--radius-sm); transition: background var(--transition-slow), outline var(--transition-slow); }
 
 /* --- JSON viewer --- */
 .json-view { margin: var(--space-1) 0; font-size: var(--text-sm); line-height: 1.5; }
 .json-label { color: var(--text-muted); font-weight: 600; font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.5px; margin-right: var(--space-1); }
-.json-tree { font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; }
-.json-key { color: #d2a8ff; }
+.json-tree { font-family: var(--font-mono); }
+.json-key { color: var(--purple); }
 .json-colon { color: var(--text-faint); }
-.json-str { color: #a5d6ff; word-break: break-all; }
+.json-str { color: var(--green); word-break: break-all; }
 .json-str.json-truncated { cursor: pointer; opacity: 0.8; }
 .json-str.json-truncated:hover { opacity: 1; text-decoration: underline dotted; }
-.json-num { color: #79c0ff; }
-.json-bool { color: #ff7b72; }
+.json-num { color: var(--accent); }
+.json-bool { color: var(--red); }
 .json-null { color: var(--text-faint); font-style: italic; }
 .json-brace { color: var(--text-faint); }
 .json-comma { color: var(--text-faint); }
@@ -74,16 +74,16 @@
 .json-block { display: inline; }
 .exp-item .exp-desc { margin-bottom: var(--space-1); line-height: 1.4; }
 .exp-item .exp-meta { font-size: var(--text-sm); color: var(--text-muted); }
-.exp-item .exp-metrics { font-size: var(--text-sm); color: #d2a8ff; margin-top: 3px; }
+.exp-item .exp-metrics { font-size: var(--text-sm); color: var(--purple); margin-top: 3px; }
 .exp-item .exp-timestamps { font-size: var(--text-xs); color: var(--text-faint); margin-top: 3px; }
 .exp-item .exp-eta { color: var(--yellow); font-weight: 600; font-size: var(--text-xs); margin-top: 3px; }
-.exp-item .exp-progress { font-size: var(--text-sm); color: var(--yellow); margin-top: var(--space-1); padding: var(--space-1) 6px; background: #1c1d1f; border-radius: 3px; }
+.exp-item .exp-progress { font-size: var(--text-sm); color: var(--yellow); margin-top: var(--space-1); padding: var(--space-1) 6px; background: var(--bg-elev); border-radius: 3px; }
 .exp-item .exp-progress .progress-bar { height: var(--space-1); background: var(--border); border-radius: 2px; margin-top: var(--space-1); overflow: hidden; }
 .exp-item .exp-progress .progress-fill { height: 100%; background: var(--yellow); border-radius: 2px; transition: width var(--transition-slow); }
 
 /* Parent links */
 .parent-link { color: var(--accent); text-decoration: none; font-weight: 600; }
-.parent-link:hover { text-decoration: underline; color: #79c0ff; }
+.parent-link:hover { text-decoration: underline; color: var(--accent-dim); }
 
 /* Idea description (replaces detail-section wrapper) */
 .detail-desc { color: var(--text); line-height: 1.5; margin-bottom: 10px; font-size: 12px; word-break: break-word; white-space: pre-wrap; }
