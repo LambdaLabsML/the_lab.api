@@ -26,7 +26,7 @@ from . import token_registry
 
 def _parse_log_progress(lines: list[str]) -> dict | None:
     """Scan log lines and return a progress snapshot with the same schema as
-    the final metrics, plus ``pct_complete`` (0–1).
+    the final metrics, plus ``pct_complete`` (0–100).
 
     Parses Tetris turn lines:
       [  42] move=LEFT  score=100  restarts=2  tick=0.1s  latency=144ms  t_remaining=230s
@@ -77,10 +77,10 @@ def _parse_log_progress(lines: list[str]) -> dict | None:
             duration = int(dm.group(1))
             break
 
-    # Cap at 0.99 while still running — t_remaining hits 0 while cleanup/GIF
-    # encoding is still in progress, so 1.0 would be misleading for "running".
-    # The runner sets _final=True and pct_complete=1.0 on actual completion.
-    pct_complete = max(0.0, min(0.99, 1.0 - last_t_remaining / duration)) if duration else 0.0
+    # 0–99 while running (t_remaining=0 ≠ completed — cleanup/GIF still in progress).
+    # The runner writes pct_complete=100 when the experiment actually finishes.
+    raw = (1.0 - last_t_remaining / duration) * 100 if duration else 0.0
+    pct_complete = round(max(0.0, min(99.0, raw)), 1)
 
     # ── latency stats (last 500 samples) ──
     lats = sorted(latencies[-500:])
@@ -1078,7 +1078,7 @@ class ExperimentRunner:
                     try:
                         import json as _json
                         _progress_path.write_text(_json.dumps({
-                            "_final": True, **(metrics or {})
+                            "_final": True, "pct_complete": 100, **(metrics or {})
                         }))
                     except OSError:
                         pass
