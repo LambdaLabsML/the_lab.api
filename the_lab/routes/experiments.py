@@ -987,7 +987,7 @@ def get_experiment_progress(exp_ref: str):
     if status in ("completed", "failed", "cancelled"):
         metrics = exp.get("metrics")
         if metrics:
-            result["progress"] = {"_final": True, **metrics}
+            result["progress"] = {"_final": True, "pct_complete": 100, **metrics}
         return result
 
     # Running / queued — return whatever the script last wrote.
