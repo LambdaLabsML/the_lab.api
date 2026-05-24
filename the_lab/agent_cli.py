@@ -313,10 +313,18 @@ def main():
                 "role": args.role,
                 "pid": os.getpid(),
             }).encode()
+            _reg_headers: dict[str, str] = {"Content-Type": "application/json"}
+            _lab_user = os.environ.get("THE_LAB_USER", "").strip()
+            _lab_pw   = os.environ.get("THE_LAB_PASSWORD", "").strip()
+            if _lab_user and _lab_pw:
+                import base64 as _b64
+                _reg_headers["Authorization"] = "Basic " + _b64.b64encode(
+                    f"{_lab_user}:{_lab_pw}".encode()
+                ).decode()
             req_obj = _urlreq.Request(
                 f"{api_base_for_register}/agents/register",
                 data=payload, method="POST",
-                headers={"Content-Type": "application/json"},
+                headers=_reg_headers,
             )
             with _urlreq.urlopen(req_obj, timeout=10) as resp:
                 reg = _json.loads(resp.read().decode())
@@ -395,11 +403,18 @@ def main():
             rc = proc.wait()
         finally:
             try:
-                import urllib.request as _urlreq
+                import urllib.request as _urlreq, base64 as _b64
+                _del_headers: dict[str, str] = {}
+                _lu = os.environ.get("THE_LAB_USER", "").strip()
+                _lp = os.environ.get("THE_LAB_PASSWORD", "").strip()
+                if _lu and _lp:
+                    _del_headers["Authorization"] = "Basic " + _b64.b64encode(
+                        f"{_lu}:{_lp}".encode()
+                    ).decode()
                 _urlreq.urlopen(
                     _urlreq.Request(
                         f"http://localhost:{args.port}/api/v1/agents/{agent_id}",
-                        method="DELETE",
+                        method="DELETE", headers=_del_headers,
                     ),
                     timeout=10,
                 )
