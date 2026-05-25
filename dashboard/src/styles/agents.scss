@@ -5,41 +5,38 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
-  background: var(--bg);
+  background: var(--bg-elev);
   color: var(--text);
 }
 
 .agents-header {
   display: flex;
-  justify-content: space-between;
-  gap: 20px;
-  align-items: flex-start;
-  padding: 18px 20px;
-  border: 1px solid var(--border);
-  background: linear-gradient(180deg, #141a22 0%, #0f141b 100%);
-  border-radius: var(--radius-lg);
+  align-items: baseline;
+  gap: var(--space-3);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--border-soft);
 }
 
 .agents-header-left h2 {
-  margin: 0 0 var(--space-2) 0;
-  font-size: 18px;
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
 }
 
 .agents-header-left p {
-  margin: 0;
-  color: var(--text-muted);
-  max-width: 760px;
-  line-height: 1.45;
-  font-size: 12px;
+  display: none;
 }
 
 .agents-header-left code {
-  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-family: var(--font-mono);
   padding: 1px 5px;
   background: var(--bg-elev);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-sm);
-  color: #79c0ff;
+  color: var(--accent);
   font-size: var(--text-sm);
 }
 
@@ -51,49 +48,49 @@
 }
 
 .agents-summary {
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--text-muted);
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.5px;
 }
 
 .agents-error {
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-sm);
   padding: var(--space-3) 14px;
   border: 1px solid var(--red);
-  background: #5a1e23;
-  color: #ffb3ba;
-  font-size: 12px;
+  background: var(--badge-red-bg);
+  color: var(--red);
+  font-size: var(--text-base);
 }
 
 .agents-empty {
   border: 1px dashed var(--border);
-  background: #11161d;
-  border-radius: var(--radius-lg);
+  background: var(--bg);
+  border-radius: var(--radius-sm);
   padding: 28px 20px;
   text-align: center;
   color: var(--text-muted);
 }
 
 .agents-empty-title {
-  font-size: 14px;
+  font-size: var(--text-lg);
   font-weight: 600;
   color: var(--text);
   margin-bottom: 6px;
 }
 
 .agents-empty-body {
-  font-size: 12px;
+  font-size: var(--text-base);
   line-height: 1.5;
 }
 
 .agents-empty code {
-  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-family: var(--font-mono);
   padding: 2px 6px;
   background: var(--bg-elev);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-sm);
-  color: #79c0ff;
+  color: var(--accent);
   font-size: var(--text-sm);
 }
 
@@ -105,8 +102,8 @@
 
 .agents-card {
   border: 1px solid var(--border);
-  background: #11161d;
-  border-radius: var(--radius-lg);
+  background: var(--bg);
+  border-radius: var(--radius-sm);
   padding: 14px var(--space-4);
   display: flex;
   flex-direction: column;
@@ -130,8 +127,8 @@
 }
 
 .agents-card-id {
-  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
-  font-size: 18px;
+  font-family: var(--font-mono);
+  font-size: var(--text-xl);
   font-weight: 700;
   color: var(--text);
   letter-spacing: 0.04em;
@@ -141,12 +138,12 @@
   display: inline-block;
   font-size: var(--text-xs);
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.5px;
   padding: 2px 7px;
   border-radius: 999px;
-  border: 1px solid #274b6d;
-  background: #102234;
-  color: #79c0ff;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
+  background: var(--badge-blue-bg);
+  color: var(--accent);
   font-weight: 500;
 }
 
@@ -156,14 +153,14 @@
   gap: 6px;
   font-size: var(--text-sm);
   color: var(--text-muted);
-  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-family: var(--font-mono);
 }
 
 .agents-dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #6e7681;
+  background: var(--text-faint);
   display: inline-block;
 }
 
@@ -187,7 +184,7 @@
   flex: 0 0 76px;
   font-size: var(--text-sm);
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.5px;
   color: var(--text-muted);
   padding-top: 2px;
 }
@@ -195,13 +192,13 @@
 .agents-card-value {
   flex: 1 1 auto;
   min-width: 0;
-  font-size: 12px;
+  font-size: var(--text-base);
   color: var(--text);
 }
 
 .agents-branch {
-  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
-  font-size: 12px;
+  font-family: var(--font-mono);
+  font-size: var(--text-base);
   color: var(--text);
   word-break: break-all;
 }
@@ -213,16 +210,16 @@
 }
 
 .agents-branch-parent code {
-  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-family: var(--font-mono);
   font-size: var(--text-sm);
-  color: #79c0ff;
+  color: var(--accent);
   background: transparent;
   border: none;
   padding: 0;
 }
 
 .agents-worktree {
-  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-family: var(--font-mono);
   font-size: var(--text-sm);
   padding: 2px 6px;
   background: var(--bg);
@@ -245,19 +242,19 @@
 }
 
 .agents-btn {
-  padding: 6px 11px;
-  background: var(--bg-elev);
+  padding: 2px var(--space-2);
+  background: none;
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  color: var(--text);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--text-xs);
   cursor: pointer;
   white-space: nowrap;
 }
 
 .agents-btn:hover:not(:disabled) {
-  background: var(--bg-hi);
+  color: var(--text);
   border-color: var(--text-muted);
 }
 
@@ -267,14 +264,12 @@
 }
 
 .agents-btn.danger {
-  background: var(--bg-hi);
-  border-color: #6e1e23;
   color: var(--red);
+  border-color: var(--badge-red-bg);
 }
 
 .agents-btn.danger:hover:not(:disabled) {
-  background: #5a1e23;
-  color: #ffb3ba;
+  background: var(--badge-red-bg);
 }
 
 @media (max-width: 700px) {
@@ -293,34 +288,41 @@
   border-top: 1px solid var(--border);
   padding-top: var(--space-4);
 }
+
 .agents-messages-header {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   margin-bottom: 10px;
 }
+
 .agents-messages-header h3 {
   margin: 0;
-  font-size: var(--text-base);
-  color: var(--text);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.5px;
 }
+
 .agents-messages-meta {
   font-size: var(--text-sm);
   color: var(--text-muted);
 }
+
 .agents-messages-empty {
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--text-base);
   padding: var(--space-3) 0;
 }
+
 .agents-messages-empty code {
   background: var(--bg-elev);
   padding: 1px 4px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   font-size: var(--text-sm);
+  font-family: var(--font-mono);
 }
+
 .agents-messages-list {
   list-style: none;
   margin: 0;
@@ -331,12 +333,14 @@
   max-height: 480px;
   overflow-y: auto;
 }
+
 .agents-message {
   background: var(--bg-elev);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
   padding: var(--space-2) 10px;
 }
+
 .agents-message-head {
   display: flex;
   align-items: center;
@@ -346,28 +350,35 @@
   color: var(--text-muted);
   margin-bottom: 4px;
 }
+
 .agents-message-from {
   color: var(--text);
   font-weight: 600;
 }
+
 .agents-message-arrow {
-  color: #6e7681;
+  color: var(--text-faint);
 }
+
 .agents-message-to {
   color: var(--accent);
 }
+
 .agents-message-time {
   margin-left: auto;
 }
+
 .agents-message-read {
   color: var(--green);
 }
+
 .agents-message-unread {
   color: var(--yellow);
 }
+
 .agents-message-body {
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--text-base);
   white-space: pre-wrap;
   word-break: break-word;
   line-height: 1.4;

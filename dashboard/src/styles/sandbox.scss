@@ -9,25 +9,23 @@
 
 .sandbox-header {
   display: flex;
-  justify-content: space-between;
-  gap: 20px;
-  align-items: flex-start;
-  padding: 18px 20px;
-  border: 1px solid var(--border);
-  background: linear-gradient(180deg, #141a22 0%, #0f141b 100%);
-  border-radius: var(--radius-lg);
+  align-items: baseline;
+  gap: var(--space-3);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--border-soft);
 }
 
 .sandbox-header h2 {
-  margin: 0 0 var(--space-2) 0;
-  font-size: 18px;
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
 }
 
 .sandbox-header p {
-  margin: 0;
-  color: var(--text-muted);
-  max-width: 760px;
-  line-height: 1.45;
+  display: none;
 }
 
 .sandbox-status-wrap {
@@ -66,19 +64,19 @@
 
 .sandbox-warning,
 .sandbox-error {
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-sm);
   padding: var(--space-3) 14px;
   border: 1px solid var(--border);
 }
 
 .sandbox-warning {
-  background: #2d1a00;
-  color: #f2cc60;
+  background: var(--badge-yellow-bg);
+  color: var(--yellow);
 }
 
 .sandbox-error {
-  background: #5a1e23;
-  color: #ffb3ba;
+  background: var(--badge-red-bg);
+  color: var(--red);
 }
 
 .sandbox-grid {
@@ -89,8 +87,8 @@
 
 .sandbox-panel {
   border: 1px solid var(--border);
-  background: #11161d;
-  border-radius: var(--radius-lg);
+  background: var(--bg);
+  border-radius: var(--radius-sm);
   padding: var(--space-4);
   display: flex;
   flex-direction: column;
@@ -98,13 +96,15 @@
 }
 
 .sandbox-panel-title {
-  font-size: var(--text-base);
-  font-weight: 700;
-  color: var(--text);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
 }
 
 .sandbox-panel-subtitle {
-  font-size: 12px;
+  font-size: var(--text-base);
   color: var(--text-muted);
   line-height: 1.4;
 }
@@ -116,7 +116,7 @@
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--text);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-sm);
   padding: var(--space-3);
   font: inherit;
   line-height: 1.45;
@@ -132,17 +132,17 @@
   display: inline-block;
   padding: 6px 10px;
   border-radius: 999px;
-  border: 1px solid #274b6d;
-  background: #102234;
-  color: #79c0ff;
-  font-size: 12px;
-  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
+  background: var(--badge-blue-bg);
+  color: var(--accent);
+  font-size: var(--text-base);
+  font-family: var(--font-mono);
 }
 
 .sandbox-chip-rw {
-  border-color: #2d5637;
-  background: #0f2416;
-  color: #7ee787;
+  border-color: var(--badge-green-bg);
+  background: var(--badge-green-bg);
+  color: var(--green);
 }
 
 .sandbox-chip-ro {
@@ -153,9 +153,11 @@
 
 .sandbox-section-title {
   margin: var(--space-2) 0 -4px;
-  font-size: var(--text-lg);
+  font-size: var(--text-sm);
   font-weight: 600;
-  color: var(--text);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
   border-bottom: 1px solid var(--border-soft);
   padding-bottom: 6px;
 }
@@ -163,7 +165,7 @@
 .sandbox-section-note {
   margin: 0 0 -8px;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--text-base);
   line-height: 1.45;
 }
 
@@ -174,7 +176,7 @@
 .sandbox-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 12px;
+  font-size: var(--text-base);
 }
 
 .sandbox-table th,

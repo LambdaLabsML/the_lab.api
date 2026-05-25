@@ -2,7 +2,7 @@
   background: var(--bg);
   border-bottom: 1px solid var(--border);
   padding: 6px 20px;
-  font-size: 12px;
+  font-size: var(--text-base);
   color: var(--text-muted);
   display: flex;
   align-items: center;
@@ -29,7 +29,7 @@
   border: 1px solid var(--accent-dim);
   padding: 3px var(--space-2);
   font-family: inherit;
-  font-size: 12px;
+  font-size: var(--text-base);
   border-radius: var(--radius-sm);
   outline: none;
 }
