@@ -1,6 +1,6 @@
 /* api.css — API explorer styles */
 
-#api-container { flex: 1 1 0%; display: block; overflow-y: auto; padding: var(--space-4); min-width: 0; min-height: 0; }
+#api-container { flex: 1 1 0%; display: block; overflow-y: auto; padding: var(--space-4); min-width: 0; min-height: 0; background: var(--bg-elev); }
 
 .api-group { margin-bottom: 20px; }
 .api-group-title {

@@ -1,10 +1,11 @@
 #sandbox-container {
   flex: 1 1 0%;
   overflow: auto;
-  padding: 20px;
+  padding: var(--space-4);
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
+  background: var(--bg-elev);
 }
 
 .sandbox-header {
@@ -114,7 +115,7 @@
   min-height: 210px;
   resize: vertical;
   border: 1px solid var(--border);
-  background: var(--bg);
+  background: var(--bg-elev);
   color: var(--text);
   border-radius: var(--radius-sm);
   padding: var(--space-3);
