@@ -97,12 +97,34 @@ class SlurmExecutor:
             )
         return result
 
-    def _ssh_plain(self, cmd: str, check: bool = True) -> subprocess.CompletedProcess:
-        """Run cmd via SSH without the SLURM_CONF prefix (for git commands)."""
-        result = subprocess.run(
-            ["ssh", self.ssh_host, cmd],
-            capture_output=True, text=True,
-        )
+    def _ssh_plain(self, cmd: str, check: bool = True,
+                   timeout: int = 120) -> subprocess.CompletedProcess:
+        """Run cmd via SSH without the SLURM_CONF prefix (for git commands).
+
+        Uses a timeout to prevent hanging indefinitely on git lock contention.
+        The remote process is killed if the local timeout fires.
+        """
+        try:
+            result = subprocess.run(
+                ["ssh",
+                 # Kill remote process when the connection dies (prevents orphaned
+                 # git processes that leave index.lock files on the remote).
+                 "-o", "ServerAliveInterval=10",
+                 "-o", "ServerAliveCountMax=3",
+                 self.ssh_host, cmd],
+                capture_output=True, text=True,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired as e:
+            if check:
+                raise RuntimeError(
+                    f"SSH command timed out after {timeout}s: {cmd!r}"
+                ) from e
+            # Return a fake failure result on timeout
+            return subprocess.CompletedProcess(
+                args=[], returncode=1,
+                stdout="", stderr=f"timeout after {timeout}s",
+            )
         if check and result.returncode != 0:
             raise RuntimeError(
                 f"SSH command failed (rc={result.returncode}): {cmd!r}\n"
@@ -193,6 +215,23 @@ class SlurmExecutor:
         Prunes stale worktree registrations first so retries after a failed
         job don't hit 'already exists' errors.
         """
+        # Clear any stale index.lock files left by interrupted git commands
+        # before running any git worktree operations (locks cause hangs).
+        try:
+            self._ssh_plain(
+                f"find {abs_bare_path}/worktrees -name 'index.lock' "
+                f"-delete 2>/dev/null || true"
+            )
+        except Exception:
+            pass
+        # Unlock the worktree if it was locked by a previous interrupted add.
+        try:
+            self._ssh_plain(
+                f"git -C {abs_bare_path} worktree unlock {worktree_path} "
+                f"2>/dev/null || true"
+            )
+        except Exception:
+            pass
         # Prune stale worktree registrations, then force-remove any live
         # worktree at the same path (happens when a rerun uses the same label).
         try:
@@ -213,10 +252,25 @@ class SlurmExecutor:
             self._ssh_plain(f"rm -rf {worktree_path} 2>/dev/null || true")
         except Exception:
             pass
-        self._ssh_plain(
+        result = self._ssh_plain(
             f"git -C {abs_bare_path} worktree add --detach -q "
-            f"{worktree_path} {commit_sha}"
+            f"{worktree_path} {commit_sha}",
+            check=False,
         )
+        if result.returncode != 0:
+            # Worktree may still exist at the right commit (partial retry).
+            # Check with rev-parse HEAD inside the worktree.
+            check = self._ssh_plain(
+                f"git -C {worktree_path} rev-parse HEAD 2>/dev/null "
+                f"| grep -q {commit_sha}",
+                check=False,
+            )
+            if check.returncode != 0:
+                raise RuntimeError(
+                    f"git worktree add failed (rc={result.returncode}): "
+                    f"{result.stderr.strip()}"
+                )
+            # Worktree exists and is at the correct commit — reuse it.
 
     def remove_worktree(self, abs_bare_path: str, worktree_path: str) -> None:
         """Remove the worktree from git's tracking. Best-effort."""
@@ -354,6 +408,35 @@ if [ -f "$THE_LAB_PROGRESS" ]; then
 fi
 
 if [ $_PREEMPTED -eq 0 ]; then
+    # Wait for artifact files (e.g. GIFs) to finish writing — poll until sizes
+    # are stable so we don't rsync a partially-written file.
+    _wait_stable() {{
+        local dir="$1" timeout="${{2:-120}}"
+        local deadline=$(( $(date +%s) + timeout ))
+        local prev="" cur
+        while [ "$(date +%s)" -lt "$deadline" ]; do
+            cur=$(find "$dir" -maxdepth 1 \( -name "*.gif" -o -name "*.json" \) \\
+                  -exec stat -c '%n:%s' {{}} \; 2>/dev/null | sort | tr '\n' '|')
+            if [ -n "$cur" ] && [ "$cur" = "$prev" ]; then
+                break
+            fi
+            prev="$cur"
+            sleep 3
+        done
+    }}
+    _wait_stable "{remote_job_dir}" 120
+
+    # Trigger rsync on the lab server and wait for it to complete.
+    # The /pull endpoint blocks until rsync finishes, so when we get 200 back
+    # all artifacts are safely on the lab server.
+    # Only delete local files if the pull succeeded — otherwise keep them for recovery.
+    if curl -sf --max-time 120 \\
+         -X POST "$THE_LAB_API_URL/experiments/{label}/pull" \\
+         -H "Authorization: Bearer $THE_LAB_TOKEN" \\
+         -H "Content-Type: application/json"; then
+        rm -rf "{remote_job_dir}/worktree" "{remote_job_dir}/venv" 2>/dev/null || true
+    fi
+
     curl -s -X POST "$THE_LAB_API_URL/experiments/{label}/slurm_done" \\
          -H "Authorization: Basic $THE_LAB_AUTH" \\
          -H "Content-Type: application/json" \\
@@ -452,6 +535,10 @@ exit $_EXIT
 
     def cancel(self, job_id: str) -> None:
         try:
+            # Disable requeue before cancelling so the job doesn't restart
+            # (slurm's --requeue flag causes scancelled jobs to be resubmitted).
+            self._ssh(f"scontrol update JobId={job_id} Requeue=0 2>/dev/null || true",
+                      check=False)
             self._ssh(f"scancel {job_id}")
         except Exception as e:
             logger.warning("scancel %s failed: %s", job_id, e)
@@ -469,7 +556,7 @@ exit $_EXIT
         """rsync the job dir back to the local experiment directory."""
         local_dir = str(local_exp_dir).rstrip("/") + "/"
         result = subprocess.run(
-            ["rsync", "-az", "--timeout=30",
+            ["rsync", "-az", "--timeout=1200",
              # The worktree is git-tracked code the local machine already has —
              # no need to sync it back. Only pull the job-root output files:
              # script.log, script.progress, script.metrics.jsonl, *.gpu_stats,
