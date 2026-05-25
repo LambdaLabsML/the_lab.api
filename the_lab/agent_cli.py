@@ -339,9 +339,14 @@ def main():
             env["THE_LAB_AGENT_ID"] = agent_id
             env["THE_LAB_AGENT_WORKTREE"] = str(agent_worktree)
         except Exception as e:
+            _YELLOW = "\033[33m"
+            _BOLD   = "\033[1m"
+            _RESET  = "\033[0m"
             print(
-                f"Warning: agent registration failed ({e}); "
-                "running in legacy/main-repo mode. Pass --no-isolated to silence.",
+                f"\n{_BOLD}{_YELLOW}⚠  Agent registration failed{_RESET}\n"
+                f"   {e}\n"
+                f"   Running in legacy/main-repo mode (no isolated worktree).\n"
+                f"   Is the Lab API server running? Pass --no-isolated to silence.\n",
                 file=sys.stderr,
             )
 
