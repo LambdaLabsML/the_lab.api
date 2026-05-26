@@ -603,6 +603,8 @@ def build_sandbox_command(
     config: dict | None = None,
     cwd: Path | str | None = None,
     extra_bwrap_args: list[str] | None = None,
+    inner_uid: int | None = None,
+    inner_gid: int | None = None,
 ) -> list[str]:
     """Wrap *target_cmd* in rootlesskit (network namespace) + bwrap (file
     isolation) + sandbox_guest (iptables + proxy + privilege drop).
@@ -621,6 +623,14 @@ def build_sandbox_command(
         config = load_sandbox_config(repo_dir)
 
     bwrap_args = build_bwrap_args(repo_dir, config, cwd=cwd)
+    if inner_uid is not None:
+        # Create a nested user namespace inside rootlesskit's namespace.
+        # rootlesskit maps outer uid 0 → real host uid, so NFS access works.
+        # The inner namespace maps inner_uid → outer uid 0, so the process
+        # appears as inner_uid (not root) to tools like Claude Code that
+        # refuse --dangerously-skip-permissions when running as uid 0.
+        gid = inner_gid if inner_gid is not None else inner_uid
+        bwrap_args = ["--unshare-user", "--uid", str(inner_uid), "--gid", str(gid)] + bwrap_args
     if extra_bwrap_args:
         bwrap_args.extend(extra_bwrap_args)
     target_cwd = str(Path(cwd).resolve()) if cwd is not None else str(repo_dir)

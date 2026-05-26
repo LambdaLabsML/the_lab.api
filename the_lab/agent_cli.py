@@ -422,16 +422,14 @@ def main():
             details = capabilities.get("details") or "sandbox runtime unavailable"
             print(f"Error: sandbox is unavailable: {details}", file=sys.stderr)
             sys.exit(1)
-        # Stay as uid/gid 0 inside the user namespace — rootlesskit maps
-        # namespace uid 0 to the real host uid, so NFS access works normally.
-        # Dropping to the real uid (e.g. 1000) maps to a sub-UID that NFS
-        # doesn't recognise, breaking all repo file access.
-        env["THE_LAB_SANDBOX_TARGET_UID"] = "0"
-        env["THE_LAB_SANDBOX_TARGET_GID"] = "0"
+        env["THE_LAB_SANDBOX_TARGET_UID"] = str(os.getuid())
+        env["THE_LAB_SANDBOX_TARGET_GID"] = str(os.getgid())
         cmd = build_sandbox_command(
             repo_root, args.agent, prompt_path.name, cmd,
             cwd=os.getcwd(),
             extra_bwrap_args=extra_bwrap or None,
+            inner_uid=os.getuid(),
+            inner_gid=os.getgid(),
         )
 
     # Pick the cwd for the agent process: its worktree if isolated, else
