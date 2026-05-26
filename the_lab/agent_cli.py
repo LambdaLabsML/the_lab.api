@@ -54,6 +54,9 @@ def _build_launch_command(
             dest_dir.mkdir(parents=True, exist_ok=True)
             mcp_file = dest_dir / "the-lab-mcp.json"
             mcp_file.write_text(mcp_config)
+            # Ensure the file is readable by the sandbox's mapped sub-UID,
+            # which appears as "other" on NFS due to user namespace UID remapping.
+            mcp_file.chmod(0o644)
             cmd.extend(["--mcp-config", str(mcp_file), "--"])
         cmd.append(loop_prompt)
         return cmd
@@ -331,10 +334,9 @@ def main():
             sys.exit(1)
 
     mcp_dir: Path | None = None
-    if sandbox_mode:
-        # ~/.claude is RW-bound and on local FS — avoids NFS UID mapping issues
-        # that cause EACCES when the sandbox's mapped sub-UID reads NFS files.
-        mcp_dir = Path.home() / ".claude"
+    if sandbox_mode and repo_root is not None:
+        from .sandbox import sandbox_dir as _sandbox_dir
+        mcp_dir = _sandbox_dir(repo_root)
 
     cmd = _build_launch_command(
         args.agent,
