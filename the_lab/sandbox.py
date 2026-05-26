@@ -119,28 +119,35 @@ def normalize_rules(values: list[str] | None) -> list[str]:
     return result
 
 
-def _normalize_path(raw: str) -> str:
-    """Normalize a file-rule path: strip comments, expanduser, absolute only."""
+def _normalize_path(raw: str, base_dir: str | None = None) -> str:
+    """Normalize a file-rule path: strip comments, expanduser, absolute only.
+
+    Relative paths are resolved against *base_dir* (typically repo_dir) when
+    provided, so callers can use paths like ``results/`` or ``./src``.
+    """
     value = raw.strip()
     if not value or value.startswith("#"):
         return ""
     value = os.path.expanduser(value)
     if not os.path.isabs(value):
-        return ""
+        if base_dir:
+            value = os.path.join(base_dir, value)
+        else:
+            return ""
     # Collapse trailing slashes (except on bare /)
     while len(value) > 1 and value.endswith("/"):
         value = value[:-1]
     return value
 
 
-def normalize_paths(values: list[str] | None) -> list[str]:
+def normalize_paths(values: list[str] | None, base_dir: str | None = None) -> list[str]:
     if not values:
         return []
     seen: set[str] = set()
     result: list[str] = []
     for value in values:
         for line in str(value).splitlines():
-            path = _normalize_path(line)
+            path = _normalize_path(line, base_dir=base_dir)
             if path and path not in seen:
                 seen.add(path)
                 result.append(path)
@@ -273,21 +280,23 @@ def default_sandbox_config(repo_dir: Path) -> dict:
 def load_sandbox_config(repo_dir: Path) -> dict:
     stored = _read_json(sandbox_config_path(repo_dir), {})
     config = default_sandbox_config(repo_dir)
+    base = str(repo_dir)
     config["enabled"] = bool(stored.get("enabled", False))
     config["allowlist"] = normalize_rules(stored.get("allowlist", []))
     config["denylist"] = normalize_rules(stored.get("denylist", []))
-    config["file_rw"] = normalize_paths(stored.get("file_rw", []))
-    config["file_ro"] = normalize_paths(stored.get("file_ro", []))
+    config["file_rw"] = normalize_paths(stored.get("file_rw", []), base_dir=base)
+    config["file_ro"] = normalize_paths(stored.get("file_ro", []), base_dir=base)
     return config
 
 
 def save_sandbox_config(repo_dir: Path, payload: dict) -> dict:
+    base = str(repo_dir)
     stored = {
         "enabled": bool(payload.get("enabled", True)),
         "allowlist": normalize_rules(payload.get("allowlist", [])),
         "denylist": normalize_rules(payload.get("denylist", [])),
-        "file_rw": normalize_paths(payload.get("file_rw", [])),
-        "file_ro": normalize_paths(payload.get("file_ro", [])),
+        "file_rw": normalize_paths(payload.get("file_rw", []), base_dir=base),
+        "file_ro": normalize_paths(payload.get("file_ro", []), base_dir=base),
     }
     _write_json(sandbox_config_path(repo_dir), stored)
     return load_sandbox_config(repo_dir)

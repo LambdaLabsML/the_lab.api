@@ -6,7 +6,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from .sandbox import build_sandbox_command, sandbox_capabilities
+from .sandbox import build_sandbox_command, load_sandbox_config, sandbox_capabilities
 
 # PROMPT_api.md ships with the_lab package
 _PROMPT_API = Path(__file__).parent / "PROMPT_api.md"
@@ -101,8 +101,12 @@ def main():
     )
     parser.add_argument(
         "--sandbox",
-        action="store_true",
-        help="Launch the agent inside a network sandbox (default: off)",
+        nargs="?",
+        const="on",
+        default="auto",
+        metavar="on|off|auto",
+        help="Launch the agent inside a network sandbox. "
+             "'auto' (default) reads the enabled flag from .the_lab/sandbox/config.json",
     )
     parser.add_argument(
         "--repo",
@@ -350,7 +354,23 @@ def main():
                 file=sys.stderr,
             )
 
-    if args.sandbox:
+    # Resolve --sandbox flag: None=off, "on"/""/True=on, "auto"=read from config
+    sandbox_mode = args.sandbox
+    if sandbox_mode == "auto":
+        # Find repo root early so we can read the config
+        _auto_repo = args.repo or None
+        _auto_root = Path(_auto_repo).resolve() if _auto_repo else _find_repo_root(Path.cwd(), prompt_path.parent)
+        if _auto_root and (_auto_root / ".git").exists():
+            sandbox_mode = "on" if load_sandbox_config(_auto_root).get("enabled", False) else None
+        else:
+            sandbox_mode = None
+
+    if sandbox_mode in ("on", "off"):
+        sandbox_mode = sandbox_mode == "on"
+    elif sandbox_mode is not None:
+        sandbox_mode = bool(sandbox_mode)
+
+    if sandbox_mode:
         if args.repo:
             repo_root = Path(args.repo).resolve()
             if not (repo_root / ".git").exists():
