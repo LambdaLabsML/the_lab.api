@@ -224,6 +224,7 @@ export interface SandboxState {
   builtin_file_rw: string[];
   builtin_file_ro: string[];
   builtin_file_binds: SandboxFileBind[];
+  has_disable_password: boolean;
   capabilities: SandboxCapabilities;
   observed: SandboxObservedEntry[];
 }

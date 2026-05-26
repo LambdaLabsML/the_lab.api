@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import fnmatch
+import hashlib
+import hmac
 import json
 import os
 import shutil
@@ -91,6 +93,28 @@ def _read_json(path: Path, default):
         return json.loads(path.read_text())
     except (json.JSONDecodeError, OSError):
         return default
+
+
+def _hash_password(password: str) -> str:
+    return hashlib.sha256(password.encode()).hexdigest()
+
+
+def get_disable_password_hash(repo_dir: Path) -> str | None:
+    stored = _read_json(sandbox_config_path(repo_dir), {})
+    return stored.get("disable_password_hash") or None
+
+
+def set_disable_password(repo_dir: Path, password: str) -> None:
+    stored = _read_json(sandbox_config_path(repo_dir), {})
+    stored["disable_password_hash"] = _hash_password(password)
+    _write_json(sandbox_config_path(repo_dir), stored)
+
+
+def verify_disable_password(repo_dir: Path, password: str) -> bool:
+    pw_hash = get_disable_password_hash(repo_dir)
+    if not pw_hash:
+        return True  # no password set — allow freely
+    return hmac.compare_digest(pw_hash, _hash_password(password))
 
 
 def _normalize_rule(rule: str) -> str:
@@ -286,6 +310,7 @@ def load_sandbox_config(repo_dir: Path) -> dict:
     config["denylist"] = normalize_rules(stored.get("denylist", []))
     config["file_rw"] = normalize_paths(stored.get("file_rw", []), base_dir=base)
     config["file_ro"] = normalize_paths(stored.get("file_ro", []), base_dir=base)
+    config["has_disable_password"] = bool(stored.get("disable_password_hash"))
     return config
 
 

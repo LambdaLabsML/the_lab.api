@@ -30,6 +30,8 @@ from ..sandbox import (
     load_sandbox_config,
     save_sandbox_config,
     sandbox_capabilities,
+    set_disable_password,
+    verify_disable_password,
 )
 from ..schemas import (
     TaskRequest,
@@ -222,6 +224,11 @@ def get_sandbox_state():
 
 @router.put("/api/v1/sandbox")
 def update_sandbox_state(req: SandboxConfigRequest):
+    current = load_sandbox_config(REPO_DIR)
+    # Turning sandbox OFF requires the correct disable password (if one is set).
+    if current.get("enabled") and not req.enabled:
+        if not verify_disable_password(REPO_DIR, req.disable_password or ""):
+            raise HTTPException(403, "Incorrect disable password")
     config = save_sandbox_config(
         REPO_DIR,
         {
@@ -232,6 +239,10 @@ def update_sandbox_state(req: SandboxConfigRequest):
             "file_ro": req.file_ro,
         },
     )
+    # When enabling, store the new disable password (required by convention from the UI).
+    if req.enabled and req.disable_password:
+        set_disable_password(REPO_DIR, req.disable_password)
+        config["has_disable_password"] = True
     capabilities = sandbox_capabilities()
     observed = list_observed_accesses(REPO_DIR)
     return {

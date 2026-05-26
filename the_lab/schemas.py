@@ -100,6 +100,7 @@ class SandboxConfigRequest(BaseModel):
     denylist: list[str] = []
     file_rw: list[str] = []
     file_ro: list[str] = []
+    disable_password: str | None = None
 
 
 class AnalyzeRequest(BaseModel):
