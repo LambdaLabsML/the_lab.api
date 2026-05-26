@@ -3,71 +3,6 @@ import { getSandboxState, updateSandboxState } from "../state/api";
 import type { SandboxCapabilities, SandboxFileBind, SandboxObservedEntry, SandboxState } from "../lib/types";
 import { formatTime } from "../lib/format";
 
-interface ToggleModalProps {
-  enabling: boolean;
-  hasPassword: boolean;
-  onConfirm: (password: string) => void;
-  onCancel: () => void;
-  error: string | null;
-  busy: boolean;
-}
-
-function ToggleModal({ enabling, hasPassword, onConfirm, onCancel, error, busy }: ToggleModalProps) {
-  const [pw, setPw] = useState("");
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
-
-  function handleSubmit(e: Event) {
-    e.preventDefault();
-    onConfirm(pw);
-  }
-
-  return (
-    <div class="sandbox-modal-backdrop" onClick={onCancel}>
-      <div class="sandbox-modal" onClick={(e) => e.stopPropagation()}>
-        <h3>{enabling ? "Enable Sandbox" : "Disable Sandbox"}</h3>
-        <form onSubmit={handleSubmit}>
-          {enabling ? (
-            <>
-              <p>Set a password required to disable the sandbox later.<br />This prevents agents from turning it off.</p>
-              <input
-                ref={inputRef}
-                type="password"
-                placeholder="Disable password"
-                value={pw}
-                onInput={(e) => setPw((e.target as HTMLInputElement).value)}
-                required
-                minLength={1}
-              />
-            </>
-          ) : (
-            <>
-              <p>Enter the disable password to turn off the sandbox.</p>
-              <input
-                ref={inputRef}
-                type="password"
-                placeholder="Disable password"
-                value={pw}
-                onInput={(e) => setPw((e.target as HTMLInputElement).value)}
-                required={hasPassword}
-              />
-            </>
-          )}
-          {error && <div class="sandbox-modal-error">{error}</div>}
-          <div class="sandbox-modal-actions">
-            <button type="button" class="sandbox-modal-cancel" onClick={onCancel} disabled={busy}>Cancel</button>
-            <button type="submit" class="sandbox-modal-confirm" disabled={busy || (enabling && !pw)}>
-              {busy ? "…" : enabling ? "Enable" : "Disable"}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
-}
 
 function joinRules(lines: string[]): string {
   return lines.join("\n");
@@ -104,10 +39,11 @@ export function SandboxView() {
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
   const [savedSnapshot, setSavedSnapshot] = useState("");
-  // Modal state for the enable/disable toggle
-  const [modal, setModal] = useState<{ enabling: boolean } | null>(null);
-  const [modalError, setModalError] = useState<string | null>(null);
-  const [modalBusy, setModalBusy] = useState(false);
+  // Inline toggle form state
+  const [togglePw, setTogglePw] = useState("");
+  const [toggleError, setToggleError] = useState<string | null>(null);
+  const [toggleBusy, setToggleBusy] = useState(false);
+  const togglePwRef = useRef<HTMLInputElement>(null);
 
   function applyState(state: SandboxState, overwriteDraft = true) {
     setBuiltinAllow(state.builtin_allowlist || []);
@@ -217,46 +153,36 @@ export function SandboxView() {
     return () => window.clearTimeout(timer);
   }, [loaded, currentSnapshot, savedSnapshot, enabled, allowText, denyText, rwText, roText]);
 
-  async function handleModalConfirm(password: string) {
-    if (!modal) return;
-    setModalBusy(true);
-    setModalError(null);
+  async function handleToggle(e: Event) {
+    e.preventDefault();
+    setToggleBusy(true);
+    setToggleError(null);
+    const enabling = !enabled;
     try {
       const state = await updateSandboxState({
-        enabled: modal.enabling,
+        enabled: enabling,
         allowlist: splitRules(allowText),
         denylist: splitRules(denyText),
         file_rw: splitRules(rwText),
         file_ro: splitRules(roText),
-        disable_password: password || undefined,
+        disable_password: togglePw || undefined,
       });
       applyState(state, false);
-      setEnabled(modal.enabling);
-      setSavedSnapshot(snapshot(
-        modal.enabling, allowText, denyText, rwText, roText,
-      ));
+      setEnabled(enabling);
+      setSavedSnapshot(snapshot(enabling, allowText, denyText, rwText, roText));
       setSaveState("saved");
       window.setTimeout(() => setSaveState((p) => (p === "saved" ? "idle" : p)), 1500);
-      setModal(null);
+      setTogglePw("");
     } catch (err) {
-      setModalError(err instanceof Error ? err.message : String(err));
+      setToggleError(err instanceof Error ? err.message : String(err));
+      togglePwRef.current?.focus();
     } finally {
-      setModalBusy(false);
+      setToggleBusy(false);
     }
   }
 
   return (
     <div id="sandbox-container">
-      {modal && (
-        <ToggleModal
-          enabling={modal.enabling}
-          hasPassword={hasDisablePassword}
-          onConfirm={handleModalConfirm}
-          onCancel={() => { setModal(null); setModalError(null); }}
-          error={modalError}
-          busy={modalBusy}
-        />
-      )}
       <div class="sandbox-header">
         <div>
           <h2>Sandbox</h2>
@@ -267,25 +193,28 @@ export function SandboxView() {
           </p>
         </div>
         <div class="sandbox-status-wrap">
-          <label class="sandbox-toggle">
+          <form class="sandbox-toggle-form" onSubmit={handleToggle}>
+            <span class={`sandbox-status-badge ${enabled ? "sandbox-status-on" : "sandbox-status-off"}`}>
+              {enabled ? "On" : "Off"}
+            </span>
             <input
-              type="checkbox"
-              checked={enabled}
-              onChange={(e) => {
-                const target = e.target as HTMLInputElement;
-                // Revert the browser's optimistic check — modal drives the change.
-                target.checked = enabled;
-                setModal({ enabling: !enabled });
-                setModalError(null);
-              }}
+              ref={togglePwRef}
+              type="password"
+              class="sandbox-toggle-pw"
+              placeholder={enabled ? "Password to disable" : "Set disable password"}
+              value={togglePw}
+              onInput={(e) => { setTogglePw((e.target as HTMLInputElement).value); setToggleError(null); }}
+              disabled={toggleBusy}
             />
-            <span>{enabled ? "Experiments: On" : "Experiments: Off"}</span>
-          </label>
-          <div class="sandbox-status-note">
-            {enabled
-              ? "Sandbox on. A password is required to disable it."
-              : "Sandbox off. A password will be set when enabling."}
-          </div>
+            <button
+              type="submit"
+              class={`sandbox-toggle-btn ${enabled ? "sandbox-toggle-btn-off" : "sandbox-toggle-btn-on"}`}
+              disabled={toggleBusy || (!enabled && !togglePw)}
+            >
+              {toggleBusy ? "…" : enabled ? "Disable" : "Enable"}
+            </button>
+          </form>
+          {toggleError && <div class="sandbox-toggle-error">{toggleError}</div>}
           <div class={`sandbox-save sandbox-save-${saveState}`}>{saveState === "idle" ? "synced" : saveState}</div>
         </div>
       </div>
