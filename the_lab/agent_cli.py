@@ -331,10 +331,10 @@ def main():
             sys.exit(1)
 
     mcp_dir: Path | None = None
-    if sandbox_mode and repo_root is not None:
-        # .the_lab/sandbox/ is already RW-bound inside the sandbox.
-        from .sandbox import sandbox_dir as _sandbox_dir
-        mcp_dir = _sandbox_dir(repo_root)
+    if sandbox_mode:
+        # ~/.claude is RW-bound and on local FS — avoids NFS UID mapping issues
+        # that cause EACCES when the sandbox's mapped sub-UID reads NFS files.
+        mcp_dir = Path.home() / ".claude"
 
     cmd = _build_launch_command(
         args.agent,
