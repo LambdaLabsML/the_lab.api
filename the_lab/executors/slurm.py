@@ -430,7 +430,7 @@ if [ $_PREEMPTED -eq 0 ]; then
     # The /pull endpoint blocks until rsync finishes, so when we get 200 back
     # all artifacts are safely on the lab server.
     # Only delete local files if the pull succeeded — otherwise keep them for recovery.
-    if curl -sf --max-time 120 \\
+    if curl -sf --max-time 1200 \\
          -X POST "$THE_LAB_API_URL/experiments/{label}/pull" \\
          -H "Authorization: Bearer $THE_LAB_TOKEN" \\
          -H "Content-Type: application/json"; then
