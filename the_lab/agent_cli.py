@@ -37,6 +37,7 @@ def _build_launch_command(
     model: str | None,
     no_skip_permissions: bool,
     mcp_config: str | None = None,
+    mcp_dir: Path | None = None,
 ) -> list[str]:
     if agent == "claude":
         cmd = [agent_bin]
@@ -45,11 +46,13 @@ def _build_launch_command(
         if model:
             cmd.extend(["--model", model])
         if mcp_config:
-            # Write to temp file — --mcp-config is variadic and consumes
-            # subsequent args. Use "--" to terminate named args before the
-            # positional prompt.
+            # Write to a directory that is visible inside the sandbox.
+            # /tmp is replaced by a fresh tmpfs inside bwrap, so use mcp_dir
+            # (the repo's .the_lab/sandbox/) when sandboxed, otherwise /tmp.
             import tempfile
-            mcp_file = Path(tempfile.gettempdir()) / "the-lab-mcp.json"
+            dest_dir = mcp_dir if mcp_dir is not None else Path(tempfile.gettempdir())
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            mcp_file = dest_dir / "the-lab-mcp.json"
             mcp_file.write_text(mcp_config)
             cmd.extend(["--mcp-config", str(mcp_file), "--"])
         cmd.append(loop_prompt)
@@ -291,6 +294,48 @@ def main():
         agent_prompt = str(prompt_path.resolve())
         print(f"Mode: single run{role_suffix}", file=sys.stderr)
 
+    # Resolve sandbox mode and repo_root early so we can pass mcp_dir to
+    # _build_launch_command (the sandbox replaces /tmp with a fresh tmpfs,
+    # so the MCP config must live inside the repo's bound sandbox dir instead).
+    sandbox_mode = args.sandbox
+    if sandbox_mode == "auto":
+        _auto_root = (
+            Path(args.repo).resolve() if args.repo
+            else _find_repo_root(Path.cwd(), prompt_path.parent)
+        )
+        if _auto_root and (_auto_root / ".git").exists():
+            sandbox_mode = "on" if load_sandbox_config(_auto_root).get("enabled", False) else None
+        else:
+            sandbox_mode = None
+    if sandbox_mode in ("on", "off"):
+        sandbox_mode = sandbox_mode == "on"
+    elif sandbox_mode is not None:
+        sandbox_mode = bool(sandbox_mode)
+
+    # Determine repo_root now (needed for sandbox + mcp_dir).
+    repo_root: Path | None = None
+    if sandbox_mode:
+        if args.repo:
+            repo_root = Path(args.repo).resolve()
+            if not (repo_root / ".git").exists():
+                print(f"Error: {repo_root} is not a git repository", file=sys.stderr)
+                sys.exit(1)
+        else:
+            repo_root = _find_repo_root(Path.cwd(), prompt_path.parent)
+        if repo_root is None:
+            print(
+                "Error: could not find the repo root for the sandboxed agent launch. "
+                "Run from your git repo.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+    mcp_dir: Path | None = None
+    if sandbox_mode and repo_root is not None:
+        # .the_lab/sandbox/ is already RW-bound inside the sandbox.
+        from .sandbox import sandbox_dir as _sandbox_dir
+        mcp_dir = _sandbox_dir(repo_root)
+
     cmd = _build_launch_command(
         args.agent,
         agent_bin,
@@ -298,6 +343,7 @@ def main():
         args.model,
         args.no_skip_permissions,
         mcp_config=mcp_config,
+        mcp_dir=mcp_dir,
     )
 
     env = dict(os.environ)
@@ -354,38 +400,8 @@ def main():
                 file=sys.stderr,
             )
 
-    # Resolve --sandbox flag: None=off, "on"/""/True=on, "auto"=read from config
-    sandbox_mode = args.sandbox
-    if sandbox_mode == "auto":
-        # Find repo root early so we can read the config
-        _auto_repo = args.repo or None
-        _auto_root = Path(_auto_repo).resolve() if _auto_repo else _find_repo_root(Path.cwd(), prompt_path.parent)
-        if _auto_root and (_auto_root / ".git").exists():
-            sandbox_mode = "on" if load_sandbox_config(_auto_root).get("enabled", False) else None
-        else:
-            sandbox_mode = None
-
-    if sandbox_mode in ("on", "off"):
-        sandbox_mode = sandbox_mode == "on"
-    elif sandbox_mode is not None:
-        sandbox_mode = bool(sandbox_mode)
-
     if sandbox_mode:
-        if args.repo:
-            repo_root = Path(args.repo).resolve()
-            if not (repo_root / ".git").exists():
-                print(f"Error: {repo_root} is not a git repository", file=sys.stderr)
-                sys.exit(1)
-        else:
-            repo_root = _find_repo_root(Path.cwd(), prompt_path.parent)
-        if repo_root is None:
-            print(
-                "Error: could not find the repo root for the sandboxed agent launch. "
-                "Run from your git repo.",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        # Sandbox the agent when --sandbox is passed.
+        # Capabilities check deferred to here so it only runs when needed.
         capabilities = sandbox_capabilities()
         if not capabilities.get("available"):
             details = capabilities.get("details") or "sandbox runtime unavailable"
