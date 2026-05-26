@@ -143,12 +143,21 @@ def list_experiments(idea_id: int):
     exps = store.list_experiments(idea_id)
     results = []
     for exp in exps:
-        out = {**exp}
-        if out.get("status") == "failed":
-            label = out.get("label", str(out["id"]))
+        label = exp.get("label", str(exp["id"]))
+        out = {
+            "id":          exp["id"],
+            "label":       label,
+            "idea_id":     exp["idea_id"],
+            "description": exp.get("description"),
+            "status":      exp.get("status"),
+            "metrics":     exp.get("metrics"),
+            "error":       exp.get("error"),
+            "runtime":     exp.get("runtime"),
+            "started_at":  exp.get("started_at"),
+            "finished_at": exp.get("finished_at"),
+        }
+        if exp.get("status") == "failed":
             out["read_log"] = f"GET /api/v1/experiments/{label}/log"
-        # Strip tags to encourage ?tags= filtering on /orient or /leaderboard
-        out.pop("tags", None)
         results.append(out)
     return results
 
@@ -185,16 +194,27 @@ def list_all_experiments(
             continue
         if metric and metric not in (exp.get("metrics") or {}):
             continue
-        out = {**exp}
-        idea_id = out["idea_id"]
+        label = exp.get("label", str(exp["id"]))
+        idea_id = exp["idea_id"]
         if idea_id not in idea_cache:
-            idea = store.get_idea(idea_id)
-            idea_cache[idea_id] = idea
+            idea_cache[idea_id] = store.get_idea(idea_id)
         idea = idea_cache[idea_id]
-        out["idea_description"] = idea["description"] if idea else None
-        # Strip tags from bulk response to encourage ?tags= filtering
-        if not tag_list:
-            out.pop("tags", None)
+        out = {
+            "id":          exp["id"],
+            "label":       label,
+            "idea_id":     idea_id,
+            "idea":        idea["description"].split("\n")[0][:80] if idea else None,
+            "description": exp.get("description"),
+            "status":      exp.get("status"),
+            "metrics":     exp.get("metrics"),
+            "error":       exp.get("error"),
+            "runtime":     exp.get("runtime"),
+            "finished_at": exp.get("finished_at"),
+        }
+        if tag_list:
+            out["tags"] = exp.get("tags")
+        if exp.get("status") == "failed":
+            out["read_log"] = f"GET /api/v1/experiments/{label}/log"
         results.append(out)
 
     resp = {"experiments": results, "count": len(results)}
