@@ -1041,6 +1041,21 @@ async def post_experiment_progress(exp_ref: str, request: Request):
     return {"ok": True}
 
 
+@router.post("/experiments/{exp_ref}/pull")
+async def pull_experiment_results(exp_ref: str):
+    """Trigger immediate rsync pull from the remote slurm job dir.
+
+    Called by the wrapper script on the compute node after the experiment
+    finishes and artifacts are stable — before the wrapper cleans up the
+    worktree and venv. Blocks until rsync completes so the caller knows
+    the data is safe before deleting local files.
+    """
+    exp = _resolve_exp(exp_ref)
+    label = exp.get("label") or str(exp["id"])
+    ok = await runner.pull_results_for_label(label)
+    return {"ok": ok, "label": label}
+
+
 # --- Timeseries ---
 
 @router.get("/experiments/{exp_ref}/timeseries")

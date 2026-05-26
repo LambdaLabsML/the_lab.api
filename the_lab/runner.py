@@ -266,6 +266,11 @@ class ExperimentRunner:
                     label = exp.get("label") or str(exp["id"])
                     script_path = self._store.repo_dir / exp["script"]
                     local_exp_dir = script_path.parent
+                    # Re-register the slurm run token so wrapper callbacks
+                    # (POST /pull, POST /progress) are accepted after restart.
+                    run_token = meta.get("slurm_run_token")
+                    if run_token:
+                        token_registry.register(run_token)
                     task = asyncio.create_task(
                         self._monitor_slurm_job(
                             exp["id"], executor, slurm_job_id, label, local_exp_dir
@@ -377,6 +382,11 @@ class ExperimentRunner:
                 continue
             units_wanted = int(req.get("units") or resource.default_units_per_job)
             label = exp.get("label") or str(exp["id"])
+            # Re-check status: it may have been cancelled while we awaited
+            # the previous dispatch (the queued list is a snapshot from above).
+            current = self._store.get_experiment(label)
+            if not current or current.get("status") not in ("queued", "pending"):
+                continue
             assigned = self._allocator.reserve(label, resource, units_wanted)
             if assigned is None:
                 continue  # not enough free units / max_parallel reached
@@ -881,15 +891,20 @@ class ExperimentRunner:
 
         now = datetime.now(timezone.utc).isoformat()
         try:
-            job_id = executor.submit(
-                label,
-                script_path,
-                wrapper_env,
-                local_exp_dir,
-                unit_kind=resource.unit_kind,
-                local_repo_dir=self._store.repo_dir,
-                git_branch=git_branch,
-                git_commit=git_commit,
+            # Run all SSH/git operations in a thread so the asyncio event loop
+            # (and therefore the HTTP server) stays responsive during submission.
+            job_id = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: executor.submit(
+                    label,
+                    script_path,
+                    wrapper_env,
+                    local_exp_dir,
+                    unit_kind=resource.unit_kind,
+                    local_repo_dir=self._store.repo_dir,
+                    git_branch=git_branch,
+                    git_commit=git_commit,
+                ),
             )
         except Exception as e:
             print(f"[the-lab] slurm submit for {label} failed: {e}")
@@ -1298,6 +1313,41 @@ class ExperimentRunner:
             lines = content.split("\n")
             content = "\n".join(lines[-tail:])
         return content
+
+    async def pull_results_for_label(self, label: str) -> bool:
+        """Trigger an immediate rsync pull for a slurm experiment. Used by
+        the compute-node wrapper to confirm data is safe before cleanup."""
+        from .executors.slurm import SlurmExecutor
+        exp = self._store.get_experiment(label)
+        if not exp:
+            return False
+        meta = exp.get("meta") or {}
+        resource_name = meta.get("assigned_resource")
+        if not resource_name:
+            return False
+        from .queue import load_config as _load_config
+        _resources, _ = _load_config(self._store.repo_dir)
+        resource = next(
+            (r for r in _resources if r.name == resource_name),
+            None,
+        )
+        if not resource or resource.kind != "slurm":
+            return False
+        ssh_host = resource.executor_config.get("ssh_host", "slurm")
+        executor = SlurmExecutor(
+            ssh_host, resource.executor_config,
+            instance_id=self._store.instance_id,
+        )
+        script_path = self._store.repo_dir / exp["script"]
+        local_exp_dir = script_path.parent
+        try:
+            await asyncio.get_event_loop().run_in_executor(
+                None, lambda: executor.pull_results(label, local_exp_dir)
+            )
+            return True
+        except Exception as e:
+            logger.warning("pull_results_for_label %s failed: %s", label, e)
+            return False
 
     def reset_seen(self):
         """Mark all currently finished experiments as seen, so /wait starts fresh."""
