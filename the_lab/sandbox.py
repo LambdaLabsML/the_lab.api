@@ -274,6 +274,16 @@ def default_file_ro(repo_dir: Path) -> list[str]:
         for entry in nvm_dir.iterdir():
             if entry.is_dir():
                 candidates.append(str(entry))
+    # Ensure the_lab package source is accessible inside the sandbox so that
+    # `python -m the_lab.sandbox_guest` works when installed as an editable
+    # (pipx/pip install -e) install pointing outside ~/.local.
+    try:
+        import the_lab as _tl
+        pkg_src = str(Path(_tl.__file__).resolve().parent.parent)
+        if pkg_src not in candidates:
+            candidates.append(pkg_src)
+    except Exception:
+        pass
     return normalize_paths(candidates)
 
 
