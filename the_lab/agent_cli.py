@@ -38,6 +38,7 @@ def _build_launch_command(
     no_skip_permissions: bool,
     mcp_config: str | None = None,
     mcp_path: str | None = None,
+    sandboxed: bool = False,
 ) -> list[str]:
     """Build the agent launch command.
 
@@ -46,11 +47,20 @@ def _build_launch_command(
     mcp_path:   destination path for the MCP config file.  Caller is
                 responsible for ensuring this path is visible inside the
                 sandbox (write it there, or inject it via bwrap --file).
+    sandboxed:  when True, use --permission-mode bypassPermissions instead of
+                --dangerously-skip-permissions (Claude refuses the latter as uid 0
+                inside rootlesskit's user namespace).
     """
     if agent == "claude":
         cmd = [agent_bin]
         if not no_skip_permissions:
-            cmd.append("--dangerously-skip-permissions")
+            if sandboxed:
+                # --dangerously-skip-permissions is blocked when uid=0 (rootlesskit
+                # maps uid 0 → real host uid for NFS access). bypassPermissions is
+                # equivalent but has no root check.
+                cmd.extend(["--permission-mode", "bypassPermissions"])
+            else:
+                cmd.append("--dangerously-skip-permissions")
         if model:
             cmd.extend(["--model", model])
         if mcp_config:
@@ -359,6 +369,7 @@ def main():
         args.no_skip_permissions,
         mcp_config=mcp_config,
         mcp_path=mcp_path_in_sandbox,  # None when not sandboxed → writes to /tmp itself
+        sandboxed=bool(sandbox_mode),
     )
 
     env = dict(os.environ)
@@ -422,14 +433,15 @@ def main():
             details = capabilities.get("details") or "sandbox runtime unavailable"
             print(f"Error: sandbox is unavailable: {details}", file=sys.stderr)
             sys.exit(1)
-        env["THE_LAB_SANDBOX_TARGET_UID"] = str(os.getuid())
-        env["THE_LAB_SANDBOX_TARGET_GID"] = str(os.getgid())
+        # Stay as uid/gid 0 inside rootlesskit's user namespace (= real host
+        # uid) so NFS file access works. Claude's --dangerously-skip-permissions
+        # refuses uid 0, so we use --permission-mode bypassPermissions instead.
+        env["THE_LAB_SANDBOX_TARGET_UID"] = "0"
+        env["THE_LAB_SANDBOX_TARGET_GID"] = "0"
         cmd = build_sandbox_command(
             repo_root, args.agent, prompt_path.name, cmd,
             cwd=os.getcwd(),
             extra_bwrap_args=extra_bwrap or None,
-            inner_uid=os.getuid(),
-            inner_gid=os.getgid(),
         )
 
     # Pick the cwd for the agent process: its worktree if isolated, else
