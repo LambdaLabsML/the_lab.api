@@ -335,27 +335,21 @@ def main():
             )
             sys.exit(1)
 
-    # When sandboxed, inject the MCP config via bwrap --file FD DEST so it
-    # lands in the sandbox's tmpfs (/tmp) — NFS paths are inaccessible to the
-    # sandbox's mapped sub-UID even with 644 permissions (user namespace UID
-    # remapping causes NFS to deny access).
-    mcp_pipe_fd: int | None = None
+    # When sandboxed, NFS paths are inaccessible to the sandbox's mapped
+    # sub-UID (user namespace UID remapping). Write the MCP config to a local
+    # (non-NFS) temp file and bind it into the sandbox's tmpfs via --ro-bind,
+    # which is added after --tmpfs /tmp so bwrap creates the mount point.
     mcp_path_in_sandbox: str | None = None
     extra_bwrap: list[str] = []
 
     if sandbox_mode and mcp_config:
-        import fcntl
-        r_fd, w_fd = os.pipe()
-        os.write(w_fd, mcp_config.encode())
-        os.close(w_fd)
-        # Clear FD_CLOEXEC so the read-end survives the exec into bwrap/rootlesskit.
-        flags = fcntl.fcntl(r_fd, fcntl.F_GETFD)
-        fcntl.fcntl(r_fd, fcntl.F_SETFD, flags & ~fcntl.FD_CLOEXEC)
-        mcp_pipe_fd = r_fd
+        import tempfile
+        host_mcp = Path(tempfile.gettempdir()) / "the-lab-mcp.json"
+        host_mcp.write_text(mcp_config)
         mcp_path_in_sandbox = "/tmp/the-lab-mcp.json"
-        # bwrap reads from r_fd and creates the file at mcp_path_in_sandbox
-        # inside the sandbox's fresh tmpfs — no NFS involved at all.
-        extra_bwrap = ["--file", str(r_fd), mcp_path_in_sandbox]
+        # --ro-bind comes after --tmpfs /tmp in bwrap_args; bwrap creates
+        # the mount point inside the fresh tmpfs before binding the host file.
+        extra_bwrap = ["--ro-bind", str(host_mcp), mcp_path_in_sandbox]
 
     cmd = _build_launch_command(
         args.agent,
