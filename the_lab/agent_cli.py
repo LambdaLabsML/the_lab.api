@@ -37,8 +37,16 @@ def _build_launch_command(
     model: str | None,
     no_skip_permissions: bool,
     mcp_config: str | None = None,
-    mcp_dir: Path | None = None,
+    mcp_path: str | None = None,
 ) -> list[str]:
+    """Build the agent launch command.
+
+    mcp_config: raw JSON content — written to mcp_path (or a temp file if
+                mcp_path is None) and passed via --mcp-config.
+    mcp_path:   destination path for the MCP config file.  Caller is
+                responsible for ensuring this path is visible inside the
+                sandbox (write it there, or inject it via bwrap --file).
+    """
     if agent == "claude":
         cmd = [agent_bin]
         if not no_skip_permissions:
@@ -46,18 +54,12 @@ def _build_launch_command(
         if model:
             cmd.extend(["--model", model])
         if mcp_config:
-            # Write to a directory that is visible inside the sandbox.
-            # /tmp is replaced by a fresh tmpfs inside bwrap, so use mcp_dir
-            # (the repo's .the_lab/sandbox/) when sandboxed, otherwise /tmp.
             import tempfile
-            dest_dir = mcp_dir if mcp_dir is not None else Path(tempfile.gettempdir())
-            dest_dir.mkdir(parents=True, exist_ok=True)
-            mcp_file = dest_dir / "the-lab-mcp.json"
-            mcp_file.write_text(mcp_config)
-            # Ensure the file is readable by the sandbox's mapped sub-UID,
-            # which appears as "other" on NFS due to user namespace UID remapping.
-            mcp_file.chmod(0o644)
-            cmd.extend(["--mcp-config", str(mcp_file), "--"])
+            if mcp_path is None:
+                dest = Path(tempfile.gettempdir()) / "the-lab-mcp.json"
+                dest.write_text(mcp_config)
+                mcp_path = str(dest)
+            cmd.extend(["--mcp-config", mcp_path, "--"])
         cmd.append(loop_prompt)
         return cmd
 
@@ -333,10 +335,27 @@ def main():
             )
             sys.exit(1)
 
-    mcp_dir: Path | None = None
-    if sandbox_mode and repo_root is not None:
-        from .sandbox import sandbox_dir as _sandbox_dir
-        mcp_dir = _sandbox_dir(repo_root)
+    # When sandboxed, inject the MCP config via bwrap --file FD DEST so it
+    # lands in the sandbox's tmpfs (/tmp) — NFS paths are inaccessible to the
+    # sandbox's mapped sub-UID even with 644 permissions (user namespace UID
+    # remapping causes NFS to deny access).
+    mcp_pipe_fd: int | None = None
+    mcp_path_in_sandbox: str | None = None
+    extra_bwrap: list[str] = []
+
+    if sandbox_mode and mcp_config:
+        import fcntl
+        r_fd, w_fd = os.pipe()
+        os.write(w_fd, mcp_config.encode())
+        os.close(w_fd)
+        # Clear FD_CLOEXEC so the read-end survives the exec into bwrap/rootlesskit.
+        flags = fcntl.fcntl(r_fd, fcntl.F_GETFD)
+        fcntl.fcntl(r_fd, fcntl.F_SETFD, flags & ~fcntl.FD_CLOEXEC)
+        mcp_pipe_fd = r_fd
+        mcp_path_in_sandbox = "/tmp/the-lab-mcp.json"
+        # bwrap reads from r_fd and creates the file at mcp_path_in_sandbox
+        # inside the sandbox's fresh tmpfs — no NFS involved at all.
+        extra_bwrap = ["--file", str(r_fd), mcp_path_in_sandbox]
 
     cmd = _build_launch_command(
         args.agent,
@@ -345,7 +364,7 @@ def main():
         args.model,
         args.no_skip_permissions,
         mcp_config=mcp_config,
-        mcp_dir=mcp_dir,
+        mcp_path=mcp_path_in_sandbox,  # None when not sandboxed → writes to /tmp itself
     )
 
     env = dict(os.environ)
@@ -414,6 +433,7 @@ def main():
         cmd = build_sandbox_command(
             repo_root, args.agent, prompt_path.name, cmd,
             cwd=os.getcwd(),
+            extra_bwrap_args=extra_bwrap or None,
         )
 
     # Pick the cwd for the agent process: its worktree if isolated, else

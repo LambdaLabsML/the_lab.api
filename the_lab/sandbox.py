@@ -602,6 +602,7 @@ def build_sandbox_command(
     target_cmd: list[str],
     config: dict | None = None,
     cwd: Path | str | None = None,
+    extra_bwrap_args: list[str] | None = None,
 ) -> list[str]:
     """Wrap *target_cmd* in rootlesskit (network namespace) + bwrap (file
     isolation) + sandbox_guest (iptables + proxy + privilege drop).
@@ -620,6 +621,8 @@ def build_sandbox_command(
         config = load_sandbox_config(repo_dir)
 
     bwrap_args = build_bwrap_args(repo_dir, config, cwd=cwd)
+    if extra_bwrap_args:
+        bwrap_args.extend(extra_bwrap_args)
     target_cwd = str(Path(cwd).resolve()) if cwd is not None else str(repo_dir)
 
     guest_cmd = [
