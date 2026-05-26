@@ -220,10 +220,11 @@ def build_notifications(request) -> list[dict]:
         suggested = store.list_ideas(status="suggested")
         for idea in suggested:
             p = idea.get("priority", "normal")
+            desc = (idea.get("description") or "").split("\n")[0][:120]
             notifications.append({
                 "type": "suggestion",
                 "priority": p,
-                "message": f"Suggested idea #{idea['id']}: {idea.get('description', '')}",
+                "message": f"Suggested idea #{idea['id']}: {desc}",
                 "action": f"POST /api/v1/ideas/{idea['id']}/adopt" if p == "high"
                           else f"POST /api/v1/ideas/{idea['id']}/abandon",
             })
@@ -251,13 +252,14 @@ def build_notifications(request) -> list[dict]:
             )
             for m in unread:
                 origin = m.get("from_role") or m.get("from_agent") or "system"
+                preview = (m.get("text") or "")[:200]
                 notifications.append({
                     "type": "message",
                     "priority": "high",
                     "message_id": m["id"],
                     "from": origin,
                     "to": m.get("to"),
-                    "message": f"{origin}: {m.get('text', '')}",
+                    "message": f"{origin}: {preview}",
                     "action": f"POST /api/v1/messages/{m['id']}/read",
                 })
         except Exception:

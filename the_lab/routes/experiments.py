@@ -663,6 +663,13 @@ def get_experiment(exp_ref: str):
     if exp.get("status") == "failed":
         label = exp.get("label", str(exp["id"]))
         exp["read_log"] = f"GET /api/v1/experiments/{label}/log"
+    # Strip internal-only meta keys that add significant token cost with no
+    # agent-facing value (slurm tokens, worktree paths, git commits).
+    meta = dict(exp.get("meta") or {})
+    for _k in ("slurm_run_token", "slurm_job_id", "slurm_attempts", "worktree",
+               "git_commit", "assigned_units"):
+        meta.pop(_k, None)
+    exp["meta"] = meta
     return exp
 
 
