@@ -417,6 +417,51 @@ def _run_iptables(kind: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# User namespace — appear as non-root to userspace while keeping NFS access
+# ---------------------------------------------------------------------------
+
+def _enter_userns_as_uid(target_uid: int, target_gid: int) -> None:
+    """Create a nested user namespace so this process appears as target_uid/gid.
+
+    Must be called AFTER iptables setup (requires CAP_NET_ADMIN as outer uid 0)
+    and BEFORE spawning the agent subprocess.
+
+    After this call:
+      • os.getuid() returns target_uid  → Claude Code accepts --dangerously-skip-permissions
+      • NFS still uses real host uid    → via rootlesskit's outer uid 0 mapping
+      • Network policy is degraded      → agent's outer uid is still 0 (iptables uid-owner 0 = ACCEPT)
+
+    Only needed for agent kinds (where Claude Code's root check fires).  Experiment
+    runners keep uid 0 because they don't call --dangerously-skip-permissions.
+    """
+    import ctypes
+    import ctypes.util
+
+    CLONE_NEWUSER = 0x10000000
+    libc_name = ctypes.util.find_library("c") or "libc.so.6"
+    libc = ctypes.CDLL(libc_name, use_errno=True)
+
+    outer_uid = os.getuid()
+    outer_gid = os.getgid()
+
+    ret = libc.unshare(ctypes.c_int(CLONE_NEWUSER))
+    if ret != 0:
+        errno = ctypes.get_errno()
+        raise OSError(errno, os.strerror(errno), "unshare(CLONE_NEWUSER)")
+
+    # Map: inner target_uid → outer_uid (1 uid)
+    with open("/proc/self/uid_map", "w") as f:
+        f.write(f"{target_uid} {outer_uid} 1\n")
+
+    # setgroups must be denied before writing gid_map when unprivileged
+    with open("/proc/self/setgroups", "w") as f:
+        f.write("deny\n")
+
+    with open("/proc/self/gid_map", "w") as f:
+        f.write(f"{target_gid} {outer_gid} 1\n")
+
+
+# ---------------------------------------------------------------------------
 # Privilege drop
 # ---------------------------------------------------------------------------
 
@@ -566,13 +611,17 @@ async def _main() -> int:
     forward_server = await _start_forwarder(api_port, HOST_GATEWAY, api_port)
     _run_iptables(args.kind)
 
-    env = _target_env(api_scheme, api_port)
-
-    # Experiments run in isolated worktrees that need write access after
-    # privilege-drop.  Agent kinds use the main repo — DON'T chown that
-    # or the host user loses access to the entire repo.
     target_uid = int(os.environ.get("THE_LAB_SANDBOX_TARGET_UID", "1000"))
     target_gid = int(os.environ.get("THE_LAB_SANDBOX_TARGET_GID", str(target_uid)))
+
+    if args.kind in _AGENT_KINDS:
+        # Claude Code refuses --dangerously-skip-permissions when uid=0. We're
+        # currently uid 0 inside rootlesskit's user namespace (= real host uid,
+        # needed for NFS access). Create a nested user namespace so getuid()
+        # returns target_uid — Claude accepts the flag while NFS still works.
+        _enter_userns_as_uid(target_uid, target_gid)
+
+    env = _target_env(api_scheme, api_port)
     target_cwd = args.cwd or str(repo_dir)
     if args.kind not in _AGENT_KINDS:
         # Remove .venv symlinks — they point to the shared venv which is

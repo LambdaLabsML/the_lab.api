@@ -47,20 +47,14 @@ def _build_launch_command(
     mcp_path:   destination path for the MCP config file.  Caller is
                 responsible for ensuring this path is visible inside the
                 sandbox (write it there, or inject it via bwrap --file).
-    sandboxed:  when True, use --permission-mode bypassPermissions instead of
-                --dangerously-skip-permissions (Claude refuses the latter as uid 0
-                inside rootlesskit's user namespace).
+    sandboxed:  (unused — kept for API compat) sandbox_guest now creates a nested
+                user namespace so getuid() returns non-zero and
+                --dangerously-skip-permissions is accepted.
     """
     if agent == "claude":
         cmd = [agent_bin]
         if not no_skip_permissions:
-            if sandboxed:
-                # --dangerously-skip-permissions is blocked when uid=0 (rootlesskit
-                # maps uid 0 → real host uid for NFS access). bypassPermissions is
-                # equivalent but has no root check.
-                cmd.extend(["--permission-mode", "bypassPermissions"])
-            else:
-                cmd.append("--dangerously-skip-permissions")
+            cmd.append("--dangerously-skip-permissions")
         if model:
             cmd.extend(["--model", model])
         if mcp_config:
@@ -352,14 +346,19 @@ def main():
     mcp_path_in_sandbox: str | None = None
     extra_bwrap: list[str] = []
 
-    if sandbox_mode and mcp_config:
-        import tempfile
-        host_mcp = Path(tempfile.gettempdir()) / "the-lab-mcp.json"
-        host_mcp.write_text(mcp_config)
-        mcp_path_in_sandbox = "/tmp/the-lab-mcp.json"
-        # --ro-bind comes after --tmpfs /tmp in bwrap_args; bwrap creates
-        # the mount point inside the fresh tmpfs before binding the host file.
-        extra_bwrap = ["--ro-bind", str(host_mcp), mcp_path_in_sandbox]
+    if sandbox_mode:
+        # --ro-bind comes after --tmpfs /tmp in bwrap_args; bwrap creates the
+        # mount point inside the fresh tmpfs before binding the host file.
+        # Bind the prompt file so it's accessible at the same path inside the sandbox.
+        if str(agent_prompt).startswith("/tmp/"):
+            extra_bwrap = ["--ro-bind", agent_prompt, agent_prompt]
+
+        if mcp_config:
+            import tempfile
+            host_mcp = Path(tempfile.gettempdir()) / "the-lab-mcp.json"
+            host_mcp.write_text(mcp_config)
+            mcp_path_in_sandbox = "/tmp/the-lab-mcp.json"
+            extra_bwrap.extend(["--ro-bind", str(host_mcp), mcp_path_in_sandbox])
 
     cmd = _build_launch_command(
         args.agent,
@@ -433,11 +432,6 @@ def main():
             details = capabilities.get("details") or "sandbox runtime unavailable"
             print(f"Error: sandbox is unavailable: {details}", file=sys.stderr)
             sys.exit(1)
-        # Stay as uid/gid 0 inside rootlesskit's user namespace (= real host
-        # uid) so NFS file access works. Claude's --dangerously-skip-permissions
-        # refuses uid 0, so we use --permission-mode bypassPermissions instead.
-        env["THE_LAB_SANDBOX_TARGET_UID"] = "0"
-        env["THE_LAB_SANDBOX_TARGET_GID"] = "0"
         cmd = build_sandbox_command(
             repo_root, args.agent, prompt_path.name, cmd,
             cwd=os.getcwd(),
