@@ -556,7 +556,7 @@ exit $_EXIT
         """rsync the job dir back to the local experiment directory."""
         local_dir = str(local_exp_dir).rstrip("/") + "/"
         result = subprocess.run(
-            ["rsync", "-az", "--timeout=1200",
+            ["rsync", "-az",
              # The worktree is git-tracked code the local machine already has —
              # no need to sync it back. Only pull the job-root output files:
              # script.log, script.progress, script.metrics.jsonl, *.gpu_stats,
