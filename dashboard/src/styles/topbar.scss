@@ -16,23 +16,33 @@
 #topbar .stat { color: var(--text-muted); white-space: nowrap; }
 #topbar .stat b { color: var(--text); font-weight: 600; }
 
-/* Full stats row (wide mode) */
+/* Shared flex slot that holds both the full stats row and the cycle widget */
+.topbar-stats-area {
+  position: relative;   /* anchor for absolute cycling overlay */
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+}
+
+/* Full stats row — always rendered; opacity:0 when compact so we can still measure it */
 .topbar-stats {
   display: flex;
   align-items: center;
   gap: 20px;
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
+  width: 100%;
+  /* No overflow:hidden here — let scrollWidth grow so the check works */
 }
 
-/* Compact cycling widget (narrow mode) */
+/* Compact cycling widget — absolutely overlays the stats-area slot */
 .topbar-stat-cycle {
+  position: absolute;
+  inset: 0;
   display: flex;
   align-items: center;
   gap: 4px;
-  flex: 1;
-  min-width: 0;
+  background: var(--bg-elev); /* cover the ghost stats row underneath */
 }
 
 .topbar-cycle-btn {

@@ -63,6 +63,7 @@ export function Topbar(props: LayoutActions) {
   const [compact, setCompact] = useState(false);
   const [statIdx, setStatIdx] = useState(0);
   const barRef = useRef<HTMLDivElement>(null);
+  const statsRef = useRef<HTMLDivElement>(null);
 
   const savedLayouts = props.getSavedLayouts?.() || [];
   void layoutVersion; // trigger re-render when layouts change
@@ -99,14 +100,18 @@ export function Topbar(props: LayoutActions) {
     { key: "tokens",  label: "Tokens",  value: tokLabel, title: tokTitle },
   ];
 
-  // Detect overflow: switch to cycling mode when topbar is narrow
+  // Detect actual overflow of the stats row and switch to compact cycling mode.
+  // The full stats row stays in the DOM (opacity:0 when hidden) so the browser
+  // can measure its real laid-out width at all times.
   useEffect(() => {
-    const el = barRef.current;
-    if (!el) return;
-    const check = () => setCompact(el.clientWidth < 580);
+    const check = () => {
+      const el = statsRef.current;
+      if (!el) return;
+      setCompact(el.scrollWidth > el.clientWidth + 2); // 2px slop
+    };
     check();
     const ro = new ResizeObserver(check);
-    ro.observe(el);
+    if (barRef.current) ro.observe(barRef.current);
     return () => ro.disconnect();
   }, []);
 
@@ -122,35 +127,43 @@ export function Topbar(props: LayoutActions) {
         title={isWsAuthFailed ? "WebSocket: auth failed" : isWsConnected ? "WebSocket: connected" : "WebSocket: reconnecting..."}
       />
 
-      {compact ? (
-        /* ── Compact cycling mode ── */
-        <div class="topbar-stat-cycle">
-          <button class="topbar-cycle-btn" onClick={prevStat} title="Previous stat">‹</button>
-          <span class="topbar-cycle-stat" title={stats[clampedIdx].title}>
-            <span class="topbar-cycle-label">{stats[clampedIdx].label}</span>
-            <b>{stats[clampedIdx].value}</b>
-          </span>
-          <button class="topbar-cycle-btn" onClick={nextStat} title="Next stat">›</button>
-          <div class="topbar-cycle-dots">
-            {stats.map((_, i) => (
-              <span
-                key={i}
-                class={`topbar-cycle-dot${i === clampedIdx ? " topbar-cycle-dot--active" : ""}`}
-                onClick={() => setStatIdx(i)}
-              />
-            ))}
-          </div>
-        </div>
-      ) : (
-        /* ── Full stats row ── */
-        <div class="topbar-stats">
+      {/* ── Stats area: single flex slot holding both full-row and cycle widget ── */}
+      <div class="topbar-stats-area">
+        {/* Full stats row — always in DOM so scrollWidth reflects true content width */}
+        <div
+          ref={statsRef}
+          class="topbar-stats"
+          aria-hidden={compact ? "true" : undefined}
+          style={compact ? { opacity: 0, pointerEvents: "none" } : undefined}
+        >
           {stats.map((s) => (
             <span key={s.key} class="stat" title={s.title}>
               {s.label}: <b>{s.value}</b>
             </span>
           ))}
         </div>
-      )}
+
+        {/* Compact cycling widget — absolutely overlays the stats row when it overflows */}
+        {compact && (
+          <div class="topbar-stat-cycle">
+            <button class="topbar-cycle-btn" onClick={prevStat} title="Previous stat">‹</button>
+            <span class="topbar-cycle-stat" title={stats[clampedIdx].title}>
+              <span class="topbar-cycle-label">{stats[clampedIdx].label}</span>
+              <b>{stats[clampedIdx].value}</b>
+            </span>
+            <button class="topbar-cycle-btn" onClick={nextStat} title="Next stat">›</button>
+            <div class="topbar-cycle-dots">
+              {stats.map((_, i) => (
+                <span
+                  key={i}
+                  class={`topbar-cycle-dot${i === clampedIdx ? " topbar-cycle-dot--active" : ""}`}
+                  onClick={() => setStatIdx(i)}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
 
       <button
         class="time-direction-btn"
