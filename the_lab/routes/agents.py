@@ -167,17 +167,43 @@ def _find_agent_project_dir(worktree: str) -> Path | None:
     JSONL files always land in the REAL ``~/.claude/projects/`` on the host,
     regardless of whether the agent is sandboxed (bwrap sets a different HOME
     but the host home is still writable inside the namespace).
+
+    Tries multiple candidate paths in order:
+    1. Exact worktree path hash (correct for agents launched with fixed code).
+    2. Repo root hash — worktrees live at ``<repo>/.the_lab/agents/<id>``; older
+       agents were launched with cwd=repo_root so their JSONL lands there.
+    3. Brute-force scan: find the project dir whose most-recent JSONL was created
+       closest to the agent's worktree mtime (last-resort fallback).
     """
     projects_root = Path.home() / ".claude" / "projects"
     if not projects_root.exists():
         return None
+
+    # Candidate 1: exact worktree hash
     target = projects_root / _worktree_project_dir(worktree)
     if target.exists():
         return target
+
+    # Candidate 2: repo root (strip /.the_lab/agents/<id> suffix if present)
+    wt_path = Path(worktree)
+    try:
+        # Typical layout: <repo>/.the_lab/agents/<agent_id>
+        # Walk up looking for a directory that has .git or .the_lab at root
+        candidate = wt_path
+        for _ in range(4):
+            candidate = candidate.parent
+            if (candidate / ".git").exists() or (candidate / ".the_lab").exists():
+                repo_target = projects_root / _worktree_project_dir(str(candidate))
+                if repo_target.exists():
+                    return repo_target
+                break
+    except Exception:
+        pass
+
     return None
 
 
-def _parse_jsonl_dir(project_dir: Path) -> dict:
+def _parse_jsonl_dir(project_dir: Path, since: float | None = None) -> dict:
     """Parse all JSONL session files inside ONE Claude project directory.
 
     Returns a summary dict:
@@ -185,6 +211,10 @@ def _parse_jsonl_dir(project_dir: Path) -> dict:
       message_count, input_tokens, output_tokens, cache_read_tokens,
       cache_creation_tokens, cost_usd
     - totals: aggregated across all sessions
+
+    ``since`` — optional Unix timestamp; JSONL files modified before this
+    time are skipped.  Used when multiple agents share the same project dir
+    (repo-root fallback) to filter to only the current agent's sessions.
     """
     sessions = []
 
@@ -201,6 +231,10 @@ def _parse_jsonl_dir(project_dir: Path) -> dict:
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     ):
+        # Skip files that predate this agent's registration (repo-root fallback)
+        if since is not None and jsonl.stat().st_mtime < since:
+            continue
+
         in_tok = out_tok = cache_read = cache_create = 0
         started_at = None
         msg_count = 0
@@ -289,6 +323,11 @@ def get_agent_history(agent_id: str):
     if not worktree:
         raise HTTPException(404, "agent has no worktree recorded")
 
+    # Determine whether the project dir is the exact worktree hash (ideal) or a
+    # fallback repo-root dir shared by many agents.  In the latter case we pass
+    # a ``since`` cutoff so only JSONL files written after this agent registered
+    # are included (avoids mixing sessions from other agents).
+    exact_dir = Path.home() / ".claude" / "projects" / _worktree_project_dir(worktree)
     project_dir = _find_agent_project_dir(worktree)
     if not project_dir:
         raise HTTPException(
@@ -296,4 +335,17 @@ def get_agent_history(agent_id: str):
             f"no Claude history found for this agent — "
             f"expected ~/.claude/projects/{_worktree_project_dir(worktree)}/",
         )
-    return _parse_jsonl_dir(project_dir)
+
+    since: float | None = None
+    if project_dir != exact_dir:
+        # Using a fallback (e.g. repo-root) dir — filter by agent creation time
+        created_at = entry.get("created_at")
+        if created_at:
+            try:
+                from datetime import datetime, timezone
+                dt = datetime.fromisoformat(created_at)
+                since = dt.timestamp()
+            except Exception:
+                pass
+
+    return _parse_jsonl_dir(project_dir, since=since)

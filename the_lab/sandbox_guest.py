@@ -519,6 +519,22 @@ def _prepare_agent_home() -> str | None:
             os.chown(fp, target_uid, target_gid)
             os.chmod(fp, 0o644)
 
+    # Replace the copied .claude/projects with a symlink back to the REAL
+    # ~/.claude/projects (which is bind-mounted read-write into the sandbox at
+    # the same absolute path).  This makes Claude Code write conversation JSONL
+    # to the persistent host path instead of the ephemeral tmpfs, so history
+    # and cost analysis survive the sandbox session.
+    agent_claude = os.path.join(agent_home, ".claude")
+    real_projects = os.path.join(real_home, ".claude", "projects")
+    agent_projects = os.path.join(agent_claude, "projects")
+    if os.path.isdir(real_projects):
+        try:
+            if os.path.isdir(agent_projects):
+                shutil.rmtree(agent_projects)
+            os.symlink(real_projects, agent_projects)
+        except Exception:
+            pass  # fall back to the copied dir (history won't persist, but agent still works)
+
     # Create a writable tmp dir — Claude Code uses /tmp/claude-<uid>/ for its
     # workspace, but the host's /tmp is shared and the mapped UID can't write there.
     agent_tmp = os.path.join(agent_home, "tmp")
