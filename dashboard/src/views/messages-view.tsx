@@ -1,0 +1,155 @@
+import { useEffect, useMemo, useRef, useState } from "preact/hooks";
+import { listAgents, listMessages } from "../state/api";
+import type { AgentEntry, MessageEntry } from "../lib/types";
+
+/** Format a created_at ISO timestamp as "Xs ago" / "Xm ago" / "Xh ago" / "Xd ago". */
+function relativeTime(iso: string): string {
+  if (!iso) return "--";
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return iso;
+  const sec = Math.max(0, Math.floor((Date.now() - t) / 1000));
+  if (sec < 60) return `${sec}s ago`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 48) return `${hr}h ago`;
+  const day = Math.floor(hr / 24);
+  return `${day}d ago`;
+}
+
+export function MessagesView() {
+  const [agents, setAgents] = useState<AgentEntry[]>([]);
+  const [messages, setMessages] = useState<MessageEntry[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // Re-render every ~30s so "Xm ago" stays fresh
+  const [, setTick] = useState(0);
+
+  const cancelledRef = useRef(false);
+
+  async function refresh() {
+    try {
+      const [agentList, msgs] = await Promise.all([
+        listAgents().catch(() => [] as AgentEntry[]),
+        listMessages(100).catch(() => [] as MessageEntry[]),
+      ]);
+      if (cancelledRef.current) return;
+      setAgents(agentList);
+      setMessages(msgs);
+      setError(null);
+      setLoaded(true);
+    } catch (err) {
+      if (cancelledRef.current) return;
+      setError(err instanceof Error ? err.message : String(err));
+      setLoaded(true);
+    }
+  }
+
+  useEffect(() => {
+    cancelledRef.current = false;
+    refresh();
+    const poll = window.setInterval(refresh, 5000);
+    const tickT = window.setInterval(() => setTick((n) => n + 1), 30000);
+    return () => {
+      cancelledRef.current = true;
+      window.clearInterval(poll);
+      window.clearInterval(tickT);
+    };
+  }, []);
+
+  // Resolve agent_id -> role for nicer "from"/"to" display when available.
+  const roleByAgent = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const a of agents) map[a.agent_id] = a.role || "default";
+    return map;
+  }, [agents]);
+
+  function describeRecipient(to: string): string {
+    if (to === "all") return "everyone";
+    if (to.startsWith("agent:")) {
+      const id = to.slice(6);
+      const role = roleByAgent[id];
+      return role ? `${id} (${role})` : id;
+    }
+    if (to.startsWith("role:")) return `role:${to.slice(5)}`;
+    return to;
+  }
+
+  function describeSender(m: MessageEntry): string {
+    if (m.from_agent) {
+      const role = m.from_role || roleByAgent[m.from_agent];
+      return role ? `${m.from_agent} (${role})` : m.from_agent;
+    }
+    return m.from_role || "system";
+  }
+
+  const messageCount = messages.length;
+  const countLabel =
+    messageCount === 0
+      ? "no messages yet"
+      : `${messageCount} message${messageCount === 1 ? "" : "s"}`;
+
+  return (
+    <div id="messages-container">
+      <div class="agents-header">
+        <div class="agents-header-left">
+          <h2>Messages</h2>
+          <p>
+            Inter-agent messages sent via <code>POST /api/v1/messages</code>.
+            Agents can send to a specific agent, a role, or everyone.
+          </p>
+        </div>
+        <div class="agents-header-right">
+          <div class="agents-summary">{loaded ? countLabel : "Loading..."}</div>
+          <button
+            class="agents-btn"
+            onClick={() => refresh()}
+            title="Reload message log"
+          >
+            Refresh
+          </button>
+        </div>
+      </div>
+
+      {error && <div class="agents-error">{error}</div>}
+
+      <section class="agents-messages">
+        <div class="agents-messages-header">
+          <h3>Message log</h3>
+          <span class="agents-messages-meta">{countLabel}</span>
+        </div>
+        {messageCount === 0 ? (
+          <div class="agents-messages-empty">
+            Inter-agent messages will appear here as agents send them via
+            <code> POST /api/v1/messages</code>.
+          </div>
+        ) : (
+          <ol class="agents-messages-list">
+            {messages.map((m) => (
+              <li class="agents-message" key={m.id}>
+                <div class="agents-message-head">
+                  <span class="agents-message-from" title={`agent ${m.from_agent ?? "system"}`}>
+                    {describeSender(m)}
+                  </span>
+                  <span class="agents-message-arrow">→</span>
+                  <span class="agents-message-to">{describeRecipient(m.to)}</span>
+                  <span class="agents-message-time" title={m.created_at}>
+                    {relativeTime(m.created_at)}
+                  </span>
+                  {m.read_by && m.read_by.length > 0 ? (
+                    <span class="agents-message-read" title={`read by: ${m.read_by.join(", ")}`}>
+                      ✓ read by {m.read_by.length}
+                    </span>
+                  ) : (
+                    <span class="agents-message-unread">unread</span>
+                  )}
+                </div>
+                <div class="agents-message-body">{m.text}</div>
+              </li>
+            ))}
+          </ol>
+        )}
+      </section>
+    </div>
+  );
+}

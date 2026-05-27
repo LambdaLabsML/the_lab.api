@@ -96,6 +96,12 @@ def list_registered_agents():
     return [_enrich(e) for e in agents_mod.list_agents(REPO_DIR)]
 
 
+@router.get("/api/v1/agents/past")
+def list_past_agents_endpoint():
+    """Return the 200 most recently completed agents."""
+    return agents_mod.list_past_agents(REPO_DIR)
+
+
 @router.get("/api/v1/agents/{agent_id}")
 def get_agent(agent_id: str):
     """Return a single agent's registry entry (enriched), or 404."""

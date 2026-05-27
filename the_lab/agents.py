@@ -144,12 +144,46 @@ def list_agents(repo_dir: Path) -> list[dict]:
     return list(_read_registry(Path(repo_dir).resolve()).values())
 
 
+_HISTORY_FILE = "history.json"
+
+
+def _history_path(repo_dir: Path) -> Path:
+    return _agents_dir(repo_dir) / _HISTORY_FILE
+
+
+def record_completed_agent(repo_dir: Path, entry: dict, completed_at: str | None = None) -> None:
+    """Append a completed agent entry to the history log."""
+    hist_path = _history_path(repo_dir)
+    try:
+        history = json.loads(hist_path.read_text()) if hist_path.exists() else []
+    except Exception:
+        history = []
+    record = dict(entry)
+    record["completed_at"] = completed_at or datetime.now(timezone.utc).isoformat()
+    # Keep last 200 entries
+    history = [record] + history
+    history = history[:200]
+    hist_path.write_text(json.dumps(history, indent=2))
+
+
+def list_past_agents(repo_dir: Path) -> list[dict]:
+    """Return the history of completed agents, newest first."""
+    hist_path = _history_path(repo_dir)
+    if not hist_path.exists():
+        return []
+    try:
+        return json.loads(hist_path.read_text())
+    except Exception:
+        return []
+
+
 def unregister_agent(repo_dir: Path, agent_id: str, *, keep_branch: bool = True) -> bool:
     repo_dir = Path(repo_dir).resolve()
     registry = _read_registry(repo_dir)
     entry = registry.pop(agent_id, None)
     if entry is None:
         return False
+    record_completed_agent(repo_dir, entry)
     worktree = Path(entry["worktree"])
     git_ops.remove_worktree(worktree, cwd=repo_dir)
     git_ops.prune_worktrees(cwd=repo_dir)

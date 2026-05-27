@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
-import { listAgents, listMessages, unregisterAgent } from "../state/api";
-import type { AgentEntry, MessageEntry } from "../lib/types";
+import { listAgents, unregisterAgent } from "../state/api";
+import type { AgentEntry } from "../lib/types";
 
 // ── History / cost lightbox ───────────────────────────────────────────────────
 
@@ -200,9 +200,20 @@ function relativeTime(iso: string): string {
   return `${day}d ago`;
 }
 
+interface PastAgent {
+  agent_id: string;
+  role?: string;
+  branch?: string;
+  parent_branch?: string;
+  worktree?: string;
+  pid?: number | null;
+  created_at?: string;
+  completed_at?: string;
+}
+
 export function AgentsView() {
   const [agents, setAgents] = useState<AgentEntry[]>([]);
-  const [messages, setMessages] = useState<MessageEntry[]>([]);
+  const [pastAgents, setPastAgents] = useState<PastAgent[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -215,15 +226,13 @@ export function AgentsView() {
 
   async function refresh(): Promise<AgentEntry[] | null> {
     try {
-      // Fetch agents + messages in parallel; the inbox is small and the
-      // agents pane is exactly where the conversation belongs.
-      const [list, msgs] = await Promise.all([
+      const [list, past] = await Promise.all([
         listAgents(),
-        listMessages(100).catch(() => [] as MessageEntry[]),
+        fetch("/api/v1/agents/past").then((r) => r.ok ? r.json() : []).catch(() => []) as Promise<PastAgent[]>,
       ]);
       if (cancelledRef.current) return null;
       setAgents(list);
-      setMessages(msgs);
+      setPastAgents(past);
       setError(null);
       setLoaded(true);
       return list;
@@ -246,32 +255,6 @@ export function AgentsView() {
       window.clearInterval(tickT);
     };
   }, []);
-
-  // Resolve agent_id -> role for nicer "from"/"to" display when available.
-  const roleByAgent = useMemo(() => {
-    const map: Record<string, string> = {};
-    for (const a of agents) map[a.agent_id] = a.role || "default";
-    return map;
-  }, [agents]);
-
-  function describeRecipient(to: string): string {
-    if (to === "all") return "everyone";
-    if (to.startsWith("agent:")) {
-      const id = to.slice(6);
-      const role = roleByAgent[id];
-      return role ? `${id} (${role})` : id;
-    }
-    if (to.startsWith("role:")) return `role:${to.slice(5)}`;
-    return to;
-  }
-
-  function describeSender(m: MessageEntry): string {
-    if (m.from_agent) {
-      const role = m.from_role || roleByAgent[m.from_agent];
-      return role ? `${m.from_agent} (${role})` : m.from_agent;
-    }
-    return m.from_role || "system";
-  }
 
   async function handleUnregister(agent: AgentEntry, dropBranch: boolean) {
     const msg = dropBranch
@@ -449,45 +432,37 @@ export function AgentsView() {
         </div>
       )}
 
-      <section class="agents-messages">
-        <div class="agents-messages-header">
-          <h3>Message log</h3>
-          <span class="agents-messages-meta">
-            {messages.length === 0 ? "no messages yet" : `${messages.length} message${messages.length === 1 ? "" : "s"}`}
-          </span>
-        </div>
-        {messages.length === 0 ? (
-          <div class="agents-messages-empty">
-            Inter-agent messages will appear here as agents send them via
-            <code> POST /api/v1/messages</code>.
+      {/* ── Recent / past agents ─────────────────────────────────────────── */}
+      {pastAgents.length > 0 && (
+        <section class="agents-past">
+          <div class="agents-messages-header">
+            <h3>Recent agents</h3>
+            <span class="agents-messages-meta">{pastAgents.length} completed</span>
           </div>
-        ) : (
-          <ol class="agents-messages-list">
-            {messages.map((m) => (
-              <li class="agents-message" key={m.id}>
-                <div class="agents-message-head">
-                  <span class="agents-message-from" title={`agent ${m.from_agent ?? "system"}`}>
-                    {describeSender(m)}
-                  </span>
-                  <span class="agents-message-arrow">→</span>
-                  <span class="agents-message-to">{describeRecipient(m.to)}</span>
-                  <span class="agents-message-time" title={m.created_at}>
-                    {relativeTime(m.created_at)}
-                  </span>
-                  {m.read_by && m.read_by.length > 0 ? (
-                    <span class="agents-message-read" title={`read by: ${m.read_by.join(", ")}`}>
-                      ✓ read by {m.read_by.length}
-                    </span>
-                  ) : (
-                    <span class="agents-message-unread">unread</span>
-                  )}
-                </div>
-                <div class="agents-message-body">{m.text}</div>
-              </li>
+          <div class="agents-past-list">
+            {pastAgents.map((a) => (
+              <div class="agents-past-row" key={`${a.agent_id}-${a.completed_at}`}>
+                <span class="agents-card-id" style={{ minWidth: 60 }}>{a.agent_id}</span>
+                <span class="agents-chip">{a.role || "default"}</span>
+                <code style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {a.branch || "—"}
+                </code>
+                <span style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", whiteSpace: "nowrap" }}>
+                  {a.completed_at ? relativeTime(a.completed_at) : "—"}
+                </span>
+                <button
+                  class="agents-btn"
+                  onClick={() => setHistoryAgentId(a.agent_id)}
+                  title="View conversation history and token cost"
+                  style={{ padding: "2px 8px", fontSize: "var(--text-xs)" }}
+                >
+                  History
+                </button>
+              </div>
             ))}
-          </ol>
-        )}
-      </section>
+          </div>
+        </section>
+      )}
     </div>
     </>
   );

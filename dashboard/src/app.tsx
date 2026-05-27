@@ -7,7 +7,7 @@ const availablePanels = signal<string[]>([]);
 const isMaximized = signal(false);
 
 // Tray: panels that live in a bottom bar and pop up as dismissable floating lightboxes
-const DEFAULT_TRAY_IDS = ["api", "stats", "sandbox", "prompts", "agents", "queue", "task", "suggest"];
+const DEFAULT_TRAY_IDS = ["api", "stats", "sandbox", "prompts", "agents", "messages", "queue", "task", "suggest"];
 // Which panels are currently in the tray (can grow when user sends panels to tray)
 const trayPanels = signal<string[]>([...DEFAULT_TRAY_IDS]);
 // Set of panel IDs currently shown as transient floats (auto-dismiss on click-outside)
@@ -41,6 +41,7 @@ import { StatsView } from "./views/stats-view";
 import { SandboxView } from "./views/sandbox-view";
 import { PromptsView } from "./views/prompts-view";
 import { AgentsView } from "./views/agents-view";
+import { MessagesView } from "./views/messages-view";
 import { QueueView } from "./views/queue-view";
 import { TablePanel } from "./components/table-panel";
 import { DetailPanel } from "./components/detail-panel";
@@ -68,7 +69,7 @@ import { initTouchMoveMenu } from "./lib/touch-move-menu";
 const PANEL_NAMES: Record<string, string> = {
   graph: "Graph", timeline: "Timeline", log: "Log",
   api: "API", stats: "Stats", sandbox: "Sandbox",
-  prompts: "Prompts", agents: "Agents", queue: "Queue",
+  prompts: "Prompts", agents: "Agents", messages: "Messages", queue: "Queue",
   metrics: "Metrics", scatter: "Scatter", detail: "Detail",
   filters: "Filters", suggest: "Suggest", task: "Task",
   table: "Table",
@@ -85,6 +86,7 @@ const PANEL_MAP: Record<string, (params?: any) => preact.JSX.Element> = {
   sandbox: () => <SandboxView />,
   prompts: () => <PromptsView />,
   agents: () => <AgentsView />,
+  messages: () => <MessagesView />,
   queue: () => <QueueView />,
   metrics: (p?: any) => <MetricsChart instanceId={p?.instanceId} initialMetric={p?.metric} />,
   scatter: (p?: any) => <ScatterChart instanceId={p?.instanceId} initialXMetric={p?.xMetric} initialYMetric={p?.yMetric} />,
