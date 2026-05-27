@@ -11,6 +11,7 @@ dependencies = [
     "anthropic>=0.52.0",
     "fastapi>=0.135.1",
     "httpx>=0.28.1",
+    "pyte>=0.8.0",
     "python-dotenv>=1.0.0",
     "uvicorn[standard]>=0.42.0",
     "watchfiles>=1.1.1",

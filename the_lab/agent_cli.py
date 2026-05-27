@@ -470,6 +470,12 @@ def main():
             _log_dir.mkdir(parents=True, exist_ok=True)
             _log_path = _log_dir / "output.log"
             _log_file = open(_log_path, "w", encoding="utf-8")
+            # Write header immediately so the file is non-empty from the start
+            _ts0 = _dt.datetime.now(_dt.timezone.utc).strftime("%H:%M:%S")
+            _log_file.write(
+                f"[{_ts0}] ── session started · agent {agent_id} ──\n"
+            )
+            _log_file.flush()
 
         # Create a PTY pair — slave becomes the agent's stdin/stdout/stderr,
         # master is our read end for logging.
