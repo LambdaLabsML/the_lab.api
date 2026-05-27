@@ -86,3 +86,13 @@ export const logEntries = signal<LogEntry[]>([]);
 
 /** Progress pct_complete for running experiments, keyed by label. */
 export const runningProgress = signal<Record<string, number>>({});
+
+// ---------------------------------------------------------------------------
+// Agent cost / token totals (populated by agents-view when it fetches history)
+// ---------------------------------------------------------------------------
+
+/** Total USD cost across all past + live agents seen so far. null = not loaded yet. */
+export const totalAgentCost = signal<number | null>(null);
+
+/** Total tokens (input+output) across all past + live agents seen so far. */
+export const totalAgentTokens = signal<number | null>(null);

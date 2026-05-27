@@ -1,5 +1,5 @@
-import { useState } from "preact/hooks";
-import { backlogData } from "../state/signals";
+import { useState, useEffect, useRef } from "preact/hooks";
+import { backlogData, totalAgentCost, totalAgentTokens } from "../state/signals";
 import { reverseTime, colorMode, colorTheme, fontFamily, fontSize } from "../state/settings";
 import { wsConnected, wsAuthFailed } from "../state/ws";
 // Font display data lives here — NOT imported from fonts.ts.
@@ -60,6 +60,9 @@ export function Topbar(props: LayoutActions) {
   const [showLayoutMenu, setShowLayoutMenu] = useState(false);
   const [saveName, setSaveName] = useState("");
   const [layoutVersion, setLayoutVersion] = useState(0);
+  const [compact, setCompact] = useState(false);
+  const [statIdx, setStatIdx] = useState(0);
+  const barRef = useRef<HTMLDivElement>(null);
 
   const savedLayouts = props.getSavedLayouts?.() || [];
   void layoutVersion; // trigger re-render when layouts change
@@ -69,25 +72,72 @@ export function Topbar(props: LayoutActions) {
   const activeFont   = fontFamily.value;
   const activeFontSz = fontSize.value;
 
+  const cost = totalAgentCost.value;
+  const tokens = totalAgentTokens.value;
+
+  // Build the stats array once so it's shared between compact and full renders
+  const stats = [
+    { key: "ideas",   label: "Ideas",   value: data ? String(data.active_ideas.length) : "--" },
+    { key: "running", label: "Running", value: data ? String(data.total_running) : "--" },
+    { key: "pending", label: "Pending", value: data ? String(data.total_pending) : "--" },
+    { key: "branch",  label: "Branch",  value: data ? data.current_branch : "--" },
+    { key: "cost",    label: "Cost",    value: cost != null ? `$${cost.toFixed(2)}` : "--",
+      title: tokens != null ? `${(tokens / 1000).toFixed(0)}K tokens` : undefined },
+  ];
+
+  // Detect overflow: switch to cycling mode when topbar is narrow
+  useEffect(() => {
+    const el = barRef.current;
+    if (!el) return;
+    const check = () => setCompact(el.clientWidth < 580);
+    check();
+    const ro = new ResizeObserver(check);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const clampedIdx = statIdx % stats.length;
+  const prevStat = () => setStatIdx((i) => (i - 1 + stats.length) % stats.length);
+  const nextStat = () => setStatIdx((i) => (i + 1) % stats.length);
+
   return (
-    <div id="topbar">
+    <div id="topbar" ref={barRef}>
       <span class="title">The Lab</span>
       <span
         class={`ws-dot ${isWsAuthFailed ? "ws-dot--auth" : isWsConnected ? "ws-dot--on" : "ws-dot--off"}`}
         title={isWsAuthFailed ? "WebSocket: auth failed" : isWsConnected ? "WebSocket: connected" : "WebSocket: reconnecting..."}
       />
-      <span class="stat">
-        Active ideas: <b>{data ? data.active_ideas.length : "--"}</b>
-      </span>
-      <span class="stat">
-        Running: <b>{data ? data.total_running : "--"}</b>
-      </span>
-      <span class="stat">
-        Pending: <b>{data ? data.total_pending : "--"}</b>
-      </span>
-      <span class="stat">
-        Branch: <b>{data ? data.current_branch : "--"}</b>
-      </span>
+
+      {compact ? (
+        /* ── Compact cycling mode ── */
+        <div class="topbar-stat-cycle">
+          <button class="topbar-cycle-btn" onClick={prevStat} title="Previous stat">‹</button>
+          <span class="topbar-cycle-stat" title={stats[clampedIdx].title}>
+            <span class="topbar-cycle-label">{stats[clampedIdx].label}</span>
+            <b>{stats[clampedIdx].value}</b>
+          </span>
+          <button class="topbar-cycle-btn" onClick={nextStat} title="Next stat">›</button>
+          <div class="topbar-cycle-dots">
+            {stats.map((_, i) => (
+              <span
+                key={i}
+                class={`topbar-cycle-dot${i === clampedIdx ? " topbar-cycle-dot--active" : ""}`}
+                onClick={() => setStatIdx(i)}
+              />
+            ))}
+          </div>
+        </div>
+      ) : (
+        /* ── Full stats row ── */
+        <div class="topbar-stats">
+          {stats.map((s) => (
+            <span key={s.key} class="stat" title={s.title}>
+              {s.label}: <b>{s.value}</b>
+            </span>
+          ))}
+        </div>
+      )}
+
       <button
         class="time-direction-btn"
         onClick={() => { reverseTime.value = !reversed; }}

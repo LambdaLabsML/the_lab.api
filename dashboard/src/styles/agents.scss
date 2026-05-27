@@ -1,3 +1,27 @@
+/* ── Agent cost sparkline ──────────────────────────────────────────────────── */
+.agent-cost-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.agent-cost-chart-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.agent-cost-chart-label {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────── */
+
 #agents-container {
   flex: 1 1 0%;
   overflow: auto;

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { listAgents, unregisterAgent } from "../state/api";
 import type { AgentEntry } from "../lib/types";
+import { totalAgentCost, totalAgentTokens } from "../state/signals";
 
 // ── History / cost lightbox ───────────────────────────────────────────────────
 
@@ -271,10 +272,79 @@ interface PastAgent {
   completed_at?: string;
 }
 
+// ── Agent cost sparkline chart ────────────────────────────────────────────────
+
+interface ChartPoint { t: number; cost: number; tokens: number; }
+
+function AgentCostChart({ points }: { points: ChartPoint[] }) {
+  const [mode, setMode] = useState<"cost" | "tokens">("cost");
+  if (points.length < 2) return null;
+
+  const W = 260, H = 52;
+  const PL = 2, PR = 2, PT = 4, PB = 12;
+  const IW = W - PL - PR, IH = H - PT - PB;
+
+  const minT = points[0].t, maxT = points[points.length - 1].t;
+  const vals = points.map((p) => (mode === "cost" ? p.cost : p.tokens));
+  const maxV = Math.max(...vals, 0.0001);
+
+  const px = (t: number) => PL + (maxT === minT ? IW / 2 : ((t - minT) / (maxT - minT)) * IW);
+  const py = (v: number) => PT + IH - (v / maxV) * IH;
+
+  const lineD = points.map((p, i) => {
+    const v = mode === "cost" ? p.cost : p.tokens;
+    return `${i === 0 ? "M" : "L"}${px(p.t).toFixed(1)},${py(v).toFixed(1)}`;
+  }).join(" ");
+  const last = points[points.length - 1];
+  const lastV = mode === "cost" ? last.cost : last.tokens;
+  const areaD = `${lineD} L${px(last.t).toFixed(1)},${(PT + IH)} L${px(points[0].t).toFixed(1)},${(PT + IH)} Z`;
+  const label = mode === "cost"
+    ? `$${last.cost.toFixed(2)} total`
+    : `${(last.tokens / 1000).toFixed(0)}K tokens`;
+  const gradId = `ag-grad-${mode}`;
+
+  return (
+    <div class="agent-cost-chart">
+      <div class="agent-cost-chart-header">
+        <span class="agent-cost-chart-label">
+          {mode === "cost" ? "Cumulative cost" : "Cumulative tokens"}
+        </span>
+        <button
+          class="agents-btn"
+          style={{ padding: "1px 6px", fontSize: "var(--text-xs)" }}
+          onClick={() => setMode(mode === "cost" ? "tokens" : "cost")}
+        >
+          {mode === "cost" ? "tokens →" : "cost →"}
+        </button>
+      </div>
+      <svg width={W} height={H} style={{ display: "block", overflow: "visible" }}>
+        <defs>
+          <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="var(--accent)" stop-opacity="0.22" />
+            <stop offset="100%" stop-color="var(--accent)" stop-opacity="0" />
+          </linearGradient>
+        </defs>
+        <path d={areaD} fill={`url(#${gradId})`} />
+        <path d={lineD} fill="none" stroke="var(--accent)" stroke-width="1.5"
+          stroke-linejoin="round" stroke-linecap="round" />
+        <circle cx={px(last.t).toFixed(1)} cy={py(lastV).toFixed(1)} r="2.5"
+          fill="var(--accent)" />
+        <text x={W - PR} y={H - 1} text-anchor="end" font-size="8"
+          fill="var(--accent)" font-family="var(--font-mono)">{label}</text>
+        <text x={PL} y={H - 1} text-anchor="start" font-size="8"
+          fill="var(--text-faint)" font-family="var(--font-mono)">{points.length} agents</text>
+      </svg>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 export function AgentsView() {
   const [agents, setAgents] = useState<AgentEntry[]>([]);
   const [pastAgents, setPastAgents] = useState<PastAgent[]>([]);
   const [costByAgent, setCostByAgent] = useState<Record<string, number>>({});
+  const [tokensByAgent, setTokensByAgent] = useState<Record<string, number>>({});
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -297,14 +367,30 @@ export function AgentsView() {
           .catch(() => null)
       )
     );
-    const updates: Record<string, number> = {};
+    const costUpd: Record<string, number> = {};
+    const tokUpd: Record<string, number> = {};
     results.forEach((r, i) => {
-      if (r.status === "fulfilled" && r.value?.totals?.cost_usd != null) {
-        updates[toFetch[i]] = r.value.totals.cost_usd;
+      if (r.status === "fulfilled" && r.value?.totals) {
+        const t = r.value.totals;
+        if (t.cost_usd != null) costUpd[toFetch[i]] = t.cost_usd;
+        const tok = (t.input_tokens || 0) + (t.output_tokens || 0);
+        if (tok > 0) tokUpd[toFetch[i]] = tok;
       }
     });
-    if (Object.keys(updates).length > 0) {
-      setCostByAgent((prev) => ({ ...prev, ...updates }));
+    if (Object.keys(costUpd).length > 0) {
+      setCostByAgent((prev) => {
+        const next = { ...prev, ...costUpd };
+        // Update global signal
+        totalAgentCost.value = Object.values(next).reduce((s, v) => s + v, 0);
+        return next;
+      });
+    }
+    if (Object.keys(tokUpd).length > 0) {
+      setTokensByAgent((prev) => {
+        const next = { ...prev, ...tokUpd };
+        totalAgentTokens.value = Object.values(next).reduce((s, v) => s + v, 0);
+        return next;
+      });
     }
   }
 
@@ -366,6 +452,27 @@ export function AgentsView() {
     return `${total} active agent${total === 1 ? "" : "s"}, ${stale} stale`;
   }, [agents]);
 
+  // Cumulative cost/token chart data — sorted by agent completion time
+  const chartPoints = useMemo<ChartPoint[]>(() => {
+    const all: Array<{ agent_id: string; ts: number }> = [
+      ...pastAgents.map((a) => ({
+        agent_id: a.agent_id,
+        ts: Date.parse(a.completed_at || a.created_at || "0"),
+      })),
+      ...agents.map((a) => ({
+        agent_id: a.agent_id,
+        ts: Date.parse(a.created_at || "0"),
+      })),
+    ].filter((a) => costByAgent[a.agent_id] != null || tokensByAgent[a.agent_id] != null);
+    all.sort((a, b) => a.ts - b.ts);
+    let cumCost = 0, cumTok = 0;
+    return all.map(({ agent_id, ts }) => {
+      cumCost += costByAgent[agent_id] ?? 0;
+      cumTok += tokensByAgent[agent_id] ?? 0;
+      return { t: ts, cost: cumCost, tokens: cumTok };
+    });
+  }, [pastAgents, agents, costByAgent, tokensByAgent]);
+
   return (
     <>
     {outputAgentId && (
@@ -386,13 +493,16 @@ export function AgentsView() {
         </div>
         <div class="agents-header-right">
           <div class="agents-summary">{loaded ? summary : "Loading..."}</div>
-          <button
-            class="agents-btn"
-            onClick={() => refresh()}
-            title="Reload agent list"
-          >
-            Refresh
-          </button>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <AgentCostChart points={chartPoints} />
+            <button
+              class="agents-btn"
+              onClick={() => refresh()}
+              title="Reload agent list"
+            >
+              Refresh
+            </button>
+          </div>
         </div>
       </div>
 
