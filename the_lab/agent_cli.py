@@ -520,7 +520,6 @@ def main():
         finally:
             if _log_file:
                 _log_file.close()
-        finally:
             try:
                 import urllib.request as _urlreq, base64 as _b64
                 _del_headers: dict[str, str] = {}
