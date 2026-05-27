@@ -278,7 +278,7 @@ interface ChartPoint { t: number; cost: number; tokens: number; }
 
 function AgentCostChart({ points }: { points: ChartPoint[] }) {
   const [mode, setMode] = useState<"cost" | "tokens">("cost");
-  if (points.length < 2) return null;
+  if (points.length === 0) return null;
 
   const W = 260, H = 52;
   const PL = 2, PR = 2, PT = 4, PB = 12;
@@ -291,17 +291,26 @@ function AgentCostChart({ points }: { points: ChartPoint[] }) {
   const px = (t: number) => PL + (maxT === minT ? IW / 2 : ((t - minT) / (maxT - minT)) * IW);
   const py = (v: number) => PT + IH - (v / maxV) * IH;
 
-  const lineD = points.map((p, i) => {
-    const v = mode === "cost" ? p.cost : p.tokens;
-    return `${i === 0 ? "M" : "L"}${px(p.t).toFixed(1)},${py(v).toFixed(1)}`;
-  }).join(" ");
   const last = points[points.length - 1];
   const lastV = mode === "cost" ? last.cost : last.tokens;
-  const areaD = `${lineD} L${px(last.t).toFixed(1)},${(PT + IH)} L${px(points[0].t).toFixed(1)},${(PT + IH)} Z`;
+
+  // With a single point draw a flat horizontal line across the full width
+  const lineD = points.length === 1
+    ? `M${PL},${py(lastV).toFixed(1)} L${PL + IW},${py(lastV).toFixed(1)}`
+    : points.map((p, i) => {
+        const v = mode === "cost" ? p.cost : p.tokens;
+        return `${i === 0 ? "M" : "L"}${px(p.t).toFixed(1)},${py(v).toFixed(1)}`;
+      }).join(" ");
+
+  const areaD = points.length === 1
+    ? `M${PL},${py(lastV).toFixed(1)} L${PL + IW},${py(lastV).toFixed(1)} L${PL + IW},${PT + IH} L${PL},${PT + IH} Z`
+    : `${lineD} L${px(last.t).toFixed(1)},${PT + IH} L${px(points[0].t).toFixed(1)},${PT + IH} Z`;
+
   const label = mode === "cost"
     ? `$${last.cost.toFixed(2)} total`
     : `${(last.tokens / 1000).toFixed(0)}K tokens`;
   const gradId = `ag-grad-${mode}`;
+  const dotX = points.length === 1 ? (PL + IW).toFixed(1) : px(last.t).toFixed(1);
 
   return (
     <div class="agent-cost-chart">
@@ -327,12 +336,12 @@ function AgentCostChart({ points }: { points: ChartPoint[] }) {
         <path d={areaD} fill={`url(#${gradId})`} />
         <path d={lineD} fill="none" stroke="var(--accent)" stroke-width="1.5"
           stroke-linejoin="round" stroke-linecap="round" />
-        <circle cx={px(last.t).toFixed(1)} cy={py(lastV).toFixed(1)} r="2.5"
+        <circle cx={dotX} cy={py(lastV).toFixed(1)} r="2.5"
           fill="var(--accent)" />
         <text x={W - PR} y={H - 1} text-anchor="end" font-size="8"
           fill="var(--accent)" font-family="var(--font-mono)">{label}</text>
         <text x={PL} y={H - 1} text-anchor="start" font-size="8"
-          fill="var(--text-faint)" font-family="var(--font-mono)">{points.length} agents</text>
+          fill="var(--text-faint)" font-family="var(--font-mono)">{points.length} agent{points.length === 1 ? "" : "s"}</text>
       </svg>
     </div>
   );
