@@ -479,11 +479,19 @@ def main():
         import os as _os
         _os.close(_slave_fd)  # parent doesn't need the slave end
 
-        _ANSI_RE = _re.compile(r"\x1b\[[0-9;]*[mABCDEFGHJKSTfnsulh]|\x1b[()=]|\r")
+        # Strip ANSI escapes, carriage returns, OSC sequences (window title etc.)
+        _ANSI_RE = _re.compile(
+            r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"  # OSC (e.g. ]0;title BEL/ST)
+            r"|\x1b\[[0-9;]*[mABCDEFGHJKSTfnsulh?]"  # CSI sequences
+            r"|\x1b[()=><NOM\\]"                       # other 2-char escapes
+            r"|\r"                                      # carriage return
+        )
+        # Spinner characters Claude Code uses for the "Orbiting…" animation
+        _SPINNER_RE = _re.compile(r"^[✢✶✻✽·\*⠂⠐⠠⠄⠁⠈⠊⠘⠸⢀⡀⣀⠿◐◓◑◒ ]+$")
 
         def _pty_relay():
-            """Read from PTY master, write raw to terminal stdout, write
-            cleaned+timestamped lines to the log file."""
+            """Read from PTY master, forward raw bytes to terminal, write
+            cleaned+timestamped meaningful lines to the log file."""
             buf = b""
             while True:
                 try:
@@ -506,27 +514,40 @@ def main():
                     sys.stdout.buffer.flush()
                 except Exception:
                     pass
-                # Log cleaned lines with timestamps
-                if _log_file:
-                    buf += chunk
-                    while b"\n" in buf:
-                        line, buf = buf.split(b"\n", 1)
-                        text = line.decode(errors="replace")
-                        clean = _ANSI_RE.sub("", text).rstrip()
-                        if clean:
-                            ts = _dt.datetime.now(_dt.timezone.utc).strftime("%H:%M:%S")
-                            try:
-                                _log_file.write(f"[{ts}] {clean}\n")
-                                _log_file.flush()
-                            except Exception:
-                                pass
-            # Flush any remaining buffer
-            if _log_file and buf:
-                text = _ANSI_RE.sub("", buf.decode(errors="replace")).rstrip()
-                if text:
+                if not _log_file:
+                    continue
+                # Accumulate and split on newlines for logging.
+                # \r resets the current line (spinner overwrite) — treat it as
+                # a line separator so we only keep the last overwrite per line.
+                buf += chunk
+                # Normalise \r\n → \n, then split on \r or \n
+                buf = buf.replace(b"\r\n", b"\n")
+                parts = _re.split(rb"[\r\n]", buf)
+                buf = parts[-1]   # incomplete last segment kept for next chunk
+                for raw_line in parts[:-1]:
+                    text = raw_line.decode(errors="replace")
+                    clean = _ANSI_RE.sub("", text).strip()
+                    if not clean:
+                        continue
+                    # Skip pure spinner frames and xterm title sequences
+                    if _SPINNER_RE.match(clean):
+                        continue
+                    # Skip lines that are just box-drawing / separator lines
+                    if _re.match(r"^[─━═╌┄┈╴╸╼╾│┃╎╏┊┋╷╹╻ ]+$", clean):
+                        continue
                     ts = _dt.datetime.now(_dt.timezone.utc).strftime("%H:%M:%S")
                     try:
-                        _log_file.write(f"[{ts}] {text}\n")
+                        _log_file.write(f"[{ts}] {clean}\n")
+                        _log_file.flush()
+                    except Exception:
+                        pass
+            # Flush any remaining buffer
+            if _log_file and buf:
+                clean = _ANSI_RE.sub("", buf.decode(errors="replace")).strip()
+                if clean and not _SPINNER_RE.match(clean):
+                    ts = _dt.datetime.now(_dt.timezone.utc).strftime("%H:%M:%S")
+                    try:
+                        _log_file.write(f"[{ts}] {clean}\n")
                     except Exception:
                         pass
 
