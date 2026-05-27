@@ -663,6 +663,21 @@ async def _main() -> int:
         if agent_home:
             env["HOME"] = agent_home
             env["TMPDIR"] = os.path.join(agent_home, "tmp")
+            # Write a breadcrumb so the outer agent_cli.py can locate the
+            # Claude history JSONL files.  The agent worktree log dir is
+            # bind-mounted and writable from inside the namespace.
+            _agent_id = os.environ.get("THE_LAB_AGENT_ID", "")
+            _worktree = os.environ.get("THE_LAB_AGENT_WORKTREE", "")
+            if _agent_id and _worktree:
+                _crumb = os.path.join(
+                    _worktree, ".the_lab", "agents", _agent_id, "claude_home"
+                )
+                try:
+                    os.makedirs(os.path.dirname(_crumb), exist_ok=True)
+                    with open(_crumb, "w") as _f:
+                        _f.write(agent_home)
+                except Exception:
+                    pass
 
         # Claude Code hardcodes /tmp/claude-<uid>/ for its Bash sandbox.
         # Instead of chowning the host's /tmp/claude-<uid>/ (which breaks

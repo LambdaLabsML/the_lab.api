@@ -2,6 +2,113 @@ import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { listAgents, listMessages, unregisterAgent } from "../state/api";
 import type { AgentEntry, MessageEntry } from "../lib/types";
 
+// ── History / cost lightbox ───────────────────────────────────────────────────
+
+interface HistorySession {
+  session_id: string;
+  started_at: string | null;
+  message_count: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cost_usd: number;
+}
+interface HistoryData {
+  sessions: HistorySession[];
+  totals: {
+    sessions: number;
+    message_count: number;
+    input_tokens: number;
+    output_tokens: number;
+    cache_read_tokens: number;
+    cost_usd: number;
+  };
+}
+
+function fmtK(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(0)}k`;
+  return String(n);
+}
+
+function AgentHistoryLightbox({ agentId, onClose }: { agentId: string; onClose: () => void }) {
+  const [data, setData] = useState<HistoryData | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch(`/api/v1/agents/${agentId}/history`)
+      .then(async (r) => {
+        if (!r.ok) throw new Error(await r.text());
+        return r.json() as Promise<HistoryData>;
+      })
+      .then(setData)
+      .catch((e) => setError(e.message));
+  }, [agentId]);
+
+  return (
+    <div class="lightbox-backdrop" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div class="lightbox" style={{ maxWidth: 700, width: "95vw" }}>
+        <div class="lightbox-header">
+          <span class="lightbox-title">History · agent/{agentId}</span>
+          <span class="lightbox-close" onClick={onClose}>×</span>
+        </div>
+        <div class="lightbox-body" style={{ overflowY: "auto", maxHeight: "75vh" }}>
+          {error && <div style={{ color: "var(--red)", padding: "12px 16px" }}>{error}</div>}
+          {!data && !error && <div style={{ padding: "12px 16px", color: "var(--text-muted)" }}>Loading…</div>}
+          {data && (
+            <>
+              {/* Totals bar */}
+              <div style={{
+                display: "flex", gap: 24, flexWrap: "wrap",
+                padding: "10px 16px", borderBottom: "1px solid var(--border)",
+                background: "var(--bg-elev)",
+              }}>
+                <div><span style={{ color: "var(--text-muted)", fontSize: "var(--text-xs)" }}>SESSIONS</span><br/><strong>{data.totals.sessions}</strong></div>
+                <div><span style={{ color: "var(--text-muted)", fontSize: "var(--text-xs)" }}>MESSAGES</span><br/><strong>{data.totals.message_count}</strong></div>
+                <div><span style={{ color: "var(--text-muted)", fontSize: "var(--text-xs)" }}>INPUT</span><br/><strong>{fmtK(data.totals.input_tokens)}</strong></div>
+                <div><span style={{ color: "var(--text-muted)", fontSize: "var(--text-xs)" }}>OUTPUT</span><br/><strong>{fmtK(data.totals.output_tokens)}</strong></div>
+                <div><span style={{ color: "var(--text-muted)", fontSize: "var(--text-xs)" }}>CACHE HIT</span><br/><strong>{fmtK(data.totals.cache_read_tokens)}</strong></div>
+                <div><span style={{ color: "var(--text-muted)", fontSize: "var(--text-xs)" }}>EST. COST</span><br/><strong style={{ color: "var(--accent)" }}>${data.totals.cost_usd.toFixed(3)}</strong></div>
+              </div>
+              {/* Per-session table */}
+              {data.sessions.length === 0 ? (
+                <div style={{ padding: "12px 16px", color: "var(--text-muted)" }}>No session files found yet.</div>
+              ) : (
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "var(--text-sm)" }}>
+                  <thead>
+                    <tr style={{ borderBottom: "1px solid var(--border)", color: "var(--text-muted)", textAlign: "left" }}>
+                      <th style={{ padding: "6px 16px" }}>Session</th>
+                      <th style={{ padding: "6px 8px" }}>Started</th>
+                      <th style={{ padding: "6px 8px", textAlign: "right" }}>Msgs</th>
+                      <th style={{ padding: "6px 8px", textAlign: "right" }}>In</th>
+                      <th style={{ padding: "6px 8px", textAlign: "right" }}>Out</th>
+                      <th style={{ padding: "6px 8px", textAlign: "right" }}>Cache</th>
+                      <th style={{ padding: "6px 16px", textAlign: "right" }}>Cost</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {data.sessions.map((s) => (
+                      <tr key={s.session_id} style={{ borderBottom: "1px solid var(--border-faint, var(--border))" }}>
+                        <td style={{ padding: "6px 16px", fontFamily: "var(--font-mono)", fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>{s.session_id.slice(0, 16)}…</td>
+                        <td style={{ padding: "6px 8px", color: "var(--text-muted)", fontSize: "var(--text-xs)" }}>{s.started_at ? s.started_at.slice(0, 16).replace("T", " ") : "—"}</td>
+                        <td style={{ padding: "6px 8px", textAlign: "right" }}>{s.message_count}</td>
+                        <td style={{ padding: "6px 8px", textAlign: "right", color: "var(--text-muted)" }}>{fmtK(s.input_tokens)}</td>
+                        <td style={{ padding: "6px 8px", textAlign: "right", color: "var(--text-muted)" }}>{fmtK(s.output_tokens)}</td>
+                        <td style={{ padding: "6px 8px", textAlign: "right", color: "var(--text-muted)" }}>{fmtK(s.cache_read_tokens)}</td>
+                        <td style={{ padding: "6px 16px", textAlign: "right", color: "var(--accent)" }}>${s.cost_usd.toFixed(3)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Output log lightbox ──────────────────────────────────────────────────────
 
 function AgentOutputLightbox({ agentId, onClose }: { agentId: string; onClose: () => void }) {
@@ -100,6 +207,7 @@ export function AgentsView() {
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [outputAgentId, setOutputAgentId] = useState<string | null>(null);
+  const [historyAgentId, setHistoryAgentId] = useState<string | null>(null);
   // Re-render every ~30s so "Xm ago" stays fresh
   const [, setTick] = useState(0);
 
@@ -192,6 +300,9 @@ export function AgentsView() {
     <>
     {outputAgentId && (
       <AgentOutputLightbox agentId={outputAgentId} onClose={() => setOutputAgentId(null)} />
+    )}
+    {historyAgentId && (
+      <AgentHistoryLightbox agentId={historyAgentId} onClose={() => setHistoryAgentId(null)} />
     )}
     <div id="agents-container">
       <div class="agents-header">
@@ -308,6 +419,13 @@ export function AgentsView() {
                     title="View timestamped output log"
                   >
                     Output
+                  </button>
+                  <button
+                    class="agents-btn"
+                    onClick={() => setHistoryAgentId(agent.agent_id)}
+                    title="View conversation history and token cost"
+                  >
+                    History
                   </button>
                   <button
                     class="agents-btn"
