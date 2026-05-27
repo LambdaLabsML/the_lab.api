@@ -33,6 +33,24 @@ function fmtK(n: number): string {
   return String(n);
 }
 
+function CopyButton({ text, label = "copy" }: { text: string; label?: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      class="agents-btn"
+      style={{ padding: "1px 6px", fontSize: "var(--text-xs)", opacity: copied ? 0.6 : 1 }}
+      title={`Copy: ${text}`}
+      onClick={() => {
+        navigator.clipboard.writeText(text).catch(() => {});
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      }}
+    >
+      {copied ? "✓" : label}
+    </button>
+  );
+}
+
 function AgentHistoryLightbox({ agentId, onClose }: { agentId: string; onClose: () => void }) {
   const [data, setData] = useState<HistoryData | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -101,9 +119,16 @@ function AgentHistoryLightbox({ agentId, onClose }: { agentId: string; onClose: 
                     </tr>
                   </thead>
                   <tbody>
-                    {data.sessions.map((s) => (
+                    {data.sessions.map((s, i) => (
                       <tr key={s.session_id} style={{ borderBottom: "1px solid var(--border-faint, var(--border))" }}>
-                        <td style={{ padding: "6px 16px", fontFamily: "var(--font-mono)", fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>{s.session_id.slice(0, 16)}…</td>
+                        <td style={{ padding: "6px 8px 6px 16px" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                            <code style={{ fontFamily: "var(--font-mono)", fontSize: "var(--text-xs)", color: i === 0 ? "var(--text)" : "var(--text-muted)" }} title={s.session_id}>
+                              {s.session_id.slice(0, 8)}…
+                            </code>
+                            <CopyButton text={s.session_id} />
+                          </div>
+                        </td>
                         <td style={{ padding: "6px 8px", color: "var(--text-muted)", fontSize: "var(--text-xs)", whiteSpace: "nowrap" }}>{s.started_at ? s.started_at.slice(0, 16).replace("T", " ") : "—"}</td>
                         <td style={{ padding: "6px 8px", textAlign: "right" }}>{s.message_count}</td>
                         <td style={{ padding: "6px 8px", textAlign: "right", color: "var(--text-muted)" }}>{fmtK(s.input_tokens)}</td>
@@ -115,6 +140,26 @@ function AgentHistoryLightbox({ agentId, onClose }: { agentId: string; onClose: 
                     ))}
                   </tbody>
                 </table>
+              )}
+              {/* Resume command — most recent session */}
+              {data.sessions.length > 0 && (
+                <div style={{
+                  margin: "12px 16px",
+                  padding: "10px 12px",
+                  background: "var(--bg-elev)",
+                  borderRadius: 6,
+                  border: "1px solid var(--border)",
+                }}>
+                  <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", marginBottom: 6 }}>
+                    RESUME LATEST SESSION
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <code style={{ fontFamily: "var(--font-mono)", fontSize: "var(--text-xs)", color: "var(--text)", flex: 1, overflowX: "auto", whiteSpace: "nowrap" }}>
+                      the-lab-agent loop --resume {data.sessions[0].session_id}
+                    </code>
+                    <CopyButton text={`the-lab-agent loop --resume ${data.sessions[0].session_id}`} label="copy cmd" />
+                  </div>
+                </div>
               )}
             </>
           )}
