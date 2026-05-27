@@ -479,15 +479,84 @@ def main():
         import os as _os
         _os.close(_slave_fd)  # parent doesn't need the slave end
 
-        # Strip ANSI escapes, carriage returns, OSC sequences (window title etc.)
+        # Strip ANSI/VT100 escape sequences before logging.
+        # Covers the full ANSI/VT100/xterm/kitty repertoire:
+        #   OSC  \x1b] ... BEL/ST
+        #   CSI  \x1b[ [parameter-bytes]* [intermediate-bytes]* final-byte
+        #        parameter bytes: 0x30-0x3F  (0-9 ; < = > ?)
+        #        intermediate bytes: 0x20-0x2F  (space ! " # $ % & ' ( ) * + , - . /)
+        #        final byte: 0x40-0x7E  (@ A-Z [ \ ] ^ _ ` a-z { | } ~)
+        #   DCS  \x1bP ... ST
+        #   PM   \x1bX ... ST
+        #   SOS  \x1bX ... ST
+        #   APC  \x1b_ ... ST
+        #   Single-char Fe sequences: \x1b followed by 0x40-0x5F (not [)
+        #   2-char sequences: \x1b followed by any single non-[ char
+        #   Also strip bare \x07 (BEL), \x08 (BS), \x0f/\x0e (SI/SO)
         _ANSI_RE = _re.compile(
-            r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"  # OSC (e.g. ]0;title BEL/ST)
-            r"|\x1b\[[0-9;]*[mABCDEFGHJKSTfnsulh?]"  # CSI sequences
-            r"|\x1b[()=><NOM\\]"                       # other 2-char escapes
-            r"|\r"                                      # carriage return
+            r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"          # OSC
+            r"|\x1b[PX_^][^\x1b]*(?:\x1b\\|\x07)"          # DCS/SOS/APC/PM
+            r"|\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]"  # CSI (full spec, incl. private params < > ? =)
+            r"|\x1b[^\x1b\[]"                               # other 2-char Fe sequences (incl. \x1b7 DECSC)
+            r"|[\x07\x08\x0e\x0f]"                          # BEL, BS, SO, SI
+            r"|\r"                                           # carriage return
         )
         # Spinner characters Claude Code uses for the "Orbiting…" animation
         _SPINNER_RE = _re.compile(r"^[✢✶✻✽·\*⠂⠐⠠⠄⠁⠈⠊⠘⠸⢀⡀⣀⠿◐◓◑◒ ]+$")
+
+        # UI noise lines to suppress:
+        # • Lines starting with spinner/animation chars (✢✶✻✽ etc.)
+        # • Terminal header bars using Unicode block elements (▐▛███▜▌)
+        # • Permission/mode prompt lines (⏵⏵, ◐, ❯)
+        # • Token/timing fragments: "(Xs · thinking…)", "↓ N tokens"
+        # • Progress status with tokens mid-line
+        _SPINNER_CHARS = "✢✶✻✽·⏵◐◑◒◓❯▐▝▘▜▛▟▙█▌▍▎▏"
+        _UI_NOISE_RE = _re.compile(
+            r"^[✢✶✻✽·]"                              # spinner prefix
+            r"|^[▐▝▘▜▛▟▙█▌▍▎▏]"                      # block-element header bars
+            r"|^[⏵❯◐◑◒◓]"                             # permission/effort/prompt
+            r"|^\(\d+s\s*[·•]"                        # "(Xs · thinking…)" fragment
+            r"|^↓\s*\d+\s*tokens"                     # "↓ N tokens" fragment
+            r"|^↑\s*\d+\s*[·•]"                       # "↑N · thinking" fragment
+            r"|·\s*thinking\s+with"                   # mid-line thinking status
+            r"|thought\s+for\s+\d+s"                  # "thought for Xs"
+        )
+
+        def _best_segment(raw_line: bytes) -> str:
+            """Return the best loggable text from a raw PTY line.
+
+            A PTY line may contain multiple \\r-overwritten versions of the same
+            visual line (spinner animation updates).  Only the *last* non-empty
+            segment after \\r splits is meaningful; earlier segments are stale
+            overwrites.  Strip ANSI codes and return the cleaned last segment,
+            or '' if nothing meaningful remains.
+            """
+            # Split on \r to get overwrite segments; last non-empty wins
+            segments = raw_line.split(b"\r")
+            for seg in reversed(segments):
+                text = seg.decode(errors="replace")
+                clean = _ANSI_RE.sub("", text).strip()
+                if clean:
+                    return clean
+            return ""
+
+        def _should_log(clean: str) -> bool:
+            """True if the cleaned line is worth writing to the log."""
+            if not clean:
+                return False
+            # Too short — escape remnant or single stray char
+            if len(clean) < 4:
+                return False
+            # Pure spinner animation frame (only spinner chars on the line)
+            if _SPINNER_RE.match(clean):
+                return False
+            # Box-drawing separator line
+            if _re.match(r"^[─━═╌┄┈╴╸╼╾│┃╎╏┊┋╷╹╻ ]+$", clean):
+                return False
+            # UI status/header/progress line
+            if _UI_NOISE_RE.search(clean):
+                return False
+            return True
 
         def _pty_relay():
             """Read from PTY master, forward raw bytes to terminal, write
@@ -516,24 +585,20 @@ def main():
                     pass
                 if not _log_file:
                     continue
-                # Accumulate and split on newlines for logging.
-                # \r resets the current line (spinner overwrite) — treat it as
-                # a line separator so we only keep the last overwrite per line.
+                # Accumulate bytes; only split on real newlines (\n).
+                # \r within a line is a spinner-overwrite — handled by
+                # _best_segment which picks the last \r-delimited segment.
+                # \r\n is normalised to \n first.
                 buf += chunk
-                # Normalise \r\n → \n, then split on \r or \n
                 buf = buf.replace(b"\r\n", b"\n")
-                parts = _re.split(rb"[\r\n]", buf)
-                buf = parts[-1]   # incomplete last segment kept for next chunk
+                # Cap buf to avoid unbounded growth during long spinner loops
+                if len(buf) > 65536:
+                    buf = buf[-32768:]
+                parts = buf.split(b"\n")
+                buf = parts[-1]   # last incomplete line kept for next chunk
                 for raw_line in parts[:-1]:
-                    text = raw_line.decode(errors="replace")
-                    clean = _ANSI_RE.sub("", text).strip()
-                    if not clean:
-                        continue
-                    # Skip pure spinner frames and xterm title sequences
-                    if _SPINNER_RE.match(clean):
-                        continue
-                    # Skip lines that are just box-drawing / separator lines
-                    if _re.match(r"^[─━═╌┄┈╴╸╼╾│┃╎╏┊┋╷╹╻ ]+$", clean):
+                    clean = _best_segment(raw_line)
+                    if not _should_log(clean):
                         continue
                     ts = _dt.datetime.now(_dt.timezone.utc).strftime("%H:%M:%S")
                     try:
@@ -543,8 +608,8 @@ def main():
                         pass
             # Flush any remaining buffer
             if _log_file and buf:
-                clean = _ANSI_RE.sub("", buf.decode(errors="replace")).strip()
-                if clean and not _SPINNER_RE.match(clean):
+                clean = _best_segment(buf)
+                if _should_log(clean):
                     ts = _dt.datetime.now(_dt.timezone.utc).strftime("%H:%M:%S")
                     try:
                         _log_file.write(f"[{ts}] {clean}\n")
