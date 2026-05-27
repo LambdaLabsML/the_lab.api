@@ -448,7 +448,56 @@ def main():
     if agent_id:
         import signal as _signal
         import subprocess as _sp
-        proc = _sp.Popen(cmd, env=env, cwd=run_cwd)
+        import threading as _threading
+        import datetime as _dt
+
+        # Write timestamped output to .the_lab/agents/<id>/output.log so the
+        # dashboard can display a scrollable, time-indexed session transcript.
+        _log_path: Path | None = None
+        if agent_worktree:
+            _log_dir = agent_worktree / ".the_lab" / "agents" / agent_id
+            _log_dir.mkdir(parents=True, exist_ok=True)
+            _log_path = _log_dir / "output.log"
+
+        def _tee_stream(src, dst_raw, log_file):
+            """Copy src → dst_raw (terminal) and log_file with timestamps."""
+            for raw_line in src:
+                ts = _dt.datetime.now(_dt.timezone.utc).strftime("%H:%M:%S")
+                try:
+                    dst_raw.buffer.write(raw_line)
+                    dst_raw.buffer.flush()
+                except Exception:
+                    pass
+                if log_file:
+                    try:
+                        text = raw_line.decode(errors="replace")
+                        # Strip ANSI escape codes for the log file
+                        import re as _re
+                        clean = _re.sub(r"\x1b\[[0-9;]*[mABCDEFGHJKSTfnsu]", "", text)
+                        if clean.strip():
+                            log_file.write(f"[{ts}] {clean}")
+                        else:
+                            log_file.write(clean)
+                        log_file.flush()
+                    except Exception:
+                        pass
+
+        _log_file = open(_log_path, "w", encoding="utf-8") if _log_path else None
+
+        proc = _sp.Popen(
+            cmd, env=env, cwd=run_cwd,
+            stdout=_sp.PIPE, stderr=_sp.PIPE,
+        )
+
+        _t_out = _threading.Thread(
+            target=_tee_stream, args=(proc.stdout, sys.stdout, _log_file), daemon=True
+        )
+        _t_err = _threading.Thread(
+            target=_tee_stream, args=(proc.stderr, sys.stderr, _log_file), daemon=True
+        )
+        _t_out.start()
+        _t_err.start()
+
         forwarded = {"sig": None}
 
         def _forward(signum, _frame):
@@ -466,6 +515,11 @@ def main():
 
         try:
             rc = proc.wait()
+            _t_out.join(timeout=2)
+            _t_err.join(timeout=2)
+        finally:
+            if _log_file:
+                _log_file.close()
         finally:
             try:
                 import urllib.request as _urlreq, base64 as _b64

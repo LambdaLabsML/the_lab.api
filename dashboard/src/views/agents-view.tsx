@@ -2,6 +2,72 @@ import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { listAgents, listMessages, unregisterAgent } from "../state/api";
 import type { AgentEntry, MessageEntry } from "../lib/types";
 
+// ── Output log lightbox ──────────────────────────────────────────────────────
+
+function AgentOutputLightbox({ agentId, onClose }: { agentId: string; onClose: () => void }) {
+  const [text, setText] = useState<string>("Loading…");
+  const [follow, setFollow] = useState(true);
+  const bodyRef = useRef<HTMLPreElement>(null);
+  const pollRef = useRef<number | null>(null);
+
+  async function load() {
+    try {
+      const resp = await fetch(`/api/v1/agents/${agentId}/output`);
+      if (resp.ok) {
+        setText(await resp.text());
+      } else if (resp.status === 404) {
+        setText("(no output log yet — agent may not have started)");
+      }
+    } catch {
+      setText("(failed to load output)");
+    }
+  }
+
+  useEffect(() => {
+    load();
+    pollRef.current = window.setInterval(load, 3000);
+    return () => { if (pollRef.current) window.clearInterval(pollRef.current); };
+  }, [agentId]);
+
+  useEffect(() => {
+    if (follow && bodyRef.current) {
+      bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
+    }
+  }, [text, follow]);
+
+  return (
+    <div class="lightbox-backdrop" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div class="lightbox" style={{ maxWidth: 900, width: "95vw" }}>
+        <div class="lightbox-header">
+          <span class="lightbox-title">Output · agent/{agentId}</span>
+          <div class="lightbox-toolbar">
+            <button
+              class={`follow-btn${follow ? " follow-active" : ""}`}
+              onClick={() => setFollow(!follow)}
+            >
+              {follow ? "↓ following" : "↓ follow"}
+            </button>
+          </div>
+          <span class="lightbox-close" onClick={onClose}>×</span>
+        </div>
+        <div class="lightbox-body" style={{ padding: 0 }}>
+          <pre
+            ref={bodyRef}
+            style={{
+              margin: 0, padding: "10px 14px",
+              fontFamily: "var(--font-mono)", fontSize: "var(--text-sm)",
+              color: "var(--text)", lineHeight: 1.5,
+              whiteSpace: "pre-wrap", wordBreak: "break-word",
+              overflowY: "auto", maxHeight: "75vh",
+              background: "var(--bg)",
+            }}
+          >{text}</pre>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /** Shorten a long path by replacing the middle with an ellipsis. */
 function truncateMiddle(s: string, max: number): string {
   if (!s) return "";
@@ -33,6 +99,7 @@ export function AgentsView() {
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [outputAgentId, setOutputAgentId] = useState<string | null>(null);
   // Re-render every ~30s so "Xm ago" stays fresh
   const [, setTick] = useState(0);
 
@@ -122,6 +189,10 @@ export function AgentsView() {
   }, [agents]);
 
   return (
+    <>
+    {outputAgentId && (
+      <AgentOutputLightbox agentId={outputAgentId} onClose={() => setOutputAgentId(null)} />
+    )}
     <div id="agents-container">
       <div class="agents-header">
         <div class="agents-header-left">
@@ -233,6 +304,13 @@ export function AgentsView() {
                 <div class="agents-card-actions">
                   <button
                     class="agents-btn"
+                    onClick={() => setOutputAgentId(agent.agent_id)}
+                    title="View timestamped output log"
+                  >
+                    Output
+                  </button>
+                  <button
+                    class="agents-btn"
                     disabled={busy}
                     onClick={() => handleUnregister(agent, false)}
                   >
@@ -293,5 +371,6 @@ export function AgentsView() {
         )}
       </section>
     </div>
+    </>
   );
 }

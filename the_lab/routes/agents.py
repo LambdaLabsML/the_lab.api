@@ -4,7 +4,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
 from .. import agents as agents_mod
@@ -109,3 +110,33 @@ def unregister_agent(agent_id: str, keep_branch: bool = True):
     if not agents_mod.unregister_agent(REPO_DIR, agent_id, keep_branch=keep_branch):
         raise HTTPException(404, f"agent '{agent_id}' not registered")
     return {"status": "unregistered", "agent_id": agent_id}
+
+
+@router.get("/api/v1/agents/{agent_id}/output")
+def get_agent_output(
+    agent_id: str,
+    tail: int = Query(default=0, description="Return only the last N lines (0 = all)"),
+):
+    """Return the timestamped output log for an agent session.
+
+    Written by the-lab-agent while the agent is running. Each line is prefixed
+    with a UTC timestamp so the caller can scroll back through the session.
+    Returns plain text; 404 if no log exists yet.
+
+    Example:
+        GET /api/v1/agents/mkn23/output?tail=100
+    """
+    entry = agents_mod.lookup_agent(REPO_DIR, agent_id)
+    if not entry:
+        raise HTTPException(404, f"agent '{agent_id}' not registered")
+    worktree = entry.get("worktree")
+    if not worktree:
+        raise HTTPException(404, "agent has no worktree")
+    log_path = Path(worktree) / ".the_lab" / "agents" / agent_id / "output.log"
+    if not log_path.exists():
+        raise HTTPException(404, "output log not found — agent may not have started yet")
+    text = log_path.read_text(errors="replace")
+    if tail:
+        lines = text.splitlines(keepends=True)
+        text = "".join(lines[-tail:])
+    return PlainTextResponse(text)
