@@ -324,9 +324,15 @@ def get_agent_history(agent_id: str):
         raise HTTPException(404, "agent has no worktree recorded")
 
     # Determine whether the project dir is the exact worktree hash (ideal) or a
-    # fallback repo-root dir shared by many agents.  In the latter case we pass
-    # a ``since`` cutoff so only JSONL files written after this agent registered
-    # are included (avoids mixing sessions from other agents).
+    # fallback repo-root dir shared by many agents.
+    #
+    # Exact match  → always usable; reliable per-agent attribution.
+    # Fallback dir → shared by many agents (old agents run with cwd=repo_root).
+    #   • Live agent  : best-effort with a ``since`` cutoff (single session active,
+    #                   so the latest JSONL is almost certainly ours).
+    #   • Past agent  : unreliable — multiple past agents share the same dir and
+    #                   were often launched in parallel, so ``since`` can't
+    #                   separate them.  Return 404 rather than wrong shared data.
     exact_dir = Path.home() / ".claude" / "projects" / _worktree_project_dir(worktree)
     project_dir = _find_agent_project_dir(worktree)
     if not project_dir:
@@ -336,13 +342,24 @@ def get_agent_history(agent_id: str):
             f"expected ~/.claude/projects/{_worktree_project_dir(worktree)}/",
         )
 
+    is_live = agents_mod.lookup_agent(REPO_DIR, agent_id) is not None
+    is_fallback = project_dir != exact_dir
+
+    if is_fallback and not is_live:
+        # Past agent using a shared fallback dir — attribution is ambiguous.
+        raise HTTPException(
+            404,
+            f"no per-agent Claude history found for past agent '{agent_id}' "
+            f"(shared project dir cannot be attributed reliably)",
+        )
+
     since: float | None = None
-    if project_dir != exact_dir:
-        # Using a fallback (e.g. repo-root) dir — filter by agent creation time
+    if is_fallback:
+        # Live agent in fallback dir — filter by agent creation time (best-effort)
         created_at = entry.get("created_at")
         if created_at:
             try:
-                from datetime import datetime, timezone
+                from datetime import datetime
                 dt = datetime.fromisoformat(created_at)
                 since = dt.timestamp()
             except Exception:
