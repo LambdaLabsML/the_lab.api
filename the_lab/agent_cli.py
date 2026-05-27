@@ -479,89 +479,132 @@ def main():
         import os as _os
         _os.close(_slave_fd)  # parent doesn't need the slave end
 
-        # Strip ANSI/VT100 escape sequences before logging.
-        # Covers the full ANSI/VT100/xterm/kitty repertoire:
-        #   OSC  \x1b] ... BEL/ST
-        #   CSI  \x1b[ [parameter-bytes]* [intermediate-bytes]* final-byte
-        #        parameter bytes: 0x30-0x3F  (0-9 ; < = > ?)
-        #        intermediate bytes: 0x20-0x2F  (space ! " # $ % & ' ( ) * + , - . /)
-        #        final byte: 0x40-0x7E  (@ A-Z [ \ ] ^ _ ` a-z { | } ~)
-        #   DCS  \x1bP ... ST
-        #   PM   \x1bX ... ST
-        #   SOS  \x1bX ... ST
-        #   APC  \x1b_ ... ST
-        #   Single-char Fe sequences: \x1b followed by 0x40-0x5F (not [)
-        #   2-char sequences: \x1b followed by any single non-[ char
-        #   Also strip bare \x07 (BEL), \x08 (BS), \x0f/\x0e (SI/SO)
-        _ANSI_RE = _re.compile(
-            r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"          # OSC
-            r"|\x1b[PX_^][^\x1b]*(?:\x1b\\|\x07)"          # DCS/SOS/APC/PM
-            r"|\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]"  # CSI (full spec, incl. private params < > ? =)
-            r"|\x1b[^\x1b\[]"                               # other 2-char Fe sequences (incl. \x1b7 DECSC)
-            r"|[\x07\x08\x0e\x0f]"                          # BEL, BS, SO, SI
-            r"|\r"                                           # carriage return
-        )
-        # Spinner characters Claude Code uses for the "Orbiting…" animation
-        _SPINNER_RE = _re.compile(r"^[✢✶✻✽·\*⠂⠐⠠⠄⠁⠈⠊⠘⠸⢀⡀⣀⠿◐◓◑◒ ]+$")
+        # ── Virtual terminal approach ────────────────────────────────────────
+        # Claude Code's TUI uses absolute cursor positioning (CUP/CHA/etc.) to
+        # build a full-screen interface, not just \r overwrites.  Stripping
+        # ANSI codes from the raw byte stream produces garbled fragments like
+        # "ragl", "Wn201", "60ought for 1s)" because text from different cursor
+        # positions on the same visual row gets concatenated.
+        #
+        # Instead we feed all PTY bytes into a pyte virtual screen (a proper
+        # VT100/xterm emulator).  A background timer samples the screen every
+        # second: any row whose visible text changed since the last sample and
+        # passes content filters gets logged with its current content.
+        #
+        # Fallback: if pyte is not installed we log nothing (raw PTY is still
+        # forwarded to stdout for interactive use).
+        try:
+            import pyte as _pyte
+            _PYTE_AVAILABLE = True
+        except ImportError:
+            _PYTE_AVAILABLE = False
 
-        # UI noise lines to suppress:
-        # • Lines starting with spinner/animation chars (✢✶✻✽ etc.)
-        # • Terminal header bars using Unicode block elements (▐▛███▜▌)
-        # • Permission/mode prompt lines (⏵⏵, ◐, ❯)
-        # • Token/timing fragments: "(Xs · thinking…)", "↓ N tokens"
-        # • Progress status with tokens mid-line
-        _SPINNER_CHARS = "✢✶✻✽·⏵◐◑◒◓❯▐▝▘▜▛▟▙█▌▍▎▏"
+        # UI-noise filter: suppress spinner/progress/chrome rows.
         _UI_NOISE_RE = _re.compile(
-            r"^[✢✶✻✽·]"                              # spinner prefix
-            r"|^[▐▝▘▜▛▟▙█▌▍▎▏]"                      # block-element header bars
-            r"|^[⏵❯◐◑◒◓]"                             # permission/effort/prompt
-            r"|^\(\d+s\s*[·•]"                        # "(Xs · thinking…)" fragment
-            r"|^↓\s*\d+\s*tokens"                     # "↓ N tokens" fragment
-            r"|^↑\s*\d+\s*[·•]"                       # "↑N · thinking" fragment
-            r"|·\s*thinking\s+with"                   # mid-line thinking status
-            r"|thought\s+for\s+\d+s"                  # "thought for Xs"
+            r"^[✢✶✻✽·⠂⠐⠠⠄⠁⠈⠊⠘⠸⢀⡀⣀⠿◐◓◑◒]"    # spinner prefix chars
+            r"|^[▐▝▘▜▛▟▙█▌▍▎▏]"                  # block-element header bars
+            r"|^[⏵❯]"                              # permission / prompt indicators
+            r"|^\s*◐"                              # effort indicator (◐medium·/effort)
+            r"|^\s*\(\d+s\s*[·•·]"               # "(Xs · thinking…)" fragment
+            r"|^\s*\d+s\s*[·•·]"                  # "10s · ↑ 268 tokens" fragment
+            r"|^\s*↓\s*\d"                         # "↓ N tokens…"
+            r"|^\s*↑\s*\d"                         # "↑ N ·…"
+            r"|·\s*thinking\s+with"                # mid-line thinking status
+            r"|thought\s+for\s+\d+s"               # "thought for Xs"
+            r"|bypass\s+permissions"               # permission prompt text
+            r"|shift\+tab\s+to\s+cycle"            # keybinding hint
         )
+        # Box-drawing-only rows
+        _BOX_RE = _re.compile(r"^[─━═╌┄┈╴╸╼╾│┃╎╏┊┋╷╹╻ ]+$")
 
-        def _best_segment(raw_line: bytes) -> str:
-            """Return the best loggable text from a raw PTY line.
-
-            A PTY line may contain multiple \\r-overwritten versions of the same
-            visual line (spinner animation updates).  Only the *last* non-empty
-            segment after \\r splits is meaningful; earlier segments are stale
-            overwrites.  Strip ANSI codes and return the cleaned last segment,
-            or '' if nothing meaningful remains.
-            """
-            # Split on \r to get overwrite segments; last non-empty wins
-            segments = raw_line.split(b"\r")
-            for seg in reversed(segments):
-                text = seg.decode(errors="replace")
-                clean = _ANSI_RE.sub("", text).strip()
-                if clean:
-                    return clean
-            return ""
-
-        def _should_log(clean: str) -> bool:
-            """True if the cleaned line is worth writing to the log."""
-            if not clean:
+        def _should_log_row(text: str) -> bool:
+            t = text.strip()
+            if not t or len(t) < 4:
                 return False
-            # Too short — escape remnant or single stray char
-            if len(clean) < 4:
+            if _BOX_RE.match(t):
                 return False
-            # Pure spinner animation frame (only spinner chars on the line)
-            if _SPINNER_RE.match(clean):
-                return False
-            # Box-drawing separator line
-            if _re.match(r"^[─━═╌┄┈╴╸╼╾│┃╎╏┊┋╷╹╻ ]+$", clean):
-                return False
-            # UI status/header/progress line
-            if _UI_NOISE_RE.search(clean):
+            if _UI_NOISE_RE.search(t):
                 return False
             return True
 
         def _pty_relay():
-            """Read from PTY master, forward raw bytes to terminal, write
-            cleaned+timestamped meaningful lines to the log file."""
-            buf = b""
+            """Read PTY master bytes; forward raw to terminal; log via pyte screen."""
+            if not _log_file:
+                # No log target — just drain so the process doesn't block.
+                while True:
+                    try:
+                        r, _, _ = _select.select([_master_fd], [], [], 0.1)
+                    except (ValueError, OSError):
+                        break
+                    if not r:
+                        if proc.poll() is not None:
+                            break
+                        continue
+                    try:
+                        chunk = _os.read(_master_fd, 4096)
+                    except OSError:
+                        break
+                    if not chunk:
+                        break
+                    try:
+                        sys.stdout.buffer.write(chunk)
+                        sys.stdout.buffer.flush()
+                    except Exception:
+                        pass
+                return
+
+            if not _PYTE_AVAILABLE:
+                # pyte not installed — forward to terminal only, no log content.
+                while True:
+                    try:
+                        r, _, _ = _select.select([_master_fd], [], [], 0.1)
+                    except (ValueError, OSError):
+                        break
+                    if not r:
+                        if proc.poll() is not None:
+                            break
+                        continue
+                    try:
+                        chunk = _os.read(_master_fd, 4096)
+                    except OSError:
+                        break
+                    if not chunk:
+                        break
+                    try:
+                        sys.stdout.buffer.write(chunk)
+                        sys.stdout.buffer.flush()
+                    except Exception:
+                        pass
+                return
+
+            # ── pyte virtual screen ──────────────────────────────────────────
+            _COLS, _ROWS = 220, 50
+            _screen = _pyte.Screen(_COLS, _ROWS)
+            _stream = _pyte.ByteStream(_screen)
+            # prev_rows: last-logged text per row index
+            _prev: dict[int, str] = {}
+            _last_sample = _dt.datetime.now(_dt.timezone.utc)
+            _SAMPLE_INTERVAL = 1.0  # seconds between screen samples
+
+            def _sample_screen():
+                """Diff the virtual screen against prev state; log changed rows."""
+                nonlocal _last_sample
+                _last_sample = _dt.datetime.now(_dt.timezone.utc)
+                ts = _last_sample.strftime("%H:%M:%S")
+                for idx, row in enumerate(_screen.display):
+                    text = row.rstrip()
+                    if not text:
+                        continue
+                    if text == _prev.get(idx):
+                        continue  # unchanged since last sample
+                    _prev[idx] = text
+                    if _should_log_row(text):
+                        try:
+                            _log_file.write(f"[{ts}] {text}\n")
+                            _log_file.flush()
+                        except Exception:
+                            pass
+
             while True:
                 try:
                     r, _, _ = _select.select([_master_fd], [], [], 0.1)
@@ -570,6 +613,10 @@ def main():
                 if not r:
                     if proc.poll() is not None:
                         break
+                    # Idle tick — sample if interval elapsed
+                    now = _dt.datetime.now(_dt.timezone.utc)
+                    if (now - _last_sample).total_seconds() >= _SAMPLE_INTERVAL:
+                        _sample_screen()
                     continue
                 try:
                     chunk = _os.read(_master_fd, 4096)
@@ -583,38 +630,17 @@ def main():
                     sys.stdout.buffer.flush()
                 except Exception:
                     pass
-                if not _log_file:
-                    continue
-                # Accumulate bytes; only split on real newlines (\n).
-                # \r within a line is a spinner-overwrite — handled by
-                # _best_segment which picks the last \r-delimited segment.
-                # \r\n is normalised to \n first.
-                buf += chunk
-                buf = buf.replace(b"\r\n", b"\n")
-                # Cap buf to avoid unbounded growth during long spinner loops
-                if len(buf) > 65536:
-                    buf = buf[-32768:]
-                parts = buf.split(b"\n")
-                buf = parts[-1]   # last incomplete line kept for next chunk
-                for raw_line in parts[:-1]:
-                    clean = _best_segment(raw_line)
-                    if not _should_log(clean):
-                        continue
-                    ts = _dt.datetime.now(_dt.timezone.utc).strftime("%H:%M:%S")
-                    try:
-                        _log_file.write(f"[{ts}] {clean}\n")
-                        _log_file.flush()
-                    except Exception:
-                        pass
-            # Flush any remaining buffer
-            if _log_file and buf:
-                clean = _best_segment(buf)
-                if _should_log(clean):
-                    ts = _dt.datetime.now(_dt.timezone.utc).strftime("%H:%M:%S")
-                    try:
-                        _log_file.write(f"[{ts}] {clean}\n")
-                    except Exception:
-                        pass
+                # Feed bytes to virtual screen
+                try:
+                    _stream.feed(chunk)
+                except Exception:
+                    pass
+                # Sample on interval
+                now = _dt.datetime.now(_dt.timezone.utc)
+                if (now - _last_sample).total_seconds() >= _SAMPLE_INTERVAL:
+                    _sample_screen()
+            # Final sample after process exits
+            _sample_screen()
 
         _t_relay = _threading.Thread(target=_pty_relay, daemon=True)
         _t_relay.start()
