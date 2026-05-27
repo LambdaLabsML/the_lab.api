@@ -96,3 +96,9 @@ export const totalAgentCost = signal<number | null>(null);
 
 /** Total tokens (input+output) across all past + live agents seen so far. */
 export const totalAgentTokens = signal<number | null>(null);
+
+/** Total input (prompt) tokens consumed across all agents. */
+export const totalAgentInputTokens = signal<number | null>(null);
+
+/** Total output (completion) tokens generated across all agents. */
+export const totalAgentOutputTokens = signal<number | null>(null);

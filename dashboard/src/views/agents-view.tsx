@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { listAgents, unregisterAgent } from "../state/api";
 import type { AgentEntry } from "../lib/types";
-import { totalAgentCost, totalAgentTokens } from "../state/signals";
+import { totalAgentCost, totalAgentTokens, totalAgentInputTokens, totalAgentOutputTokens } from "../state/signals";
 
 // ── History / cost lightbox ───────────────────────────────────────────────────
 
@@ -345,6 +345,8 @@ export function AgentsView() {
   const [pastAgents, setPastAgents] = useState<PastAgent[]>([]);
   const [costByAgent, setCostByAgent] = useState<Record<string, number>>({});
   const [tokensByAgent, setTokensByAgent] = useState<Record<string, number>>({});
+  const [inputTokByAgent, setInputTokByAgent] = useState<Record<string, number>>({});
+  const [outputTokByAgent, setOutputTokByAgent] = useState<Record<string, number>>({});
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -369,18 +371,21 @@ export function AgentsView() {
     );
     const costUpd: Record<string, number> = {};
     const tokUpd: Record<string, number> = {};
+    const inTokUpd: Record<string, number> = {};
+    const outTokUpd: Record<string, number> = {};
     results.forEach((r, i) => {
       if (r.status === "fulfilled" && r.value?.totals) {
         const t = r.value.totals;
         if (t.cost_usd != null) costUpd[toFetch[i]] = t.cost_usd;
-        const tok = (t.input_tokens || 0) + (t.output_tokens || 0);
-        if (tok > 0) tokUpd[toFetch[i]] = tok;
+        const inT = t.input_tokens || 0;
+        const outT = t.output_tokens || 0;
+        const tok = inT + outT;
+        if (tok > 0) { tokUpd[toFetch[i]] = tok; inTokUpd[toFetch[i]] = inT; outTokUpd[toFetch[i]] = outT; }
       }
     });
     if (Object.keys(costUpd).length > 0) {
       setCostByAgent((prev) => {
         const next = { ...prev, ...costUpd };
-        // Update global signal
         totalAgentCost.value = Object.values(next).reduce((s, v) => s + v, 0);
         return next;
       });
@@ -389,6 +394,16 @@ export function AgentsView() {
       setTokensByAgent((prev) => {
         const next = { ...prev, ...tokUpd };
         totalAgentTokens.value = Object.values(next).reduce((s, v) => s + v, 0);
+        return next;
+      });
+      setInputTokByAgent((prev) => {
+        const next = { ...prev, ...inTokUpd };
+        totalAgentInputTokens.value = Object.values(next).reduce((s, v) => s + v, 0);
+        return next;
+      });
+      setOutputTokByAgent((prev) => {
+        const next = { ...prev, ...outTokUpd };
+        totalAgentOutputTokens.value = Object.values(next).reduce((s, v) => s + v, 0);
         return next;
       });
     }

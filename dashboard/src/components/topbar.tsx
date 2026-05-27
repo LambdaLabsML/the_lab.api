@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "preact/hooks";
-import { backlogData, totalAgentCost, totalAgentTokens } from "../state/signals";
+import { backlogData, totalAgentCost, totalAgentInputTokens, totalAgentOutputTokens } from "../state/signals";
 import { reverseTime, colorMode, colorTheme, fontFamily, fontSize } from "../state/settings";
 import { wsConnected, wsAuthFailed } from "../state/ws";
 // Font display data lives here — NOT imported from fonts.ts.
@@ -73,7 +73,21 @@ export function Topbar(props: LayoutActions) {
   const activeFontSz = fontSize.value;
 
   const cost = totalAgentCost.value;
-  const tokens = totalAgentTokens.value;
+  const inTok = totalAgentInputTokens.value;
+  const outTok = totalAgentOutputTokens.value;
+
+  function fmtTok(n: number): string {
+    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+    if (n >= 1_000) return `${Math.round(n / 1_000)}K`;
+    return String(n);
+  }
+
+  const tokLabel = (inTok != null && outTok != null)
+    ? `↓${fmtTok(inTok)} ↑${fmtTok(outTok)}`
+    : "--";
+  const tokTitle = (inTok != null && outTok != null)
+    ? `Input (consumed): ${inTok.toLocaleString()} · Output (generated): ${outTok.toLocaleString()}`
+    : undefined;
 
   // Build the stats array once so it's shared between compact and full renders
   const stats = [
@@ -81,8 +95,8 @@ export function Topbar(props: LayoutActions) {
     { key: "running", label: "Running", value: data ? String(data.total_running) : "--" },
     { key: "pending", label: "Pending", value: data ? String(data.total_pending) : "--" },
     { key: "branch",  label: "Branch",  value: data ? data.current_branch : "--" },
-    { key: "cost",    label: "Cost",    value: cost != null ? `$${cost.toFixed(2)}` : "--",
-      title: tokens != null ? `${(tokens / 1000).toFixed(0)}K tokens` : undefined },
+    { key: "cost",    label: "Cost",    value: cost != null ? `$${cost.toFixed(2)}` : "--" },
+    { key: "tokens",  label: "Tokens",  value: tokLabel, title: tokTitle },
   ];
 
   // Detect overflow: switch to cycling mode when topbar is narrow
