@@ -451,52 +451,87 @@ def main():
         import threading as _threading
         import datetime as _dt
 
-        # Write timestamped output to .the_lab/agents/<id>/output.log so the
-        # dashboard can display a scrollable, time-indexed session transcript.
+        # Write timestamped output to .the_lab/agents/<id>/output.log.
+        # We use a PTY (pseudo-terminal) so the agent process gets a real TTY
+        # for its interactive UI, while we intercept bytes on the master side
+        # to tee them to the log file with timestamps.
+        import pty as _pty
+        import select as _select
+        import re as _re
+        import datetime as _dt
+
         _log_path: Path | None = None
+        _log_file = None
         if agent_worktree:
             _log_dir = agent_worktree / ".the_lab" / "agents" / agent_id
             _log_dir.mkdir(parents=True, exist_ok=True)
             _log_path = _log_dir / "output.log"
+            _log_file = open(_log_path, "w", encoding="utf-8")
 
-        def _tee_stream(src, dst_raw, log_file):
-            """Copy src → dst_raw (terminal) and log_file with timestamps."""
-            for raw_line in src:
-                ts = _dt.datetime.now(_dt.timezone.utc).strftime("%H:%M:%S")
-                try:
-                    dst_raw.buffer.write(raw_line)
-                    dst_raw.buffer.flush()
-                except Exception:
-                    pass
-                if log_file:
-                    try:
-                        text = raw_line.decode(errors="replace")
-                        # Strip ANSI escape codes for the log file
-                        import re as _re
-                        clean = _re.sub(r"\x1b\[[0-9;]*[mABCDEFGHJKSTfnsu]", "", text)
-                        if clean.strip():
-                            log_file.write(f"[{ts}] {clean}")
-                        else:
-                            log_file.write(clean)
-                        log_file.flush()
-                    except Exception:
-                        pass
-
-        _log_file = open(_log_path, "w", encoding="utf-8") if _log_path else None
+        # Create a PTY pair — slave becomes the agent's stdin/stdout/stderr,
+        # master is our read end for logging.
+        _master_fd, _slave_fd = _pty.openpty()
 
         proc = _sp.Popen(
             cmd, env=env, cwd=run_cwd,
-            stdout=_sp.PIPE, stderr=_sp.PIPE,
+            stdin=_slave_fd, stdout=_slave_fd, stderr=_slave_fd,
         )
+        import os as _os
+        _os.close(_slave_fd)  # parent doesn't need the slave end
 
-        _t_out = _threading.Thread(
-            target=_tee_stream, args=(proc.stdout, sys.stdout, _log_file), daemon=True
-        )
-        _t_err = _threading.Thread(
-            target=_tee_stream, args=(proc.stderr, sys.stderr, _log_file), daemon=True
-        )
-        _t_out.start()
-        _t_err.start()
+        _ANSI_RE = _re.compile(r"\x1b\[[0-9;]*[mABCDEFGHJKSTfnsulh]|\x1b[()=]|\r")
+
+        def _pty_relay():
+            """Read from PTY master, write raw to terminal stdout, write
+            cleaned+timestamped lines to the log file."""
+            buf = b""
+            while True:
+                try:
+                    r, _, _ = _select.select([_master_fd], [], [], 0.1)
+                except (ValueError, OSError):
+                    break
+                if not r:
+                    if proc.poll() is not None:
+                        break
+                    continue
+                try:
+                    chunk = _os.read(_master_fd, 4096)
+                except OSError:
+                    break
+                if not chunk:
+                    break
+                # Forward raw bytes to terminal (preserves colours/UI)
+                try:
+                    sys.stdout.buffer.write(chunk)
+                    sys.stdout.buffer.flush()
+                except Exception:
+                    pass
+                # Log cleaned lines with timestamps
+                if _log_file:
+                    buf += chunk
+                    while b"\n" in buf:
+                        line, buf = buf.split(b"\n", 1)
+                        text = line.decode(errors="replace")
+                        clean = _ANSI_RE.sub("", text).rstrip()
+                        if clean:
+                            ts = _dt.datetime.now(_dt.timezone.utc).strftime("%H:%M:%S")
+                            try:
+                                _log_file.write(f"[{ts}] {clean}\n")
+                                _log_file.flush()
+                            except Exception:
+                                pass
+            # Flush any remaining buffer
+            if _log_file and buf:
+                text = _ANSI_RE.sub("", buf.decode(errors="replace")).rstrip()
+                if text:
+                    ts = _dt.datetime.now(_dt.timezone.utc).strftime("%H:%M:%S")
+                    try:
+                        _log_file.write(f"[{ts}] {text}\n")
+                    except Exception:
+                        pass
+
+        _t_relay = _threading.Thread(target=_pty_relay, daemon=True)
+        _t_relay.start()
 
         forwarded = {"sig": None}
 
@@ -515,9 +550,12 @@ def main():
 
         try:
             rc = proc.wait()
-            _t_out.join(timeout=2)
-            _t_err.join(timeout=2)
+            _t_relay.join(timeout=3)
         finally:
+            try:
+                _os.close(_master_fd)
+            except OSError:
+                pass
             if _log_file:
                 _log_file.close()
             try:
