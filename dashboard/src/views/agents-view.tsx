@@ -229,6 +229,7 @@ interface PastAgent {
 export function AgentsView() {
   const [agents, setAgents] = useState<AgentEntry[]>([]);
   const [pastAgents, setPastAgents] = useState<PastAgent[]>([]);
+  const [costByAgent, setCostByAgent] = useState<Record<string, number>>({});
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -238,6 +239,29 @@ export function AgentsView() {
   const [, setTick] = useState(0);
 
   const cancelledRef = useRef(false);
+  const costFetchedRef = useRef<Set<string>>(new Set());
+
+  async function fetchCostsForAgents(agentIds: string[]) {
+    const toFetch = agentIds.filter((id) => !costFetchedRef.current.has(id));
+    if (!toFetch.length) return;
+    toFetch.forEach((id) => costFetchedRef.current.add(id));
+    const results = await Promise.allSettled(
+      toFetch.map((id) =>
+        fetch(`/api/v1/agents/${id}/history`)
+          .then((r) => (r.ok ? r.json() : null))
+          .catch(() => null)
+      )
+    );
+    const updates: Record<string, number> = {};
+    results.forEach((r, i) => {
+      if (r.status === "fulfilled" && r.value?.totals?.cost_usd != null) {
+        updates[toFetch[i]] = r.value.totals.cost_usd;
+      }
+    });
+    if (Object.keys(updates).length > 0) {
+      setCostByAgent((prev) => ({ ...prev, ...updates }));
+    }
+  }
 
   async function refresh(): Promise<AgentEntry[] | null> {
     try {
@@ -250,6 +274,9 @@ export function AgentsView() {
       setPastAgents(past);
       setError(null);
       setLoaded(true);
+      // Fetch costs for past agents in the background
+      const allIds = [...past.map((a: PastAgent) => a.agent_id), ...list.map((a) => a.agent_id)];
+      fetchCostsForAgents(allIds);
       return list;
     } catch (err) {
       if (cancelledRef.current) return null;
@@ -410,6 +437,15 @@ export function AgentsView() {
                   </div>
                 </div>
 
+                {costByAgent[agent.agent_id] != null && (
+                  <div class="agents-card-row">
+                    <div class="agents-card-label">Cost so far</div>
+                    <div class="agents-card-value" style={{ color: "var(--accent)", fontWeight: 600 }}>
+                      ${costByAgent[agent.agent_id].toFixed(3)}
+                    </div>
+                  </div>
+                )}
+
                 <div class="agents-card-actions">
                   <button
                     class="agents-btn"
@@ -465,6 +501,13 @@ export function AgentsView() {
                 <span style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", whiteSpace: "nowrap" }}>
                   {a.completed_at ? relativeTime(a.completed_at) : "—"}
                 </span>
+                {costByAgent[a.agent_id] != null ? (
+                  <span style={{ fontSize: "var(--text-xs)", color: "var(--accent)", fontWeight: 600, whiteSpace: "nowrap", minWidth: 52, textAlign: "right" }}>
+                    ${costByAgent[a.agent_id].toFixed(3)}
+                  </span>
+                ) : (
+                  <span style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", minWidth: 52, textAlign: "right" }}>—</span>
+                )}
                 <button
                   class="agents-btn"
                   onClick={() => setHistoryAgentId(a.agent_id)}

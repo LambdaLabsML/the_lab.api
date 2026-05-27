@@ -39,6 +39,7 @@ def _build_launch_command(
     mcp_config: str | None = None,
     mcp_path: str | None = None,
     sandboxed: bool = False,
+    extra_agent_args: list[str] | None = None,
 ) -> list[str]:
     """Build the agent launch command.
 
@@ -50,6 +51,9 @@ def _build_launch_command(
     sandboxed:  (unused — kept for API compat) sandbox_guest now creates a nested
                 user namespace so getuid() returns non-zero and
                 --dangerously-skip-permissions is accepted.
+    extra_agent_args: additional flags forwarded verbatim to the agent binary,
+                inserted before the ``--`` / prompt separator so they are
+                parsed by the agent itself.  Example: ``['--resume', '<id>']``.
     """
     if agent == "claude":
         cmd = [agent_bin]
@@ -57,6 +61,8 @@ def _build_launch_command(
             cmd.append("--dangerously-skip-permissions")
         if model:
             cmd.extend(["--model", model])
+        if extra_agent_args:
+            cmd.extend(extra_agent_args)
         if mcp_config:
             import tempfile
             if mcp_path is None:
@@ -70,6 +76,8 @@ def _build_launch_command(
     cmd = [agent_bin, "--yolo"]
     if model:
         cmd.extend(["--model", model])
+    if extra_agent_args:
+        cmd.extend(extra_agent_args)
     cmd.append(loop_prompt)
     return cmd
 
@@ -150,7 +158,7 @@ def main():
              "worktree (legacy behaviour). Default is isolated mode: a fresh "
              "worktree is created and removed automatically around the run.",
     )
-    args = parser.parse_args()
+    args, extra_agent_args = parser.parse_known_args()
 
     # --list-roles: handle and exit before any agent setup.
     if args.list_roles:
@@ -369,6 +377,7 @@ def main():
         mcp_config=mcp_config,
         mcp_path=mcp_path_in_sandbox,  # None when not sandboxed → writes to /tmp itself
         sandboxed=bool(sandbox_mode),
+        extra_agent_args=extra_agent_args or None,
     )
 
     env = dict(os.environ)
@@ -434,7 +443,7 @@ def main():
             sys.exit(1)
         cmd = build_sandbox_command(
             repo_root, args.agent, prompt_path.name, cmd,
-            cwd=os.getcwd(),
+            cwd=str(agent_worktree) if agent_worktree else os.getcwd(),
             extra_bwrap_args=extra_bwrap or None,
         )
 
