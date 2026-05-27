@@ -94,6 +94,35 @@ export function StatsView() {
         <span class="stats-total">{stats.total_calls.toLocaleString()} total calls</span>
       </div>
 
+      {/* Response size table */}
+      {stats.response_sizes && stats.response_sizes.length > 0 && (
+        <div class="stats-card" style={{ marginBottom: "var(--space-3)", flexShrink: 0 }}>
+          <div class="stats-card-title">Response sizes · MCP calls only (KB)</div>
+          <div class="stats-card-body" style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "var(--text-sm)", fontFamily: "var(--font-mono)" }}>
+              <thead>
+                <tr>
+                  {["endpoint", "calls", "total KB", "avg KB", "max KB"].map((h) => (
+                    <th key={h} style={{ textAlign: h === "endpoint" ? "left" : "right", color: "var(--text-muted)", padding: "2px 8px", borderBottom: "1px solid var(--border-soft)", fontWeight: 600 }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {stats.response_sizes.slice(0, 20).map((r) => (
+                  <tr key={r.endpoint} style={{ borderBottom: "1px solid var(--border-soft)" }}>
+                    <td style={{ padding: "3px 8px", color: "var(--text)", maxWidth: 320, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.endpoint.replace(/^(GET|POST|PUT|PATCH|DELETE) /, "")}</td>
+                    <td style={{ padding: "3px 8px", textAlign: "right", color: "var(--text-muted)" }}>{r.calls}</td>
+                    <td style={{ padding: "3px 8px", textAlign: "right", color: r.total_kb > 1000 ? "var(--red)" : r.total_kb > 100 ? "var(--yellow)" : "var(--text)" }}>{r.total_kb.toLocaleString()}</td>
+                    <td style={{ padding: "3px 8px", textAlign: "right", color: r.avg_kb > 20 ? "var(--yellow)" : "var(--text-muted)" }}>{r.avg_kb}</td>
+                    <td style={{ padding: "3px 8px", textAlign: "right", color: "var(--text-muted)" }}>{r.max_kb}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       <div class="stats-columns">
         {/* Left: patterns list */}
         <div class="stats-card">

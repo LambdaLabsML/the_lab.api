@@ -37,6 +37,11 @@ class ApiStats:
         self._patterns: dict[int, dict[str, int]] = {
             n: defaultdict(int) for n in range(2, MAX_NGRAM + 1)
         }
+        # Per-endpoint response size tracking: total_bytes and call count
+        # (for computing avg). Keyed by normalized path.
+        self._resp_bytes_total: dict[str, int] = defaultdict(int)
+        self._resp_bytes_count: dict[str, int] = defaultdict(int)
+        self._resp_bytes_max: dict[str, int] = defaultdict(int)
         # Sliding window of recent calls per client for n-gram extraction
         self._history: dict[str, deque[str]] = {}
         # Recent call log (ring buffer)
@@ -52,12 +57,24 @@ class ApiStats:
                 self._calls = defaultdict(int, data.get("calls", {}))
                 for n in range(2, MAX_NGRAM + 1):
                     stored = data.get(f"patterns_{n}", {})
-                    # Backwards compat: old "patterns" key is bigrams
                     if n == 2 and not stored:
                         stored = data.get("patterns", {})
                     self._patterns[n] = defaultdict(int, stored)
+                self._resp_bytes_total = defaultdict(int, data.get("resp_bytes_total", {}))
+                self._resp_bytes_count = defaultdict(int, data.get("resp_bytes_count", {}))
+                self._resp_bytes_max   = defaultdict(int, data.get("resp_bytes_max", {}))
             except (json.JSONDecodeError, OSError):
                 pass
+
+    def record_response_size(self, method: str, path: str, size_bytes: int) -> None:
+        """Track response size for an endpoint (call after the full response is built)."""
+        key = f"{method} {normalize_path(path)}"
+        with self._lock:
+            self._resp_bytes_total[key] += size_bytes
+            self._resp_bytes_count[key] += 1
+            if size_bytes > self._resp_bytes_max[key]:
+                self._resp_bytes_max[key] = size_bytes
+            self._dirty = True
 
     def flush(self):
         """Write stats to disk."""
@@ -67,6 +84,9 @@ class ApiStats:
             data: dict = {"calls": dict(self._calls)}
             for n in range(2, MAX_NGRAM + 1):
                 data[f"patterns_{n}"] = dict(self._patterns[n])
+            data["resp_bytes_total"] = dict(self._resp_bytes_total)
+            data["resp_bytes_count"] = dict(self._resp_bytes_count)
+            data["resp_bytes_max"]   = dict(self._resp_bytes_max)
             self._dirty = False
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
@@ -116,13 +136,32 @@ class ApiStats:
         with self._lock:
             calls = dict(self._calls)
             patterns = dict(self._patterns.get(n, {}))
+            rb_total = dict(self._resp_bytes_total)
+            rb_count = dict(self._resp_bytes_count)
+            rb_max   = dict(self._resp_bytes_max)
         sorted_calls = sorted(calls.items(), key=lambda x: x[1], reverse=True)
         sorted_patterns = sorted(patterns.items(), key=lambda x: x[1], reverse=True)
         total = sum(calls.values())
         mcp_calls = sum(1 for r in self._recent if r.get("mcp"))
+
+        # Build response-size table — sort by total bytes descending
+        size_rows = []
+        for key in set(rb_total) | set(calls):
+            total_b = rb_total.get(key, 0)
+            count   = rb_count.get(key, 0)
+            size_rows.append({
+                "endpoint":    key,
+                "calls":       calls.get(key, 0),
+                "total_kb":    round(total_b / 1024, 1),
+                "avg_kb":      round(total_b / max(count, 1) / 1024, 1),
+                "max_kb":      round(rb_max.get(key, 0) / 1024, 1),
+            })
+        size_rows.sort(key=lambda r: r["total_kb"], reverse=True)
+
         result = {
             "calls": [{"endpoint": k, "count": v} for k, v in sorted_calls],
             "patterns": [{"sequence": k, "count": v} for k, v in sorted_patterns],
+            "response_sizes": size_rows,
             "pattern_length": n,
             "total_calls": total,
             "mcp_calls": mcp_calls,

@@ -321,7 +321,14 @@ async def inject_notifications(request, call_next):
         return Response(content=body, status_code=response.status_code,
                         headers=dict(response.headers), media_type=response.media_type)
     notifications = build_notifications(request)
+    is_mcp_req = request.headers.get("x-mcp-proxy") == "true"
+
+    def _track_size(final_body: bytes) -> None:
+        if is_mcp_req and response.status_code < 400:
+            api_stats.record_response_size(request.method, path, len(final_body))
+
     if not notifications:
+        _track_size(body)
         return Response(content=body, status_code=response.status_code,
                         headers=dict(response.headers), media_type=response.media_type)
     # Dict body → inline. List body → header-only signal.
@@ -330,13 +337,16 @@ async def inject_notifications(request, call_next):
         try:
             new_body = _json.dumps(data, allow_nan=True).encode()
         except (ValueError, TypeError):
+            _track_size(body)
             return Response(content=body, status_code=response.status_code,
                             headers=dict(response.headers), media_type=response.media_type)
+        _track_size(new_body)
         return Response(content=new_body, status_code=response.status_code,
                         media_type="application/json")
     headers = dict(response.headers)
     headers["X-Notifications-Count"] = str(len(notifications))
     headers.pop("content-length", None)  # body unchanged but defensive
+    _track_size(body)
     return Response(content=body, status_code=response.status_code,
                     headers=headers, media_type=response.media_type)
 

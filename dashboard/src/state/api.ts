@@ -179,6 +179,7 @@ export interface ApiStatsResponse {
   pattern_length: number;
   calls: { endpoint: string; count: number }[];
   patterns: { sequence: string; count: number }[];
+  response_sizes: { endpoint: string; calls: number; total_kb: number; avg_kb: number; max_kb: number }[];
 }
 
 /** GET /api/v1/stats */
