@@ -9,7 +9,9 @@
   gap: 16px;
   flex-shrink: 0;
   font-size: var(--text-base);
-  overflow: hidden;          /* no wrapping — we cycle instead */
+  /* overflow: hidden removed — it was clipping the Layouts dropdown.
+     Wrapping is prevented by flex-wrap:nowrap (default) + overflow:hidden
+     on .topbar-stats-area which contains the only variable-width content. */
   min-width: 0;
 }
 #topbar .title { font-size: var(--text-lg); font-weight: 700; color: var(--accent); flex-shrink: 0; }
