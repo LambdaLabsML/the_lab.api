@@ -16,11 +16,31 @@ MAX_NGRAM = 5
 
 # Normalize paths like /api/v1/ideas/42 or /experiments/408.11 → {id}
 _ID_RE = re.compile(r"/(\d+(?:\.\d+)?)(?=/|$)")
+# Normalize alphanumeric slug IDs after known collection endpoints
+# e.g. /agents/mkn23, /messages/abc12 → /agents/{id}, /messages/{id}
+# Excludes known literal sub-paths (register, log, tags, search, etc.)
+_LITERAL_SEGMENTS = frozenset({
+    "register", "log", "tags", "search", "pull", "start", "cancel",
+    "rerun", "done", "slurm_done", "timeseries", "compare", "analyze",
+    "read", "read_all", "batch", "rename", "new", "checkout", "conclude",
+    "abandon", "adopt", "note", "notes", "suggest",
+})
+_SLUG_RE = re.compile(
+    r"(/(agents|messages|experiments|ideas|tasks|runs|jobs))/([A-Za-z0-9][A-Za-z0-9_-]{1,40})(?=/|$)"
+)
 
 
 def normalize_path(path: str) -> str:
-    """Replace numeric path segments (including dotted labels) with {id} for grouping."""
-    return _ID_RE.sub("/{id}", path)
+    """Replace numeric and alphanumeric ID segments with {id} for grouping."""
+    path = _ID_RE.sub("/{id}", path)
+
+    def _replace_slug(m: re.Match) -> str:
+        if m.group(3) in _LITERAL_SEGMENTS:
+            return m.group(0)  # keep as-is
+        return m.group(1) + "/{id}"
+
+    path = _SLUG_RE.sub(_replace_slug, path)
+    return path
 
 
 MAX_HISTORY = 200  # recent calls to keep in memory
