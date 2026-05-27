@@ -610,31 +610,49 @@ def main():
             _ROWS, _COLS = _ws_rows, _ws_cols
             _screen = _pyte.Screen(_COLS, _ROWS)
             _stream = _pyte.ByteStream(_screen)
-            # prev_rows: last-logged text per row index
+            # prev_rows: last-seen text per row index (for change detection)
             _prev: dict[int, str] = {}
+            # Content-based dedup: text → epoch of last log write.
+            # Prevents the same line being re-logged when the screen is
+            # cleared and redrawn (e.g. \x1b[2J followed by the same content).
+            _logged_at: dict[str, float] = {}
+            _DEDUP_WINDOW = 30.0   # seconds before we allow re-logging the same text
             _last_sample = _dt.datetime.now(_dt.timezone.utc)
             _SAMPLE_INTERVAL = 1.0  # seconds between screen samples
 
             def _sample_screen():
                 """Diff the virtual screen against prev state; log changed rows."""
                 nonlocal _last_sample
-                _last_sample = _dt.datetime.now(_dt.timezone.utc)
-                ts = _last_sample.strftime("%H:%M:%S")
+                now = _dt.datetime.now(_dt.timezone.utc)
+                _last_sample = now
+                ts = now.strftime("%H:%M:%S")
+                epoch = now.timestamp()
                 for idx, row in enumerate(_screen.display):
                     text = row.rstrip()
                     if not text:
-                        # Row cleared — forget it so it can be re-logged if content returns
+                        # Row cleared — drop from prev so it's fresh if content returns
                         _prev.pop(idx, None)
                         continue
                     if text == _prev.get(idx):
-                        continue  # unchanged since last sample
+                        continue  # row unchanged since last sample
                     _prev[idx] = text
-                    if _should_log_row(text):
-                        try:
-                            _log_file.write(f"[{ts}] {text}\n")
-                            _log_file.flush()
-                        except Exception:
-                            pass
+                    if not _should_log_row(text):
+                        continue
+                    # Content-based dedup: skip if same text was logged recently
+                    last = _logged_at.get(text, 0.0)
+                    if epoch - last < _DEDUP_WINDOW:
+                        continue
+                    _logged_at[text] = epoch
+                    # Periodically purge stale dedup entries to bound memory
+                    if len(_logged_at) > 2000:
+                        cutoff = epoch - _DEDUP_WINDOW
+                        for k in [k for k, v in _logged_at.items() if v < cutoff]:
+                            del _logged_at[k]
+                    try:
+                        _log_file.write(f"[{ts}] {text}\n")
+                        _log_file.flush()
+                    except Exception:
+                        pass
 
             while True:
                 try:
@@ -676,6 +694,54 @@ def main():
         _t_relay = _threading.Thread(target=_pty_relay, daemon=True)
         _t_relay.start()
 
+        # ── stdin → PTY master relay ──────────────────────────────────────
+        # Without this, the subprocess never receives keyboard input.
+        # We set stdin to raw mode so every keypress (arrows, ctrl-*, etc.)
+        # is forwarded immediately rather than line-buffered.
+        import tty as _tty
+        _old_tty: list | None = None
+        try:
+            if sys.stdin.isatty():
+                _old_tty = _termios.tcgetattr(sys.stdin.fileno())
+                _tty.setraw(sys.stdin.fileno(), _termios.TCSANOW)
+        except Exception:
+            _old_tty = None
+
+        def _restore_tty():
+            if _old_tty is not None:
+                try:
+                    _termios.tcsetattr(
+                        sys.stdin.fileno(), _termios.TCSADRAIN, _old_tty
+                    )
+                except Exception:
+                    pass
+
+        def _stdin_relay():
+            """Forward raw stdin keystrokes to the PTY master."""
+            try:
+                while proc.poll() is None:
+                    try:
+                        r, _, _ = _select.select([sys.stdin.fileno()], [], [], 0.1)
+                    except (ValueError, OSError):
+                        break
+                    if not r:
+                        continue
+                    try:
+                        data = _os.read(sys.stdin.fileno(), 256)
+                    except OSError:
+                        break
+                    if not data:
+                        break
+                    try:
+                        _os.write(_master_fd, data)
+                    except OSError:
+                        break
+            finally:
+                pass  # TTY restored in the main finally block
+
+        _t_stdin = _threading.Thread(target=_stdin_relay, daemon=True)
+        _t_stdin.start()
+
         forwarded = {"sig": None}
 
         def _forward(signum, _frame):
@@ -715,12 +781,16 @@ def main():
             rc = proc.wait()
             _t_relay.join(timeout=3)
         finally:
+            # Restore terminal before anything else — must happen even on error
+            _restore_tty()
             try:
                 _os.close(_master_fd)
             except OSError:
                 pass
             if _log_file:
                 _log_file.close()
+            # Unregister — 404 is fine (agent may have already been unregistered
+            # manually from the dashboard; not an error worth reporting).
             try:
                 import urllib.request as _urlreq, base64 as _b64
                 _del_headers: dict[str, str] = {}
@@ -730,16 +800,20 @@ def main():
                     _del_headers["Authorization"] = "Basic " + _b64.b64encode(
                         f"{_lu}:{_lp}".encode()
                     ).decode()
-                _urlreq.urlopen(
+                _resp = _urlreq.urlopen(
                     _urlreq.Request(
                         f"http://localhost:{args.port}/api/v1/agents/{agent_id}",
                         method="DELETE", headers=_del_headers,
                     ),
                     timeout=10,
                 )
+                _resp.read()
             except Exception as e:
-                print(f"Warning: failed to unregister agent {agent_id}: {e}",
-                      file=sys.stderr)
+                # Suppress 404 — already unregistered is not an error
+                _err_str = str(e)
+                if "404" not in _err_str and "not registered" not in _err_str:
+                    print(f"Warning: failed to unregister agent {agent_id}: {e}",
+                          file=sys.stderr)
         sys.exit(rc)
 
     # Legacy / --no-isolated path: replace this process with the agent.
