@@ -358,28 +358,139 @@ def _get_idea_cacheable(idea_id: int, notes: str | None):
     return result
 
 
+_SLIM_EXP_KEEP = {
+    "id", "idea_id", "seq", "label", "description", "status",
+    "tags", "metrics", "error",
+    "runtime_seconds", "runtime", "has_output",
+    "created_at", "finished_at",
+}
+"""Fields kept in a slim experiment object.  The rest (meta, branch_diff,
+script, pid, queue_position, queued_at, started_at) are stripped — they are
+only relevant for infra debugging, not for an agent reading experiment results.
+A note inside ``meta`` that agents *do* care about — the model / think /
+max_tokens config — is promoted to a top-level ``config`` dict."""
+
+
+def _slim_experiment(exp: dict) -> dict:
+    """Strip infra-noise from an experiment object.
+
+    Keeps: id, label, description, status, tags, metrics, error, runtime,
+    has_output, created_at, finished_at.
+    Promotes useful meta keys (model, think, max_tokens, temperature,
+    drafter, quantization) to a ``config`` sub-dict.
+    """
+    out = {k: v for k, v in exp.items() if k in _SLIM_EXP_KEEP}
+    meta = exp.get("meta") or {}
+    config_keys = ("model", "think", "template", "max_tokens", "temperature",
+                   "drafter", "quantization", "kv_cache_dtype", "gpu_mem_util")
+    config = {k: meta[k] for k in config_keys if k in meta}
+    if config:
+        out["config"] = config
+    return out
+
+
 @router.get("/ideas/{idea_id}")
-def get_idea(idea_id: int, notes: str | None = None):
-    """Get full detail for a single idea, including its experiments and notes.
+def get_idea(
+    idea_id: int,
+    notes: str | None = Query(default=None, description="'all' includes debug-level notes"),
+    experiments: str = Query(
+        default="slim",
+        description=(
+            "How much experiment detail to include. "
+            "'slim' (default) — id/label/description/status/tags/metrics/config, "
+            "infra fields stripped. "
+            "'none' — no experiments array, just experiment_summary. "
+            "'full' — complete experiment objects (may be very large)."
+        ),
+    ),
+    notes_limit: int = Query(
+        default=10,
+        description="Max number of notes to return (most recent first). 0 = all.",
+    ),
+):
+    """Get detail for a single idea.
 
-    Returns the idea record with all associated experiments and journal notes.
-    Each experiment includes ``has_output`` reflecting the *current* presence
-    of its ``<script>.output.md`` file (checked on every call, since output
-    is written by the experiment script and isn't tracked by Store.version).
+    By default returns slim experiment objects (metrics + config, no slurm/infra
+    fields) and the 10 most recent notes.  Tune with query params:
 
-    By default, debug-level notes are excluded. Pass ``?notes=all`` to include
-    every note level (insight, milestone, observation, and debug).
+    - ``experiments=none``   — drop experiments array entirely (fastest, just
+      ``experiment_summary`` aggregate).
+    - ``experiments=slim``   — default: metrics + config, no infra noise.
+    - ``experiments=full``   — complete objects (may be 200 KB+ for busy ideas).
+    - ``notes=all``          — include debug-level notes (default excludes them).
+    - ``notes_limit=0``      — return all notes (default 10).
+
+    For the complete unfiltered response use ``GET /ideas/{id}/full``.
 
     Example:
-        GET /api/v1/ideas/1?notes=all
-        -> {"id": 1, "description": "...", "status": "active", "branch": "idea/1",
-            "experiments": [...], "notes": [...]}
+        GET /api/v1/ideas/1
+        GET /api/v1/ideas/1?experiments=none
+        GET /api/v1/ideas/1?experiments=full&notes=all&notes_limit=0
     """
     cached = _get_idea_cacheable(idea_id, notes)
     if cached is None:
         raise HTTPException(404, "idea not found")
-    # Build a copy with fresh has_output flags — must not mutate cached dicts
-    # (other callers share them).
+
+    # Ensure experiment_summary is always present (may be None if list_ideas
+    # was never called for this idea, since it mutates the store dict as a
+    # side effect).
+    def _ensure_summary(r: dict, exps: list) -> dict:
+        if r.get("experiment_summary") is None:
+            completed = [e for e in exps if e["status"] == "completed" and e.get("metrics")]
+            latest = max(completed, key=lambda e: e.get("finished_at", "")) if completed else None
+            return {**r, "experiment_summary": {
+                "total": len(exps),
+                "completed": len(completed),
+                "failed": sum(1 for e in exps if e["status"] == "failed"),
+                "running": sum(1 for e in exps if e["status"] == "running"),
+                "latest_metrics": latest["metrics"] if latest else None,
+                "latest_experiment_id": latest["id"] if latest else None,
+            }}
+        return r
+
+    all_exps = cached.get("experiments", [])
+
+    # Build experiment list according to requested detail level
+    if experiments == "none":
+        result = {k: v for k, v in cached.items() if k != "experiments"}
+        result = _ensure_summary(result, all_exps)
+    elif experiments == "full":
+        fresh_exps = [
+            {**exp, "has_output": _has_output_md(exp.get("script"))}
+            for exp in all_exps
+        ]
+        result = {**cached, "experiments": fresh_exps}
+        result = _ensure_summary(result, all_exps)
+    else:  # "slim" (default)
+        fresh_exps = [
+            _slim_experiment({**exp, "has_output": _has_output_md(exp.get("script"))})
+            for exp in all_exps
+        ]
+        result = {**cached, "experiments": fresh_exps}
+        result = _ensure_summary(result, all_exps)
+
+    # Cap notes list
+    if notes_limit > 0 and len(result.get("notes", [])) > notes_limit:
+        result = {**result, "notes": result["notes"][-notes_limit:]}
+
+    return result
+
+
+@router.get("/ideas/{idea_id}/full")
+def get_idea_full(idea_id: int, notes: str | None = None):
+    """Return the complete, unfiltered idea record — full experiment objects,
+    all notes, all infra metadata.
+
+    This is the equivalent of ``GET /ideas/{id}?experiments=full&notes_limit=0``
+    and is provided as a stable URL for cases where the caller explicitly wants
+    everything (e.g. diffing, archiving, full audit).
+
+    For normal agent use prefer ``GET /ideas/{id}`` (slim, default) or
+    ``GET /ideas/{id}?experiments=none`` (summary only).
+    """
+    cached = _get_idea_cacheable(idea_id, notes)
+    if cached is None:
+        raise HTTPException(404, "idea not found")
     fresh_exps = [
         {**exp, "has_output": _has_output_md(exp.get("script"))}
         for exp in cached.get("experiments", [])

@@ -611,11 +611,20 @@ class Store:
         """List all experiments across all ideas."""
         return list(self._experiments.values())
 
-    def search_ideas_by_keywords(self, keywords: list[str]) -> list[dict]:
+    def search_ideas_by_keywords(
+        self,
+        keywords: list[str],
+        include_experiments: bool = False,
+        notes_limit: int = 3,
+    ) -> list[dict]:
         """Search ideas by multiple keywords, ranked by descending relevance.
 
         Relevance = fraction of query keywords found in the idea description.
-        Each idea is returned with its experiments (including metrics).
+
+        By default returns slim idea objects: metadata + ``experiment_summary``
+        + the most recent ``notes_limit`` notes (insights/milestones).  Pass
+        ``include_experiments=True`` to attach full experiment arrays (can be
+        very large for busy ideas).
         """
         if not keywords:
             return []
@@ -634,9 +643,30 @@ class Store:
             relevance = matched / len(query_tokens)
 
             idea_copy = dict(idea)
-            # Attach experiments with metrics
             exps = self.list_experiments(idea["id"])
-            idea_copy["experiments"] = exps
+            if include_experiments:
+                idea_copy["experiments"] = exps
+            else:
+                idea_copy.pop("experiments", None)
+            # Always include a compact experiment_summary (computed freshly so
+            # it's always present regardless of whether list_ideas was called).
+            if "experiment_summary" not in idea_copy or idea_copy["experiment_summary"] is None:
+                completed = [e for e in exps if e["status"] == "completed" and e.get("metrics")]
+                latest = max(completed, key=lambda e: e.get("finished_at", "")) if completed else None
+                idea_copy["experiment_summary"] = {
+                    "total": len(exps),
+                    "completed": len(completed),
+                    "failed": sum(1 for e in exps if e["status"] == "failed"),
+                    "running": sum(1 for e in exps if e["status"] == "running"),
+                    "latest_metrics": latest["metrics"] if latest else None,
+                    "latest_experiment_id": latest["id"] if latest else None,
+                }
+            # Attach a small note excerpt (most recent insights/milestones)
+            all_notes = self.get_notes(idea["id"], levels=Store.DETAIL_LEVELS)
+            if notes_limit > 0:
+                idea_copy["notes"] = all_notes[-notes_limit:] if len(all_notes) > notes_limit else all_notes
+            else:
+                idea_copy["notes"] = all_notes
             idea_copy["relevance"] = round(relevance, 3)
             results.append(idea_copy)
 

@@ -289,6 +289,17 @@ def leaderboard_with_search(
     max_open_ideas: int = Query(default=10, description="Cap on the open_ideas list (most recently active first)"),
     max_progression: int = Query(default=8, description="Cap on the progression list (most recent improvements)"),
     max_search_results: int = Query(default=5, description="Cap on idea search_results when q is provided"),
+    search_notes_limit: int = Query(
+        default=3,
+        description="Max notes per search result (most-recent; 0 = all). "
+                    "Ignored when search_experiments=true.",
+    ),
+    search_experiments: bool = Query(
+        default=False,
+        description="Include full experiment arrays in search results. "
+                    "WARNING: can make the response very large (100 KB+). "
+                    "Default false — experiment_summary is always included.",
+    ),
     fields: str | None = Query(
         default=None,
         description="Comma-separated top-level field projection (e.g. 'leaderboard,best_idea,next_step'). "
@@ -302,9 +313,15 @@ def leaderboard_with_search(
     Use this endpoint to orient yourself in one call instead of calling
     /leaderboard and /ideas/search separately.
 
+    **Search results are slim by default** (no experiments array, 3 notes).
+    Each result includes ``experiment_summary`` with aggregate counts and best
+    score.  To get experiments use ``search_experiments=true`` (large response)
+    or call ``GET /ideas/{id}`` on the specific idea.
+
     Example:
         GET /api/v1/leaderboard/search?metric=score&sort=desc
         GET /api/v1/leaderboard/search?fields=leaderboard,best_idea
+        GET /api/v1/leaderboard/search?q=think&search_notes_limit=5
     """
     descending = sort.lower() != "asc"
     leaderboard = _build_leaderboard_response(
@@ -315,7 +332,11 @@ def leaderboard_with_search(
     if q.strip():
         keywords = [k.strip() for k in q.split(",") if k.strip()]
         searched_keywords = {k.lower() for k in keywords}
-        search_results = store.search_ideas_by_keywords(keywords)
+        search_results = store.search_ideas_by_keywords(
+            keywords,
+            include_experiments=search_experiments,
+            notes_limit=search_notes_limit,
+        )
         leaderboard["search_results_total"] = len(search_results)
         leaderboard["search_results"] = search_results[:max_search_results]
         leaderboard["search_query"] = q
