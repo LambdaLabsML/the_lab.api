@@ -11,6 +11,7 @@ interface HistorySession {
   input_tokens: number;
   output_tokens: number;
   cache_read_tokens: number;
+  cache_creation_tokens: number;
   cost_usd: number;
 }
 interface HistoryData {
@@ -21,6 +22,7 @@ interface HistoryData {
     input_tokens: number;
     output_tokens: number;
     cache_read_tokens: number;
+    cache_creation_tokens: number;
     cost_usd: number;
   };
 }
@@ -59,16 +61,27 @@ function AgentHistoryLightbox({ agentId, onClose }: { agentId: string; onClose: 
             <>
               {/* Totals bar */}
               <div style={{
-                display: "flex", gap: 24, flexWrap: "wrap",
+                display: "flex", gap: 20, flexWrap: "wrap",
                 padding: "10px 16px", borderBottom: "1px solid var(--border)",
                 background: "var(--bg-elev)",
               }}>
-                <div><span style={{ color: "var(--text-muted)", fontSize: "var(--text-xs)" }}>SESSIONS</span><br/><strong>{data.totals.sessions}</strong></div>
-                <div><span style={{ color: "var(--text-muted)", fontSize: "var(--text-xs)" }}>MESSAGES</span><br/><strong>{data.totals.message_count}</strong></div>
-                <div><span style={{ color: "var(--text-muted)", fontSize: "var(--text-xs)" }}>INPUT</span><br/><strong>{fmtK(data.totals.input_tokens)}</strong></div>
-                <div><span style={{ color: "var(--text-muted)", fontSize: "var(--text-xs)" }}>OUTPUT</span><br/><strong>{fmtK(data.totals.output_tokens)}</strong></div>
-                <div><span style={{ color: "var(--text-muted)", fontSize: "var(--text-xs)" }}>CACHE HIT</span><br/><strong>{fmtK(data.totals.cache_read_tokens)}</strong></div>
-                <div><span style={{ color: "var(--text-muted)", fontSize: "var(--text-xs)" }}>EST. COST</span><br/><strong style={{ color: "var(--accent)" }}>${data.totals.cost_usd.toFixed(3)}</strong></div>
+                {[
+                  ["SESSIONS",   data.totals.sessions],
+                  ["MESSAGES",   data.totals.message_count],
+                  ["INPUT",      fmtK(data.totals.input_tokens)],
+                  ["OUTPUT",     fmtK(data.totals.output_tokens)],
+                  ["CACHE READ", fmtK(data.totals.cache_read_tokens)],
+                  ["CACHE WRITE",fmtK(data.totals.cache_creation_tokens)],
+                ].map(([label, val]) => (
+                  <div key={String(label)}>
+                    <div style={{ color: "var(--text-muted)", fontSize: "var(--text-xs)" }}>{label}</div>
+                    <strong>{val}</strong>
+                  </div>
+                ))}
+                <div style={{ marginLeft: "auto" }}>
+                  <div style={{ color: "var(--text-muted)", fontSize: "var(--text-xs)" }}>EST. COST</div>
+                  <strong style={{ color: "var(--accent)", fontSize: "var(--text-lg)" }}>${data.totals.cost_usd.toFixed(3)}</strong>
+                </div>
               </div>
               {/* Per-session table */}
               {data.sessions.length === 0 ? (
@@ -82,7 +95,8 @@ function AgentHistoryLightbox({ agentId, onClose }: { agentId: string; onClose: 
                       <th style={{ padding: "6px 8px", textAlign: "right" }}>Msgs</th>
                       <th style={{ padding: "6px 8px", textAlign: "right" }}>In</th>
                       <th style={{ padding: "6px 8px", textAlign: "right" }}>Out</th>
-                      <th style={{ padding: "6px 8px", textAlign: "right" }}>Cache</th>
+                      <th style={{ padding: "6px 8px", textAlign: "right" }}>↓Cache</th>
+                      <th style={{ padding: "6px 8px", textAlign: "right" }}>↑Cache</th>
                       <th style={{ padding: "6px 16px", textAlign: "right" }}>Cost</th>
                     </tr>
                   </thead>
@@ -90,11 +104,12 @@ function AgentHistoryLightbox({ agentId, onClose }: { agentId: string; onClose: 
                     {data.sessions.map((s) => (
                       <tr key={s.session_id} style={{ borderBottom: "1px solid var(--border-faint, var(--border))" }}>
                         <td style={{ padding: "6px 16px", fontFamily: "var(--font-mono)", fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>{s.session_id.slice(0, 16)}…</td>
-                        <td style={{ padding: "6px 8px", color: "var(--text-muted)", fontSize: "var(--text-xs)" }}>{s.started_at ? s.started_at.slice(0, 16).replace("T", " ") : "—"}</td>
+                        <td style={{ padding: "6px 8px", color: "var(--text-muted)", fontSize: "var(--text-xs)", whiteSpace: "nowrap" }}>{s.started_at ? s.started_at.slice(0, 16).replace("T", " ") : "—"}</td>
                         <td style={{ padding: "6px 8px", textAlign: "right" }}>{s.message_count}</td>
                         <td style={{ padding: "6px 8px", textAlign: "right", color: "var(--text-muted)" }}>{fmtK(s.input_tokens)}</td>
                         <td style={{ padding: "6px 8px", textAlign: "right", color: "var(--text-muted)" }}>{fmtK(s.output_tokens)}</td>
                         <td style={{ padding: "6px 8px", textAlign: "right", color: "var(--text-muted)" }}>{fmtK(s.cache_read_tokens)}</td>
+                        <td style={{ padding: "6px 8px", textAlign: "right", color: "var(--text-muted)" }}>{fmtK(s.cache_creation_tokens)}</td>
                         <td style={{ padding: "6px 16px", textAlign: "right", color: "var(--accent)" }}>${s.cost_usd.toFixed(3)}</td>
                       </tr>
                     ))}

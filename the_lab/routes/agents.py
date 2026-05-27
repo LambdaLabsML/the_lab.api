@@ -149,99 +149,122 @@ def get_agent_output(
     return PlainTextResponse(text)
 
 
-def _find_claude_history_dir(worktree: str, agent_id: str) -> Path | None:
-    """Return the Claude Code history directory for an agent session.
+def _worktree_project_dir(worktree: str) -> str:
+    """Return the Claude Code project-directory name for a given worktree path.
 
-    When the agent runs inside a bwrap sandbox, sandbox_guest.py writes the
-    agent's $HOME path to ``<worktree>/.the_lab/agents/<id>/claude_home``.
-    We use that to locate ``$HOME/.claude/projects/``.
+    Claude Code names project subdirectories by replacing every non-alphanumeric
+    character in the absolute path with ``-``.  Example::
 
-    Fallback: if no breadcrumb exists (non-sandboxed agent), use the real
-    ``~/.claude/projects/`` directory.
+        /lambda/nfs/.../agents/abc12
+        → -lambda-nfs----agents-abc12
     """
-    crumb = Path(worktree) / ".the_lab" / "agents" / agent_id / "claude_home"
-    if crumb.exists():
-        claude_home = Path(crumb.read_text().strip())
-    else:
-        claude_home = Path.home()
-    projects_dir = claude_home / ".claude" / "projects"
-    return projects_dir if projects_dir.exists() else None
+    return re.sub(r"[^a-zA-Z0-9]", "-", worktree)
 
 
-def _parse_history(projects_dir: Path) -> dict:
-    """Parse all JSONL session files under a Claude projects directory.
+def _find_agent_project_dir(worktree: str) -> Path | None:
+    """Return the specific Claude Code JSONL project directory for this worktree.
 
-    Returns a summary dict with:
-    - sessions: list of sessions, newest first, each with:
-        - session_id, project_path, started_at, message_count,
-          input_tokens, output_tokens, cache_read_tokens, cost_usd (estimated)
-    - totals: aggregated token/cost across all sessions
+    JSONL files always land in the REAL ``~/.claude/projects/`` on the host,
+    regardless of whether the agent is sandboxed (bwrap sets a different HOME
+    but the host home is still writable inside the namespace).
+    """
+    projects_root = Path.home() / ".claude" / "projects"
+    if not projects_root.exists():
+        return None
+    target = projects_root / _worktree_project_dir(worktree)
+    if target.exists():
+        return target
+    return None
+
+
+def _parse_jsonl_dir(project_dir: Path) -> dict:
+    """Parse all JSONL session files inside ONE Claude project directory.
+
+    Returns a summary dict:
+    - sessions: list, newest-first, each with session_id, started_at,
+      message_count, input_tokens, output_tokens, cache_read_tokens,
+      cache_creation_tokens, cost_usd
+    - totals: aggregated across all sessions
     """
     sessions = []
-    # Pricing as of Claude Sonnet 4.x (per 1M tokens, approximate)
-    PRICE_INPUT = 3.0 / 1_000_000
-    PRICE_OUTPUT = 15.0 / 1_000_000
-    PRICE_CACHE_READ = 0.30 / 1_000_000
 
-    for jsonl in sorted(projects_dir.rglob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True):
-        msgs = []
+    # Claude Sonnet 4.x pricing per 1 M tokens (approximate)
+    PRICE = {
+        "input":            3.00 / 1_000_000,
+        "output":          15.00 / 1_000_000,
+        "cache_read":       0.30 / 1_000_000,
+        "cache_creation":   3.75 / 1_000_000,
+    }
+
+    for jsonl in sorted(
+        project_dir.glob("*.jsonl"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    ):
+        in_tok = out_tok = cache_read = cache_create = 0
+        started_at = None
+        msg_count = 0
+
         try:
             for line in jsonl.read_text(errors="replace").splitlines():
                 line = line.strip()
                 if not line:
                     continue
                 try:
-                    msgs.append(json.loads(line))
+                    entry = json.loads(line)
                 except json.JSONDecodeError:
-                    pass
+                    continue
+
+                # Timestamp — use the first one we see
+                ts = entry.get("timestamp") or entry.get("created_at")
+                if ts and not started_at:
+                    started_at = ts
+
+                # Usage lives inside entry["message"]["usage"] for assistant turns
+                msg = entry.get("message")
+                usage = (
+                    (msg.get("usage") if isinstance(msg, dict) else None)
+                    or entry.get("usage")
+                    or {}
+                )
+                in_tok      += usage.get("input_tokens", 0)
+                out_tok     += usage.get("output_tokens", 0)
+                cache_read  += usage.get("cache_read_input_tokens", 0)
+                cache_create+= usage.get("cache_creation_input_tokens", 0)
+
+                if entry.get("type") in ("user", "assistant"):
+                    msg_count += 1
         except Exception:
             continue
 
-        if not msgs:
-            continue
-
-        input_tok = output_tok = cache_tok = 0
-        started_at = None
-        msg_count = 0
-
-        for m in msgs:
-            ts = m.get("timestamp") or m.get("created_at")
-            if ts and not started_at:
-                started_at = ts
-            usage = m.get("usage") or (m.get("message", {}) or {}).get("usage") or {}
-            input_tok += usage.get("input_tokens", 0)
-            output_tok += usage.get("output_tokens", 0)
-            cache_tok += usage.get("cache_read_input_tokens", 0)
-            if m.get("role") in ("user", "assistant"):
-                msg_count += 1
+        if not (in_tok or out_tok):
+            continue  # empty / unstarted session
 
         cost = (
-            input_tok * PRICE_INPUT
-            + output_tok * PRICE_OUTPUT
-            + cache_tok * PRICE_CACHE_READ
+            in_tok       * PRICE["input"]
+            + out_tok    * PRICE["output"]
+            + cache_read * PRICE["cache_read"]
+            + cache_create * PRICE["cache_creation"]
         )
-
-        # Derive a human-readable project path from the hashed directory name
-        project_hash = jsonl.parent.name
         sessions.append({
-            "session_id": jsonl.stem,
-            "project_hash": project_hash,
-            "file": str(jsonl),
-            "started_at": started_at,
-            "message_count": msg_count,
-            "input_tokens": input_tok,
-            "output_tokens": output_tok,
-            "cache_read_tokens": cache_tok,
-            "cost_usd": round(cost, 4),
+            "session_id":          jsonl.stem,
+            "started_at":          started_at,
+            "message_count":       msg_count,
+            "input_tokens":        in_tok,
+            "output_tokens":       out_tok,
+            "cache_read_tokens":   cache_read,
+            "cache_creation_tokens": cache_create,
+            "cost_usd":            round(cost, 4),
         })
 
     totals = {
-        "sessions": len(sessions),
-        "message_count": sum(s["message_count"] for s in sessions),
-        "input_tokens": sum(s["input_tokens"] for s in sessions),
-        "output_tokens": sum(s["output_tokens"] for s in sessions),
-        "cache_read_tokens": sum(s["cache_read_tokens"] for s in sessions),
-        "cost_usd": round(sum(s["cost_usd"] for s in sessions), 4),
+        "sessions":              len(sessions),
+        "message_count":         sum(s["message_count"]           for s in sessions),
+        "input_tokens":          sum(s["input_tokens"]            for s in sessions),
+        "output_tokens":         sum(s["output_tokens"]           for s in sessions),
+        "cache_read_tokens":     sum(s["cache_read_tokens"]       for s in sessions),
+        "cache_creation_tokens": sum(s["cache_creation_tokens"]   for s in sessions),
+        "cost_usd":              round(sum(s["cost_usd"]          for s in sessions), 4),
     }
     return {"sessions": sessions, "totals": totals}
 
@@ -250,17 +273,27 @@ def _parse_history(projects_dir: Path) -> dict:
 def get_agent_history(agent_id: str):
     """Return parsed Claude Code conversation history for an agent session.
 
-    Reads JSONL files from the agent's Claude home directory (written by
-    ``claude`` CLI during the session).  Returns session summaries with token
-    counts and estimated cost.  404 if no history is available yet.
+    Works for both live agents (in the registry) and past agents (in
+    history.json).  Locates JSONL files via the worktree path recorded at
+    registration time.
     """
+    # Try live registry first, then fall back to completed-agent history
     entry = agents_mod.lookup_agent(REPO_DIR, agent_id)
     if not entry:
-        raise HTTPException(404, f"agent '{agent_id}' not registered")
+        past = agents_mod.list_past_agents(REPO_DIR)
+        entry = next((a for a in past if a.get("agent_id") == agent_id), None)
+    if not entry:
+        raise HTTPException(404, f"agent '{agent_id}' not found in registry or history")
+
     worktree = entry.get("worktree")
     if not worktree:
-        raise HTTPException(404, "agent has no worktree")
-    projects_dir = _find_claude_history_dir(worktree, agent_id)
-    if not projects_dir:
-        raise HTTPException(404, "no Claude history directory found — agent may not have started yet")
-    return _parse_history(projects_dir)
+        raise HTTPException(404, "agent has no worktree recorded")
+
+    project_dir = _find_agent_project_dir(worktree)
+    if not project_dir:
+        raise HTTPException(
+            404,
+            f"no Claude history found for this agent — "
+            f"expected ~/.claude/projects/{_worktree_project_dir(worktree)}/",
+        )
+    return _parse_jsonl_dir(project_dir)
