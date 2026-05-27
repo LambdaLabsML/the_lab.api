@@ -459,6 +459,9 @@ def main():
         import select as _select
         import re as _re
         import datetime as _dt
+        import fcntl as _fcntl
+        import termios as _termios
+        import struct as _struct
 
         _log_path: Path | None = None
         _log_file = None
@@ -472,11 +475,29 @@ def main():
         # master is our read end for logging.
         _master_fd, _slave_fd = _pty.openpty()
 
+        # ── Window size: inherit from current terminal ───────────────────────
+        # openpty() creates a PTY with size 0×0 by default.  The subprocess
+        # reads the size via TIOCGWINSZ; if it sees 0×0 it renders poorly or
+        # not at all.  Copy the real terminal size (or use a sensible default).
+        import os as _os
+        try:
+            _ws = _fcntl.ioctl(sys.stdin.fileno(), _termios.TIOCGWINSZ, b"\x00" * 8)
+            _ws_rows, _ws_cols, _ws_xpix, _ws_ypix = _struct.unpack("HHHH", _ws)
+            if _ws_rows < 4 or _ws_cols < 8:
+                raise ValueError("degenerate size")
+        except Exception:
+            _ws_rows, _ws_cols, _ws_xpix, _ws_ypix = 50, 220, 0, 0
+
+        _ws_packed = _struct.pack("HHHH", _ws_rows, _ws_cols, _ws_xpix, _ws_ypix)
+        try:
+            _fcntl.ioctl(_master_fd, _termios.TIOCSWINSZ, _ws_packed)
+        except Exception:
+            pass
+
         proc = _sp.Popen(
             cmd, env=env, cwd=run_cwd,
             stdin=_slave_fd, stdout=_slave_fd, stderr=_slave_fd,
         )
-        import os as _os
         _os.close(_slave_fd)  # parent doesn't need the slave end
 
         # ── Virtual terminal approach ────────────────────────────────────────
@@ -578,7 +599,9 @@ def main():
                 return
 
             # ── pyte virtual screen ──────────────────────────────────────────
-            _COLS, _ROWS = 220, 50
+            # Match the pyte screen to the actual PTY dimensions so that cursor
+            # positions in the escape sequences land on the right rows/cols.
+            _ROWS, _COLS = _ws_rows, _ws_cols
             _screen = _pyte.Screen(_COLS, _ROWS)
             _stream = _pyte.ByteStream(_screen)
             # prev_rows: last-logged text per row index
@@ -594,6 +617,8 @@ def main():
                 for idx, row in enumerate(_screen.display):
                     text = row.rstrip()
                     if not text:
+                        # Row cleared — forget it so it can be re-logged if content returns
+                        _prev.pop(idx, None)
                         continue
                     if text == _prev.get(idx):
                         continue  # unchanged since last sample
@@ -654,11 +679,31 @@ def main():
             except Exception:
                 pass
 
+        def _handle_winch(_signum, _frame):
+            """Resize the PTY and pyte screen to match the new terminal size."""
+            try:
+                ws = _fcntl.ioctl(sys.stdin.fileno(), _termios.TIOCGWINSZ, b"\x00" * 8)
+                rows, cols, xpix, ypix = _struct.unpack("HHHH", ws)
+                if rows < 4 or cols < 8:
+                    return
+                packed = _struct.pack("HHHH", rows, cols, xpix, ypix)
+                _fcntl.ioctl(_master_fd, _termios.TIOCSWINSZ, packed)
+            except Exception:
+                pass
+            try:
+                proc.send_signal(_signal.SIGWINCH)
+            except Exception:
+                pass
+
         for s in (_signal.SIGINT, _signal.SIGTERM, _signal.SIGHUP):
             try:
                 _signal.signal(s, _forward)
             except (ValueError, OSError):
                 pass
+        try:
+            _signal.signal(_signal.SIGWINCH, _handle_winch)
+        except (ValueError, OSError, AttributeError):
+            pass
 
         try:
             rc = proc.wait()
