@@ -373,16 +373,16 @@ def get_notifications(request: Request):
 # ---------------------------------------------------------------------------
 # CORS
 #
-# Explicit origin http://192.222.53.161:4173 (production Vite preview).
-# Additional origins can be added via THE_LAB_CORS_ORIGINS (comma-separated).
-# Set THE_LAB_CORS_ORIGINS=* to allow all origins (handy for local dev).
+# Default: allow all origins.
+# To restrict, set THE_LAB_CORS_ORIGINS to a comma-separated list, e.g.:
+#   THE_LAB_CORS_ORIGINS=http://myapp.example.com,http://localhost:5173
 # ---------------------------------------------------------------------------
 _cors_env = os.environ.get("THE_LAB_CORS_ORIGINS", "").strip()
-if _cors_env and _cors_env != "*":
+if _cors_env:
     # Explicit list supplied — restrict to those origins only
     _cors_origins = [o.strip() for o in _cors_env.split(",") if o.strip()]
 else:
-    # Default: allow all origins (set THE_LAB_CORS_ORIGINS to restrict)
+    # Default: open to all origins
     _cors_origins = ["*"]
 
 app.add_middleware(
