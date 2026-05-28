@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
@@ -13,6 +14,8 @@ from .. import agents as agents_mod
 from .. import messages as messages_mod
 from ..deps import REPO_DIR, store
 from ..git_ops import get_current_branch
+
+_costs_lock = threading.Lock()
 
 router = APIRouter()
 
@@ -100,6 +103,107 @@ def list_registered_agents():
 def list_past_agents_endpoint():
     """Return the 200 most recently completed agents."""
     return agents_mod.list_past_agents(REPO_DIR)
+
+
+@router.get("/api/v1/agents/costs")
+def get_agent_costs():
+    """Return per-agent cost + token totals for all known agents.
+
+    Results are cached in ``.the_lab/agent_costs.json``.  Live agents are
+    always re-computed (their cost grows); completed agents are looked up
+    from the cache and only computed if missing.
+
+    Response schema::
+
+        {
+          "<agent_id>": {
+            "cost": 1.234,
+            "inTok": 120000,
+            "outTok": 8000,
+            "ts": "2025-05-28T12:34:56",   # completion or creation ISO time
+            "live": false
+          },
+          ...
+        }
+    """
+    cache_path = REPO_DIR / ".the_lab" / "agent_costs.json"
+
+    # Load persisted cache
+    with _costs_lock:
+        try:
+            cache: dict = json.loads(cache_path.read_text()) if cache_path.exists() else {}
+        except Exception:
+            cache = {}
+
+    live_agents = agents_mod.list_agents(REPO_DIR)
+    past_agents = agents_mod.list_past_agents(REPO_DIR)
+    live_ids = {a["agent_id"] for a in live_agents}
+
+    to_compute: list[dict] = []
+    # Always re-compute live agents (cost grows)
+    for a in live_agents:
+        to_compute.append({**a, "_live": True})
+    # Compute past agents only if not yet cached (or previously marked live)
+    for a in past_agents:
+        aid = a["agent_id"]
+        if aid not in cache or cache[aid].get("live"):
+            to_compute.append({**a, "_live": False})
+
+    changed = False
+    for a in to_compute:
+        aid = a["agent_id"]
+        worktree = a.get("worktree", "")
+        is_live = a["_live"]
+        ts = a.get("completed_at") or a.get("created_at") or ""
+
+        project_dir = _find_agent_project_dir(worktree) if worktree else None
+        if not project_dir:
+            continue
+
+        # For fallback (shared) dirs, only use for live agents with a since cutoff
+        exact_dir = Path.home() / ".claude" / "projects" / _worktree_project_dir(worktree)
+        since: float | None = None
+        if project_dir != exact_dir:
+            if not is_live:
+                continue  # ambiguous — skip past agents on shared dirs
+            created_at = a.get("created_at")
+            if created_at:
+                try:
+                    from datetime import datetime
+                    since = datetime.fromisoformat(created_at).timestamp()
+                except Exception:
+                    pass
+
+        try:
+            data = _parse_jsonl_dir(project_dir, since=since)
+            t = data["totals"]
+            if t["cost_usd"] > 0 or t["input_tokens"] > 0:
+                cache[aid] = {
+                    "cost": t["cost_usd"],
+                    "inTok": t["input_tokens"],
+                    "outTok": t["output_tokens"],
+                    "ts": ts,
+                    "live": is_live,
+                }
+                changed = True
+        except Exception:
+            pass
+
+    # Mark any cached entry that was live but is no longer running
+    for aid, entry in list(cache.items()):
+        if entry.get("live") and aid not in live_ids:
+            cache[aid] = {**entry, "live": False}
+            changed = True
+
+    if changed:
+        with _costs_lock:
+            try:
+                cache_path.parent.mkdir(parents=True, exist_ok=True)
+                cache_path.write_text(json.dumps(cache, indent=2))
+            except Exception:
+                pass
+
+    return cache
 
 
 @router.get("/api/v1/agents/{agent_id}")
