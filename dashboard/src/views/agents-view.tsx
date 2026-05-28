@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { listAgents, unregisterAgent } from "../state/api";
 import type { AgentEntry } from "../lib/types";
-import { totalAgentCost, totalAgentTokens, totalAgentInputTokens, totalAgentOutputTokens } from "../state/signals";
+import { agentCostMap } from "../state/signals";
 
 // ── History / cost lightbox ───────────────────────────────────────────────────
 
@@ -352,10 +352,6 @@ function AgentCostChart({ points }: { points: ChartPoint[] }) {
 export function AgentsView() {
   const [agents, setAgents] = useState<AgentEntry[]>([]);
   const [pastAgents, setPastAgents] = useState<PastAgent[]>([]);
-  const [costByAgent, setCostByAgent] = useState<Record<string, number>>({});
-  const [tokensByAgent, setTokensByAgent] = useState<Record<string, number>>({});
-  const [inputTokByAgent, setInputTokByAgent] = useState<Record<string, number>>({});
-  const [outputTokByAgent, setOutputTokByAgent] = useState<Record<string, number>>({});
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -364,59 +360,10 @@ export function AgentsView() {
   // Re-render every ~30s so "Xm ago" stays fresh
   const [, setTick] = useState(0);
 
-  const cancelledRef = useRef(false);
-  const costFetchedRef = useRef<Set<string>>(new Set());
+  // Cost data comes from the global signal (populated by polling.ts, always-on)
+  const costMap = agentCostMap.value;
 
-  async function fetchCostsForAgents(agentIds: string[]) {
-    const toFetch = agentIds.filter((id) => !costFetchedRef.current.has(id));
-    if (!toFetch.length) return;
-    toFetch.forEach((id) => costFetchedRef.current.add(id));
-    const results = await Promise.allSettled(
-      toFetch.map((id) =>
-        fetch(`/api/v1/agents/${id}/history`)
-          .then((r) => (r.ok ? r.json() : null))
-          .catch(() => null)
-      )
-    );
-    const costUpd: Record<string, number> = {};
-    const tokUpd: Record<string, number> = {};
-    const inTokUpd: Record<string, number> = {};
-    const outTokUpd: Record<string, number> = {};
-    results.forEach((r, i) => {
-      if (r.status === "fulfilled" && r.value?.totals) {
-        const t = r.value.totals;
-        if (t.cost_usd != null) costUpd[toFetch[i]] = t.cost_usd;
-        const inT = t.input_tokens || 0;
-        const outT = t.output_tokens || 0;
-        const tok = inT + outT;
-        if (tok > 0) { tokUpd[toFetch[i]] = tok; inTokUpd[toFetch[i]] = inT; outTokUpd[toFetch[i]] = outT; }
-      }
-    });
-    if (Object.keys(costUpd).length > 0) {
-      setCostByAgent((prev) => {
-        const next = { ...prev, ...costUpd };
-        totalAgentCost.value = Object.values(next).reduce((s, v) => s + v, 0);
-        return next;
-      });
-    }
-    if (Object.keys(tokUpd).length > 0) {
-      setTokensByAgent((prev) => {
-        const next = { ...prev, ...tokUpd };
-        totalAgentTokens.value = Object.values(next).reduce((s, v) => s + v, 0);
-        return next;
-      });
-      setInputTokByAgent((prev) => {
-        const next = { ...prev, ...inTokUpd };
-        totalAgentInputTokens.value = Object.values(next).reduce((s, v) => s + v, 0);
-        return next;
-      });
-      setOutputTokByAgent((prev) => {
-        const next = { ...prev, ...outTokUpd };
-        totalAgentOutputTokens.value = Object.values(next).reduce((s, v) => s + v, 0);
-        return next;
-      });
-    }
-  }
+  const cancelledRef = useRef(false);
 
   async function refresh(): Promise<AgentEntry[] | null> {
     try {
@@ -429,9 +376,6 @@ export function AgentsView() {
       setPastAgents(past);
       setError(null);
       setLoaded(true);
-      // Fetch costs for past agents in the background
-      const allIds = [...past.map((a: PastAgent) => a.agent_id), ...list.map((a) => a.agent_id)];
-      fetchCostsForAgents(allIds);
       return list;
     } catch (err) {
       if (cancelledRef.current) return null;
@@ -476,26 +420,20 @@ export function AgentsView() {
     return `${total} active agent${total === 1 ? "" : "s"}, ${stale} stale`;
   }, [agents]);
 
-  // Cumulative cost/token chart data — sorted by agent completion time
+  // Cumulative cost/token chart data — built from the global agentCostMap signal,
+  // sorted by each agent's timestamp so the line grows left-to-right over time.
   const chartPoints = useMemo<ChartPoint[]>(() => {
-    const all: Array<{ agent_id: string; ts: number }> = [
-      ...pastAgents.map((a) => ({
-        agent_id: a.agent_id,
-        ts: Date.parse(a.completed_at || a.created_at || "0"),
-      })),
-      ...agents.map((a) => ({
-        agent_id: a.agent_id,
-        ts: Date.parse(a.created_at || "0"),
-      })),
-    ].filter((a) => costByAgent[a.agent_id] != null || tokensByAgent[a.agent_id] != null);
-    all.sort((a, b) => a.ts - b.ts);
+    const entries = Object.entries(costMap)
+      .filter(([, e]) => e.cost > 0 || e.inTok > 0)
+      .map(([, e]) => ({ ts: Date.parse(e.ts), cost: e.cost, tok: e.inTok + e.outTok }));
+    entries.sort((a, b) => a.ts - b.ts);
     let cumCost = 0, cumTok = 0;
-    return all.map(({ agent_id, ts }) => {
-      cumCost += costByAgent[agent_id] ?? 0;
-      cumTok += tokensByAgent[agent_id] ?? 0;
+    return entries.map(({ ts, cost, tok }) => {
+      cumCost += cost;
+      cumTok += tok;
       return { t: ts, cost: cumCost, tokens: cumTok };
     });
-  }, [pastAgents, agents, costByAgent, tokensByAgent]);
+  }, [costMap]);
 
   return (
     <>
@@ -616,11 +554,11 @@ export function AgentsView() {
                   </div>
                 </div>
 
-                {costByAgent[agent.agent_id] != null && (
+                {costMap[agent.agent_id]?.cost != null && (
                   <div class="agents-card-row">
                     <div class="agents-card-label">Cost so far</div>
                     <div class="agents-card-value" style={{ color: "var(--accent)", fontWeight: 600 }}>
-                      ${costByAgent[agent.agent_id].toFixed(3)}
+                      ${costMap[agent.agent_id]?.cost.toFixed(3)}
                     </div>
                   </div>
                 )}
@@ -680,9 +618,9 @@ export function AgentsView() {
                 <span style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", whiteSpace: "nowrap" }}>
                   {a.completed_at ? relativeTime(a.completed_at) : "—"}
                 </span>
-                {costByAgent[a.agent_id] != null ? (
+                {costMap[a.agent_id]?.cost != null ? (
                   <span style={{ fontSize: "var(--text-xs)", color: "var(--accent)", fontWeight: 600, whiteSpace: "nowrap", minWidth: 52, textAlign: "right" }}>
-                    ${costByAgent[a.agent_id].toFixed(3)}
+                    ${costMap[a.agent_id]?.cost.toFixed(3)}
                   </span>
                 ) : (
                   <span style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", minWidth: 52, textAlign: "right" }}>—</span>

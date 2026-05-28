@@ -88,13 +88,25 @@ export const logEntries = signal<LogEntry[]>([]);
 export const runningProgress = signal<Record<string, number>>({});
 
 // ---------------------------------------------------------------------------
-// Agent cost / token totals (populated by agents-view when it fetches history)
+// Agent cost / token data — populated by polling.ts (always-on, not pane-dependent)
 // ---------------------------------------------------------------------------
 
-/** Total USD cost across all past + live agents seen so far. null = not loaded yet. */
+/** Per-agent cost+token data. Key = agent_id. Updated by pollAgentCosts(). */
+export interface AgentCostEntry {
+  cost: number;
+  inTok: number;
+  outTok: number;
+  /** ISO timestamp used for the sparkline x-axis. Completion time for past; creation for live. */
+  ts: string;
+  /** Whether this agent is still running (costs grow over time). */
+  live: boolean;
+}
+export const agentCostMap = signal<Record<string, AgentCostEntry>>({});
+
+/** Total USD cost across all agents. null = not yet loaded. */
 export const totalAgentCost = signal<number | null>(null);
 
-/** Total tokens (input+output) across all past + live agents seen so far. */
+/** Total tokens (input+output) across all agents. */
 export const totalAgentTokens = signal<number | null>(null);
 
 /** Total input (prompt) tokens consumed across all agents. */
