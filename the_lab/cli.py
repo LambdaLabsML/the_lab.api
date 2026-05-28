@@ -91,7 +91,28 @@ def cmd_init(target: str | None = None):
         canonical_prompt.write_text(_PROMPT_TEMPLATE.read_text())
         print(f"  {_green(chr(10003))} Created .the_lab/PROMPT.md -- edit this with your research problem")
 
-    # 3. MCP bridge ----------------------------------------------------------
+    # 3. preamble.sh ---------------------------------------------------------
+    # Sourced at the top of every experiment wrapper script. Projects can
+    # customise it freely; the default is a no-op that just exports the shared
+    # dir so downstream scripts can locate shared artifacts.
+    preamble_dst = lab_dir / "preamble.sh"
+    if preamble_dst.exists():
+        print(f"  {_green(chr(10003))} .the_lab/preamble.sh already exists")
+    else:
+        lab_dir.mkdir(parents=True, exist_ok=True)
+        preamble_dst.write_text(
+            "#!/usr/bin/env bash\n"
+            "# .the_lab/preamble.sh — sourced at the start of every experiment script.\n"
+            "# Add project-wide setup here: activate virtualenvs, set env vars, etc.\n"
+            "# This file is gitignored and safe to edit freely.\n"
+            "\n"
+            '_the_lab_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"\n'
+            'export THE_LAB_SHARED_DIR="${_the_lab_dir}"\n'
+        )
+        preamble_dst.chmod(0o755)
+        print(f"  {_green(chr(10003))} Created .the_lab/preamble.sh -- add project setup here (activate venv, etc.)")
+
+    # 4. MCP bridge ----------------------------------------------------------
     _pkg_skills = Path(__file__).parent / "agent_skills"
     mcp_script_src = _pkg_skills / "skills" / "lab_api_mcp.py"
     mcp_json_src = _pkg_skills / "mcp.json"
@@ -176,7 +197,7 @@ def cmd_init(target: str | None = None):
     else:
         print(f"  {_dim('-')} MCP bridge not found in package (agent_skills/ missing)")
 
-    # 4. .gitignore ----------------------------------------------------------
+    # 5. .gitignore ----------------------------------------------------------
     gitignore = repo / ".gitignore"
     existing = gitignore.read_text() if gitignore.exists() else ""
     lines = existing.splitlines()
@@ -200,7 +221,7 @@ def cmd_init(target: str | None = None):
     else:
         print(f"  {_green(chr(10003))} .gitignore already includes .the_lab/ and .claude/")
 
-    # 5. Pre-fill PROMPT.md with Claude --------------------------------
+    # 6. Pre-fill PROMPT.md with Claude --------------------------------
     # Pick the active prompt file: prefer .the_lab/PROMPT.md (canonical),
     # fall back to legacy <repo>/PROMPT.md if the user declined migration.
     active_prompt = canonical_prompt if canonical_prompt.exists() else legacy_prompt
@@ -239,7 +260,7 @@ def cmd_init(target: str | None = None):
         else:
             print(f"  {_dim('-')} Skipped — edit PROMPT.md manually")
 
-    # 6. Next steps ----------------------------------------------------------
+    # 7. Next steps ----------------------------------------------------------
     print(f"\n{_bold('Next steps:')}\n")
     print(f"  1. Review {_blue('PROMPT.md')}")
     print(f"  2. Start the server:")
