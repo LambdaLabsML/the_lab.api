@@ -59,16 +59,17 @@ When documenting findings, always note what each tag represents (e.g., "table-he
 Scripts must print `{"metrics": {...}}` as their **last stdout line** (or omit for setup tasks). Optional extras:
 - `$THE_LAB_PROGRESS` — write progress JSON for live monitoring
 - `$THE_LAB_METRICS` — append JSONL for per-step training curves
-- `.the_lab/preamble.sh` — auto-sourced before every script; use it for shared helpers
+- `.the_lab/preamble.sh` — auto-sourced before every script via `source .the_lab/preamble.sh 2>/dev/null || true`; use it for shared helpers
 
 Recommended experiment script pattern:
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
 
-source .the_lab/preamble.sh
 # your experiment command here
 ```
+
+**⚠️ Do NOT add `source .the_lab/preamble.sh` to your script.** The harness already injects it automatically with `2>/dev/null || true` so it degrades safely in isolated worktrees. A second bare `source .the_lab/preamble.sh` (without `|| true`) under `set -euo pipefail` will cause the experiment to silently exit before your command ever runs — because `preamble.sh` is gitignored and not present in per-experiment worktrees.
 
 ### Git integration
 
@@ -80,7 +81,7 @@ Each idea is a git branch. The server manages branching automatically:
 
 ```
 .the_lab/
-  preamble.sh              # optional: sourced before every experiment
+  preamble.sh              # gitignored — harness injects it safely; do not re-source in scripts
   artifacts/               # shared datasets, checkpoints (not branch-specific)
   experiments/
     {idea_id}/
