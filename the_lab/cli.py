@@ -231,7 +231,6 @@ def cmd_init(target: str | None = None):
             result = subprocess.run(
                 [claude_bin, "--dangerously-skip-permissions", "-p", prefill_prompt],
                 cwd=str(repo),
-                timeout=120,
             )
             if result.returncode == 0:
                 print(f"\n  {_green(chr(10003))} Claude pre-filled PROMPT.md — review and adjust as needed")
