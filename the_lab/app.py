@@ -14,6 +14,7 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from . import token_registry as _token_registry
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.responses import Response
 
@@ -369,6 +370,31 @@ def get_notifications(request: Request):
 # both custom middlewares: it sees the request first and the fully-assembled
 # response last, which is exactly when we want to compress (after notifications
 # have been injected). JSON compresses ~4x; 1 KB threshold skips tiny responses.
+# ---------------------------------------------------------------------------
+# CORS
+#
+# Explicit origin http://192.222.53.161:4173 (production Vite preview).
+# Additional origins can be added via THE_LAB_CORS_ORIGINS (comma-separated).
+# Set THE_LAB_CORS_ORIGINS=* to allow all origins (handy for local dev).
+# ---------------------------------------------------------------------------
+_cors_env = os.environ.get("THE_LAB_CORS_ORIGINS", "").strip()
+if _cors_env and _cors_env != "*":
+    # Explicit list supplied — restrict to those origins only
+    _cors_origins = [o.strip() for o in _cors_env.split(",") if o.strip()]
+else:
+    # Default: allow all origins (set THE_LAB_CORS_ORIGINS to restrict)
+    _cors_origins = ["*"]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# GZip goes outermost (added last) so it compresses the already-assembled
+# response after CORS and auth headers have been injected.
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 
