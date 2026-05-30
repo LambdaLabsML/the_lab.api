@@ -567,6 +567,25 @@ def build_bwrap_args(repo_dir: Path, config: dict, cwd: Path | str | None = None
         if Path(path).exists():
             ro_paths.append(path)
 
+    # Worktree mirror: when cwd differs from repo_dir (agent runs in a git
+    # worktree), blocked files exist at a *different* absolute path inside the
+    # worktree. Without this, an agent can bypass file_ro by editing
+    # `cwd/tetris_client.py` instead of `repo_dir/tetris_client.py`.
+    # For each user_ro path that lives under repo_dir, compute the matching
+    # path under cwd and add it as ro too.
+    if cwd != str(repo_dir):
+        for path in list(user_ro):
+            try:
+                rel = Path(path).relative_to(repo_dir)
+            except ValueError:
+                continue  # not under repo_dir — no worktree equivalent
+            wt_path = str(Path(cwd) / rel)
+            if wt_path in seen:
+                continue  # already covered (e.g. explicitly in rw)
+            seen.add(wt_path)
+            if Path(wt_path).exists():
+                ro_paths.append(wt_path)
+
     # Runtime essentials — must come BEFORE user binds so that a
     # subsequent --ro-bind under /tmp isn't shadowed by the tmpfs.
     args.extend([
