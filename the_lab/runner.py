@@ -1156,22 +1156,62 @@ class ExperimentRunner:
                     self._finished_queue.put_nowait(exp_id)
                     return
                 now = datetime.now(timezone.utc).isoformat()
-                error = f"slurm job {job_id} ended with state {state}"
-                self._store.update_experiment(
-                    exp_id,
-                    status="failed",
-                    error=error,
-                    pid=None,
-                    finished_at=now,
-                )
-                from . import ws as ws_mod
-                ws_mod.broadcaster.broadcast_soon({
-                    "type": "experiment_finished",
-                    "label": label,
-                    "idea_id": exp.get("idea_id"),
-                    "status": "failed",
-                    "metrics": None,
-                })
+                log_path = local_exp_dir / "script.log"
+                output = log_path.read_text() if log_path.exists() else ""
+                # Try to extract JSON metrics — the script may have completed
+                # successfully before Slurm killed/cancelled the wrapper.
+                result, result_idx = self._extract_json(output)
+                if result is not None:
+                    if "metrics" in result:
+                        metrics = result.get("metrics", {})
+                    else:
+                        metrics = {k: v for k, v in result.items() if k not in ("meta",)}
+                    meta = {**(exp.get("meta") or {}), **result.get("meta", {})}
+                    self._store.update_experiment(
+                        exp_id,
+                        status="completed",
+                        metrics=metrics,
+                        meta=meta,
+                        pid=None,
+                        finished_at=now,
+                    )
+                    if result_idx is not None:
+                        self._strip_result_line(log_path, result_idx)
+                    ws_mod.broadcaster.broadcast_soon({
+                        "type": "experiment_finished",
+                        "label": label,
+                        "idea_id": exp.get("idea_id"),
+                        "status": "completed",
+                        "metrics": metrics,
+                    })
+                else:
+                    # No metrics — mark as failed with the last lines of the log
+                    # so the dashboard shows why the script died (not just the
+                    # Slurm state which is always vague).
+                    log_tail = "\n".join(output.splitlines()[-30:]) if output else ""
+                    error = f"slurm job {job_id} ended with state {state}"
+                    if log_tail:
+                        error = f"{error}\n\n--- last log lines ---\n{log_tail}"
+                    err_path = local_exp_dir / "script.err"
+                    try:
+                        err_path.write_text(error)
+                    except OSError:
+                        pass
+                    self._store.update_experiment(
+                        exp_id,
+                        status="failed",
+                        error=error,
+                        pid=None,
+                        finished_at=now,
+                    )
+                    from . import ws as ws_mod
+                    ws_mod.broadcaster.broadcast_soon({
+                        "type": "experiment_finished",
+                        "label": label,
+                        "idea_id": exp.get("idea_id"),
+                        "status": "failed",
+                        "metrics": None,
+                    })
                 asyncio.get_event_loop().run_in_executor(None, lambda: executor.cleanup_remote(label, abs_bare_path=getattr(executor, "_resolved_bare_path", None)))
                 self._allocator.release(label)
                 self.wake_scheduler()
