@@ -437,13 +437,59 @@ def main():
             _YELLOW = "\033[33m"
             _BOLD   = "\033[1m"
             _RESET  = "\033[0m"
-            print(
-                f"\n{_BOLD}{_YELLOW}⚠  Agent registration failed{_RESET}\n"
-                f"   {e}\n"
-                f"   Running in legacy/main-repo mode (no isolated worktree).\n"
-                f"   Is the Lab API server running? Pass --no-isolated to silence.\n",
-                file=sys.stderr,
-            )
+            _RED    = "\033[31m"
+            _GREEN  = "\033[32m"
+            _DIM    = "\033[2m"
+            while True:
+                print(
+                    f"\n{_BOLD}{_YELLOW}⚠  Agent registration failed{_RESET}\n"
+                    f"   {_DIM}{e}{_RESET}\n"
+                    f"   Is the Lab API server running?  (port {args.port})\n",
+                    file=sys.stderr,
+                )
+                print(
+                    f"  {_BOLD}[r]{_RESET} Retry registration\n"
+                    f"  {_BOLD}[c]{_RESET} Continue without isolation (legacy / main-repo mode)\n"
+                    f"  {_BOLD}[q]{_RESET} Quit\n",
+                    file=sys.stderr,
+                )
+                try:
+                    choice = input("  Choice [r/c/q]: ").strip().lower()
+                except (EOFError, KeyboardInterrupt):
+                    choice = "q"
+                if choice == "r":
+                    try:
+                        req_obj2 = _urlreq.Request(
+                            f"{api_base_for_register}/agents/register",
+                            data=payload, method="POST",
+                            headers=_reg_headers,
+                        )
+                        with _urlreq.urlopen(req_obj2, timeout=10) as resp2:
+                            reg = _json.loads(resp2.read().decode())
+                        agent_id = reg["agent_id"]
+                        agent_worktree = Path(reg["worktree"]).resolve()
+                        print(
+                            f"\n{_GREEN}✓ Registered{_RESET} id={agent_id} on branch {reg['branch']}"
+                            f" (parent: {reg['parent_branch']})\n"
+                            f"  worktree: {agent_worktree}",
+                            file=sys.stderr,
+                        )
+                        env["THE_LAB_AGENT_ID"] = agent_id
+                        env["THE_LAB_AGENT_WORKTREE"] = str(agent_worktree)
+                        break
+                    except Exception as e2:
+                        e = e2
+                        continue  # show the prompt again with the new error
+                elif choice == "c":
+                    print(
+                        f"  {_DIM}Continuing without isolation. "
+                        f"Pass --no-isolated to skip this prompt next time.{_RESET}\n",
+                        file=sys.stderr,
+                    )
+                    break
+                else:
+                    print(f"\n{_RED}Aborted.{_RESET}", file=sys.stderr)
+                    sys.exit(1)
 
     if sandbox_mode:
         # Capabilities check deferred to here so it only runs when needed.
