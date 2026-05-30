@@ -179,10 +179,16 @@ class SlurmExecutor:
 
         Also caches the result as ``_resolved_bare_path`` so cleanup_remote
         can pass it without needing to SSH again.
+
+        Sets ``receive.denyCurrentBranch = ignore`` unconditionally — this is
+        a no-op on proper bare repos (which have no checked-out branch) and a
+        safety net when the remote is a non-bare repo with a branch checked out.
         """
         abs_path = self._resolve_git_repo_path()
-        self._ssh_plain(f"git init --bare {abs_path} -q 2>/dev/null || true")
-
+        self._ssh_plain(
+            f"git init --bare {abs_path} -q 2>/dev/null || true && "
+            f"git -C {abs_path} config receive.denyCurrentBranch ignore"
+        )
         self._resolved_bare_path: str = abs_path  # type: ignore[attr-defined]
         return abs_path
 
