@@ -210,10 +210,11 @@ class SlurmExecutor:
         result = _do_push()
         if result.returncode != 0 and "branch is currently checked out" in result.stderr:
             # Remote is a non-bare repo with this branch checked out.
-            # Move it off the branch so the push is accepted, then retry.
+            # Force-checkout a different ref so the push is accepted, then retry.
+            # --force is required in case there are uncommitted changes on the remote.
             self._ssh_plain(
-                f"git -C {abs_bare} checkout main -q 2>/dev/null || "
-                f"git -C {abs_bare} checkout --detach HEAD -q 2>/dev/null || true"
+                f"git -C {abs_bare} checkout --force main -q 2>/dev/null || "
+                f"git -C {abs_bare} checkout --force --detach HEAD -q 2>/dev/null || true"
             )
             result = _do_push()
         if result.returncode != 0:
