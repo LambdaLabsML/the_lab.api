@@ -849,6 +849,13 @@ class ExperimentRunner:
 
         script_path = self._store.repo_dir / exp["script"]
         local_exp_dir = script_path.parent
+        if not script_path.exists():
+            raise RuntimeError(
+                f"script file missing for experiment {label}: {exp['script']!r}\n"
+                f"The experiment was created without script_content. "
+                f"Recreate it with script_content, or use "
+                f"POST /experiments/<source_label>/rerun on an experiment that has a script."
+            )
 
         # Git context: resolve branch + commit from the idea so the executor
         # can push the right branch and create an isolated worktree.
