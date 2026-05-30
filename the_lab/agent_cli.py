@@ -293,9 +293,20 @@ def main():
     role_suffix = f" (role='{effective_role}')" if effective_role != "default" else ""
     role_arg = f"role='{effective_role}'" if effective_role != "default" else ""
     if use_loop:
-        # In loop mode, ask the model to re-read instructions each iteration
-        tool_call = f"get_instructions tool with {role_arg}" if role_arg else "get_instructions tool"
-        agent_prompt = f"/loop {args.duration} Please re-read the instructions provided by thelabapi ({tool_call}) and continue working on the provided problem."
+        # Loop mode:
+        #   - First turn: read instructions once, then start optimising.
+        #   - Subsequent turns (/loop re-invocations): continue from where we
+        #     left off. Only re-read instructions if genuinely lost (e.g. after
+        #     a crash/restart or when unsure what to do next).
+        tool_call = f"get_instructions(role='{effective_role}')" if role_arg else "get_instructions()"
+        agent_prompt = (
+            f"/loop {args.duration} "
+            f"Start by calling {tool_call} to load the project instructions and API reference. "
+            f"Then enter a continuous optimisation loop: propose and run experiments, "
+            f"analyse results, and keep improving. "
+            f"Only call {tool_call} again if you have lost context and are unsure what to do — "
+            f"otherwise trust your current context and keep working."
+        )
         print(f"Mode: loop (every {args.duration}){role_suffix}", file=sys.stderr)
     else:
         # Prepend a directive to call get_instructions first if MCP is available
