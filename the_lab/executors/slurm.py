@@ -181,27 +181,41 @@ class SlurmExecutor:
         can pass it without needing to SSH again.
         """
         abs_path = self._resolve_git_repo_path()
-        self._ssh_plain(
-            f"git init --bare {abs_path} -q 2>/dev/null || true"
-        )
+        self._ssh_plain(f"git init --bare {abs_path} -q 2>/dev/null || true")
+
         self._resolved_bare_path: str = abs_path  # type: ignore[attr-defined]
         return abs_path
 
     def push_branch(self, local_repo_dir: Path, branch: str) -> None:
-        """Push *branch* from the local repo to the remote bare repo via SSH.
+        """Push *branch* from the local repo to the remote repo via SSH.
 
         Uses an SSH URL so no extra git remote needs to be configured.
         The push is force-pushed because ideas are re-committed frequently.
+
+        If the push fails because the branch is currently checked out on the
+        remote (non-bare repo), switch the remote off that branch first
+        (checkout main, or detach HEAD) so the push can proceed cleanly.
         """
         abs_bare = self._resolve_git_repo_path()
-        # SSH URL: ssh://alias/absolute/path  (no user@ needed if alias handles it)
         remote_url = f"ssh://{self.ssh_host}{abs_bare}"
-        result = subprocess.run(
-            ["git", "-C", str(local_repo_dir),
-             "push", "--force", "--quiet", remote_url,
-             f"{branch}:{branch}"],
-            capture_output=True, text=True,
-        )
+
+        def _do_push() -> subprocess.CompletedProcess:
+            return subprocess.run(
+                ["git", "-C", str(local_repo_dir),
+                 "push", "--force", "--quiet", remote_url,
+                 f"{branch}:{branch}"],
+                capture_output=True, text=True,
+            )
+
+        result = _do_push()
+        if result.returncode != 0 and "branch is currently checked out" in result.stderr:
+            # Remote is a non-bare repo with this branch checked out.
+            # Move it off the branch so the push is accepted, then retry.
+            self._ssh_plain(
+                f"git -C {abs_bare} checkout main -q 2>/dev/null || "
+                f"git -C {abs_bare} checkout --detach HEAD -q 2>/dev/null || true"
+            )
+            result = _do_push()
         if result.returncode != 0:
             raise RuntimeError(
                 f"git push to slurm failed for branch {branch!r}:\n"
