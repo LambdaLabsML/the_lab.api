@@ -582,11 +582,16 @@ class ExperimentRunner:
 
         script_path = self._store.repo_dir / exp["script"]
         if not script_path.exists():
-            return {
-                "status": "error",
-                "reason": f"script not found at {exp['script']}. "
-                          f"Write the script first, or pass script_content when creating the experiment.",
-            }
+            msg = (
+                f"script not found at {exp['script']!r}. "
+                f"Provide script_content when creating the experiment, or use "
+                f"POST /experiments/<source>/rerun on an experiment that has a script."
+            )
+            self._store.update_experiment(
+                label, status="failed", error=msg,
+                finished_at=datetime.now(timezone.utc).isoformat(),
+            )
+            return {"status": "error", "reason": msg}
 
         os.chmod(script_path, os.stat(script_path).st_mode | 0o755)
 
@@ -850,12 +855,18 @@ class ExperimentRunner:
         script_path = self._store.repo_dir / exp["script"]
         local_exp_dir = script_path.parent
         if not script_path.exists():
-            raise RuntimeError(
-                f"script file missing for experiment {label}: {exp['script']!r}\n"
-                f"The experiment was created without script_content. "
-                f"Recreate it with script_content, or use "
-                f"POST /experiments/<source_label>/rerun on an experiment that has a script."
+            msg = (
+                f"script file missing: {exp['script']!r}. "
+                f"The experiment was created without script_content — "
+                f"provide script_content when creating, or use "
+                f"POST /experiments/<source>/rerun on an experiment that has a script."
             )
+            self._store.update_experiment(
+                label, status="failed", error=msg,
+                finished_at=datetime.now(timezone.utc).isoformat(),
+            )
+            print(f"[the-lab] errored experiment {label}: {msg}")
+            return {"status": "error", "reason": msg}
 
         # Git context: resolve branch + commit from the idea so the executor
         # can push the right branch and create an isolated worktree.
