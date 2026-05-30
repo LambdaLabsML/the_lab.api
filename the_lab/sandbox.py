@@ -311,27 +311,42 @@ def default_sandbox_config(repo_dir: Path) -> dict:
     }
 
 
+def _to_relative(path: str, base: str) -> str:
+    """Return path relative to base when possible, else return as-is."""
+    try:
+        return str(Path(path).relative_to(base))
+    except ValueError:
+        return path  # outside repo — keep absolute
+
+
 def load_sandbox_config(repo_dir: Path) -> dict:
     stored = _read_json(sandbox_config_path(repo_dir), {})
     config = default_sandbox_config(repo_dir)
-    base = str(repo_dir)
     config["enabled"] = bool(stored.get("enabled", False))
     config["allowlist"] = normalize_rules(stored.get("allowlist", []))
     config["denylist"] = normalize_rules(stored.get("denylist", []))
-    config["file_rw"] = normalize_paths(stored.get("file_rw", []), base_dir=base)
-    config["file_ro"] = normalize_paths(stored.get("file_ro", []), base_dir=base)
+    # Paths are stored relative to repo_dir; return them as-is so the UI
+    # shows relative paths (portable across worktrees).  build_bwrap_args
+    # resolves them to absolute when constructing the bwrap command.
+    config["file_rw"] = [p for p in stored.get("file_rw", []) if p]
+    config["file_ro"] = [p for p in stored.get("file_ro", []) if p]
     config["has_disable_password"] = bool(stored.get("disable_password_hash"))
     return config
 
 
 def save_sandbox_config(repo_dir: Path, payload: dict) -> dict:
     base = str(repo_dir)
+    # Normalize to absolute first (resolves any relative inputs), then convert
+    # back to relative so config.json stores portable paths that work in
+    # worktrees without editing.
+    abs_rw = normalize_paths(payload.get("file_rw", []), base_dir=base)
+    abs_ro = normalize_paths(payload.get("file_ro", []), base_dir=base)
     stored = {
         "enabled": bool(payload.get("enabled", True)),
         "allowlist": normalize_rules(payload.get("allowlist", [])),
         "denylist": normalize_rules(payload.get("denylist", [])),
-        "file_rw": normalize_paths(payload.get("file_rw", []), base_dir=base),
-        "file_ro": normalize_paths(payload.get("file_ro", []), base_dir=base),
+        "file_rw": [_to_relative(p, base) for p in abs_rw],
+        "file_ro": [_to_relative(p, base) for p in abs_ro],
     }
     _write_json(sandbox_config_path(repo_dir), stored)
     return load_sandbox_config(repo_dir)
@@ -547,8 +562,9 @@ def build_bwrap_args(repo_dir: Path, config: dict, cwd: Path | str | None = None
     default_ro = default_file_ro(repo_dir)
 
     # Merge user rules with defaults; user rules take precedence for the same path.
-    user_rw = set(config.get("file_rw") or [])
-    user_ro = set(config.get("file_ro") or [])
+    # Paths from load_sandbox_config are relative to repo_dir — resolve to absolute.
+    user_rw = set(normalize_paths(config.get("file_rw") or [], base_dir=str(repo_dir)))
+    user_ro = set(normalize_paths(config.get("file_ro") or [], base_dir=str(repo_dir)))
 
     rw_paths: list[str] = []
     seen: set[str] = set()
