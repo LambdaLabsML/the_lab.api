@@ -107,28 +107,37 @@ def list_past_agents_endpoint():
 
 @router.get("/api/v1/agents/costs")
 def get_agent_costs():
-    """Return per-agent cost + token totals for all known agents.
+    """Return per-agent cost + token data for all known agents.
 
-    Results are cached in ``.the_lab/agent_costs.json``.  Live agents are
-    always re-computed (their cost grows); completed agents are looked up
-    from the cache and only computed if missing.
+    Cached in ``.the_lab/agent_costs.json``.
+
+    Completed agents are computed once and stored as a flat record.
+    Live agents accumulate a ``readings`` list — one entry appended per
+    call — so callers can draw a cost-over-time chart as the agent runs.
 
     Response schema::
 
         {
           "<agent_id>": {
-            "cost": 1.234,
-            "inTok": 120000,
-            "outTok": 8000,
-            "ts": "2025-05-28T12:34:56",   # completion or creation ISO time
-            "live": false
+            // Completed agent — single record at completion time
+            "cost": 1.234, "inTok": 120000, "outTok": 8000,
+            "ts": "2025-05-28T12:34:56", "live": false
           },
-          ...
+          "<live_agent_id>": {
+            // Live agent — time-series of cost snapshots
+            "live": true,
+            "ts": "2025-05-28T11:00:00",   // creation time (x-axis anchor)
+            "readings": [
+              {"ts": "2025-05-28T11:05:00", "cost": 0.50, "inTok": 40000, "outTok": 3000},
+              {"ts": "2025-05-28T11:06:00", "cost": 1.10, "inTok": 80000, "outTok": 6000}
+            ]
+          }
         }
     """
+    from datetime import datetime, timezone
+
     cache_path = REPO_DIR / ".the_lab" / "agent_costs.json"
 
-    # Load persisted cache
     with _costs_lock:
         try:
             cache: dict = json.loads(cache_path.read_text()) if cache_path.exists() else {}
@@ -140,36 +149,36 @@ def get_agent_costs():
     live_ids = {a["agent_id"] for a in live_agents}
 
     to_compute: list[dict] = []
-    # Always re-compute live agents (cost grows)
     for a in live_agents:
         to_compute.append({**a, "_live": True})
-    # Compute past agents only if not yet cached (or previously marked live)
     for a in past_agents:
         aid = a["agent_id"]
-        if aid not in cache or cache[aid].get("live"):
+        existing = cache.get(aid, {})
+        # Re-compute if: never cached, or was previously live (now finalise it)
+        if not existing or existing.get("live"):
             to_compute.append({**a, "_live": False})
 
+    now_iso = datetime.now(timezone.utc).isoformat()
     changed = False
+
     for a in to_compute:
         aid = a["agent_id"]
         worktree = a.get("worktree", "")
         is_live = a["_live"]
-        ts = a.get("completed_at") or a.get("created_at") or ""
+        ts = a.get("completed_at") or a.get("created_at") or now_iso
 
         project_dir = _find_agent_project_dir(worktree) if worktree else None
         if not project_dir:
             continue
 
-        # For fallback (shared) dirs, only use for live agents with a since cutoff
         exact_dir = Path.home() / ".claude" / "projects" / _worktree_project_dir(worktree)
         since: float | None = None
         if project_dir != exact_dir:
             if not is_live:
-                continue  # ambiguous — skip past agents on shared dirs
+                continue  # shared fallback dir — skip past agents (ambiguous)
             created_at = a.get("created_at")
             if created_at:
                 try:
-                    from datetime import datetime
                     since = datetime.fromisoformat(created_at).timestamp()
                 except Exception:
                     pass
@@ -177,22 +186,47 @@ def get_agent_costs():
         try:
             data = _parse_jsonl_dir(project_dir, since=since)
             t = data["totals"]
-            if t["cost_usd"] > 0 or t["input_tokens"] > 0:
+            if not (t["cost_usd"] > 0 or t["input_tokens"] > 0):
+                continue
+
+            if is_live:
+                # Append a new reading to the time-series
+                existing = cache.get(aid, {})
+                readings = existing.get("readings", [])
+                readings.append({
+                    "ts": now_iso,
+                    "cost": t["cost_usd"],
+                    "inTok": t["input_tokens"],
+                    "outTok": t["output_tokens"],
+                })
+                readings = readings[-500:]  # cap history
+                cache[aid] = {"live": True, "ts": ts, "readings": readings}
+            else:
+                # Completed — single flat record
                 cache[aid] = {
                     "cost": t["cost_usd"],
                     "inTok": t["input_tokens"],
                     "outTok": t["output_tokens"],
                     "ts": ts,
-                    "live": is_live,
+                    "live": False,
                 }
-                changed = True
+            changed = True
         except Exception:
             pass
 
-    # Mark any cached entry that was live but is no longer running
+    # Finalise any agent that was live but has now completed:
+    # Convert its readings to a flat completed record using the last reading.
     for aid, entry in list(cache.items()):
         if entry.get("live") and aid not in live_ids:
-            cache[aid] = {**entry, "live": False}
+            readings = entry.get("readings", [])
+            last = readings[-1] if readings else {}
+            cache[aid] = {
+                "cost": last.get("cost", 0),
+                "inTok": last.get("inTok", 0),
+                "outTok": last.get("outTok", 0),
+                "ts": entry.get("ts", now_iso),
+                "live": False,
+            }
             changed = True
 
     if changed:

@@ -91,15 +91,24 @@ export const runningProgress = signal<Record<string, number>>({});
 // Agent cost / token data — populated by polling.ts (always-on, not pane-dependent)
 // ---------------------------------------------------------------------------
 
-/** Per-agent cost+token data. Key = agent_id. Updated by pollAgentCosts(). */
-export interface AgentCostEntry {
+export interface AgentCostReading {
+  ts: string;
   cost: number;
   inTok: number;
   outTok: number;
-  /** ISO timestamp used for the sparkline x-axis. Completion time for past; creation for live. */
+}
+
+/** Per-agent cost+token data. Key = agent_id. Updated by pollAgentCosts(). */
+export interface AgentCostEntry {
+  // Completed agents: flat record
+  cost?: number;
+  inTok?: number;
+  outTok?: number;
+  /** Completion time (completed) or creation time (live). */
   ts: string;
-  /** Whether this agent is still running (costs grow over time). */
   live: boolean;
+  // Live agents: time-series of snapshots
+  readings?: AgentCostReading[];
 }
 export const agentCostMap = signal<Record<string, AgentCostEntry>>({});
 

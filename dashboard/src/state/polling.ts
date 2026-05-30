@@ -247,13 +247,26 @@ function pollLog(): Promise<void> {
 // Agent cost polling — always-on, server-persisted in .the_lab/agent_costs.json
 // ---------------------------------------------------------------------------
 
+function lastReading(e: AgentCostEntry): { cost: number; inTok: number; outTok: number } {
+  if (e.live && e.readings?.length) {
+    const r = e.readings[e.readings.length - 1];
+    return { cost: r.cost, inTok: r.inTok, outTok: r.outTok };
+  }
+  return { cost: e.cost ?? 0, inTok: e.inTok ?? 0, outTok: e.outTok ?? 0 };
+}
+
 function recomputeTotals(map: Record<string, AgentCostEntry>): void {
   const vals = Object.values(map);
   if (!vals.length) return;
-  totalAgentCost.value = vals.reduce((s, e) => s + e.cost, 0);
-  totalAgentInputTokens.value = vals.reduce((s, e) => s + e.inTok, 0);
-  totalAgentOutputTokens.value = vals.reduce((s, e) => s + e.outTok, 0);
-  totalAgentTokens.value = vals.reduce((s, e) => s + e.inTok + e.outTok, 0);
+  let cost = 0, inTok = 0, outTok = 0;
+  for (const e of vals) {
+    const r = lastReading(e);
+    cost += r.cost; inTok += r.inTok; outTok += r.outTok;
+  }
+  totalAgentCost.value = cost;
+  totalAgentInputTokens.value = inTok;
+  totalAgentOutputTokens.value = outTok;
+  totalAgentTokens.value = inTok + outTok;
 }
 
 function pollAgentCosts(): Promise<void> {

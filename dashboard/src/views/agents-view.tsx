@@ -363,6 +363,13 @@ export function AgentsView() {
   // Cost data comes from the global signal (populated by polling.ts, always-on)
   const costMap = agentCostMap.value;
 
+  function agentCost(id: string): number | null {
+    const e = costMap[id];
+    if (!e) return null;
+    if (e.live && e.readings?.length) return e.readings[e.readings.length - 1].cost;
+    return e.cost ?? null;
+  }
+
   const cancelledRef = useRef(false);
 
   async function refresh(): Promise<AgentEntry[] | null> {
@@ -420,19 +427,34 @@ export function AgentsView() {
     return `${total} active agent${total === 1 ? "" : "s"}, ${stale} stale`;
   }, [agents]);
 
-  // Cumulative cost/token chart data — built from the global agentCostMap signal,
-  // sorted by each agent's timestamp so the line grows left-to-right over time.
+  // Cumulative cost/token chart.
+  // Completed agents contribute one point each at their completion time.
+  // Live agents contribute their full readings array so the line grows over time.
   const chartPoints = useMemo<ChartPoint[]>(() => {
-    const entries = Object.entries(costMap)
-      .filter(([, e]) => e.cost > 0 || e.inTok > 0)
-      .map(([, e]) => ({ ts: Date.parse(e.ts), cost: e.cost, tok: e.inTok + e.outTok }));
-    entries.sort((a, b) => a.ts - b.ts);
-    let cumCost = 0, cumTok = 0;
-    return entries.map(({ ts, cost, tok }) => {
-      cumCost += cost;
-      cumTok += tok;
-      return { t: ts, cost: cumCost, tokens: cumTok };
-    });
+    // 1. Completed agents — sorted by completion ts, cumulative baseline
+    const completed = Object.values(costMap)
+      .filter((e) => !e.live && (e.cost ?? 0) > 0)
+      .map((e) => ({ t: Date.parse(e.ts), cost: e.cost ?? 0, tok: (e.inTok ?? 0) + (e.outTok ?? 0) }))
+      .sort((a, b) => a.t - b.t);
+
+    let baseCost = 0, baseTok = 0;
+    const pts: ChartPoint[] = [];
+    for (const p of completed) {
+      baseCost += p.cost;
+      baseTok += p.tok;
+      pts.push({ t: p.t, cost: baseCost, tokens: baseTok });
+    }
+
+    // 2. Live agents — append each reading on top of the completed baseline
+    for (const e of Object.values(costMap).filter((e) => e.live)) {
+      const readings = e.readings ?? (e.cost != null ? [{ ts: e.ts, cost: e.cost, inTok: e.inTok ?? 0, outTok: e.outTok ?? 0 }] : []);
+      for (const r of readings) {
+        pts.push({ t: Date.parse(r.ts), cost: baseCost + r.cost, tokens: baseTok + r.inTok + r.outTok });
+      }
+    }
+
+    pts.sort((a, b) => a.t - b.t);
+    return pts;
   }, [costMap]);
 
   return (
@@ -554,11 +576,11 @@ export function AgentsView() {
                   </div>
                 </div>
 
-                {costMap[agent.agent_id]?.cost != null && (
+                {agentCost(agent.agent_id) != null && (
                   <div class="agents-card-row">
                     <div class="agents-card-label">Cost so far</div>
                     <div class="agents-card-value" style={{ color: "var(--accent)", fontWeight: 600 }}>
-                      ${costMap[agent.agent_id]?.cost.toFixed(3)}
+                      ${agentCost(agent.agent_id)!.toFixed(3)}
                     </div>
                   </div>
                 )}
@@ -618,9 +640,9 @@ export function AgentsView() {
                 <span style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", whiteSpace: "nowrap" }}>
                   {a.completed_at ? relativeTime(a.completed_at) : "—"}
                 </span>
-                {costMap[a.agent_id]?.cost != null ? (
+                {agentCost(a.agent_id) != null ? (
                   <span style={{ fontSize: "var(--text-xs)", color: "var(--accent)", fontWeight: 600, whiteSpace: "nowrap", minWidth: 52, textAlign: "right" }}>
-                    ${costMap[a.agent_id]?.cost.toFixed(3)}
+                    ${agentCost(a.agent_id)!.toFixed(3)}
                   </span>
                 ) : (
                   <span style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", minWidth: 52, textAlign: "right" }}>—</span>
