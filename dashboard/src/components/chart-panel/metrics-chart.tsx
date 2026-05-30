@@ -26,6 +26,7 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
   const isClone = !!instanceId;
   const [localMetric, setLocalMetric] = useState(initialMetric || "");
   const [logScale, setLogScale] = useState(false);
+  const [visibilityTick, setVisibilityTick] = useState(0);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const chartRef = useRef<Chart | null>(null);
   const innerRef = useRef<HTMLDivElement>(null);
@@ -67,13 +68,20 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
   // When the canvas transitions from hidden (display:none dockview tab) to
   // visible, Chart.js's internal ResizeObserver doesn't always fire. Use an
   // IntersectionObserver to detect visibility and force a resize+redraw.
+  // If the chart was never created (canvas had 0 dimensions on first mount —
+  // common on mobile before dockview finishes layout), bump visibilityTick
+  // to re-run the draw effect now that the canvas is properly sized.
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const observer = new IntersectionObserver((entries) => {
-      if (entries[0].isIntersecting && chartRef.current) {
-        chartRef.current.resize();
-        chartRef.current.update("none");
+      if (entries[0].isIntersecting) {
+        if (chartRef.current) {
+          chartRef.current.resize();
+          chartRef.current.update("none");
+        } else {
+          setVisibilityTick((t) => t + 1);
+        }
       }
     }, { threshold: 0.01 });
     observer.observe(canvas);
@@ -142,7 +150,7 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
     }); // end requestAnimationFrame
 
     return () => cancelAnimationFrame(rafId);
-  }, [metric, mode, impOnly, tags, tagMode, experiments, reversed, showAbandoned.value, showConcluded.value, showRunning.value, clip, mean, logScale, theme, _fz]);
+  }, [metric, mode, impOnly, tags, tagMode, experiments, reversed, showAbandoned.value, showConcluded.value, showRunning.value, clip, mean, logScale, theme, _fz, visibilityTick]);
 
   // Handle highlight changes separately (just update point sizes)
   useEffect(() => {
