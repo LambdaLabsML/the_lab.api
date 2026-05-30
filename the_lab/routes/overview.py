@@ -13,6 +13,7 @@ from ..deps import (
     metric_direction,
     _idea_context,
     _branch_diff_summary,
+    _description_short,
     _read_task,
     project_fields,
     resolve_metric,
@@ -39,7 +40,7 @@ def _build_leaderboard_response(
 
     def _idea_desc(idea_id: int) -> str | None:
         idea = idea_by_id.get(idea_id)
-        return idea["description"] if idea else None
+        return _description_short(idea["description"]) if idea else None
 
     def _public_meta(exp: dict) -> dict:
         return {
@@ -62,7 +63,7 @@ def _build_leaderboard_response(
         idea_exps = exps_by_idea.get(idea["id"], [])
         open_ideas.append({
             "id": idea["id"],
-            "description": idea["description"],
+            "description": _description_short(idea["description"]),
             "source": idea.get("source", "agent"),
             "priority": idea.get("priority", "normal"),
             "running_experiments": sum(1 for e in idea_exps if e.get("status") == "running"),
@@ -83,13 +84,13 @@ def _build_leaderboard_response(
             continue
         running_experiments.append({
             "experiment_id": exp["id"],
+            "label": exp.get("label"),
             "idea_id": exp["idea_id"],
             "idea_description": _idea_desc(exp["idea_id"]),
-            "description": exp.get("description"),
+            "description": _description_short(exp.get("description")),
             "tags": exp.get("tags", []),
             "started_at": exp.get("started_at"),
             "runtime": exp.get("runtime"),
-            "meta": _public_meta(exp),
         })
     running_experiments.sort(key=lambda e: e.get("started_at") or "", reverse=True)
 
@@ -155,15 +156,15 @@ def _build_leaderboard_response(
         best_exp = by_value[0]
         idea = idea_by_id.get(best_exp["idea_id"])
         if idea:
-            insights = [n["text"] for n in store.get_notes(idea["id"], levels={"insight"})]
+            insights = [n["text"][:200] for n in store.get_notes(idea["id"], levels={"insight"})]
             best_idea = {
                 "id": idea["id"],
-                "description": idea["description"],
+                "description": _description_short(idea["description"]),
                 "parent_ids": idea.get("parent_ids", []),
                 "branch": idea.get("branch"),
-                "conclusion": idea.get("conclusion"),
+                "conclusion": _description_short(idea.get("conclusion")),
                 "best_value": _mv(best_exp),
-                "key_insights": insights[:5],
+                "key_insights": insights[:3],
                 "branch_from_this": f"POST /ideas/new with parent_ids=[{idea['id']}]",
             }
 
@@ -196,7 +197,7 @@ def _build_leaderboard_response(
     for idea in all_ideas:
         for note in store.get_notes(idea["id"], levels={"insight"}):
             key_insights.append({
-                "text": note["text"],
+                "text": note["text"][:200],
                 "idea_id": idea["id"],
                 "created_at": note.get("created_at"),
             })
@@ -236,7 +237,7 @@ def _build_leaderboard_response(
         "recent": recent_out,
         "progression": progression,
         "progression_total": progression_total,
-        "key_insights": key_insights[:10],
+        "key_insights": key_insights[:5],
         "key_insights_total": len(key_insights),
     }
 
@@ -286,8 +287,8 @@ def leaderboard_with_search(
     q: str = Query(default="", description="Comma-separated keywords to search for in idea descriptions"),
     top: int = Query(default=10, description="Number of top experiments to show"),
     sort: str = Query(default="desc", description="Sort order: 'desc' (highest first) or 'asc' (lowest first)"),
-    max_open_ideas: int = Query(default=10, description="Cap on the open_ideas list (most recently active first)"),
-    max_progression: int = Query(default=8, description="Cap on the progression list (most recent improvements)"),
+    max_open_ideas: int = Query(default=5, description="Cap on the open_ideas list (most recently active first)"),
+    max_progression: int = Query(default=5, description="Cap on the progression list (most recent improvements)"),
     max_search_results: int = Query(default=5, description="Cap on idea search_results when q is provided"),
     search_notes_limit: int = Query(
         default=3,
