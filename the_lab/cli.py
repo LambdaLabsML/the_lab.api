@@ -112,7 +112,36 @@ def cmd_init(target: str | None = None):
         preamble_dst.chmod(0o755)
         print(f"  {_green(chr(10003))} Created .the_lab/preamble.sh -- add project setup here (activate venv, etc.)")
 
-    # 4. MCP bridge ----------------------------------------------------------
+    # 4. pre-commit hook — blocks staged changes to blocked files ---------------
+    hooks_dir = repo / ".git" / "hooks"
+    hook_path = hooks_dir / "pre-commit"
+    hook_body = (
+        "#!/usr/bin/env bash\n"
+        "# Installed by the-lab init — prevents committing changes to blocked files.\n"
+        "blocked='.the_lab/blocked_files.txt'\n"
+        "[ -f \"$blocked\" ] || exit 0\n"
+        "while IFS= read -r file || [ -n \"$file\" ]; do\n"
+        "  # strip comments and blank lines\n"
+        "  file=\"${file%%#*}\"\n"
+        "  file=\"${file//[[:space:]]/}\"\n"
+        "  [ -z \"$file\" ] && continue\n"
+        "  if git diff --cached --name-only | grep -qxF \"$file\"; then\n"
+        "    echo \"error: commit blocked — '$file' is in .the_lab/blocked_files.txt\" >&2\n"
+        "    exit 1\n"
+        "  fi\n"
+        "done < \"$blocked\"\n"
+    )
+    if hooks_dir.exists():
+        if hook_path.exists():
+            print(f"  {_green(chr(10003))} .git/hooks/pre-commit already exists")
+        else:
+            hook_path.write_text(hook_body)
+            hook_path.chmod(0o755)
+            print(f"  {_green(chr(10003))} Installed .git/hooks/pre-commit (blocks commits to blocked files)")
+    else:
+        print(f"  {_dim('-')} Skipped pre-commit hook (.git/hooks/ not found)")
+
+    # 5. MCP bridge ----------------------------------------------------------
     _pkg_skills = Path(__file__).parent / "agent_skills"
     mcp_script_src = _pkg_skills / "skills" / "lab_api_mcp.py"
     mcp_json_src = _pkg_skills / "mcp.json"
@@ -197,7 +226,7 @@ def cmd_init(target: str | None = None):
     else:
         print(f"  {_dim('-')} MCP bridge not found in package (agent_skills/ missing)")
 
-    # 5. .gitignore ----------------------------------------------------------
+    # 6. .gitignore ----------------------------------------------------------
     gitignore = repo / ".gitignore"
     existing = gitignore.read_text() if gitignore.exists() else ""
     lines = existing.splitlines()
@@ -221,7 +250,7 @@ def cmd_init(target: str | None = None):
     else:
         print(f"  {_green(chr(10003))} .gitignore already includes .the_lab/ and .claude/")
 
-    # 6. Pre-fill PROMPT.md with Claude --------------------------------
+    # 7. Pre-fill PROMPT.md with Claude --------------------------------
     # Pick the active prompt file: prefer .the_lab/PROMPT.md (canonical),
     # fall back to legacy <repo>/PROMPT.md if the user declined migration.
     active_prompt = canonical_prompt if canonical_prompt.exists() else legacy_prompt
@@ -260,7 +289,7 @@ def cmd_init(target: str | None = None):
         else:
             print(f"  {_dim('-')} Skipped — edit PROMPT.md manually")
 
-    # 7. Next steps ----------------------------------------------------------
+    # 8. Next steps ----------------------------------------------------------
     print(f"\n{_bold('Next steps:')}\n")
     print(f"  1. Review {_blue('PROMPT.md')}")
     print(f"  2. Start the server:")

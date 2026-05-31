@@ -622,6 +622,32 @@ def build_bwrap_args(repo_dir: Path, config: dict, cwd: Path | str | None = None
     for path in ro_paths:
         args.extend(["--ro-bind", path, path])
 
+    # Protect git hooks from tampering. The repo is bound read-write above, but
+    # .git/hooks/ is remounted read-only AFTER so bwrap's later mount wins.
+    # This prevents an agent from disabling the pre-commit hook (which blocks
+    # staged changes to blocked files) or installing a malicious hook.
+    for git_dir in [repo_dir / ".git", Path(cwd) / ".git"]:
+        hooks_dir = git_dir / "hooks"
+        if hooks_dir.is_dir():
+            hooks_str = str(hooks_dir)
+            args.extend(["--ro-bind", hooks_str, hooks_str])
+        # Worktree .git is a file pointing to the main git dir; also protect
+        # the main repo's hooks when cwd is a worktree.
+        elif git_dir.is_file():
+            try:
+                # Read "gitdir: /path/to/.git/worktrees/xxx"
+                gitdir_line = git_dir.read_text().strip()
+                if gitdir_line.startswith("gitdir:"):
+                    wt_gitdir = Path(gitdir_line.split(":", 1)[1].strip())
+                    # Main git dir is two levels up from the worktree gitdir
+                    main_hooks = wt_gitdir.parent.parent / "hooks"
+                    if main_hooks.is_dir():
+                        hooks_str = str(main_hooks)
+                        if hooks_str not in args:
+                            args.extend(["--ro-bind", hooks_str, hooks_str])
+            except Exception:
+                pass
+
     # Chdir to repo_dir so `python -m the_lab.sandbox_guest` can resolve the
     # package. sandbox_guest will chdir into the target *cwd* before exec'ing
     # the user's command.
