@@ -68,8 +68,11 @@ export async function getIdea(
   id: number,
   allNotes?: boolean,
 ): Promise<IdeaDetail> {
-  const qs = allNotes ? "?notes=all" : "";
-  return fetchJson<IdeaDetail>(`/api/v1/ideas/${id}${qs}`);
+  // Always request full experiments so the detail panel shows meta/config keys.
+  // The slim default strips meta (it's designed for agent token budgets, not the UI).
+  const params = new URLSearchParams({ experiments: "full" });
+  if (allNotes) params.set("notes", "all");
+  return fetchJson<IdeaDetail>(`/api/v1/ideas/${id}?${params}`);
 }
 
 /** GET /api/v1/ideas — returns the full list of ideas (summary form).
