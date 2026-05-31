@@ -426,6 +426,7 @@ def main():
 
         _resumed_from_old = False
         _stale_proj: "Path | None" = None
+        _stale_agent_id: "str | None" = None
         if _resume_id:
             _projects_root = Path.home() / ".claude" / "projects"
             # Find which project dir contains this session
@@ -466,12 +467,13 @@ def main():
                                     file=sys.stderr,
                                 )
                             else:
-                                # Worktree gone — register fresh but copy JSONL so
+                                # Worktree gone — register fresh but move JSONL so
                                 # the new project dir can find the session
                                 _stale_proj = _session_proj
+                                _stale_agent_id = _entry["agent_id"]
                                 print(
                                     f"  session {_resume_id[:8]}… found (worktree was cleaned up)"
-                                    f" — will copy to fresh worktree",
+                                    f" — will move to fresh worktree",
                                     file=sys.stderr,
                                 )
                             break
@@ -503,16 +505,31 @@ def main():
                 )
                 env["THE_LAB_AGENT_ID"] = agent_id
                 env["THE_LAB_AGENT_WORKTREE"] = str(agent_worktree)
-                # Copy session JSONL from stale project dir to new one so --resume works
+                # Move session JSONL to new project dir (not copy — a copy would
+                # double-count cost since both agents would have the same session).
+                # Remove the old agent's entry from agent_costs.json so it gets
+                # recalculated to $0 on next poll (no JSONL → no cost).
                 if _resume_id and _stale_proj:
-                    import shutil as _shutil
+                    import shutil as _shutil, json as _jsc
                     _src = _stale_proj / f"{_resume_id}.jsonl"
                     _new_proj = _projects_root / _re.sub(r"[^a-zA-Z0-9]", "-", str(agent_worktree))
                     _new_proj.mkdir(parents=True, exist_ok=True)
                     _dst = _new_proj / f"{_resume_id}.jsonl"
                     if _src.exists() and not _dst.exists():
-                        _shutil.copy2(_src, _dst)
-                        print(f"  session copied to new project dir", file=sys.stderr)
+                        _shutil.move(str(_src), _dst)
+                        print(f"  session moved to new project dir", file=sys.stderr)
+                    # Clear stale agent's cost cache entry so it won't double-count
+                    if _stale_agent_id and repo_root:
+                        _costs_path = repo_root / ".the_lab" / "agent_costs.json"
+                        try:
+                            if _costs_path.exists():
+                                _costs = _jsc.loads(_costs_path.read_text())
+                                if _stale_agent_id in _costs:
+                                    del _costs[_stale_agent_id]
+                                    _costs_path.write_text(_jsc.dumps(_costs, indent=2))
+                                    print(f"  cleared cost cache for old agent {_stale_agent_id}", file=sys.stderr)
+                        except Exception:
+                            pass
             except Exception as e:
                 _YELLOW = "\033[33m"
                 _BOLD   = "\033[1m"
