@@ -425,6 +425,7 @@ def main():
                 break
 
         _resumed_from_old = False
+        _stale_proj: "Path | None" = None
         if _resume_id:
             _projects_root = Path.home() / ".claude" / "projects"
             # Find which project dir contains this session
@@ -435,7 +436,9 @@ def main():
                         _session_proj = _proj
                         break
             if _session_proj:
-                # Match project dir name back to an agent worktree via the API
+                # Match project dir name back to an agent worktree via the API.
+                # Check both live and past agents; worktree may no longer exist
+                # (agent was unregistered) so we skip the exists() guard here.
                 try:
                     for _endpoint in (
                         f"{api_base_for_register}/agents",
@@ -449,26 +452,33 @@ def main():
                             if not _wt:
                                 continue
                             _wt_path = Path(_wt).resolve()
-                            if _re.sub(r"[^a-zA-Z0-9]", "-", str(_wt_path)) == _session_proj.name and _wt_path.exists():
+                            if _re.sub(r"[^a-zA-Z0-9]", "-", str(_wt_path)) != _session_proj.name:
+                                continue
+                            if _wt_path.exists():
+                                # Worktree still exists — reuse it directly
                                 agent_id = _entry["agent_id"]
                                 agent_worktree = _wt_path
                                 env["THE_LAB_AGENT_ID"] = agent_id
                                 env["THE_LAB_AGENT_WORKTREE"] = str(agent_worktree)
                                 _resumed_from_old = True
                                 print(
-                                    f"Agent: resuming id={agent_id} on worktree {agent_worktree}",
+                                    f"Agent: resuming id={agent_id} on existing worktree",
                                     file=sys.stderr,
                                 )
-                                break
+                            else:
+                                # Worktree gone — register fresh but copy JSONL so
+                                # the new project dir can find the session
+                                _stale_proj = _session_proj
+                                print(
+                                    f"  session {_resume_id[:8]}… found (worktree was cleaned up)"
+                                    f" — will copy to fresh worktree",
+                                    file=sys.stderr,
+                                )
+                            break
                         if _resumed_from_old:
                             break
                 except Exception:
                     pass  # fall through to normal registration
-            if not _resumed_from_old:
-                print(
-                    f"  warning: session {_resume_id[:8]}… not found in any known worktree — registering fresh",
-                    file=sys.stderr,
-                )
 
         if not _resumed_from_old:
             try:
@@ -493,6 +503,16 @@ def main():
                 )
                 env["THE_LAB_AGENT_ID"] = agent_id
                 env["THE_LAB_AGENT_WORKTREE"] = str(agent_worktree)
+                # Copy session JSONL from stale project dir to new one so --resume works
+                if _resume_id and _stale_proj:
+                    import shutil as _shutil
+                    _src = _stale_proj / f"{_resume_id}.jsonl"
+                    _new_proj = _projects_root / _re.sub(r"[^a-zA-Z0-9]", "-", str(agent_worktree))
+                    _new_proj.mkdir(parents=True, exist_ok=True)
+                    _dst = _new_proj / f"{_resume_id}.jsonl"
+                    if _src.exists() and not _dst.exists():
+                        _shutil.copy2(_src, _dst)
+                        print(f"  session copied to new project dir", file=sys.stderr)
             except Exception as e:
                 _YELLOW = "\033[33m"
                 _BOLD   = "\033[1m"
