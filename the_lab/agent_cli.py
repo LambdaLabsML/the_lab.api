@@ -399,122 +399,161 @@ def main():
     agent_id: str | None = None
     agent_worktree: Path | None = None
     if not args.no_isolated:
-        api_base_for_register = f"http://localhost:{args.port}/api/v1"
-        try:
-            import urllib.request as _urlreq
-            import urllib.error as _urlerr
-            import json as _json
-            payload = _json.dumps({
-                "role": args.role,
-                "pid": os.getpid(),
-            }).encode()
-            _reg_headers: dict[str, str] = {"Content-Type": "application/json"}
-            _lab_user = os.environ.get("THE_LAB_USER", "").strip()
-            _lab_pw   = os.environ.get("THE_LAB_PASSWORD", "").strip()
-            if _lab_user and _lab_pw:
-                import base64 as _b64
-                _reg_headers["Authorization"] = "Basic " + _b64.b64encode(
-                    f"{_lab_user}:{_lab_pw}".encode()
-                ).decode()
-            req_obj = _urlreq.Request(
-                f"{api_base_for_register}/agents/register",
-                data=payload, method="POST",
-                headers=_reg_headers,
-            )
-            with _urlreq.urlopen(req_obj, timeout=10) as resp:
-                reg = _json.loads(resp.read().decode())
-            agent_id = reg["agent_id"]
-            agent_worktree = Path(reg["worktree"]).resolve()
-            print(
-                f"Agent: registered id={agent_id} on branch {reg['branch']} "
-                f"(parent: {reg['parent_branch']})\n"
-                f"  worktree: {agent_worktree}",
-                file=sys.stderr,
-            )
-            env["THE_LAB_AGENT_ID"] = agent_id
-            env["THE_LAB_AGENT_WORKTREE"] = str(agent_worktree)
+        import urllib.request as _urlreq
+        import urllib.error as _urlerr
+        import json as _json
+        import re as _re
 
-            # If --resume <session_id> was passed, find the session JSONL anywhere
-            # in ~/.claude/projects/ and copy it into the new agent's project dir.
-            # Claude determines the project dir from CWD, so a new worktree won't
-            # find sessions written by a previous agent in a different worktree.
-            _resume_id: str | None = None
-            for _i, _a in enumerate(extra_agent_args or []):
-                if _a == "--resume" and _i + 1 < len(extra_agent_args):
-                    _resume_id = extra_agent_args[_i + 1]
-                    break
-            if _resume_id:
-                import re as _re, shutil as _shutil
-                _projects_root = Path.home() / ".claude" / "projects"
-                _new_proj_dir = _projects_root / _re.sub(r"[^a-zA-Z0-9]", "-", str(agent_worktree))
-                _target = _new_proj_dir / f"{_resume_id}.jsonl"
-                if not _target.exists():
-                    for _proj in _projects_root.iterdir() if _projects_root.exists() else []:
-                        _src = _proj / f"{_resume_id}.jsonl"
-                        if _src.exists():
-                            _new_proj_dir.mkdir(parents=True, exist_ok=True)
-                            _shutil.copy2(_src, _target)
-                            print(f"  session {_resume_id[:8]}… copied to new project dir", file=sys.stderr)
-                            break
-                    else:
-                        print(f"  warning: session {_resume_id[:8]}… not found in ~/.claude/projects/", file=sys.stderr)
-        except Exception as e:
-            _YELLOW = "\033[33m"
-            _BOLD   = "\033[1m"
-            _RESET  = "\033[0m"
-            _RED    = "\033[31m"
-            _GREEN  = "\033[32m"
-            _DIM    = "\033[2m"
-            while True:
-                print(
-                    f"\n{_BOLD}{_YELLOW}⚠  Agent registration failed{_RESET}\n"
-                    f"   {_DIM}{e}{_RESET}\n"
-                    f"   Is the Lab API server running?  (port {args.port})\n",
-                    file=sys.stderr,
-                )
-                print(
-                    f"  {_BOLD}[r]{_RESET} Retry registration\n"
-                    f"  {_BOLD}[c]{_RESET} Continue without isolation (legacy / main-repo mode)\n"
-                    f"  {_BOLD}[q]{_RESET} Quit\n",
-                    file=sys.stderr,
-                )
-                try:
-                    choice = input("  Choice [r/c/q]: ").strip().lower()
-                except (EOFError, KeyboardInterrupt):
-                    choice = "q"
-                if choice == "r":
-                    try:
-                        req_obj2 = _urlreq.Request(
-                            f"{api_base_for_register}/agents/register",
-                            data=payload, method="POST",
-                            headers=_reg_headers,
-                        )
-                        with _urlreq.urlopen(req_obj2, timeout=10) as resp2:
-                            reg = _json.loads(resp2.read().decode())
-                        agent_id = reg["agent_id"]
-                        agent_worktree = Path(reg["worktree"]).resolve()
-                        print(
-                            f"\n{_GREEN}✓ Registered{_RESET} id={agent_id} on branch {reg['branch']}"
-                            f" (parent: {reg['parent_branch']})\n"
-                            f"  worktree: {agent_worktree}",
-                            file=sys.stderr,
-                        )
-                        env["THE_LAB_AGENT_ID"] = agent_id
-                        env["THE_LAB_AGENT_WORKTREE"] = str(agent_worktree)
+        api_base_for_register = f"http://localhost:{args.port}/api/v1"
+
+        _lab_user = os.environ.get("THE_LAB_USER", "").strip()
+        _lab_pw   = os.environ.get("THE_LAB_PASSWORD", "").strip()
+        _reg_headers: dict[str, str] = {"Content-Type": "application/json"}
+        if _lab_user and _lab_pw:
+            import base64 as _b64
+            _reg_headers["Authorization"] = "Basic " + _b64.b64encode(
+                f"{_lab_user}:{_lab_pw}".encode()
+            ).decode()
+
+        # If --resume <session_id> is given, find the agent whose worktree
+        # owns that session and reuse it instead of creating a fresh one.
+        # This keeps the same branch and working state as the original run.
+        _resume_id: str | None = None
+        for _i, _a in enumerate(extra_agent_args or []):
+            if _a == "--resume" and _i + 1 < len(extra_agent_args):
+                _resume_id = extra_agent_args[_i + 1]
+                break
+
+        _resumed_from_old = False
+        if _resume_id:
+            _projects_root = Path.home() / ".claude" / "projects"
+            # Find which project dir contains this session
+            _session_proj: Path | None = None
+            if _projects_root.exists():
+                for _proj in _projects_root.iterdir():
+                    if (_proj / f"{_resume_id}.jsonl").exists():
+                        _session_proj = _proj
                         break
-                    except Exception as e2:
-                        e = e2
-                        continue  # show the prompt again with the new error
-                elif choice == "c":
+            if _session_proj:
+                # Match project dir name back to an agent worktree via the API
+                try:
+                    for _endpoint in (
+                        f"{api_base_for_register}/agents",
+                        f"{api_base_for_register}/agents/past",
+                    ):
+                        _req = _urlreq.Request(_endpoint, headers=_reg_headers)
+                        with _urlreq.urlopen(_req, timeout=10) as _r:
+                            _entries = _json.loads(_r.read().decode())
+                        for _entry in _entries:
+                            _wt = _entry.get("worktree", "")
+                            if not _wt:
+                                continue
+                            _wt_path = Path(_wt).resolve()
+                            if _re.sub(r"[^a-zA-Z0-9]", "-", str(_wt_path)) == _session_proj.name and _wt_path.exists():
+                                agent_id = _entry["agent_id"]
+                                agent_worktree = _wt_path
+                                env["THE_LAB_AGENT_ID"] = agent_id
+                                env["THE_LAB_AGENT_WORKTREE"] = str(agent_worktree)
+                                _resumed_from_old = True
+                                print(
+                                    f"Agent: resuming id={agent_id} on worktree {agent_worktree}",
+                                    file=sys.stderr,
+                                )
+                                break
+                        if _resumed_from_old:
+                            break
+                except Exception:
+                    pass  # fall through to normal registration
+            if not _resumed_from_old:
+                print(
+                    f"  warning: session {_resume_id[:8]}… not found in any known worktree — registering fresh",
+                    file=sys.stderr,
+                )
+
+        if not _resumed_from_old:
+            try:
+                payload = _json.dumps({
+                    "role": args.role,
+                    "pid": os.getpid(),
+                }).encode()
+                req_obj = _urlreq.Request(
+                    f"{api_base_for_register}/agents/register",
+                    data=payload, method="POST",
+                    headers=_reg_headers,
+                )
+                with _urlreq.urlopen(req_obj, timeout=10) as resp:
+                    reg = _json.loads(resp.read().decode())
+                agent_id = reg["agent_id"]
+                agent_worktree = Path(reg["worktree"]).resolve()
+                print(
+                    f"Agent: registered id={agent_id} on branch {reg['branch']} "
+                    f"(parent: {reg['parent_branch']})\n"
+                    f"  worktree: {agent_worktree}",
+                    file=sys.stderr,
+                )
+                env["THE_LAB_AGENT_ID"] = agent_id
+                env["THE_LAB_AGENT_WORKTREE"] = str(agent_worktree)
+            except Exception as e:
+                _YELLOW = "\033[33m"
+                _BOLD   = "\033[1m"
+                _RESET  = "\033[0m"
+                _RED    = "\033[31m"
+                _GREEN  = "\033[32m"
+                _DIM    = "\033[2m"
+                while True:
                     print(
-                        f"  {_DIM}Continuing without isolation. "
-                        f"Pass --no-isolated to skip this prompt next time.{_RESET}\n",
+                        f"\n{_BOLD}{_YELLOW}⚠  Agent registration failed{_RESET}\n"
+                        f"   {_DIM}{e}{_RESET}\n"
+                        f"   Is the Lab API server running?  (port {args.port})\n",
                         file=sys.stderr,
                     )
-                    break
-                else:
-                    print(f"\n{_RED}Aborted.{_RESET}", file=sys.stderr)
-                    sys.exit(1)
+                    print(
+                        f"  {_BOLD}[r]{_RESET} Retry registration\n"
+                        f"  {_BOLD}[c]{_RESET} Continue without isolation (legacy / main-repo mode)\n"
+                        f"  {_BOLD}[q]{_RESET} Quit\n",
+                        file=sys.stderr,
+                    )
+                    try:
+                        choice = input("  Choice [r/c/q]: ").strip().lower()
+                    except (EOFError, KeyboardInterrupt):
+                        choice = "q"
+                    if choice == "r":
+                        try:
+                            payload2 = _json.dumps({
+                                "role": args.role,
+                                "pid": os.getpid(),
+                            }).encode()
+                            req_obj2 = _urlreq.Request(
+                                f"{api_base_for_register}/agents/register",
+                                data=payload2, method="POST",
+                                headers=_reg_headers,
+                            )
+                            with _urlreq.urlopen(req_obj2, timeout=10) as resp2:
+                                reg = _json.loads(resp2.read().decode())
+                            agent_id = reg["agent_id"]
+                            agent_worktree = Path(reg["worktree"]).resolve()
+                            print(
+                                f"\n{_GREEN}✓ Registered{_RESET} id={agent_id} on branch {reg['branch']}"
+                                f" (parent: {reg['parent_branch']})\n"
+                                f"  worktree: {agent_worktree}",
+                                file=sys.stderr,
+                            )
+                            env["THE_LAB_AGENT_ID"] = agent_id
+                            env["THE_LAB_AGENT_WORKTREE"] = str(agent_worktree)
+                            break
+                        except Exception as e2:
+                            e = e2
+                            continue  # show the prompt again with the new error
+                    elif choice == "c":
+                        print(
+                            f"  {_DIM}Continuing without isolation. "
+                            f"Pass --no-isolated to skip this prompt next time.{_RESET}\n",
+                            file=sys.stderr,
+                        )
+                        break
+                    else:
+                        print(f"\n{_RED}Aborted.{_RESET}", file=sys.stderr)
+                        sys.exit(1)
 
     if sandbox_mode:
         # Capabilities check deferred to here so it only runs when needed.
