@@ -433,6 +433,31 @@ def main():
             )
             env["THE_LAB_AGENT_ID"] = agent_id
             env["THE_LAB_AGENT_WORKTREE"] = str(agent_worktree)
+
+            # If --resume <session_id> was passed, find the session JSONL anywhere
+            # in ~/.claude/projects/ and copy it into the new agent's project dir.
+            # Claude determines the project dir from CWD, so a new worktree won't
+            # find sessions written by a previous agent in a different worktree.
+            _resume_id: str | None = None
+            for _i, _a in enumerate(extra_agent_args or []):
+                if _a == "--resume" and _i + 1 < len(extra_agent_args):
+                    _resume_id = extra_agent_args[_i + 1]
+                    break
+            if _resume_id:
+                import re as _re, shutil as _shutil
+                _projects_root = Path.home() / ".claude" / "projects"
+                _new_proj_dir = _projects_root / _re.sub(r"[^a-zA-Z0-9]", "-", str(agent_worktree))
+                _target = _new_proj_dir / f"{_resume_id}.jsonl"
+                if not _target.exists():
+                    for _proj in _projects_root.iterdir() if _projects_root.exists() else []:
+                        _src = _proj / f"{_resume_id}.jsonl"
+                        if _src.exists():
+                            _new_proj_dir.mkdir(parents=True, exist_ok=True)
+                            _shutil.copy2(_src, _target)
+                            print(f"  session {_resume_id[:8]}… copied to new project dir", file=sys.stderr)
+                            break
+                    else:
+                        print(f"  warning: session {_resume_id[:8]}… not found in ~/.claude/projects/", file=sys.stderr)
         except Exception as e:
             _YELLOW = "\033[33m"
             _BOLD   = "\033[1m"
