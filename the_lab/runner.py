@@ -1136,20 +1136,44 @@ class ExperimentRunner:
                         "metrics": metrics,
                     })
                 else:
-                    self._store.update_experiment(
-                        exp_id,
-                        status="completed",
-                        metrics=None,
-                        pid=None,
-                        finished_at=now,
-                    )
-                    ws_mod.broadcaster.broadcast_soon({
-                        "type": "experiment_finished",
-                        "label": label,
-                        "idea_id": exp.get("idea_id"),
-                        "status": "completed",
-                        "metrics": None,
-                    })
+                    # No JSON metrics in output. Check the log for fatal error
+                    # indicators — if found, mark as failed rather than completed
+                    # with metrics=null. This catches cases where the script exits
+                    # 0 (or slurm_done never reached the API) but the log clearly
+                    # shows a fatal failure.
+                    _fatal_patterns = ("FATAL", "\nError:", "Traceback (most recent", "error: command")
+                    _log_has_fatal = any(p in output for p in _fatal_patterns)
+                    if _log_has_fatal:
+                        _last_lines = "\n".join(output.splitlines()[-10:])
+                        self._store.update_experiment(
+                            exp_id,
+                            status="failed",
+                            error=f"fatal error detected in log (no metrics produced):\n{_last_lines}",
+                            pid=None,
+                            finished_at=now,
+                        )
+                        ws_mod.broadcaster.broadcast_soon({
+                            "type": "experiment_finished",
+                            "label": label,
+                            "idea_id": exp.get("idea_id"),
+                            "status": "failed",
+                            "metrics": None,
+                        })
+                    else:
+                        self._store.update_experiment(
+                            exp_id,
+                            status="completed",
+                            metrics=None,
+                            pid=None,
+                            finished_at=now,
+                        )
+                        ws_mod.broadcaster.broadcast_soon({
+                            "type": "experiment_finished",
+                            "label": label,
+                            "idea_id": exp.get("idea_id"),
+                            "status": "completed",
+                            "metrics": None,
+                        })
                 asyncio.get_event_loop().run_in_executor(None, lambda: executor.cleanup_remote(label, abs_bare_path=getattr(executor, "_resolved_bare_path", None)))
                 self._allocator.release(label)
                 self.wake_scheduler()
