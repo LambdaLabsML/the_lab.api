@@ -819,37 +819,12 @@ def orient(
     to experiments matching ALL specified tags. Running experiments and
     suggested ideas are always shown regardless of tag filter.
 
-    Top-level keys (all optional — only present when relevant):
-
-    Always present:
-      current_branch          str   — currently checked-out git branch
-      status                  str   — one of: has_running | has_failures |
-                                      has_pending | has_failures_and_completions |
-                                      ready | no_experiments
-      recommendation          str   — single focused action to take next
-      next_step               str   — API call or CLI command for that action
-      ideas_active            int   — number of active ideas (tag-filtered)
-      experiments_completed   int   — completed experiments (tag-filtered)
-      experiments_running     int   — running experiments (always unfiltered)
-      experiments_failed      int   — failed experiments (always unfiltered)
-
-    Conditional:
-      alternatives            list  — extra options when multiple experiments running
-      running_experiment_labels list — labels of all running experiments
-      failures                dict  — {count, action, message} when some failed
-      suggested_ideas         list  — [{id, description, priority}] human suggestions
-      tag_health              dict  — duplicate tag warning with normalize action
-      metric_hint             str   — lower-is-better hint when convergence_gap found
-      filter_hint             str   — suggestion to use ?tags= when ≥2 tags exist
-      tags_filter             list  — echoes the ?tags= filter when active
-      then                    str   — follow-up action after next_step
-
     Example:
         GET /api/v1/orient?tags=held-out
         -> {"current_branch": "idea/3", "status": "has_running",
             "recommendation": "Wait for experiment 1.3 to finish",
-            "next_step": "GET /api/v1/wait?experiment_id=1.3",
-            "ideas_active": 2, "experiments_running": 1, ...}
+            "next_steps": [...], "best_score": 0.91, "ideas_active": 2,
+            "tags_filter": ["held-out"]}
     """
     tag_filter = {t.strip() for t in tags.split(",") if t.strip()} if tags else set()
 
@@ -999,6 +974,19 @@ def orient(
                 "action": "GET /api/v1/experiments/tags then POST /api/v1/experiments/tags/rename to normalize",
                 "variants": {variants[0]: variants for variants in duplicates.values()},
             }
+
+    # Enumerate all metric keys seen across completed experiments so agents know
+    # what to pass to ?metric=, /leaderboard, and /leaderboard/search.
+    metric_key_counts: dict[str, int] = {}
+    for exp in all_exps_orient:
+        if exp.get("status") == "completed":
+            for k in (exp.get("metrics") or {}):
+                metric_key_counts[k] = metric_key_counts.get(k, 0) + 1
+    if metric_key_counts:
+        # Sort by frequency descending so the most-used keys come first
+        resp["known_metric_keys"] = sorted(
+            metric_key_counts, key=lambda k: -metric_key_counts[k]
+        )
 
     # Targeted hint: if convergence_gap metric exists, tell agent how to query it
     has_convergence_gap = any(
