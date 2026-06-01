@@ -42,6 +42,24 @@ router = APIRouter(prefix="/api/v1")
 
 # --- Ideas ---
 
+def _new_idea_response(idea: dict, similar: list, checked_out: bool) -> dict:
+    """Slim creation response — just what the agent needs to proceed."""
+    idea_id = idea["id"]
+    out: dict = {
+        "id":          idea_id,
+        "branch":      idea.get("branch"),
+        "status":      idea.get("status"),
+        "checked_out": checked_out,
+        "_more":       f"GET /api/v1/ideas/{idea_id}",
+    }
+    if similar:
+        out["similar_ideas"] = [
+            {"id": s["id"], "description": _description_short(s.get("description"))}
+            for s in similar[:5]
+        ]
+    return out
+
+
 @router.post("/ideas/new", status_code=201)
 def create_idea(req: NewIdeaRequest, request: Request):
     """Create a new idea and its corresponding git branch.
@@ -101,24 +119,20 @@ def create_idea(req: NewIdeaRequest, request: Request):
             store.save_idea(idea)
             similar = store.find_similar_ideas(req.description)
             similar = [s for s in similar if s["id"] != idea["id"]]
-            if similar:
-                idea["similar_ideas"] = similar
-            idea["checked_out"] = True
-            return idea
+            return _new_idea_response(idea, similar=similar, checked_out=True)
 
         store.save_idea(idea)
         similar = store.find_similar_ideas(req.description)
         similar = [s for s in similar if s["id"] != idea["id"]]
-        if similar:
-            idea["similar_ideas"] = similar
+        checked_out = False
         if req.auto_checkout:
             try:
                 # carry: uncommitted changes land on new branch, not the old one
                 checkout_idea_carry(idea_id, cwd=cwd)
-                idea["checked_out"] = True
+                checked_out = True
             except GitError:
-                idea["checked_out"] = False
-        return idea
+                pass
+        return _new_idea_response(idea, similar=similar, checked_out=checked_out)
     except GitError as e:
         store.release_unused_idea_id(idea_id)
         raise HTTPException(500, str(e))
