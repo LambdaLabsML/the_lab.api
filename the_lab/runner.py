@@ -6,6 +6,7 @@ import json
 import os
 import secrets
 import signal
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -670,7 +671,14 @@ class ExperimentRunner:
         }
         if env_extra:
             env.update(env_extra)
-        command = ["bash", str(script_path)]
+        command_script_path = script_path
+        if worktree_path:
+            command_script_path = worktree_path / ".the_lab" / "current_experiment" / "script.sh"
+            command_script_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(script_path, command_script_path)
+            os.chmod(command_script_path, 0o755)
+
+        command = ["bash", str(command_script_path)]
         sandbox_config = load_sandbox_config(self._store.repo_dir)
         if sandbox_config.get("enabled", False) and not os.environ.get("THE_LAB_NO_SANDBOX"):
             capabilities = sandbox_capabilities()
