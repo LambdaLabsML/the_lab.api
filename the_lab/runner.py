@@ -237,8 +237,7 @@ class ExperimentRunner:
             dst = worktree_path / ".the_lab" / "preamble.sh"
             dst.parent.mkdir(parents=True, exist_ok=True)
             if not dst.exists() and not dst.is_symlink():
-                shutil.copy2(src.resolve(), dst)
-                os.chmod(dst, 0o755)
+                dst.symlink_to(src)
 
         src_bin = lab_dir / "bin"
         if src_bin.is_dir():

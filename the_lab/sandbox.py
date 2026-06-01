@@ -260,7 +260,6 @@ def default_file_rw(repo_dir: Path) -> list[str]:
 
 def default_file_ro(repo_dir: Path) -> list[str]:
     """Default RO bind-mounts: user's local bin, agent configs, node runtime."""
-    del repo_dir
     home = Path(os.path.expanduser("~"))
     candidates = [
         str(home / ".local"),
@@ -268,6 +267,9 @@ def default_file_ro(repo_dir: Path) -> list[str]:
         str(home / ".gitconfig"),
         str(home / ".gitignore_global"),
     ]
+    preamble = repo_dir / ".the_lab" / "preamble.sh"
+    if preamble.exists():
+        candidates.append(str(preamble.resolve()))
     # Auto-detect nvm node install so Claude Code can spawn node.
     nvm_dir = home / ".nvm" / "versions" / "node"
     if nvm_dir.exists():
