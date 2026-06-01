@@ -103,8 +103,45 @@ def _read(repo_dir: Path) -> dict:
     return data
 
 
+_MAX_MESSAGES = 500
+_MAX_AGE_DAYS = 7
+
+
+def _prune(data: dict) -> dict:
+    """Drop old read messages so the file doesn't grow unboundedly.
+
+    Rules (applied in order):
+    - Always keep unread messages (read_by is empty).
+    - Drop messages older than _MAX_AGE_DAYS that have been read by at least
+      one agent.
+    - If the list still exceeds _MAX_MESSAGES, drop the oldest ones first.
+    """
+    msgs = data.get("messages", [])
+    if len(msgs) <= _MAX_MESSAGES:
+        return data  # fast path — nothing to do
+
+    cutoff = (datetime.now(timezone.utc).timestamp() - _MAX_AGE_DAYS * 86400)
+    kept = []
+    for m in msgs:
+        read_by = m.get("read_by") or []
+        if not read_by:
+            kept.append(m)  # unread — always keep
+            continue
+        ts = m.get("created_at") or ""
+        try:
+            age = datetime.fromisoformat(ts).timestamp()
+        except Exception:
+            age = 0
+        if age >= cutoff:
+            kept.append(m)  # recent enough — keep
+    # Hard cap: keep the most recent _MAX_MESSAGES
+    if len(kept) > _MAX_MESSAGES:
+        kept = kept[-_MAX_MESSAGES:]
+    return {**data, "messages": kept}
+
+
 def _write(repo_dir: Path, data: dict) -> None:
-    _path(repo_dir).write_text(json.dumps(data, indent=2) + "\n")
+    _path(repo_dir).write_text(json.dumps(_prune(data), indent=2) + "\n")
 
 
 def _validate_to(to: str) -> None:

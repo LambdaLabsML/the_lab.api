@@ -11,7 +11,9 @@ from ..deps import (
     REPO_DIR,
     agent_cwd,
     _idea_context,
+    _agents_on_idea,
     _branch_diff_summary,
+    _description_short,
     _read_task,
     project_fields,
     resolve_metric,
@@ -406,6 +408,7 @@ def _slim_experiment(exp: dict) -> dict:
 @router.get("/ideas/{idea_id}")
 def get_idea(
     idea_id: int,
+    request: Request,
     notes: str | None = Query(default=None, description="'all' includes debug-level notes"),
     experiments: str = Query(
         default="slim",
@@ -486,6 +489,13 @@ def get_idea(
     # Cap notes list
     if notes_limit > 0 and len(result.get("notes", [])) > notes_limit:
         result = {**result, "notes": result["notes"][-notes_limit:]}
+
+    # Show other agents currently working on this idea so callers can avoid
+    # duplicate work. The requesting agent is excluded from the list.
+    caller_agent_id = getattr(request.state, "agent_id", None)
+    claimed = _agents_on_idea(idea_id, exclude_agent_id=caller_agent_id)
+    if claimed:
+        result = {**result, "claimed_by": claimed}
 
     return result
 

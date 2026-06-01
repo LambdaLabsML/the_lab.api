@@ -12,6 +12,7 @@ from ..deps import (
     REPO_DIR,
     metric_direction,
     _idea_context,
+    _agents_on_idea,
     _branch_diff_summary,
     _description_short,
     _read_task,
@@ -734,21 +735,22 @@ async def wait_for_experiment(
 
 
 @router.get("/backlog")
-@cached_response(lambda: ())
-def get_backlog():
+def get_backlog(request: Request):
     """Get an overview of active work and the suggestion backlog.
 
     Returns the current git branch, all active ideas with per-idea experiment
     counts (running, pending, completed, failed), and all suggested ideas
-    waiting for adoption. Use this endpoint to understand what is in flight,
-    what needs attention, and what the human has suggested.
+    waiting for adoption. Each active idea includes ``claimed_by`` — other live
+    agents currently working on that idea — so agents can avoid collisions.
 
     Example:
         GET /api/v1/backlog
         -> {"current_branch": "idea/3", "total_running": 1, "total_pending": 2,
-            "active_ideas": [{"id": 3, "description": "...", "running_experiments": 1, ...}],
+            "active_ideas": [{"id": 3, "description": "...", "running_experiments": 1,
+                               "claimed_by": [{"agent_id": "abc12", "role": "default"}]}, ...],
             "suggested_ideas": [{"id": 5, "description": "...", "priority": "high", ...}]}
     """
+    caller_agent_id = getattr(request.state, "agent_id", None)
     current = get_current_branch(cwd=REPO_DIR)
     ideas = store.list_ideas(status="active")
     result = []
@@ -762,7 +764,7 @@ def get_backlog():
         failed = sum(1 for e in exps if e["status"] == "failed")
         total_running += running
         total_pending += pending
-        result.append({
+        entry: dict = {
             "id": idea["id"],
             "description": idea["description"],
             "source": idea.get("source", "agent"),
@@ -770,7 +772,11 @@ def get_backlog():
             "running_experiments": running,
             "completed_experiments": completed,
             "failed_experiments": failed,
-        })
+        }
+        claimed = _agents_on_idea(idea["id"], exclude_agent_id=caller_agent_id)
+        if claimed:
+            entry["claimed_by"] = claimed
+        result.append(entry)
     suggested = store.list_ideas(status="suggested")
     suggested_items = [
         {"id": s["id"], "description": s["description"],

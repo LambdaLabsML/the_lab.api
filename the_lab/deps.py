@@ -198,6 +198,31 @@ def _idea_context(idea_id: int) -> dict:
     }
 
 
+def _agents_on_idea(idea_id: int, exclude_agent_id: str | None = None) -> list[dict]:
+    """Return live agents whose worktree is checked out on idea/<idea_id>.
+
+    Excludes *exclude_agent_id* (typically the requesting agent) so an agent
+    doesn't see itself as a competitor on its own idea.  Returns slim dicts:
+    [{agent_id, role}].
+    """
+    from . import agents as _agents_mod
+    from .git_ops import get_current_branch
+    branch = f"idea/{idea_id}"
+    result = []
+    for entry in _agents_mod.list_agents(REPO_DIR):
+        aid = entry.get("agent_id")
+        if exclude_agent_id and aid == exclude_agent_id:
+            continue
+        worktree = entry.get("worktree")
+        try:
+            cb = get_current_branch(cwd=worktree) if worktree else None
+        except Exception:
+            cb = None
+        if cb == branch:
+            result.append({"agent_id": aid, "role": entry.get("role")})
+    return result
+
+
 def _branch_diff_summary(idea_id: int) -> dict | None:
     """Return a concise diff summary for an idea branch vs its parent.
 
