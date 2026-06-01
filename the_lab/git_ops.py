@@ -86,6 +86,7 @@ def branch_diff(branch: str, base: str, cwd: str | Path | None = None) -> dict:
     base_ref = merge_base.stdout.strip() if merge_base.returncode == 0 else base
 
     stat = _run(["diff", "--stat", base_ref, branch], cwd=cwd, check=False)
+    numstat = _run(["diff", "--numstat", base_ref, branch], cwd=cwd, check=False)
     diff = _run(["diff", base_ref, branch], cwd=cwd, check=False)
 
     return {
@@ -93,6 +94,7 @@ def branch_diff(branch: str, base: str, cwd: str | Path | None = None) -> dict:
         "branch": branch,
         "merge_base": base_ref[:12],
         "stat": stat.stdout,
+        "numstat": numstat.stdout,
         "diff": diff.stdout,
     }
 

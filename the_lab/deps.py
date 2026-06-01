@@ -199,7 +199,11 @@ def _idea_context(idea_id: int) -> dict:
 
 
 def _branch_diff_summary(idea_id: int) -> dict | None:
-    """Return a compact diff summary for an idea branch vs its parent."""
+    """Return a concise diff summary for an idea branch vs its parent.
+
+    Returns which files changed and by how many lines (+/-), not the full patch.
+    Shape: {"base_branch": str, "changes": [{"file": str, "added": int, "removed": int}, ...]}
+    """
     idea = store.get_idea(idea_id)
     if not idea or not idea.get("branch"):
         return None
@@ -215,18 +219,24 @@ def _branch_diff_summary(idea_id: int) -> dict | None:
         return None
     if "error" in diff_info:
         return None
-    stat = diff_info.get("stat", "").strip()
-    files_changed = [
-        line.strip().split("|")[0].strip()
-        for line in stat.splitlines()
-        if "|" in line
-    ]
-    summary = {
-        "base_branch": base,
-        "files_changed": files_changed,
-        "stat": stat,
-    }
-    if not files_changed:
+
+    # Parse --numstat output: "<added>\t<removed>\t<file>" per line
+    changes = []
+    for line in (diff_info.get("numstat") or "").splitlines():
+        parts = line.split("\t", 2)
+        if len(parts) == 3:
+            added_s, removed_s, fname = parts
+            try:
+                changes.append({
+                    "file": fname.strip(),
+                    "added": int(added_s),
+                    "removed": int(removed_s),
+                })
+            except ValueError:
+                pass  # binary files show "-" — skip
+
+    summary: dict = {"base_branch": base, "changes": changes}
+    if not changes:
         summary["warning"] = (
             "No code changes detected on this branch vs parent. "
             "Did you forget to edit and save files before creating the experiment?"

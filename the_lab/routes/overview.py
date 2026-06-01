@@ -660,8 +660,11 @@ async def wait_for_experiment(
     exp = result.get("experiment")
     if exp:
         result.update(_idea_context(exp.get("idea_id")))
-        # branch_diff removed from wait response — it can be large and is
-        # available on demand via GET /ideas/{id} or GET /ideas/{id}/diff.
+        # Concise branch diff: which files changed and +/- line counts only.
+        # Full patch available via GET /ideas/{id}/diff if needed.
+        diff_summary = _branch_diff_summary(exp.get("idea_id"))
+        if diff_summary:
+            result["branch_diff"] = diff_summary
         exp_label = exp.get("label", str(exp["id"]))
         metrics = exp.get("metrics") or {}
         current_score = None
