@@ -116,17 +116,22 @@ async def create_experiment(idea_id: int, req: NewExperimentRequest):
         -int((e.get("meta") or {}).get("priority", 0) or 0),
         e.get("created_at") or "",
     ))
+    queue_position = None
     for i, qexp in enumerate(queue):
         if qexp.get("id") == exp.get("id"):
-            exp["queue_position"] = i + 1
+            queue_position = i + 1
             break
 
-    # Include branch diff summary so agent sees what code changed (or didn't)
-    diff_summary = _branch_diff_summary(idea_id)
-    if diff_summary:
-        exp["branch_diff"] = diff_summary
-
-    return exp
+    label = exp.get("label") or str(exp["id"])
+    return {
+        "id":             exp["id"],
+        "label":          label,
+        "idea_id":        idea_id,
+        "status":         exp.get("status"),
+        "queue_position": queue_position,
+        "wait":           f"GET /api/v1/wait?experiment_id={label}",
+        "_more":          f"GET /api/v1/experiments/{label}",
+    }
 
 
 @router.get("/ideas/{idea_id}/experiments")

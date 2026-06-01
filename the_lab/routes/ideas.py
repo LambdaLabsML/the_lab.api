@@ -629,11 +629,14 @@ def conclude_idea(idea_id: int, req: ConcludeRequest):
         raise HTTPException(404, "idea not found")
     if idea["status"] != "active":
         raise HTTPException(400, f"idea is {idea['status']}, cannot conclude")
-    result = store.update_idea(idea_id, status="concluded", conclusion=req.conclusion)
-    # Surface the undo path — reopening is an existing endpoint but it's
-    # easy to miss if you've never had to reach for it.
-    result["undo"] = f"POST /api/v1/ideas/{idea_id}/reopen with a reason"
-    return result
+    store.update_idea(idea_id, status="concluded", conclusion=req.conclusion)
+    return {
+        "id": idea_id,
+        "status": "concluded",
+        "conclusion": req.conclusion,
+        "undo": f"POST /api/v1/ideas/{idea_id}/reopen",
+        "_more": f"GET /api/v1/ideas/{idea_id}",
+    }
 
 
 @router.post("/ideas/{idea_id}/abandon")
@@ -654,9 +657,14 @@ def abandon_idea(idea_id: int, req: AbandonRequest):
         raise HTTPException(404, "idea not found")
     if idea["status"] not in ("active", "suggested"):
         raise HTTPException(400, f"idea is {idea['status']}, cannot abandon")
-    result = store.update_idea(idea_id, status="abandoned", conclusion=req.reason)
-    result["undo"] = f"POST /api/v1/ideas/{idea_id}/reopen with a reason"
-    return result
+    store.update_idea(idea_id, status="abandoned", conclusion=req.reason)
+    return {
+        "id": idea_id,
+        "status": "abandoned",
+        "reason": req.reason,
+        "undo": f"POST /api/v1/ideas/{idea_id}/reopen",
+        "_more": f"GET /api/v1/ideas/{idea_id}",
+    }
 
 
 @router.post("/ideas/{idea_id}/reopen")
