@@ -112,7 +112,8 @@ export async function getExperimentLog(
   expRef: string | number,
   tail?: number,
 ): Promise<{ log: string }> {
-  const qs = tail ? `?tail=${tail}` : "";
+  // UI always requests the full log — tail=25 default is for agent API calls.
+  const qs = tail ? `?tail=${tail}` : "?full=true";
   return fetchJson<{ log: string }>(`/api/v1/experiments/${expRef}/log${qs}`);
 }
 
