@@ -619,56 +619,31 @@ def serve_repo_file(file_path: str):
 
 # --- Parameterized experiment routes (MUST come after literal paths) ---
 
+_META_STRIP = frozenset({
+    "slurm_run_token", "slurm_job_id", "slurm_attempts",
+    "worktree", "git_commit", "git_branch", "assigned_units",
+})
+
+
 @router.get("/experiments/{exp_ref}")
 def get_experiment(exp_ref: str):
-    """Get full detail for a single experiment.
+    """Get detail for a single experiment.
 
     Accepts global ID (``4``) or label (``1.2`` = idea 1, experiment 2).
+    Internal infrastructure fields (slurm tokens, worktree paths, git hashes)
+    are stripped. Use ``GET /api/v1/wait?compare=true`` for best-score
+    comparison (requires a full experiment scan).
 
     Example:
         GET /api/v1/experiments/1.2
-        -> {"id": 4, "label": "1.2", "idea_id": 1, "seq": 2, "status": "completed", ...}
+        -> {"id": 4, "label": "1.2", "status": "completed", "metrics": {...}, ...}
     """
     exp = _resolve_exp(exp_ref)
-    # Add score comparison for completed experiments
-    if exp.get("status") == "completed":
-        metrics = exp.get("metrics") or {}
-        current_score = None
-        for key in ("score", "accuracy", "final_score"):
-            if key in metrics:
-                current_score = metrics[key]
-                break
-        if current_score is not None:
-            best_score = None
-            best_exp_id = None
-            best_exp_label = None
-            for idea in store.list_ideas():
-                for e in store.list_experiments(idea["id"]):
-                    if e["id"] == exp["id"]:
-                        continue
-                    em = e.get("metrics") or {}
-                    for key in ("score", "accuracy", "final_score"):
-                        if key in em and (best_score is None or em[key] > best_score):
-                            best_score = em[key]
-                            best_exp_id = e["id"]
-                            best_exp_label = e.get("label", str(e["id"]))
-            if best_score is not None:
-                exp["progress"] = {
-                    "this_score": current_score,
-                    "best_score": best_score,
-                    "best_experiment_id": best_exp_id,
-                    "best_experiment_label": best_exp_label,
-                    "is_new_best": current_score > best_score,
-                }
     if exp.get("status") == "failed":
         label = exp.get("label", str(exp["id"]))
-        exp["read_log"] = f"GET /api/v1/experiments/{label}/log"
-    # Strip internal-only meta keys that add significant token cost with no
-    # agent-facing value (slurm tokens, worktree paths, git commits).
-    meta = dict(exp.get("meta") or {})
-    for _k in ("slurm_run_token", "slurm_job_id", "slurm_attempts", "worktree",
-               "git_commit", "assigned_units"):
-        meta.pop(_k, None)
+        exp["read_log"] = f"GET /api/v1/experiments/{label}/log?tail=50"
+    # Strip internal-only meta keys
+    meta = {k: v for k, v in (exp.get("meta") or {}).items() if k not in _META_STRIP}
     exp["meta"] = meta
     return exp
 
@@ -905,20 +880,32 @@ async def cancel_experiment(exp_ref: str):
 
 
 @router.get("/experiments/{exp_ref}/log")
-def get_experiment_log(exp_ref: str, tail: int | None = None):
+def get_experiment_log(
+    exp_ref: str,
+    tail: int | None = Query(default=25, description="Return last N lines (default 25). Pass 0 to disable."),
+    head: int | None = Query(default=None, description="Return first N lines instead of tail."),
+    full: bool = Query(default=False, description="Return the complete log (overrides tail/head)."),
+):
     """Read the stdout/stderr log for an experiment.
 
-    Returns the combined output log captured during experiment execution. Use
-    ``?tail=50`` to retrieve only the last 50 lines, which is useful for
-    checking recent progress on long-running experiments without downloading
-    the entire log.
+    Defaults to the last 25 lines to keep responses small. Use ``?tail=N``
+    for more context, ``?head=N`` for the start of the log, or ``?full=true``
+    for the complete output.
 
     Example:
-        GET /api/v1/experiments/4/log?tail=50
-        -> {"log": "Epoch 49/50 - loss: 0.31 - acc: 0.92\\nEpoch 50/50 - loss: 0.30 ..."}
+        GET /api/v1/experiments/4/log           # last 25 lines (default)
+        GET /api/v1/experiments/4/log?tail=100  # last 100 lines
+        GET /api/v1/experiments/4/log?head=50   # first 50 lines
+        GET /api/v1/experiments/4/log?full=true # entire log
     """
     exp = _resolve_exp(exp_ref)
-    log = runner.get_log(exp["id"], tail=tail)
+    if full:
+        log = runner.get_log(exp["id"], tail=None)
+    elif head is not None:
+        raw = runner.get_log(exp["id"], tail=None) or ""
+        log = "\n".join(raw.splitlines()[:head])
+    else:
+        log = runner.get_log(exp["id"], tail=tail if tail else None)
     if log is None:
         raise HTTPException(404, "experiment log not found")
     return {"log": log}
@@ -1142,9 +1129,9 @@ async def start_experiment_via_idea(idea_id: int, exp_ref: str):
 
 
 @router.get("/ideas/{idea_id}/experiments/{exp_ref}/log")
-def get_experiment_log_via_idea(idea_id: int, exp_ref: str, tail: int | None = None):
+def get_experiment_log_via_idea(idea_id: int, exp_ref: str, tail: int | None = Query(default=25), head: int | None = None, full: bool = False):
     """Convenience alias — redirects to GET /experiments/{exp_ref}/log."""
-    return get_experiment_log(exp_ref, tail=tail)
+    return get_experiment_log(exp_ref, tail=tail, head=head, full=full)
 
 
 @router.post("/ideas/{idea_id}/experiments/{exp_ref}/cancel")

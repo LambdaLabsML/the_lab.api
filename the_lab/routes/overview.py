@@ -613,6 +613,7 @@ async def wait_for_experiment(
     timeout: float = Query(default=3600, le=86400),
     experiment_id: str | None = Query(default=None, description="Global ID or label (e.g. '4' or '1.2')"),
     idea_id: int | None = Query(default=None),
+    compare: bool = Query(default=False, description="Include best-score comparison across all experiments (requires full scan, off by default)."),
 ):
     """Long-poll until an experiment finishes.
 
@@ -659,21 +660,22 @@ async def wait_for_experiment(
     exp = result.get("experiment")
     if exp:
         result.update(_idea_context(exp.get("idea_id")))
-        # Include branch diff summary so agent sees what was tested
-        diff_summary = _branch_diff_summary(exp.get("idea_id"))
-        if diff_summary:
-            result["branch_diff"] = diff_summary
-        # Add score comparison to help agent track progress
+        # branch_diff removed from wait response — it can be large and is
+        # available on demand via GET /ideas/{id} or GET /ideas/{id}/diff.
+        exp_label = exp.get("label", str(exp["id"]))
         metrics = exp.get("metrics") or {}
         current_score = None
         for key in ("score", "accuracy", "final_score"):
             if key in metrics:
                 current_score = metrics[key]
                 break
-        if current_score is not None:
-            best_score = None
+
+        # Best-score comparison is opt-in (?compare=true) because it requires
+        # scanning all experiments across all ideas on every /wait call.
+        best_score = None
+        best_exp_label = None
+        if compare and current_score is not None:
             best_exp_id = None
-            best_exp_label = None
             for idea in store.list_ideas():
                 for e in store.list_experiments(idea["id"]):
                     if e["id"] == exp.get("id"):
@@ -693,14 +695,14 @@ async def wait_for_experiment(
                     "is_new_best": current_score > best_score,
                     "delta": round(current_score - best_score, 6),
                 }
+
         # If experiment failed or scored poorly, point to /log for diagnosis
-        exp_label = exp.get("label", str(exp["id"]))
         if exp.get("status") == "failed":
             result["diagnosis"] = (
                 f"Experiment {exp_label} failed. "
-                f"Read the log for error details: GET /api/v1/experiments/{exp_label}/log"
+                f"Read the log for error details: GET /api/v1/experiments/{exp_label}/log?tail=50"
             )
-        elif current_score is not None and best_score is not None and current_score < best_score:
+        elif compare and current_score is not None and best_score is not None and current_score < best_score:
             result["diagnosis"] = (
                 f"Score {current_score} is below best {best_score}. "
                 f"Check the log for clues: GET /api/v1/experiments/{exp_label}/log"
