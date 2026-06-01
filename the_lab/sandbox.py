@@ -269,7 +269,14 @@ def default_file_ro(repo_dir: Path) -> list[str]:
     ]
     preamble = repo_dir / ".the_lab" / "preamble.sh"
     if preamble.exists():
-        candidates.append(str(preamble.resolve()))
+        arc_root = preamble.resolve().parent
+        candidates.extend([
+            str(arc_root / "preamble.sh"),
+            str(arc_root / "postamble.sh"),
+            str(arc_root / ".eval_config"),
+            str(arc_root / "arc3_server"),
+            str(arc_root / "viewer"),
+        ])
     # Auto-detect nvm node install so Claude Code can spawn node.
     nvm_dir = home / ".nvm" / "versions" / "node"
     if nvm_dir.exists():
