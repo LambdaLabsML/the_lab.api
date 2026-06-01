@@ -83,7 +83,7 @@ async def create_experiment(idea_id: int, req: NewExperimentRequest):
         script_path = REPO_DIR / exp["script"]
         script_path.parent.mkdir(parents=True, exist_ok=True)
         script_path.write_text(_wrap_script(req.script_content))
-        os.chmod(script_path, 0o644)
+        os.chmod(script_path, 0o755)
 
     # The queue takes it from here. New experiments default to "queued";
     # the scheduler will start them when capacity permits and dependencies
@@ -829,7 +829,7 @@ async def rerun_experiment(exp_ref: str):
     new_script_path = REPO_DIR / new_exp["script"]
     new_script_path.parent.mkdir(parents=True, exist_ok=True)
     new_script_path.write_text(script_content)
-    os.chmod(new_script_path, 0o644)
+    os.chmod(new_script_path, 0o755)
 
     # Queue it — same pattern as create_experiment so reruns respect
     # resource capacity, priorities, and parallel-job caps instead of
