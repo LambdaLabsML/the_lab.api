@@ -156,7 +156,7 @@ def _build_leaderboard_response(
         best_exp = by_value[0]
         idea = idea_by_id.get(best_exp["idea_id"])
         if idea:
-            insights = [n["text"][:200] for n in store.get_notes(idea["id"], levels={"insight"})]
+            insights = [_description_short(n["text"], limit=200) for n in store.get_notes(idea["id"], levels={"insight"})]
             best_idea = {
                 "id": idea["id"],
                 "description": _description_short(idea["description"]),
@@ -197,7 +197,7 @@ def _build_leaderboard_response(
     for idea in all_ideas:
         for note in store.get_notes(idea["id"], levels={"insight"}):
             key_insights.append({
-                "text": note["text"][:200],
+                "text": _description_short(note["text"], limit=200),
                 "idea_id": idea["id"],
                 "created_at": note.get("created_at"),
             })

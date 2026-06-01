@@ -18,6 +18,7 @@ from ..deps import (
     _resolve_exp,
     _idea_context,
     _branch_diff_summary,
+    _description_short,
     _wrap_script,
 )
 from ..git_ops import get_current_branch
@@ -219,11 +220,11 @@ def list_all_experiments(
             "id":          exp["id"],
             "label":       label,
             "idea_id":     idea_id,
-            "idea":        idea["description"].split("\n")[0][:80] if idea else None,
-            "description": (exp.get("description") or "").split("\n")[0][:120] or None,
+            "idea":        _description_short(idea["description"], limit=80) if idea else None,
+            "description": _description_short(exp.get("description")) or None,
             "status":      exp.get("status"),
             "score":       primary,
-            "error":       (exp.get("error") or "").split("\n")[0][:120] or None,
+            "error":       _description_short(exp.get("error"), limit=120) or None,
             "runtime":     exp.get("runtime"),
             "finished_at": exp.get("finished_at"),
         }
