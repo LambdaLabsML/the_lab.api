@@ -625,6 +625,18 @@ async def wait_for_experiment(
     (default 3600s, max 86400s) controls how long to wait before returning a
     timeout response.
 
+    **Preferred usage for agents:** run ``the-lab wait <label>`` as a
+    background shell command instead of calling this endpoint directly. The CLI
+    command exits with code 0 (completed) or 1 (failed) and prints a compact
+    JSON result, so the agent is notified automatically when the experiment
+    finishes without blocking a tool call slot:
+
+        the-lab wait 3.15 --port 9009
+        # exits with the result JSON on stdout; run_in_background=True in Claude Code
+
+    Calling this endpoint directly is fine for simple sequential flows, but the
+    CLI approach lets the agent continue working on other tasks while waiting.
+
     Example:
         GET /api/v1/wait?experiment_id=4&timeout=300
         -> {"status": "completed", "experiment": {"id": 4, "metrics": {...}, ...},

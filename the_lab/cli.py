@@ -440,11 +440,72 @@ def _ensure_self_signed_cert(repo_dir: Path) -> tuple[str, str]:
     return str(cert_file), str(key_file)
 
 
+def cmd_wait():
+    """the-lab wait <experiment_label> [--port N] [--timeout N] [--url URL]
+
+    Long-poll until an experiment finishes, then print a compact JSON result
+    and exit with code 0 (completed) or 1 (failed/timeout).
+
+    Designed to be run in the background by Claude Code:
+
+        Bash("the-lab wait 3.15 --port 9009", run_in_background=True)
+
+    Claude Code is notified automatically when the command exits, then reads
+    the printed JSON to get the final status and metrics.
+    """
+    import argparse as _ap, json as _json, urllib.request as _urlreq, urllib.error as _urlerr
+
+    p = _ap.ArgumentParser(prog="the-lab wait")
+    p.add_argument("label", help="Experiment label (e.g. '3.15') or ID")
+    p.add_argument("--port", type=int, default=8000)
+    p.add_argument("--timeout", type=float, default=3600, help="Max seconds to wait (default 3600)")
+    p.add_argument("--url", default=None, help="Override API base URL (e.g. http://host:9009/api/v1)")
+    args = p.parse_args(sys.argv[2:])
+
+    api_base = args.url or f"http://localhost:{args.port}/api/v1"
+
+    # Resolve the experiment label → global ID via the API
+    try:
+        with _urlreq.urlopen(f"{api_base}/experiments/{args.label}", timeout=10) as r:
+            exp = _json.loads(r.read())
+        exp_id = exp.get("id") or args.label
+    except Exception:
+        exp_id = args.label  # pass label directly to /wait
+
+    url = f"{api_base}/wait?experiment_id={exp_id}&timeout={int(args.timeout)}"
+    try:
+        with _urlreq.urlopen(url, timeout=args.timeout + 30) as r:
+            result = _json.loads(r.read())
+    except _urlerr.URLError as e:
+        print(_json.dumps({"status": "error", "error": str(e)}))
+        sys.exit(1)
+    except Exception as e:
+        print(_json.dumps({"status": "error", "error": str(e)}))
+        sys.exit(1)
+
+    exp = result.get("experiment") or {}
+    status = exp.get("status") or result.get("status") or result.get("event", "unknown")
+    out = {
+        "status":     status,
+        "label":      exp.get("label") or exp.get("id") or exp_id,
+        "metrics":    exp.get("metrics"),
+        "error":      exp.get("error"),
+        "runtime":    exp.get("runtime"),
+        "finished_at": exp.get("finished_at"),
+    }
+    print(_json.dumps(out))
+    sys.exit(0 if status == "completed" else 1)
+
+
 def main():
-    # Handle 'init' subcommand before argparse (server mode)
+    # Handle subcommands before argparse (server mode)
     if len(sys.argv) >= 2 and sys.argv[1] == "init":
         target = sys.argv[2] if len(sys.argv) >= 3 else None
         cmd_init(target)
+        return
+
+    if len(sys.argv) >= 2 and sys.argv[1] == "wait":
+        cmd_wait()
         return
 
     parser = argparse.ArgumentParser(description="The Lab — Experiment Management API")
