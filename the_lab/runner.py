@@ -1066,6 +1066,17 @@ class ExperimentRunner:
                 # Pull results from remote
                 await asyncio.get_event_loop().run_in_executor(None, lambda: executor.pull_results(label, local_exp_dir))
                 exp = self._store.get_experiment(exp_id)
+                # If slurm_done already marked the experiment failed (non-zero exit
+                # code), trust it — Slurm reports COMPLETED for the *job* even when
+                # the *script* exits non-zero, so the monitor must not overwrite a
+                # failure that slurm_done recorded from the actual exit code.
+                if exp and exp.get("status") == "failed":
+                    asyncio.get_event_loop().run_in_executor(None, lambda: executor.cleanup_remote(label, abs_bare_path=getattr(executor, "_resolved_bare_path", None)))
+                    self._allocator.release(label)
+                    self.wake_scheduler()
+                    self._tasks.pop(exp_id, None)
+                    self._finished_queue.put_nowait(exp_id)
+                    return
                 if not exp or exp.get("status") == "cancelled":
                     asyncio.get_event_loop().run_in_executor(None, lambda: executor.cleanup_remote(label, abs_bare_path=getattr(executor, "_resolved_bare_path", None)))
                     self._allocator.release(label)
