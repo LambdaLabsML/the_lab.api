@@ -464,18 +464,35 @@ def cmd_wait():
 
     api_base = args.url or f"http://localhost:{args.port}/api/v1"
 
+    # Build headers the same way the MCP bridge does — pick up agent ID and
+    # Basic auth from environment so auth-gated servers work transparently.
+    import base64 as _b64
+    headers: dict[str, str] = {}
+    agent_id = os.environ.get("THE_LAB_AGENT_ID", "").strip()
+    if agent_id:
+        headers["X-Agent-Id"] = agent_id
+    _user = os.environ.get("THE_LAB_USER", "").strip()
+    _pw   = os.environ.get("THE_LAB_PASSWORD", "").strip()
+    if _user and _pw:
+        headers["Authorization"] = "Basic " + _b64.b64encode(
+            f"{_user}:{_pw}".encode()
+        ).decode()
+
+    def _get(url: str, timeout: float = 15) -> dict:
+        req = _urlreq.Request(url, headers=headers)
+        with _urlreq.urlopen(req, timeout=timeout) as r:
+            return _json.loads(r.read())
+
     # Resolve the experiment label → global ID via the API
     try:
-        with _urlreq.urlopen(f"{api_base}/experiments/{args.label}", timeout=10) as r:
-            exp = _json.loads(r.read())
+        exp = _get(f"{api_base}/experiments/{args.label}")
         exp_id = exp.get("id") or args.label
     except Exception:
         exp_id = args.label  # pass label directly to /wait
 
     url = f"{api_base}/wait?experiment_id={exp_id}&timeout={int(args.timeout)}"
     try:
-        with _urlreq.urlopen(url, timeout=args.timeout + 30) as r:
-            result = _json.loads(r.read())
+        result = _get(url, timeout=args.timeout + 30)
     except _urlerr.URLError as e:
         print(_json.dumps({"status": "error", "error": str(e)}))
         sys.exit(1)
