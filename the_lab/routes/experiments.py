@@ -186,6 +186,8 @@ def list_all_experiments(
 
     tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
 
+    _PRIMARY_METRICS = ("score", "accuracy", "final_score")
+
     results = []
     for exp in all_exps:
         if status and exp.get("status") != status:
@@ -199,22 +201,36 @@ def list_all_experiments(
         if idea_id not in idea_cache:
             idea_cache[idea_id] = store.get_idea(idea_id)
         idea = idea_cache[idea_id]
+
+        # Keep only the primary score metric in bulk listing — full metrics
+        # are available via GET /experiments/{label}
+        all_metrics = exp.get("metrics") or {}
+        primary = {k: all_metrics[k] for k in _PRIMARY_METRICS if k in all_metrics}
+        if all_metrics and not primary:
+            # No standard primary key — keep first numeric value as a hint
+            for k, v in all_metrics.items():
+                if isinstance(v, (int, float)):
+                    primary[k] = v
+                    break
+        if len(all_metrics) > len(primary):
+            primary["_more"] = f"GET /api/v1/experiments/{label}"
+
         out = {
             "id":          exp["id"],
             "label":       label,
             "idea_id":     idea_id,
             "idea":        idea["description"].split("\n")[0][:80] if idea else None,
-            "description": exp.get("description"),
+            "description": (exp.get("description") or "").split("\n")[0][:120] or None,
             "status":      exp.get("status"),
-            "metrics":     exp.get("metrics"),
-            "error":       exp.get("error"),
+            "score":       primary,
+            "error":       (exp.get("error") or "").split("\n")[0][:120] or None,
             "runtime":     exp.get("runtime"),
             "finished_at": exp.get("finished_at"),
         }
         if tag_list:
             out["tags"] = exp.get("tags")
         if exp.get("status") == "failed":
-            out["read_log"] = f"GET /api/v1/experiments/{label}/log"
+            out["log"] = f"GET /api/v1/experiments/{label}/log?tail=50"
         results.append(out)
 
     resp = {"experiments": results, "count": len(results)}
