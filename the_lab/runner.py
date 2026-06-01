@@ -679,8 +679,17 @@ class ExperimentRunner:
             os.chmod(command_script_path, 0o755)
 
         command = ["bash", str(command_script_path)]
+        try:
+            uses_inner_arc_sandbox = "_sandboxed" in script_path.read_text()
+        except Exception:
+            uses_inner_arc_sandbox = False
+
         sandbox_config = load_sandbox_config(self._store.repo_dir)
-        if sandbox_config.get("enabled", False) and not os.environ.get("THE_LAB_NO_SANDBOX"):
+        if (
+            sandbox_config.get("enabled", False)
+            and not os.environ.get("THE_LAB_NO_SANDBOX")
+            and not uses_inner_arc_sandbox
+        ):
             capabilities = sandbox_capabilities()
             if not capabilities.get("available"):
                 details = capabilities.get("details") or "sandbox runtime unavailable"
