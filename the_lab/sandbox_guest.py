@@ -575,7 +575,8 @@ def _target_env(api_scheme: str, api_port: int) -> dict[str, str]:
 async def _run_target(command: list[str], env: dict[str, str]) -> int:
     # bwrap binds the necessary paths into the namespace, so we don't need
     # to copy binaries or resolve executables out of inaccessible dirs here.
-    proc = subprocess.Popen(command, env=env, preexec_fn=_drop_privileges)
+    preexec = None if env.get("THE_LAB_SANDBOX_KEEP_ROOT") == "1" else _drop_privileges
+    proc = subprocess.Popen(command, env=env, preexec_fn=preexec)
 
     loop = asyncio.get_running_loop()
 
@@ -638,6 +639,11 @@ async def _main() -> int:
         _enter_userns_as_uid(target_uid, target_gid)
 
     env = _target_env(api_scheme, api_port)
+    if args.kind not in _AGENT_KINDS:
+        # Rootlesskit uid 0 maps to the real host uid, which is required for
+        # NFS-backed experiment worktrees. Dropping to uid 1000 inside the
+        # namespace can make otherwise 0755 scripts unreadable on NFS.
+        env["THE_LAB_SANDBOX_KEEP_ROOT"] = "1"
     target_cwd = args.cwd or str(repo_dir)
     if args.kind not in _AGENT_KINDS:
         # Remove .venv symlinks — they point to the shared venv which is
