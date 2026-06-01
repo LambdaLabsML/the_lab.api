@@ -177,17 +177,20 @@ def list_all_experiments(
     Use filters to narrow results. This is more efficient than fetching
     experiments per-idea when you need data across the whole project.
 
+    Pass ``?metric=X`` to filter to experiments that have metric X **and** show
+    only that metric value in the response — useful for focused comparison when
+    you know which metric you're optimising. Without ``?metric``, all metrics
+    are returned for each experiment.
+
     Example:
         GET /api/v1/experiments
         GET /api/v1/experiments?status=completed&metric=score
-        GET /api/v1/experiments?tags=baseline
+        GET /api/v1/experiments?tags=baseline&metric=accuracy
     """
     all_exps = store.list_all_experiments()
     idea_cache: dict[int, dict] = {}
 
     tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
-
-    _PRIMARY_METRICS = ("score", "accuracy", "final_score")
 
     results = []
     for exp in all_exps:
@@ -195,7 +198,8 @@ def list_all_experiments(
             continue
         if tag_list and not all(t in (exp.get("tags") or []) for t in tag_list):
             continue
-        if metric and metric not in (exp.get("metrics") or {}):
+        all_metrics = exp.get("metrics") or {}
+        if metric and metric not in all_metrics:
             continue
         label = exp.get("label", str(exp["id"]))
         idea_id = exp["idea_id"]
@@ -203,18 +207,13 @@ def list_all_experiments(
             idea_cache[idea_id] = store.get_idea(idea_id)
         idea = idea_cache[idea_id]
 
-        # Keep only the primary score metric in bulk listing — full metrics
-        # are available via GET /experiments/{label}
-        all_metrics = exp.get("metrics") or {}
-        primary = {k: all_metrics[k] for k in _PRIMARY_METRICS if k in all_metrics}
-        if all_metrics and not primary:
-            # No standard primary key — keep first numeric value as a hint
-            for k, v in all_metrics.items():
-                if isinstance(v, (int, float)):
-                    primary[k] = v
-                    break
-        if len(all_metrics) > len(primary):
-            primary["_more"] = f"GET /api/v1/experiments/{label}"
+        # When ?metric=X is given, show only that value (the caller knows what
+        # they care about). Otherwise include all metrics — we don't know which
+        # metric the project optimises, so hardcoding names would be wrong.
+        if metric:
+            shown_metrics = {metric: all_metrics[metric]}
+        else:
+            shown_metrics = all_metrics
 
         out = {
             "id":          exp["id"],
@@ -223,7 +222,7 @@ def list_all_experiments(
             "idea":        _description_short(idea["description"], limit=80) if idea else None,
             "description": _description_short(exp.get("description")) or None,
             "status":      exp.get("status"),
-            "score":       primary,
+            "metrics":     shown_metrics,
             "error":       _description_short(exp.get("error"), limit=120) or None,
             "runtime":     exp.get("runtime"),
             "finished_at": exp.get("finished_at"),
