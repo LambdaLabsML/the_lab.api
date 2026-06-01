@@ -905,30 +905,47 @@ def get_experiment_log(
     exp_ref: str,
     tail: int | None = Query(default=25, description="Return last N lines (default 25). Pass 0 to disable."),
     head: int | None = Query(default=None, description="Return first N lines instead of tail."),
-    full: bool = Query(default=False, description="Return the complete log (overrides tail/head)."),
+    full: bool = Query(default=False, description="Return the complete log (overrides tail/head/grep)."),
+    grep: str | None = Query(default=None, description="Return only lines matching this substring (case-insensitive)."),
+    above: int = Query(default=0, description="Lines of context before each grep match."),
+    below: int = Query(default=0, description="Lines of context after each grep match."),
 ):
     """Read the stdout/stderr log for an experiment.
 
-    Defaults to the last 25 lines to keep responses small. Use ``?tail=N``
-    for more context, ``?head=N`` for the start of the log, or ``?full=true``
-    for the complete output.
+    Defaults to the last 25 lines. Use ``?grep=text`` to filter to matching
+    lines with optional context (``?above=N&below=N`` like grep -B/-A).
 
     Example:
-        GET /api/v1/experiments/4/log           # last 25 lines (default)
-        GET /api/v1/experiments/4/log?tail=100  # last 100 lines
-        GET /api/v1/experiments/4/log?head=50   # first 50 lines
-        GET /api/v1/experiments/4/log?full=true # entire log
+        GET /api/v1/experiments/4/log                        # last 25 lines
+        GET /api/v1/experiments/4/log?tail=100               # last 100 lines
+        GET /api/v1/experiments/4/log?head=50                # first 50 lines
+        GET /api/v1/experiments/4/log?full=true              # entire log
+        GET /api/v1/experiments/4/log?grep=error             # matching lines
+        GET /api/v1/experiments/4/log?grep=error&above=2&below=5  # with context
     """
     exp = _resolve_exp(exp_ref)
+    raw = runner.get_log(exp["id"], tail=None)
+    if raw is None:
+        raise HTTPException(404, "experiment log not found")
+
+    if grep:
+        lines = raw.splitlines()
+        needle = grep.lower()
+        included: set[int] = set()
+        for i, line in enumerate(lines):
+            if needle in line.lower():
+                for j in range(max(0, i - above), min(len(lines), i + below + 1)):
+                    included.add(j)
+        log = "\n".join(lines[i] for i in sorted(included))
+        return {"log": log, "matched_lines": len([i for i, l in enumerate(lines) if needle in l.lower()])}
+
     if full:
-        log = runner.get_log(exp["id"], tail=None)
+        log = raw
     elif head is not None:
-        raw = runner.get_log(exp["id"], tail=None) or ""
         log = "\n".join(raw.splitlines()[:head])
     else:
-        log = runner.get_log(exp["id"], tail=tail if tail else None)
-    if log is None:
-        raise HTTPException(404, "experiment log not found")
+        effective_tail = tail if tail else None
+        log = "\n".join(raw.splitlines()[-effective_tail:]) if effective_tail else raw
     return {"log": log}
 
 
@@ -1150,9 +1167,9 @@ async def start_experiment_via_idea(idea_id: int, exp_ref: str):
 
 
 @router.get("/ideas/{idea_id}/experiments/{exp_ref}/log")
-def get_experiment_log_via_idea(idea_id: int, exp_ref: str, tail: int | None = Query(default=25), head: int | None = None, full: bool = False):
+def get_experiment_log_via_idea(idea_id: int, exp_ref: str, tail: int | None = Query(default=25), head: int | None = None, full: bool = False, grep: str | None = None, above: int = 0, below: int = 0):
     """Convenience alias — redirects to GET /experiments/{exp_ref}/log."""
-    return get_experiment_log(exp_ref, tail=tail, head=head, full=full)
+    return get_experiment_log(exp_ref, tail=tail, head=head, full=full, grep=grep, above=above, below=below)
 
 
 @router.post("/ideas/{idea_id}/experiments/{exp_ref}/cancel")

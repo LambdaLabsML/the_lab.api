@@ -77,14 +77,16 @@ def list_messages(
     request: Request,
     for_me: bool = False,
     unread: bool = False,
-    limit: int | None = 100,
+    limit: int = 20,
+    offset: int = 0,
 ):
-    """List messages.
+    """List messages, newest first.
 
-    Defaults to all messages, newest first. Use ``?for_me=1`` to restrict to
-    messages addressed to the caller (by id, role, or ``all``), and
-    ``?unread=1`` to restrict further to ones the caller hasn't marked read.
-    Both flags require ``X-Agent-Id``.
+    Use ``?for_me=1`` to restrict to messages addressed to the caller (by id,
+    role, or ``all``), and ``?unread=1`` for unread-only. Both flags require
+    ``X-Agent-Id``. Supports pagination via ``?limit=N&offset=N``.
+
+    Returns ``{messages, total, limit, offset}`` so callers can page through.
     """
     agent_id, role = _resolve_sender(request)
     if (for_me or unread) and not agent_id:
@@ -93,16 +95,18 @@ def list_messages(
             "for_me / unread require X-Agent-Id; the server can't infer the recipient.",
         )
     if unread:
-        return messages_mod.unread_for(
-            REPO_DIR, agent_id=agent_id, role=role, limit=limit,
-        )
+        msgs = messages_mod.unread_for(REPO_DIR, agent_id=agent_id, role=role, limit=None)
+        total = len(msgs)
+        page = msgs[offset: offset + limit]
+        return {"messages": page, "total": total, "limit": limit, "offset": offset}
     if for_me:
-        all_msgs = messages_mod.list_messages(REPO_DIR, limit=None)
-        out = [m for m in all_msgs if messages_mod.is_for(m, agent_id=agent_id, role=role)]
-        if limit is not None:
-            out = out[:limit]
-        return out
-    return messages_mod.list_messages(REPO_DIR, limit=limit)
+        all_msgs, _ = messages_mod.list_messages(REPO_DIR, limit=None)
+        msgs = [m for m in all_msgs if messages_mod.is_for(m, agent_id=agent_id, role=role)]
+        total = len(msgs)
+        page = msgs[offset: offset + limit]
+        return {"messages": page, "total": total, "limit": limit, "offset": offset}
+    page, total = messages_mod.list_messages(REPO_DIR, limit=limit, offset=offset)
+    return {"messages": page, "total": total, "limit": limit, "offset": offset}
 
 
 @router.post("/api/v1/messages/{msg_id}/read")

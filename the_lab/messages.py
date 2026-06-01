@@ -103,40 +103,22 @@ def _read(repo_dir: Path) -> dict:
     return data
 
 
-_MAX_MESSAGES = 500
-_MAX_AGE_DAYS = 7
+_MAX_READ_KEPT = 5  # read messages retained per recipient after pruning
 
 
 def _prune(data: dict) -> dict:
-    """Drop old read messages so the file doesn't grow unboundedly.
+    """Keep all unread messages; retain only the last _MAX_READ_KEPT read ones.
 
-    Rules (applied in order):
-    - Always keep unread messages (read_by is empty).
-    - Drop messages older than _MAX_AGE_DAYS that have been read by at least
-      one agent.
-    - If the list still exceeds _MAX_MESSAGES, drop the oldest ones first.
+    Messages are split into unread (read_by empty) and read (read_by non-empty).
+    All unread messages are kept. Read messages are sorted oldest-first and only
+    the last _MAX_READ_KEPT are retained — the rest are discarded.
     """
     msgs = data.get("messages", [])
-    if len(msgs) <= _MAX_MESSAGES:
-        return data  # fast path — nothing to do
-
-    cutoff = (datetime.now(timezone.utc).timestamp() - _MAX_AGE_DAYS * 86400)
-    kept = []
-    for m in msgs:
-        read_by = m.get("read_by") or []
-        if not read_by:
-            kept.append(m)  # unread — always keep
-            continue
-        ts = m.get("created_at") or ""
-        try:
-            age = datetime.fromisoformat(ts).timestamp()
-        except Exception:
-            age = 0
-        if age >= cutoff:
-            kept.append(m)  # recent enough — keep
-    # Hard cap: keep the most recent _MAX_MESSAGES
-    if len(kept) > _MAX_MESSAGES:
-        kept = kept[-_MAX_MESSAGES:]
+    unread = [m for m in msgs if not m.get("read_by")]
+    read   = [m for m in msgs if m.get("read_by")]
+    kept   = unread + read[-_MAX_READ_KEPT:]
+    if len(kept) == len(msgs):
+        return data  # nothing changed
     return {**data, "messages": kept}
 
 
@@ -202,14 +184,18 @@ def list_messages(
     repo_dir: Path,
     *,
     limit: int | None = None,
-) -> list[dict]:
-    """All messages, newest first."""
+    offset: int = 0,
+) -> tuple[list[dict], int]:
+    """All messages, newest first. Returns (page, total_count)."""
     with _lock:
         msgs = list(_read(repo_dir)["messages"])
     msgs.reverse()
+    total = len(msgs)
+    if offset:
+        msgs = msgs[offset:]
     if limit is not None:
         msgs = msgs[:limit]
-    return msgs
+    return msgs, total
 
 
 def is_for(msg: dict, *, agent_id: str | None, role: str | None) -> bool:
