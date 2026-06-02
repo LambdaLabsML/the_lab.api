@@ -25,6 +25,23 @@ from .store import Store
 from . import token_registry
 
 
+def _metrics_from_result(result: dict) -> tuple[dict, dict]:
+    """Return final metrics/meta, preferring ARC scorecard score when present."""
+    if "metrics" in result:
+        metrics = dict(result.get("metrics") or {})
+    else:
+        metrics = {k: v for k, v in result.items() if k != "meta"}
+    meta = dict(result.get("meta") or {})
+    scorecard = meta.get("scorecard") if isinstance(meta, dict) else None
+    if isinstance(scorecard, dict) and scorecard.get("score") is not None:
+        raw_score = metrics.get("score")
+        if raw_score is not None and raw_score != scorecard.get("score"):
+            metrics["progress_score"] = raw_score
+        metrics["score"] = scorecard.get("score")
+        metrics["score_source"] = "scorecard"
+    return metrics, meta
+
+
 def _parse_log_progress(lines: list[str]) -> dict | None:
     """Scan log lines and return a progress snapshot with the same schema as
     the final metrics, plus ``pct_complete`` (0–100).
@@ -473,8 +490,8 @@ class ExperimentRunner:
         _label = exp.get("label") or str(exp_id)
         _idea_id = exp.get("idea_id")
         if result is not None:
-            metrics = result.get("metrics", {})
-            meta = {**exp.get("meta", {}), **result.get("meta", {})}
+            metrics, result_meta = _metrics_from_result(result)
+            meta = {**exp.get("meta", {}), **result_meta}
             self._store.update_experiment(
                 exp_id,
                 status="completed",
@@ -539,8 +556,8 @@ class ExperimentRunner:
 
         result, result_idx = self._extract_json(output)
         if result is not None:
-            metrics = result.get("metrics", {})
-            meta = {**exp.get("meta", {}), **result.get("meta", {})}
+            metrics, result_meta = _metrics_from_result(result)
+            meta = {**exp.get("meta", {}), **result_meta}
             self._store.update_experiment(
                 exp_id, status="completed", metrics=metrics, meta=meta,
                 pid=None, finished_at=now,
@@ -779,8 +796,8 @@ class ExperimentRunner:
         elif process.returncode == 0:
             result, result_idx = self._extract_json(output)
             if result is not None:
-                metrics = result.get("metrics", {})
-                meta = {**exp.get("meta", {}), **result.get("meta", {})}
+                metrics, result_meta = _metrics_from_result(result)
+                meta = {**exp.get("meta", {}), **result_meta}
                 self._store.update_experiment(
                     exp_id, status="completed", metrics=metrics, meta=meta,
                     pid=None, finished_at=now,
@@ -1106,14 +1123,7 @@ class ExperimentRunner:
                 output = log_path.read_text() if log_path.exists() else ""
                 result, result_idx = self._extract_json(output)
                 if result is not None:
-                    # If result has a nested "metrics" key use it; otherwise
-                    # treat the whole result as metrics (e.g. Tetris format
-                    # where keys like "turns", "latency_mean_ms" are top-level).
-                    if "metrics" in result:
-                        metrics = result.get("metrics", {})
-                    else:
-                        metrics = {k: v for k, v in result.items()
-                                   if k not in ("meta",)}
+                    metrics, result_meta = _metrics_from_result(result)
                     # Rewrite remote artifact paths to local pulled copies.
                     # Job root is the only sync target now (worktree excluded).
                     # Scripts must copy artifacts to the job root before exit.
@@ -1124,7 +1134,7 @@ class ExperimentRunner:
                             _local = local_exp_dir / _name
                             if _local.exists():
                                 metrics[_key] = str(_local)
-                    meta = {**(exp.get("meta") or {}), **result.get("meta", {})}
+                    meta = {**(exp.get("meta") or {}), **result_meta}
                     self._store.update_experiment(
                         exp_id,
                         status="completed",
@@ -1214,11 +1224,8 @@ class ExperimentRunner:
                 # successfully before Slurm killed/cancelled the wrapper.
                 result, result_idx = self._extract_json(output)
                 if result is not None:
-                    if "metrics" in result:
-                        metrics = result.get("metrics", {})
-                    else:
-                        metrics = {k: v for k, v in result.items() if k not in ("meta",)}
-                    meta = {**(exp.get("meta") or {}), **result.get("meta", {})}
+                    metrics, result_meta = _metrics_from_result(result)
+                    meta = {**(exp.get("meta") or {}), **result_meta}
                     self._store.update_experiment(
                         exp_id,
                         status="completed",
