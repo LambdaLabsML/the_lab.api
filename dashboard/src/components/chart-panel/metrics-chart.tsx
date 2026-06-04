@@ -17,6 +17,7 @@ import {
   ideaMean,
   showBestLine,
   chartMinified,
+  colorblindMode,
 } from "../../state/settings";
 import { buildChartData, collectChartKeys } from "../../lib/chart-data";
 import { isLowerBetter } from "../../lib/colors";
@@ -171,6 +172,7 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
         yScale.max    = yBounds.max;
         (yScale as any).type = logScale ? "logarithmic" : "linear";
         (chartRef.current.options.scales!.x as any).ticks.display = !minified;
+        (chartRef.current.options.scales!.x as any).grid.display = !minified;
         chartRef.current.resize();
         chartRef.current.update("none");
         return;
@@ -180,9 +182,10 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
     }); // end requestAnimationFrame
 
     return () => cancelAnimationFrame(rafId);
-  }, [metric, mode, impOnly, tags, tagMode, experiments, reversed, showAbandoned.value, showConcluded.value, showRunning.value, clip, mean, logScale, theme, _fz, visibilityTick, bestLine, minified]);
+  }, [metric, mode, impOnly, tags, tagMode, experiments, reversed, showAbandoned.value, showConcluded.value, showRunning.value, clip, mean, logScale, theme, _fz, visibilityTick, bestLine, minified, colorblindMode.value]);
 
-  // Handle highlight changes separately (just update point sizes)
+  // Handle highlight changes separately (just update point sizes).
+  // Mini mode keeps dots small — only the specifically highlighted idea expands.
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart) return;
@@ -190,19 +193,24 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
     const expData = ds._expData as any[];
     if (!expData) return;
 
+    const mini = chartMinified.value;
     if (highlighted !== null) {
       ds.pointRadius = expData.map((e: any) =>
-        e.idea_id === highlighted ? 12 : 4
+        e.idea_id === highlighted ? (mini ? 5 : 12) : (mini ? 2 : 4)
       );
       ds.pointBorderWidth = expData.map((e: any) =>
-        e.idea_id === highlighted ? 3 : 1
+        e.idea_id === highlighted ? (mini ? 1.5 : 3) : (mini ? 0 : 1)
       );
     } else {
-      ds.pointRadius = expData.map((e: any) => (e._running ? 8 : 6));
-      ds.pointBorderWidth = expData.map((e: any) => (e._running ? 2.5 : 1));
+      ds.pointRadius = expData.map((e: any) =>
+        mini ? 2 : (e._running ? 8 : 6)
+      );
+      ds.pointBorderWidth = expData.map((e: any) =>
+        mini ? 0 : (e._running ? 2.5 : 1)
+      );
     }
     chart.update("none");
-  }, [highlighted]);
+  }, [highlighted, chartMinified.value]);
 
   // Collect chartable keys grouped by source
   const grouped = useMemo(() => collectChartKeys(experiments), [experiments]);
@@ -275,7 +283,7 @@ function makeBestLineDataset(data: number[], metricKey: string) {
   return {
     label: `best ${metricKey}`,
     data,
-    borderColor: getCssVar("--accent"),
+    borderColor: getCssVar("--purple") || "#a371f7",
     borderWidth: 1.5,
     borderDash: [4, 4],
     pointRadius: 0,
@@ -371,7 +379,7 @@ function createChart(
             },
             autoSkip: true,
           },
-          grid: { color: getCssVar("--border-soft") },
+          grid: { display: !minified, color: getCssVar("--border-soft") },
         },
         y: {
           ...(clipOutliers.value ? computeYBounds(chartData.values) : {}),

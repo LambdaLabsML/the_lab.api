@@ -18,6 +18,7 @@ import {
   ideaMean,
   scatterXMetric,
   scatterYMetric,
+  colorblindMode,
 } from "../../state/settings";
 import { filterMetricExperiments, collectChartKeys, resolveNumericValue } from "../../lib/chart-data";
 import { IDEA_PALETTE, _colorForExp, isLowerBetter } from "../../lib/colors";
@@ -350,7 +351,7 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric }: { i
     }); // end requestAnimationFrame
 
     return () => cancelAnimationFrame(rafId);
-  }, [xMetric, yMetric, mode, impOnly, tags, tagMode, experiments, showAbandoned.value, showConcluded.value, showRunning.value, clip, mean, theme, _fz]);
+  }, [xMetric, yMetric, mode, impOnly, tags, tagMode, experiments, showAbandoned.value, showConcluded.value, showRunning.value, clip, mean, theme, _fz, colorblindMode.value]);
 
   // Handle highlight changes separately
   useEffect(() => {
