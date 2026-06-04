@@ -108,7 +108,7 @@
   width: 7px; height: 7px;
   border-radius: 50%;
   flex-shrink: 0;
-  margin-left: -16px; /* pull it closer after the title gap */
+  margin-left: -6px; /* small pull-in so dot reads as part of title */
   align-self: center;
 }
 .ws-dot--on  { background: var(--green); box-shadow: 0 0 4px var(--green); }
