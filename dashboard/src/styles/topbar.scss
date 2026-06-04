@@ -139,6 +139,7 @@
   cursor: pointer; border-radius: var(--radius-sm);
 }
 .layout-menu-btn:hover { background: var(--bg-hi); color: var(--accent); }
+.layout-menu-btn--active { color: var(--accent) !important; font-weight: 600; }
 .layout-save-row { display: flex; gap: 4px; }
 .layout-save-input {
   flex: 1; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm);

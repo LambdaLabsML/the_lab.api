@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "preact/hooks";
 import { backlogData, totalAgentCost, totalAgentInputTokens, totalAgentOutputTokens } from "../state/signals";
-import { reverseTime, colorMode, colorTheme, fontFamily, fontSize } from "../state/settings";
+import { reverseTime, colorMode, colorTheme, fontFamily, fontSize, colorblindMode } from "../state/settings";
 import { wsConnected, wsAuthFailed } from "../state/ws";
 // Font display data lives here — NOT imported from fonts.ts.
 // Importing fonts.ts created a topbar → fonts → lazy-chunk TDZ in Vite's
@@ -72,6 +72,7 @@ export function Topbar(props: LayoutActions) {
   const activeTheme  = colorTheme.value;
   const activeFont   = fontFamily.value;
   const activeFontSz = fontSize.value;
+  const isColorblind = colorblindMode.value;
 
   const cost = totalAgentCost.value;
   const inTok = totalAgentInputTokens.value;
@@ -236,6 +237,18 @@ export function Topbar(props: LayoutActions) {
                   </button>
                 ))}
               </div>
+            </div>
+
+            {/* Accessibility */}
+            <div class="layout-menu-section">
+              <div class="layout-menu-label">Accessibility:</div>
+              <button
+                class={`layout-menu-btn${isColorblind ? " layout-menu-btn--active" : ""}`}
+                onClick={() => { colorblindMode.value = !isColorblind; }}
+                title="Okabe-Ito colorblind-safe palette (replaces red/green with vermillion/teal)"
+              >
+                {isColorblind ? "◉ Colorblind mode on" : "◎ Colorblind mode"}
+              </button>
             </div>
 
             <div class="layout-menu-section">

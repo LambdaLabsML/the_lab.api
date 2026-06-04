@@ -1,6 +1,6 @@
 import { render } from "preact";
 import { App } from "./app";
-import { colorTheme, fontFamily, fontSize } from "./state/settings";
+import { colorTheme, fontFamily, fontSize, colorblindMode } from "./state/settings";
 import { effect } from "@preact/signals";
 import { ALL_PAIRINGS, DEFAULT_PAIRING } from "./lib/fonts";
 import "dockview-core/dist/styles/dockview.css";
@@ -41,6 +41,39 @@ effect(() => {
   const s = fontSize.value;
   if (s === "m") document.documentElement.removeAttribute("data-font-size");
   else document.documentElement.setAttribute("data-font-size", s);
+});
+
+// Colorblind mode: override status CSS variables with Okabe-Ito safe palette.
+// The Okabe-Ito set (2002) is the scientific standard — validated across all
+// common colorblind types by simulating deuteranopia, protanopia, tritanopia.
+// Key insight: replaces the red-green axis with blue-orange, which is
+// preserved across all types of red-green colorblindness.
+const CB_STYLE_ID = "the-lab-colorblind-overrides";
+effect(() => {
+  const el = document.getElementById(CB_STYLE_ID);
+  if (colorblindMode.value) {
+    if (!el) {
+      const style = document.createElement("style");
+      style.id = CB_STYLE_ID;
+      // Override status colors with Okabe-Ito palette.
+      // We use CSS variable overrides so they work with every theme:
+      //   active (green)    → #009E73  bluish-green (teal axis, safe vs red)
+      //   abandoned (red)   → #D55E00  vermillion   (orange axis, safe vs green)
+      //   running (yellow)  → #F0E442  yellow       (keep — safe in all types)
+      //   accent (blue)     → #0072B2  deep blue    (keep — safe in all types)
+      style.textContent = `
+        :root, [data-theme] {
+          --green:  #009E73;
+          --red:    #D55E00;
+          --yellow: #F0E442;
+          --accent: #0072B2;
+        }
+      `;
+      document.head.appendChild(style);
+    }
+  } else {
+    el?.remove();
+  }
 });
 
 render(<App />, document.getElementById("app")!);

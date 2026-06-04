@@ -15,8 +15,11 @@ import {
   showRunning,
   clipOutliers,
   ideaMean,
+  showBestLine,
+  chartMinified,
 } from "../../state/settings";
 import { buildChartData, collectChartKeys } from "../../lib/chart-data";
+import { isLowerBetter } from "../../lib/colors";
 import { navigateToIdea } from "../../lib/navigate";
 import { getCssVar, getCssVarPx } from "../../lib/css-vars";
 import type { ChartDataResult } from "../../lib/chart-data";
@@ -27,6 +30,8 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
   const [localMetric, setLocalMetric] = useState(initialMetric || "");
   const [logScale, setLogScale] = useState(false);
   const [visibilityTick, setVisibilityTick] = useState(0);
+  const bestLine = showBestLine.value;
+  const minified = chartMinified.value;
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const chartRef = useRef<Chart | null>(null);
   const innerRef = useRef<HTMLDivElement>(null);
@@ -119,9 +124,22 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
       );
       if (!chartData) return;
 
+      // Minified mode: very small dots for global overview
+      const radii = minified
+        ? chartData.pointRadii.map(() => 2)
+        : chartData.pointRadii;
+      const borderWidths = minified
+        ? chartData.pointBorderWidths.map(() => 0)
+        : chartData.pointBorderWidths;
+
+      // Best-line dataset: step-function of running best value
+      const bestLineData = bestLine ? computeBestLine(chartData.values, isLowerBetter(metric)) : null;
+
       if (inner) {
         const parentW = inner.parentElement?.clientWidth ?? 400;
-        const minW = Math.max(parentW, Math.min(chartData.labels.length * 50, 4000));
+        const minW = minified
+          ? parentW
+          : Math.max(parentW, Math.min(chartData.labels.length * 50, 4000));
         inner.style.width = minW + "px";
       }
 
@@ -130,27 +148,39 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
         ds.data = chartData.values;
         ds.pointBackgroundColor = chartData.pointBgColors as any;
         ds.pointBorderColor    = chartData.pointColors as any;
-        ds.pointBorderWidth    = chartData.pointBorderWidths as any;
-        ds.pointStyle          = chartData.pointStyles as any;
-        ds.pointRadius         = chartData.pointRadii as any;
+        ds.pointBorderWidth    = borderWidths as any;
+        ds.pointStyle          = (minified ? chartData.pointStyles.map(() => "circle") : chartData.pointStyles) as any;
+        ds.pointRadius         = radii as any;
+        ds.pointHoverRadius    = minified ? 4 : 10;
         (ds as any)._expData   = chartData.expData;
         chartRef.current.data.labels = chartData.labels;
+        // Update or add/remove best-line dataset
+        if (bestLineData) {
+          if (chartRef.current.data.datasets.length < 2) {
+            chartRef.current.data.datasets.push(makeBestLineDataset(bestLineData, metric));
+          } else {
+            chartRef.current.data.datasets[1].data = bestLineData;
+          }
+        } else {
+          chartRef.current.data.datasets.splice(1);
+        }
         const yBounds = clip ? computeYBounds(chartData.values) : {};
         const yScale  = chartRef.current.options.scales!.y!;
-        yScale.title  = { display: true, text: metric, color: getCssVar("--text-muted"), font: { size: getCssVarPx("--text-xs") } };
+        yScale.title  = { display: !minified, text: metric, color: getCssVar("--text-muted"), font: { size: getCssVarPx("--text-xs") } };
         yScale.min    = yBounds.min;
         yScale.max    = yBounds.max;
         (yScale as any).type = logScale ? "logarithmic" : "linear";
+        (chartRef.current.options.scales!.x as any).ticks.display = !minified;
         chartRef.current.resize();
         chartRef.current.update("none");
         return;
       }
 
-      chartRef.current = createChart(canvas, metric, chartData);
+      chartRef.current = createChart(canvas, metric, chartData, { minified, bestLineData, metricKey: metric });
     }); // end requestAnimationFrame
 
     return () => cancelAnimationFrame(rafId);
-  }, [metric, mode, impOnly, tags, tagMode, experiments, reversed, showAbandoned.value, showConcluded.value, showRunning.value, clip, mean, logScale, theme, _fz, visibilityTick]);
+  }, [metric, mode, impOnly, tags, tagMode, experiments, reversed, showAbandoned.value, showConcluded.value, showRunning.value, clip, mean, logScale, theme, _fz, visibilityTick, bestLine, minified]);
 
   // Handle highlight changes separately (just update point sizes)
   useEffect(() => {
@@ -212,6 +242,12 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
         <button type="button" class={`chart-toggle-btn${logScale ? " active" : ""}`} onClick={() => { setLogScale(!logScale); }} title="Logarithmic Y axis">
           log
         </button>
+        <button type="button" class={`chart-toggle-btn${bestLine ? " active" : ""}`} onClick={() => { showBestLine.value = !bestLine; }} title="Show current-best step line">
+          ⌇ Best
+        </button>
+        <button type="button" class={`chart-toggle-btn${minified ? " active" : ""}`} onClick={() => { chartMinified.value = !minified; }} title="Minified: small dots, global overview">
+          ⊡ Mini
+        </button>
         <button type="button" class="chart-toggle-btn" onClick={() => { if (cloneChartPanel) cloneChartPanel("metrics", metric); }} title="Clone this chart as a new tab">
           + Clone
         </button>
@@ -223,6 +259,32 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
       </div>
     </div>
   );
+}
+
+/** Build the running-best step-function values for the best-line dataset. */
+function computeBestLine(values: number[], lowerIsBetter: boolean): number[] {
+  let best: number | null = null;
+  return values.map((v) => {
+    if (best === null || (lowerIsBetter ? v < best : v > best)) best = v;
+    return best!;
+  });
+}
+
+/** Chart.js dataset config for the best-line. */
+function makeBestLineDataset(data: number[], metricKey: string) {
+  return {
+    label: `best ${metricKey}`,
+    data,
+    borderColor: getCssVar("--accent"),
+    borderWidth: 1.5,
+    borderDash: [4, 4],
+    pointRadius: 0,
+    pointHoverRadius: 0,
+    tension: 0,
+    fill: false,
+    stepped: "before",
+    order: 0,
+  } as any;
 }
 
 /** IQR-based y-axis bounds that clip extreme outliers. */
@@ -251,28 +313,37 @@ function computeYBounds(values: number[]): { min?: number; max?: number } {
 function createChart(
   canvas: HTMLCanvasElement,
   metricKey: string,
-  chartData: ChartDataResult
+  chartData: ChartDataResult,
+  opts: { minified?: boolean; bestLineData?: number[] | null; metricKey?: string } = {}
 ): Chart {
+  const { minified = false, bestLineData = null } = opts;
+  const radii = minified ? chartData.pointRadii.map(() => 2) : chartData.pointRadii;
+  const borderWidths = minified ? chartData.pointBorderWidths.map(() => 0) : chartData.pointBorderWidths;
+  const datasets: any[] = [
+    {
+      label: metricKey,
+      data: chartData.values,
+      borderColor: `color-mix(in srgb, ${getCssVar("--text-muted")} 27%, transparent)`,
+      pointBackgroundColor: chartData.pointBgColors,
+      pointBorderColor: chartData.pointColors,
+      pointBorderWidth: borderWidths,
+      pointStyle: minified ? chartData.pointStyles.map(() => "circle") : chartData.pointStyles,
+      pointRadius: radii,
+      pointHoverRadius: minified ? 4 : 10,
+      tension: 0,
+      fill: false,
+      order: 1,
+      _expData: chartData.expData,
+    },
+  ];
+  if (bestLineData) {
+    datasets.unshift(makeBestLineDataset(bestLineData, metricKey));
+  }
   return new Chart(canvas, {
     type: "line",
     data: {
       labels: chartData.labels,
-      datasets: [
-        {
-          label: metricKey,
-          data: chartData.values,
-          borderColor: `color-mix(in srgb, ${getCssVar("--text-muted")} 27%, transparent)`,
-          pointBackgroundColor: chartData.pointBgColors,
-          pointBorderColor: chartData.pointColors,
-          pointBorderWidth: chartData.pointBorderWidths,
-          pointStyle: chartData.pointStyles,
-          pointRadius: chartData.pointRadii,
-          pointHoverRadius: 10,
-          tension: 0,
-          fill: false,
-          _expData: chartData.expData,
-        } as any,
-      ],
+      datasets,
     },
     options: {
       responsive: true,
@@ -292,6 +363,7 @@ function createChart(
         x: {
           display: true,
           ticks: {
+            display: !minified,
             color: getCssVar("--text-muted"),
             font: {
               size: 10,
@@ -304,7 +376,7 @@ function createChart(
         y: {
           ...(clipOutliers.value ? computeYBounds(chartData.values) : {}),
           title: {
-            display: true,
+            display: !minified,
             text: metricKey,
             color: getCssVar("--text-muted"),
             font: { size: getCssVarPx("--text-xs") },
