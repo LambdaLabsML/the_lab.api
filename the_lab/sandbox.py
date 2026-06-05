@@ -687,6 +687,17 @@ def build_sandbox_command(
             → python -m the_lab.sandbox_guest
               → the target command
     """
+    missing = [b for b in ("rootlesskit", "bwrap") if not shutil.which(b)]
+    if missing:
+        raise RuntimeError(
+            f"Sandbox requires {' and '.join(missing)} but "
+            + ("it is" if len(missing) == 1 else "they are")
+            + " not installed.\n"
+            "  Ubuntu/Debian:  sudo apt-get install "
+            + ("rootlesskit" if "rootlesskit" in missing else "")
+            + (" bubblewrap" if "bwrap" in missing else "").strip()
+        )
+
     if config is None:
         config = load_sandbox_config(repo_dir)
 
