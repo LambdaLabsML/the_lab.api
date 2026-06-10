@@ -20,6 +20,15 @@ const MIN_PX_PER_POINT = 8;
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
+/** Upward-pointing triangle path centred on (cx, cy) with half-size r. */
+function trianglePath(cx: number, cy: number, r: number): string {
+  const h = r * 1.8;
+  const x0 = cx, y0 = cy - h;           // apex
+  const x1 = cx - r, y1 = cy + h * 0.4; // bottom-left
+  const x2 = cx + r, y2 = cy + h * 0.4; // bottom-right
+  return `M${x0.toFixed(1)},${y0.toFixed(1)} L${x1.toFixed(1)},${y1.toFixed(1)} L${x2.toFixed(1)},${y2.toFixed(1)} Z`;
+}
+
 function fmtVal(v: number): string {
   if (Math.abs(v) >= 1000) return v.toFixed(0);
   if (Math.abs(v) >= 10)   return v.toFixed(1);
@@ -212,10 +221,14 @@ export function MiniMetricsChart({
           const ideaHighlighted = exp != null && globalHighlight === exp.idea_id;
           const anyHighlight = globalHighlight !== null;
           const faded = anyHighlight && !ideaHighlighted;
+          const isRunning = exp?._running ?? false;
           const r = ideaHighlighted
             ? (isMilestone ? 6.5 : 5.5)
             : isHovered ? (isMilestone ? 6 : 5)
             : (isMilestone ? 4.5 : 3);
+          const dotColor = isMilestone ? "var(--yellow, #d29922)" : color;
+          const strokeColor = ideaHighlighted ? "var(--text, #c9d1d9)" : isMilestone ? "var(--bg, #0d1117)" : "none";
+          const strokeW = ideaHighlighted ? 1.5 : isMilestone ? 1.2 : 0;
 
           return (
             <g
@@ -229,12 +242,21 @@ export function MiniMetricsChart({
                 stroke={isMilestone ? "var(--yellow, #d29922)" : "var(--border, #30363d)"}
                 stroke-width="1" stroke-dasharray="2 3"
                 opacity={faded ? 0.12 : isMilestone ? 0.55 : 0.35} />
-              <circle cx={x} cy={y} r={r}
-                fill={isMilestone ? "var(--yellow, #d29922)" : color}
-                stroke={ideaHighlighted ? "var(--text, #c9d1d9)" : isMilestone ? "var(--bg, #0d1117)" : "none"}
-                stroke-width={ideaHighlighted ? 1.5 : isMilestone ? 1.2 : 0}
-                opacity={faded ? 0.2 : 1}
-              />
+              {isRunning ? (
+                <path d={trianglePath(x, y, r)}
+                  fill="transparent"
+                  stroke={dotColor}
+                  stroke-width={Math.max(strokeW, 1.5)}
+                  opacity={faded ? 0.2 : 1}
+                />
+              ) : (
+                <circle cx={x} cy={y} r={r}
+                  fill={dotColor}
+                  stroke={strokeColor}
+                  stroke-width={strokeW}
+                  opacity={faded ? 0.2 : 1}
+                />
+              )}
               {isMilestone && !faded && (
                 <text x={x + 6} y={y - 6}
                   fill="var(--yellow, #d29922)" font-size="9"
