@@ -253,15 +253,16 @@ def build_notifications(request) -> list[dict]:
             )
             for m in unread:
                 origin = m.get("from_role") or m.get("from_agent") or "system"
-                preview = (m.get("text") or "")[:200]
+                snippet = (m.get("text") or "")[:60].rstrip()
+                preview = (snippet + "…") if len(m.get("text") or "") > 60 else snippet
                 notifications.append({
                     "type": "message",
                     "priority": "high",
                     "message_id": m["id"],
                     "from": origin,
                     "to": m.get("to"),
-                    "message": f"{origin}: {preview}",
-                    "action": f"POST /api/v1/messages/{m['id']}/read",
+                    "message": f"new message from {origin}: {preview}",
+                    "action": "GET /api/v1/messages to read, then POST /api/v1/messages/{id}/read to mark read",
                 })
         except Exception:
             pass

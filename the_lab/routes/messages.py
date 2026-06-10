@@ -120,7 +120,7 @@ def mark_message_read(msg_id: int, request: Request):
     msg = messages_mod.mark_read(REPO_DIR, msg_id, agent_id)
     if msg is None:
         raise HTTPException(404, f"message {msg_id} not found")
-    return msg
+    return {"status": "ok", "id": msg_id}
 
 
 @router.post("/api/v1/messages/read_all")
