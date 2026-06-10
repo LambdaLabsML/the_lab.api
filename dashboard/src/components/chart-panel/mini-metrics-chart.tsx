@@ -201,7 +201,7 @@ export function MiniMetricsChart({
               style="cursor:pointer;"
               onMouseEnter={() => setHoveredIdx(i)}
               onMouseLeave={() => setHoveredIdx(null)}
-              onClick={() => exp && navigateToIdea(exp.idea_id)}
+              onClick={() => exp && navigateToIdea(exp.idea_id, exp.label ?? String(exp.id))}
             >
               <line x1={x} x2={x} y1={y} y2={H - PAD.b}
                 stroke={isMilestone ? "var(--yellow, #d29922)" : "var(--border, #30363d)"}

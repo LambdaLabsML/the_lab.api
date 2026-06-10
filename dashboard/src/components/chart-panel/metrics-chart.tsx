@@ -112,6 +112,13 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
       chartRef.current.destroy();
       chartRef.current = null;
     }
+    // When switching back from mini mode the canvas is a new DOM element —
+    // the old Chart.js instance points at the unmounted canvas. Detect the
+    // mismatch and recreate so the chart isn't drawn into a detached node.
+    if (chartRef.current && (chartRef.current as any).canvas !== canvasRef.current) {
+      chartRef.current.destroy();
+      chartRef.current = null;
+    }
 
     // Capture mutable refs for the rAF closure
     const canvas = canvasRef.current;
