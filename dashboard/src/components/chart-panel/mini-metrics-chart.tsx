@@ -123,14 +123,26 @@ export function MiniMetricsChart({
   const yMin = dataMin - yPad;
   const yMax = dataMax + yPad;
 
-  // Running best + milestone detection (always from chronological order in values)
+  // Running best + milestone detection — always computed in chronological
+  // order (oldest→newest). When reversed=true the display is newest→oldest,
+  // so we iterate right-to-left and the running best is a suffix max/min.
   const milestones = new Set<number>();
-  let best: number | null = null;
-  const runningBest: number[] = values.map((v, i) => {
-    const isBetter = best === null || (lower ? v < best : v > best);
-    if (isBetter) { best = v; milestones.add(i); }
-    return best!;
-  });
+  const runningBest: number[] = new Array(n);
+  if (reversed) {
+    let best: number | null = null;
+    for (let i = n - 1; i >= 0; i--) {
+      const isBetter = best === null || (lower ? values[i] < best : values[i] > best);
+      if (isBetter) { best = values[i]; milestones.add(i); }
+      runningBest[i] = best!;
+    }
+  } else {
+    let best: number | null = null;
+    for (let i = 0; i < n; i++) {
+      const isBetter = best === null || (lower ? values[i] < best : values[i] > best);
+      if (isBetter) { best = values[i]; milestones.add(i); }
+      runningBest[i] = best!;
+    }
+  }
 
   // Stepped best-score path
   const stepPoints = values.map((_, i) => [toX(i), toY(runningBest[i])] as const);
@@ -145,7 +157,7 @@ export function MiniMetricsChart({
   const tickStep = (yMax - yMin) / (nTicks - 1);
   const yTicks = Array.from({ length: nTicks }, (_, i) => yMin + i * tickStep);
 
-  const bestVal = runningBest[n - 1];
+  const bestVal = lower ? Math.min(...finite) : Math.max(...finite);
   const needsScroll = svgW > containerW;
 
   return (
