@@ -103,15 +103,8 @@ def _read(repo_dir: Path) -> dict:
     return data
 
 
-_MAX_MESSAGES = 2000  # hard cap on total messages kept for history
-
-
 def _prune(data: dict) -> dict:
-    """Cap total message history at _MAX_MESSAGES, dropping the oldest first."""
-    msgs = data.get("messages", [])
-    if len(msgs) <= _MAX_MESSAGES:
-        return data
-    return {**data, "messages": msgs[-_MAX_MESSAGES:]}
+    return data
 
 
 def _write(repo_dir: Path, data: dict) -> None:
