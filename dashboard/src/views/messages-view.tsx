@@ -20,6 +20,7 @@ function relativeTime(iso: string): string {
 export function MessagesView() {
   const [agents, setAgents] = useState<AgentEntry[]>([]);
   const [messages, setMessages] = useState<MessageEntry[]>([]);
+  const [showAll, setShowAll] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Re-render every ~30s so "Xm ago" stays fresh
@@ -83,11 +84,13 @@ export function MessagesView() {
     return m.from_role || "system";
   }
 
-  const messageCount = messages.length;
+  const displayed = showAll ? messages : messages.filter((m) => !m.read_by?.length);
+  const unreadCount = messages.filter((m) => !m.read_by?.length).length;
+  const messageCount = displayed.length;
   const countLabel =
     messageCount === 0
-      ? "no messages yet"
-      : `${messageCount} message${messageCount === 1 ? "" : "s"}`;
+      ? (showAll ? "no messages yet" : "no unread messages")
+      : `${messageCount} ${showAll ? "" : "unread "}message${messageCount === 1 ? "" : "s"}`;
 
   return (
     <div id="messages-container">
@@ -101,6 +104,13 @@ export function MessagesView() {
         </div>
         <div class="agents-header-right">
           <div class="agents-summary">{loaded ? countLabel : "Loading..."}</div>
+          <button
+            class="agents-btn"
+            onClick={() => setShowAll((v) => !v)}
+            title={showAll ? "Show unread only" : "Show all messages"}
+          >
+            {showAll ? `Unread only${unreadCount ? ` (${unreadCount})` : ""}` : "Show all"}
+          </button>
           <button
             class="agents-btn"
             onClick={() => refresh()}
@@ -125,7 +135,7 @@ export function MessagesView() {
           </div>
         ) : (
           <ol class="agents-messages-list">
-            {messages.map((m) => (
+            {displayed.map((m) => (
               <li class="agents-message" key={m.id}>
                 <div class="agents-message-head">
                   <span class="agents-message-from" title={`agent ${m.from_agent ?? "system"}`}>
