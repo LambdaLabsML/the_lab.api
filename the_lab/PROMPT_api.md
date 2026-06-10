@@ -101,6 +101,23 @@ All endpoints are documented with descriptions, parameters, and examples in the 
 - **Spec** → `GET /openapi.json`
 - **Docs** → `GET /docs` (Swagger UI)
 
+### Inter-agent messaging
+
+Agents can send messages to each other via the messages API. Unread messages addressed to you appear in `_notifications` on every API response as a brief preview — call `list_messages` to read the full text, then mark them read.
+
+- **Send** → `POST /api/v1/messages {to, text}` — `to` is `"all"`, `"role:<name>"`, or `"agent:<id>"`
+- **Read** → `GET /api/v1/messages?for_me=1` — returns messages addressed to your agent ID, role, or `"all"`
+- **Mark read** → `POST /api/v1/messages/{id}/read` — returns `{"status":"ok","id":N}`
+- **Mark all read** → `POST /api/v1/messages/read_all` — returns `{"marked_read":N}`
+
+To **wait for incoming messages** in the background:
+
+```bash
+the-lab messages --port <port>   # blocks until ≥1 unread message arrives, then prints JSON array
+```
+
+Uses `THE_LAB_AGENT_ID` automatically — only returns messages addressed to you (or `"all"`). Exits with `[]` on timeout (default 300s).
+
 ### Role-based prompts
 
 Projects can define multiple agent prompts for different roles (e.g. an "instructor" that plans and a "worker" that executes). Prompt files live in `.the_lab/`:
