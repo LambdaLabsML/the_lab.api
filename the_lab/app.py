@@ -262,7 +262,7 @@ def build_notifications(request) -> list[dict]:
                     "from": origin,
                     "to": m.get("to"),
                     "message": f"new message from {origin}: {preview}",
-                    "action": "GET /api/v1/messages to read, then POST /api/v1/messages/{id}/read to mark read",
+                    "action": f"GET /api/v1/messages (read full text), then POST /api/v1/messages/{m['id']}/read",
                 })
         except Exception:
             pass
