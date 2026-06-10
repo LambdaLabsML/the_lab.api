@@ -557,7 +557,8 @@ def cmd_messages():
     deadline = _time.monotonic() + args.timeout
     while True:
         try:
-            data = _get(f"{api_base}/messages?limit=50")
+            qs = "limit=50&for_me=1" if agent_id else "limit=50"
+            data = _get(f"{api_base}/messages?{qs}")
             msgs = data.get("messages", [])
             unread = [m for m in msgs if not m.get("read_by")]
             if unread:
