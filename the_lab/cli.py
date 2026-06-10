@@ -514,6 +514,69 @@ def cmd_wait():
     sys.exit(0 if status == "completed" else 1)
 
 
+def cmd_messages():
+    """the-lab messages [--port N] [--timeout N] [--url URL] [--poll N]
+
+    Long-poll until at least one unread message is available, print them as
+    JSON, and exit.  Designed to be run in the background by Claude Code:
+
+        Bash("the-lab messages --port 9009", run_in_background=True)
+
+    Claude Code is notified automatically when the command exits, then reads
+    the printed JSON array to get the messages.  Uses THE_LAB_AGENT_ID,
+    THE_LAB_USER, and THE_LAB_PASSWORD from the environment when set.
+    """
+    import argparse as _ap, json as _json, time as _time
+    import urllib.request as _urlreq, urllib.error as _urlerr, base64 as _b64
+
+    p = _ap.ArgumentParser(prog="the-lab messages")
+    p.add_argument("--port", type=int, default=8000)
+    p.add_argument("--timeout", type=float, default=300, help="Max seconds to wait (default 300)")
+    p.add_argument("--poll", type=float, default=3, help="Polling interval in seconds (default 3)")
+    p.add_argument("--url", default=None, help="Override API base URL")
+    args = p.parse_args(sys.argv[2:])
+
+    api_base = args.url or f"http://localhost:{args.port}/api/v1"
+
+    headers: dict[str, str] = {}
+    agent_id = os.environ.get("THE_LAB_AGENT_ID", "").strip()
+    if agent_id:
+        headers["X-Agent-Id"] = agent_id
+    _user = os.environ.get("THE_LAB_USER", "").strip()
+    _pw   = os.environ.get("THE_LAB_PASSWORD", "").strip()
+    if _user and _pw:
+        headers["Authorization"] = "Basic " + _b64.b64encode(
+            f"{_user}:{_pw}".encode()
+        ).decode()
+
+    def _get(url: str) -> dict:
+        req = _urlreq.Request(url, headers=headers)
+        with _urlreq.urlopen(req, timeout=15) as r:
+            return _json.loads(r.read())
+
+    deadline = _time.monotonic() + args.timeout
+    while True:
+        try:
+            data = _get(f"{api_base}/messages?limit=50")
+            msgs = data.get("messages", [])
+            unread = [m for m in msgs if not m.get("read_by")]
+            if unread:
+                print(_json.dumps(unread))
+                sys.exit(0)
+        except _urlerr.URLError as e:
+            print(_json.dumps({"error": str(e)}))
+            sys.exit(1)
+        except Exception as e:
+            print(_json.dumps({"error": str(e)}))
+            sys.exit(1)
+
+        if _time.monotonic() >= deadline:
+            print(_json.dumps([]))
+            sys.exit(0)
+
+        _time.sleep(args.poll)
+
+
 def main():
     # Handle subcommands before argparse (server mode)
     if len(sys.argv) >= 2 and sys.argv[1] == "init":
@@ -523,6 +586,10 @@ def main():
 
     if len(sys.argv) >= 2 and sys.argv[1] == "wait":
         cmd_wait()
+        return
+
+    if len(sys.argv) >= 2 and sys.argv[1] == "messages":
+        cmd_messages()
         return
 
     parser = argparse.ArgumentParser(description="The Lab — Experiment Management API")
