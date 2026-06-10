@@ -103,23 +103,15 @@ def _read(repo_dir: Path) -> dict:
     return data
 
 
-_MAX_READ_KEPT = 5  # read messages retained per recipient after pruning
+_MAX_MESSAGES = 2000  # hard cap on total messages kept for history
 
 
 def _prune(data: dict) -> dict:
-    """Keep all unread messages; retain only the last _MAX_READ_KEPT read ones.
-
-    Messages are split into unread (read_by empty) and read (read_by non-empty).
-    All unread messages are kept. Read messages are sorted oldest-first and only
-    the last _MAX_READ_KEPT are retained — the rest are discarded.
-    """
+    """Cap total message history at _MAX_MESSAGES, dropping the oldest first."""
     msgs = data.get("messages", [])
-    unread = [m for m in msgs if not m.get("read_by")]
-    read   = [m for m in msgs if m.get("read_by")]
-    kept   = unread + read[-_MAX_READ_KEPT:]
-    if len(kept) == len(msgs):
-        return data  # nothing changed
-    return {**data, "messages": kept}
+    if len(msgs) <= _MAX_MESSAGES:
+        return data
+    return {**data, "messages": msgs[-_MAX_MESSAGES:]}
 
 
 def _write(repo_dir: Path, data: dict) -> None:
