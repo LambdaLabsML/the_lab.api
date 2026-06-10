@@ -268,9 +268,15 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
               metric={metric}
               experiments={experiments}
               ideas={ideas}
+              layout={layout}
               hiddenStatuses={hiddenStatuses}
               hideRunning={hideRunning}
               impOnly={impOnly}
+              colorMode={mode}
+              tags={tags}
+              tagMode={tagMode}
+              reversed={reversed}
+              mean={mean}
             />
           </div>
         ) : (
