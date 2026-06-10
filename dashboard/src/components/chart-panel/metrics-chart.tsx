@@ -21,6 +21,7 @@ import {
 } from "../../state/settings";
 import { buildChartData, collectChartKeys } from "../../lib/chart-data";
 import { isLowerBetter } from "../../lib/colors";
+import { MiniMetricsChart } from "./mini-metrics-chart";
 import { navigateToIdea } from "../../lib/navigate";
 import { getCssVar, getCssVarPx } from "../../lib/css-vars";
 import type { ChartDataResult } from "../../lib/chart-data";
@@ -261,9 +262,22 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
         </button>
       </div>
       <div id="chart-wrap" style={{ flex: 1, minHeight: 0 }}>
-        <div id="chart-inner" ref={innerRef}>
-          <canvas ref={canvasRef} />
-        </div>
+        {minified ? (
+          <div style={{ width: "100%", height: "100%" }}>
+            <MiniMetricsChart
+              metric={metric}
+              experiments={experiments}
+              ideas={ideas}
+              hiddenStatuses={hiddenStatuses}
+              hideRunning={hideRunning}
+              impOnly={impOnly}
+            />
+          </div>
+        ) : (
+          <div id="chart-inner" ref={innerRef}>
+            <canvas ref={canvasRef} />
+          </div>
+        )}
       </div>
     </div>
   );
