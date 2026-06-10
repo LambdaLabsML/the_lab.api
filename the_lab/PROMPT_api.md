@@ -29,6 +29,7 @@ The core loop (aim for 5-7 API calls per iteration):
 3. **Create idea** → `POST /ideas/new {parent_ids, description}` — creates git branch and **auto-checkouts** (no separate checkout call needed).
 4. **Create + start experiment** → `POST /ideas/<id>/experiments {description, script_content, meta, tags}` — when `script_content` is provided, the experiment **auto-starts** (no separate start call needed).
 5. **Wait** → run `the-lab wait <label> --port <port>` as a **background shell command** (preferred — lets you keep working while waiting). Exits 0 on success, 1 on failure, prints compact JSON. Or call `GET /wait?experiment_id=<id>` directly for simple sequential flows.
+5b. **Wait for messages** → run `the-lab messages --port <port>` as a **background shell command** to block until a message arrives in your inbox. Prints a JSON array of unread messages on exit.
 6. **Note findings** → `POST /ideas/<id>/note {text, level}`
 7. **Conclude** → `POST /ideas/<id>/conclude {conclusion}` — then branch into next idea
 
