@@ -11,6 +11,7 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import { buildChartData } from "../../lib/chart-data";
 import { isLowerBetter } from "../../lib/colors";
 import { navigateToIdea } from "../../lib/navigate";
+import { highlightedIdea } from "../../state/signals";
 import type { Experiment, IdeaNode, SubwayLayout } from "../../lib/types";
 
 const H = 200;
@@ -71,6 +72,7 @@ export function MiniMetricsChart({
   mean: boolean;
 }) {
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
+  const globalHighlight = highlightedIdea.value; // graph → mini: expand matching dots
   const wrapRef = useRef<HTMLDivElement>(null);
   const [containerW, setContainerW] = useState(560);
 
@@ -195,25 +197,33 @@ export function MiniMetricsChart({
           const isHovered = hoveredIdx === i;
           const color = pointColors[i] ?? "var(--text-muted)";
           const exp = expData?.[i];
+          const ideaHighlighted = exp != null && globalHighlight === exp.idea_id;
+          const anyHighlight = globalHighlight !== null;
+          const faded = anyHighlight && !ideaHighlighted;
+          const r = ideaHighlighted
+            ? (isMilestone ? 6.5 : 5.5)
+            : isHovered ? (isMilestone ? 6 : 5)
+            : (isMilestone ? 4.5 : 3);
+
           return (
             <g
               key={i}
               style="cursor:pointer;"
-              onMouseEnter={() => setHoveredIdx(i)}
-              onMouseLeave={() => setHoveredIdx(null)}
+              onMouseEnter={() => { setHoveredIdx(i); if (exp) highlightedIdea.value = exp.idea_id; }}
+              onMouseLeave={() => { setHoveredIdx(null); highlightedIdea.value = null; }}
               onClick={() => exp && navigateToIdea(exp.idea_id, exp.label ?? String(exp.id))}
             >
               <line x1={x} x2={x} y1={y} y2={H - PAD.b}
                 stroke={isMilestone ? "var(--yellow, #d29922)" : "var(--border, #30363d)"}
                 stroke-width="1" stroke-dasharray="2 3"
-                opacity={isMilestone ? 0.55 : 0.35} />
-              <circle cx={x} cy={y}
-                r={isHovered ? (isMilestone ? 6 : 5) : (isMilestone ? 4.5 : 3)}
+                opacity={faded ? 0.12 : isMilestone ? 0.55 : 0.35} />
+              <circle cx={x} cy={y} r={r}
                 fill={isMilestone ? "var(--yellow, #d29922)" : color}
-                stroke={isMilestone ? "var(--bg, #0d1117)" : "none"}
-                stroke-width={isMilestone ? 1.2 : 0}
+                stroke={ideaHighlighted ? "var(--text, #c9d1d9)" : isMilestone ? "var(--bg, #0d1117)" : "none"}
+                stroke-width={ideaHighlighted ? 1.5 : isMilestone ? 1.2 : 0}
+                opacity={faded ? 0.2 : 1}
               />
-              {isMilestone && (
+              {isMilestone && !faded && (
                 <text x={x + 6} y={y - 6}
                   fill="var(--yellow, #d29922)" font-size="9"
                   font-family="var(--font-mono, JetBrains Mono, monospace)"
