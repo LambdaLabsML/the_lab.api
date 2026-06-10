@@ -257,7 +257,8 @@ export async function listAgents(): Promise<AgentEntry[]> {
 
 /** GET /api/v1/messages */
 export async function listMessages(limit: number = 100): Promise<MessageEntry[]> {
-  return fetchJson<MessageEntry[]>(`/api/v1/messages?limit=${limit}`);
+  const res = await fetchJson<{ messages: MessageEntry[] }>(`/api/v1/messages?limit=${limit}`);
+  return res.messages ?? [];
 }
 
 /** DELETE /api/v1/agents/:id?keep_branch=true|false */

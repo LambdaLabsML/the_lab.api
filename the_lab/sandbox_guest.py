@@ -677,6 +677,19 @@ async def _main() -> int:
     env["HF_HOME"] = os.path.join(sandbox_home, ".cache", "huggingface")
     env["UV_CACHE_DIR"] = os.path.join(sandbox_home, ".cache", "uv")
 
+    # For all kinds: copy claude credentials into the sandbox home so that
+    # experiment scripts that invoke `claude -p` directly can authenticate.
+    # Agent kinds override HOME below with a fuller _prepare_agent_home(); for
+    # other kinds this is the only home the process gets.
+    if args.kind not in _AGENT_KINDS:
+        _experiment_home = _prepare_agent_home()
+        if _experiment_home:
+            env["HOME"] = _experiment_home
+            env["TMPDIR"] = os.path.join(_experiment_home, "tmp")
+            env["XDG_CACHE_HOME"] = os.path.join(_experiment_home, ".cache")
+            env["HF_HOME"] = os.path.join(_experiment_home, ".cache", "huggingface")
+            env["UV_CACHE_DIR"] = os.path.join(_experiment_home, ".cache", "uv")
+
     if args.kind in _AGENT_KINDS:
         # Agent CLIs refuse to run as root (--dangerously-skip-permissions).
         # Prepare a temp home with the user's config so the dropped-privilege
