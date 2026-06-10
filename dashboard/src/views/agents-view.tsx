@@ -276,11 +276,23 @@ interface PastAgent {
 
 interface ChartPoint { t: number; cost: number; tokens: number; }
 
-function AgentCostChart({ points }: { points: ChartPoint[] }) {
+function AgentCostChart({
+  points,
+  width = 260,
+  height = 52,
+  label: labelOverride,
+  color = "var(--accent)",
+}: {
+  points: ChartPoint[];
+  width?: number;
+  height?: number;
+  label?: string;
+  color?: string;
+}) {
   const [mode, setMode] = useState<"cost" | "tokens">("cost");
   if (points.length === 0) return null;
 
-  const W = 260, H = 52;
+  const W = width, H = height;
   const PL = 2, PR = 2, PT = 4, PB = 12;
   const IW = W - PL - PR, IH = H - PT - PB;
 
@@ -294,7 +306,6 @@ function AgentCostChart({ points }: { points: ChartPoint[] }) {
   const last = points[points.length - 1];
   const lastV = mode === "cost" ? last.cost : last.tokens;
 
-  // With a single point draw a flat horizontal line across the full width
   const lineD = points.length === 1
     ? `M${PL},${py(lastV).toFixed(1)} L${PL + IW},${py(lastV).toFixed(1)}`
     : points.map((p, i) => {
@@ -306,17 +317,17 @@ function AgentCostChart({ points }: { points: ChartPoint[] }) {
     ? `M${PL},${py(lastV).toFixed(1)} L${PL + IW},${py(lastV).toFixed(1)} L${PL + IW},${PT + IH} L${PL},${PT + IH} Z`
     : `${lineD} L${px(last.t).toFixed(1)},${PT + IH} L${px(points[0].t).toFixed(1)},${PT + IH} Z`;
 
-  const label = mode === "cost"
-    ? `$${last.cost.toFixed(2)} total`
-    : `${(last.tokens / 1000).toFixed(0)}K tokens`;
-  const gradId = `ag-grad-${mode}`;
+  const valueLabel = mode === "cost"
+    ? `$${last.cost.toFixed(3)}`
+    : `${(last.tokens / 1000).toFixed(0)}K tok`;
+  const gradId = `ag-grad-${mode}-${W}`;
   const dotX = points.length === 1 ? (PL + IW).toFixed(1) : px(last.t).toFixed(1);
 
   return (
     <div class="agent-cost-chart">
       <div class="agent-cost-chart-header">
         <span class="agent-cost-chart-label">
-          {mode === "cost" ? "Cumulative cost" : "Cumulative tokens"}
+          {labelOverride ?? (mode === "cost" ? "Cumulative cost" : "Cumulative tokens")}
         </span>
         <button
           class="agents-btn"
@@ -329,19 +340,16 @@ function AgentCostChart({ points }: { points: ChartPoint[] }) {
       <svg width={W} height={H} style={{ display: "block", overflow: "visible" }}>
         <defs>
           <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stop-color="var(--accent)" stop-opacity="0.22" />
-            <stop offset="100%" stop-color="var(--accent)" stop-opacity="0" />
+            <stop offset="0%" stop-color={color} stop-opacity="0.22" />
+            <stop offset="100%" stop-color={color} stop-opacity="0" />
           </linearGradient>
         </defs>
         <path d={areaD} fill={`url(#${gradId})`} />
-        <path d={lineD} fill="none" stroke="var(--accent)" stroke-width="1.5"
+        <path d={lineD} fill="none" stroke={color} stroke-width="1.5"
           stroke-linejoin="round" stroke-linecap="round" />
-        <circle cx={dotX} cy={py(lastV).toFixed(1)} r="2.5"
-          fill="var(--accent)" />
+        <circle cx={dotX} cy={py(lastV).toFixed(1)} r="2.5" fill={color} />
         <text x={W - PR} y={H - 1} text-anchor="end" font-size="8"
-          fill="var(--accent)" font-family="var(--font-mono)">{label}</text>
-        <text x={PL} y={H - 1} text-anchor="start" font-size="8"
-          fill="var(--text-faint)" font-family="var(--font-mono)">{points.length} agent{points.length === 1 ? "" : "s"}</text>
+          fill={color} font-family="var(--font-mono)">{valueLabel}</text>
       </svg>
     </div>
   );
@@ -427,11 +435,9 @@ export function AgentsView() {
     return `${total} active agent${total === 1 ? "" : "s"}, ${stale} stale`;
   }, [agents]);
 
-  // Cumulative cost/token chart.
-  // Completed agents contribute one point each at their completion time.
-  // Live agents contribute their full readings array so the line grows over time.
+  // Combined cumulative chart — sum of all agents over time.
   const chartPoints = useMemo<ChartPoint[]>(() => {
-    // 1. Completed agents — sorted by completion ts, cumulative baseline
+    // 1. Completed agents — sorted by ts, build cumulative baseline
     const completed = Object.values(costMap)
       .filter((e) => !e.live && (e.cost ?? 0) > 0)
       .map((e) => ({ t: Date.parse(e.ts), cost: e.cost ?? 0, tok: (e.inTok ?? 0) + (e.outTok ?? 0) }))
@@ -445,16 +451,42 @@ export function AgentsView() {
       pts.push({ t: p.t, cost: baseCost, tokens: baseTok });
     }
 
-    // 2. Live agents — append each reading on top of the completed baseline
-    for (const e of Object.values(costMap).filter((e) => e.live)) {
-      const readings = e.readings ?? (e.cost != null ? [{ ts: e.ts, cost: e.cost, inTok: e.inTok ?? 0, outTok: e.outTok ?? 0 }] : []);
-      for (const r of readings) {
-        pts.push({ t: Date.parse(r.ts), cost: baseCost + r.cost, tokens: baseTok + r.inTok + r.outTok });
+    // 2. Live agents — merge all timestamps, sum each agent's latest reading.
+    // Each agent's readings are cumulative for that agent, so at every timestamp
+    // we compute baseCost + Σ(latest cost per live agent up to that point).
+    const liveEntries = Object.values(costMap).filter((e) => e.live);
+    if (liveEntries.length > 0) {
+      const allTs = [...new Set(
+        liveEntries.flatMap((e) =>
+          (e.readings ?? (e.cost != null ? [{ ts: e.ts, cost: e.cost, inTok: e.inTok ?? 0, outTok: e.outTok ?? 0 }] : []))
+            .map((r) => r.ts)
+        )
+      )].sort();
+
+      for (const ts of allTs) {
+        let sumCost = 0, sumTok = 0;
+        for (const e of liveEntries) {
+          const readings = e.readings ?? (e.cost != null ? [{ ts: e.ts, cost: e.cost, inTok: e.inTok ?? 0, outTok: e.outTok ?? 0 }] : []);
+          const latest = readings.filter((r) => r.ts <= ts).at(-1);
+          if (latest) { sumCost += latest.cost; sumTok += latest.inTok + latest.outTok; }
+        }
+        pts.push({ t: Date.parse(ts), cost: baseCost + sumCost, tokens: baseTok + sumTok });
       }
     }
 
     pts.sort((a, b) => a.t - b.t);
     return pts;
+  }, [costMap]);
+
+  // Per-agent sparkline points (each agent's own cumulative readings)
+  const perAgentPoints = useMemo<Record<string, ChartPoint[]>>(() => {
+    const out: Record<string, ChartPoint[]> = {};
+    for (const [id, e] of Object.entries(costMap)) {
+      const readings = e.readings ?? (e.cost != null ? [{ ts: e.ts, cost: e.cost, inTok: e.inTok ?? 0, outTok: e.outTok ?? 0 }] : []);
+      if (readings.length === 0) continue;
+      out[id] = readings.map((r) => ({ t: Date.parse(r.ts), cost: r.cost, tokens: r.inTok + r.outTok }));
+    }
+    return out;
   }, [costMap]);
 
   return (
@@ -477,18 +509,26 @@ export function AgentsView() {
         </div>
         <div class="agents-header-right">
           <div class="agents-summary">{loaded ? summary : "Loading..."}</div>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <AgentCostChart points={chartPoints} />
-            <button
-              class="agents-btn"
-              onClick={() => refresh()}
-              title="Reload agent list"
-            >
-              Refresh
-            </button>
-          </div>
+          <button
+            class="agents-btn"
+            onClick={() => refresh()}
+            title="Reload agent list"
+          >
+            Refresh
+          </button>
         </div>
       </div>
+
+      {chartPoints.length > 0 && (
+        <div style={{ padding: "0 0 12px 0" }}>
+          <AgentCostChart
+            points={chartPoints}
+            width={520}
+            height={60}
+            label="All agents — cumulative cost"
+          />
+        </div>
+      )}
 
       {error && <div class="agents-error">{error}</div>}
 
@@ -576,11 +616,17 @@ export function AgentsView() {
                   </div>
                 </div>
 
-                {agentCost(agent.agent_id) != null && (
-                  <div class="agents-card-row">
-                    <div class="agents-card-label">Cost so far</div>
-                    <div class="agents-card-value" style={{ color: "var(--accent)", fontWeight: 600 }}>
-                      ${agentCost(agent.agent_id)!.toFixed(3)}
+                {perAgentPoints[agent.agent_id] && (
+                  <div class="agents-card-row" style={{ alignItems: "flex-start" }}>
+                    <div class="agents-card-label" style={{ paddingTop: 2 }}>Cost</div>
+                    <div class="agents-card-value">
+                      <AgentCostChart
+                        points={perAgentPoints[agent.agent_id]}
+                        width={200}
+                        height={44}
+                        label=""
+                        color="var(--green)"
+                      />
                     </div>
                   </div>
                 )}
