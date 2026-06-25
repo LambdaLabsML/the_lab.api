@@ -32,21 +32,18 @@ export function LogView() {
 
   return (
     <div id="log-container">
-      <div id="log-filters">
-        {FILTERS.map((f) => (
-          <label key={f.key}>
-            <input
-              type="checkbox"
-              checked={!!active[f.key]}
-              onChange={() => toggle(f.key)}
-            />
-            <span class="filter-dot" style={{ background: f.color }} />
-            {" "}{f.label}
-          </label>
-        ))}
-        <span style={{ color: "var(--text-faint)", marginLeft: "auto", fontSize: "10px" }}>
-          {filtered.length} entries{truncated ? ` (showing ${MAX_VISIBLE})` : ""}
-        </span>
+      <div class="pane-bar">
+        <h2 class="pane-bar-title">Log</h2>
+        <span class="pane-bar-count">{filtered.length} entries{truncated ? ` (capped at ${MAX_VISIBLE})` : ""}</span>
+        <div class="pane-bar-actions" style={{ gap: 8 }}>
+          {FILTERS.map((f) => (
+            <label key={f.key} style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: "var(--text-xs)", color: active[f.key] ? "var(--text)" : "var(--text-faint)", cursor: "pointer", userSelect: "none" }}>
+              <span style={{ width: 8, height: 8, borderRadius: "50%", background: active[f.key] ? f.color : "var(--border)", display: "inline-block", flexShrink: 0 }} />
+              <input type="checkbox" checked={!!active[f.key]} onChange={() => toggle(f.key)} style={{ display: "none" }} />
+              {f.label}
+            </label>
+          ))}
+        </div>
       </div>
       <div id="log-entries">
         {filtered.length === 0 && (

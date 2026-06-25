@@ -275,7 +275,7 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
           ⤢ Outliers
         </button>
         <button type="button" class={`chart-toggle-btn${logScale ? " active" : ""}`} onClick={() => { setLogScale(!logScale); }} title="Logarithmic Y axis">
-          log
+          Log Y
         </button>
         <button type="button" class={`chart-toggle-btn${bestLine ? " active" : ""}`} onClick={() => { showBestLine.value = !bestLine; }} title="Show current-best step line">
           ⌇ Current Best

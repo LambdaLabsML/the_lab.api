@@ -1141,7 +1141,13 @@ function ExperimentGrid({ experiments }: { experiments: import("./lib/types").Ex
           const exps = byIdea.get(ideaId)!;
           const ideaCol = ideaColor[ideaId];
           return (
-            <span key={ideaId} class="exp-idea-group" style={gi > 0 ? { marginLeft: 5 } : {}}>
+            <span
+              key={ideaId}
+              class="exp-idea-group"
+              style={gi > 0 ? { marginLeft: 5, cursor: "pointer" } : { cursor: "pointer" }}
+              title={`idea #${ideaId} — click to view`}
+              onClick={() => navigateToIdea(ideaId)}
+            >
               {exps.map((e) => {
                 const status = e._running ? "running" : (e.status ?? "unknown");
                 const cls = `exp-grid-sq ${STATUS_SQ_CLASS[status] ?? "sq-cancelled"}`;

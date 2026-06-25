@@ -164,9 +164,15 @@ export function ApiView() {
     return callCounts[`${method} ${normalized}`] || 0;
   }
 
+  const totalEndpoints = TAG_ORDER.reduce((n, t) => n + (groups[t]?.length || 0), 0);
+
   return (
     <>
       <div id="api-container">
+        <div class="pane-bar">
+          <h2 class="pane-bar-title">API Reference</h2>
+          <span class="pane-bar-count">{totalEndpoints} endpoints</span>
+        </div>
         <div id="api-list">
           {!spec && <div style={{ padding: "20px", color: "var(--text-faint)" }}>Loading API spec...</div>}
           {TAG_ORDER.map((tag) => {

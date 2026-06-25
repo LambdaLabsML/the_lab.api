@@ -33,6 +33,12 @@ export function TimelineView() {
     const ctx = canvas.getContext("2d")!;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
+    // Alternating row backgrounds for readability
+    for (let i = 0; i < nodes.length; i++) {
+      ctx.fillStyle = i % 2 === 0 ? "rgba(255,255,255,0.02)" : "rgba(255,255,255,0.01)";
+      ctx.fillRect(0, padTop + i * rowH, canvas.width, rowH);
+    }
+
     const allStarts = nodes.map((n) => new Date(n.first_start).getTime());
     const allEnds = nodes.map((n) => {
       if (n.last_finish) return new Date(n.last_finish).getTime();
@@ -97,9 +103,10 @@ export function TimelineView() {
         const toStart = tToX(new Date(n.first_start).getTime());
         const toY = padTop + toIdx * rowH + rowH / 2;
         ctx.save();
-        ctx.strokeStyle = "#484f58"; // var(--text-faint)
-        ctx.lineWidth = 1;
-        ctx.setLineDash([4, 4]);
+        ctx.strokeStyle = "#30363d"; // dimmer arrows, less visual noise
+        ctx.lineWidth = 0.8;
+        ctx.globalAlpha = 0.5;
+        ctx.setLineDash([3, 5]);
         ctx.beginPath();
         ctx.moveTo(fromEnd, fromY);
         ctx.lineTo(toStart, toY);
@@ -120,7 +127,7 @@ export function TimelineView() {
     for (let i = 0; i < nodes.length; i++) {
       const n = nodes[i];
       const y = padTop + i * rowH;
-      const barH = rowH * 0.6;
+      const barH = rowH * 0.75;
       const barY = y + (rowH - barH) / 2;
       const start = new Date(n.first_start).getTime();
       const end = n.last_finish
@@ -130,20 +137,28 @@ export function TimelineView() {
           : start + 60000;
       const x1 = tToX(start);
       const x2 = tToX(end);
-      const barW = Math.max(x2 - x1, 4);
+      const barW = Math.max(x2 - x1, 6);
       const status = n.has_running ? "running" : (n.has_queued ? "queued" : n.status);
       const color = STATUS_BAR_COLORS[status] || STATUS_BAR_COLORS.active;
-      ctx.fillStyle = color + "aa";
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = color + "cc";
       ctx.strokeStyle = color;
-      ctx.lineWidth = 1;
+      ctx.lineWidth = 1.5;
       ctx.beginPath();
       ctx.roundRect(x1, barY, barW, barH, 3);
       ctx.fill();
       ctx.stroke();
-      ctx.fillStyle = "#c9d1d9"; // var(--text)
-      ctx.font = "11px SF Mono, Fira Code, Consolas, monospace";
+      // Idea ID label inside bar if wide enough
+      if (barW > 28) {
+        ctx.fillStyle = "rgba(0,0,0,0.7)";
+        ctx.font = "bold 9px SF Mono, Fira Code, monospace";
+        ctx.textAlign = "left";
+        ctx.fillText("#" + n.id, x1 + 4, barY + barH * 0.65);
+      }
+      ctx.fillStyle = "#c9d1d9";
+      ctx.font = "11px system-ui, -apple-system, sans-serif";
       ctx.textAlign = "right";
-      ctx.fillText("#" + n.id + ": " + truncate(n.description, 25), labelW - 8, y + rowH / 2 + 4);
+      ctx.fillText("#" + n.id + ": " + truncate(n.description, 28), labelW - 8, y + rowH / 2 + 4);
     }
   }, [data, reversed]);
 
@@ -162,7 +177,12 @@ export function TimelineView() {
   return (
     <div id="timeline-container">
       <div id="timeline-wrap" ref={wrapRef}>
-        <canvas ref={canvasRef} onClick={handleClick} />
+        <canvas
+          ref={canvasRef}
+          onClick={handleClick}
+          style={{ cursor: "pointer", display: "block" }}
+          title="Click a row to load idea details"
+        />
       </div>
     </div>
   );
