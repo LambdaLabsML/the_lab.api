@@ -154,7 +154,8 @@ body {
   border-radius: 2px;
   min-width: 4px;
 }
-.ihb-active    { background: var(--green);      opacity: 0.8; }
+.ihb-done      { background: var(--green);      opacity: 0.6; }
+.ihb-active    { background: var(--yellow);     opacity: 0.9; }
 .ihb-concluded { background: var(--accent);     opacity: 0.7; }
 .ihb-abandoned { background: var(--red);        opacity: 0.7; }
 .ihb-queued    { background: var(--text-faint); opacity: 0.5; }
@@ -227,6 +228,13 @@ body {
   font-size: var(--text-lg);
   font-weight: 700;
   line-height: 1;
+  flex-shrink: 0;
+}
+
+.review-best-direction {
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+  white-space: nowrap;
   flex-shrink: 0;
 }
 
@@ -800,8 +808,8 @@ body {
 
   /* Experiment grid — one scrollable row on mobile too */
   .exp-grid-legend-note { display: none; }
-  /* Hide verbose idle hint on mobile */
-  .review-idle-hint { display: none; }
+  /* Hide direction indicator on mobile (save space) */
+  .review-best-direction { display: none; }
   .review-status-left {
     gap: 8px;
     font-size: var(--text-xs);

@@ -1169,6 +1169,20 @@ function ExperimentGrid({ experiments }: { experiments: import("./lib/types").Ex
   );
 }
 
+function ProgressRing({ pct }: { pct: number }) {
+  const size = 14, sw = 2, r = (size - sw) / 2;
+  const c = 2 * Math.PI * r;
+  const off = c * (1 - Math.min(Math.max(pct, 0), 100) / 100);
+  return (
+    <svg width={size} height={size} style={{ display: "inline-block", verticalAlign: "middle", marginRight: 4, flexShrink: 0 }}>
+      <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="var(--border)" strokeWidth={sw} />
+      <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="var(--yellow)" strokeWidth={sw}
+        strokeDasharray={c} strokeDashoffset={off} strokeLinecap="round"
+        transform={`rotate(-90 ${size/2} ${size/2})`} />
+    </svg>
+  );
+}
+
 function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
   const data = backlogData.value;
   const experiments = allExperiments.value;
@@ -1206,6 +1220,22 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
   const liveCount = totalRunning || running;
   const isLive = liveCount > 0;
 
+  // Last-activity: most recent finished_at across all experiments
+  const lastFinishedAt = done.reduce<string | null>((latest, e) => {
+    if (!e.finished_at) return latest;
+    return !latest || e.finished_at > latest ? e.finished_at : latest;
+  }, null);
+  function timeAgo(iso: string | null): string {
+    if (!iso) return "";
+    const sec = Math.max(0, Math.floor((Date.now() - Date.parse(iso)) / 1000));
+    if (sec < 60) return `${sec}s ago`;
+    const min = Math.floor(sec / 60);
+    if (min < 60) return `${min}m ago`;
+    const hr = Math.floor(min / 60);
+    if (hr < 48) return `${hr}h ago`;
+    return `${Math.floor(hr / 24)}d ago`;
+  }
+
   // Idea health breakdown for the Ideas disclosure mini-bar
   const ideaList = Object.values(ideas);
   const ideasActive    = ideaList.filter((i) => i.status === "active" || i.has_running || i.has_queued).length;
@@ -1219,10 +1249,17 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
         <div class="review-status-left">
           <span class={`review-status-dot ${isLive ? "live" : "idle"}`} />
           <span class="review-status-primary">
-            {isLive
-              ? <><strong>{liveCount}</strong> running{avgProgress > 0 ? ` · ${avgProgress}%` : ""}</>
-              : <span class="review-status-idle">idle <span class="review-idle-hint">— no experiments running</span></span>
-            }
+            {isLive ? (
+              <>
+                <ProgressRing pct={avgProgress} />
+                <strong>{liveCount}</strong> running{avgProgress > 0 ? ` · ${avgProgress}%` : ""}
+              </>
+            ) : (
+              <span class="review-status-idle">
+                idle
+                {lastFinishedAt && <span class="review-idle-hint"> · last {timeAgo(lastFinishedAt)}</span>}
+              </span>
+            )}
           </span>
           {queued > 0 && <span class="review-status-item"><strong>{queued}</strong> queued</span>}
           <span class="review-status-item"><strong>{finished}</strong> done</span>
@@ -1243,8 +1280,11 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
         <div class="review-best-bar">
           <span class="review-best-label">best {metric}</span>
           <strong class="review-best-value">{typeof bestVal === "number" ? bestVal.toFixed(3) : bestVal}</strong>
+          <span class="review-best-direction" title={lower ? "lower is better" : "higher is better"}>
+            {lower ? "↓ lower better" : "↑ higher better"}
+          </span>
           <span class="review-best-meta">
-            {bestIdea ? bestIdea.description?.split("\n")[0].slice(0, 60) : `idea #${bestExp.idea_id}`}
+            {bestIdea ? bestIdea.description?.split("\n")[0].slice(0, 55) : `idea #${bestExp.idea_id}`}
             {" · "}<code>{bestExp.label ?? `exp/${bestExp.id}`}</code>
           </span>
         </div>
@@ -1282,6 +1322,15 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
           id="review-runs"
           title="Experiments"
           action={`${finished} done · ${running} running${failed > 0 ? ` · ${failed} failed` : ""}`}
+          preview={
+            finished + running + failed > 0 ? (
+              <div class="idea-health-bar">
+                {finished > 0 && <span class="ihb-seg ihb-done"     style={{ flex: finished }} title={`${finished} done`} />}
+                {running > 0  && <span class="ihb-seg ihb-active"   style={{ flex: running }}  title={`${running} running`} />}
+                {failed > 0   && <span class="ihb-seg ihb-abandoned" style={{ flex: failed }}  title={`${failed} failed`} />}
+              </div>
+            ) : undefined
+          }
         >
           <div class="review-panel review-table-panel">
             <TablePanel />
