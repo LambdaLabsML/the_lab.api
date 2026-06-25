@@ -77,6 +77,7 @@ import {
 import { initTouchMoveMenu } from "./lib/touch-move-menu";
 import { getStatusColor, isLowerBetter } from "./lib/colors";
 import { navigateToIdea } from "./lib/navigate";
+import { fmtMetricName } from "./lib/format";
 
 // ---------------------------------------------------------------------------
 // Panel component map — maps panel ID to Preact component
@@ -1210,17 +1211,6 @@ function BestSparkline({ experiments, metric, lower }: {
   );
 }
 
-/** Human-readable metric name: duration_s → duration (s), accuracy_per_mtoken → accuracy/Mtok */
-function fmtMetricName(key: string): string {
-  return key
-    .replace(/_per_mtoken$/, "/Mtok")
-    .replace(/_per_token$/, "/tok")
-    .replace(/_ms$/, " (ms)")
-    .replace(/_s$/, " (s)")
-    .replace(/_pct$/, " (%)")
-    .replace(/_score$/, " score")
-    .replace(/_/g, " ");
-}
 
 function ProgressRing({ pct }: { pct: number }) {
   const size = 14, sw = 2, r = (size - sw) / 2;

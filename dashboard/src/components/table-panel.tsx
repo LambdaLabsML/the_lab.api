@@ -53,6 +53,21 @@ export function TablePanel() {
   const ideas = allIdeas.value;
   const layout = currentLayout.value;
   const metric = selectedMetric.value;
+
+  // Compute milestone experiment IDs (new global bests in chronological order)
+  const milestoneIds = useMemo(() => {
+    if (!metric) return new Set<number>();
+    const lower = isLowerBetter(metric);
+    const sorted = experiments.filter(e => !e._running && e.metrics && typeof e.metrics[metric] === "number")
+      .slice().sort((a, b) => a.id - b.id);
+    const set = new Set<number>();
+    let best: number | null = null;
+    for (const e of sorted) {
+      const v = e.metrics![metric] as number;
+      if (best === null || (lower ? v < best : v > best)) { best = v; set.add(e.id); }
+    }
+    return set;
+  }, [experiments, metric]);
   const mode = colorMode.value;
   const tags = activeTagFilters.value;
   const tagMode = tagFilterMode.value;
@@ -354,6 +369,7 @@ export function TablePanel() {
                   </td>
                   <td>
                     <span class="exp-link">
+                      {milestoneIds.has(exp.id) && <span class="exp-milestone" title="New global best at this point">\u2B50</span>}
                       exp/{exp.label || exp.id}{exp._running ? " \u25B6" : ""}
                     </span>
                   </td>

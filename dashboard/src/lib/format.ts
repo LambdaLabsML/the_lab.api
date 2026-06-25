@@ -47,6 +47,23 @@ export function ideaTitle(s: string): string {
   return m ? m[0].trim() : s;
 }
 
+/**
+ * Human-readable metric key:
+ *   duration_s       → "duration (s)"
+ *   accuracy_per_mtoken → "accuracy/Mtok"
+ *   score            → "score"
+ */
+export function fmtMetricName(key: string): string {
+  return key
+    .replace(/_per_mtoken$/, '/Mtok')
+    .replace(/_per_token$/, '/tok')
+    .replace(/_ms$/, ' (ms)')
+    .replace(/_s$/, ' (s)')
+    .replace(/_pct$/, ' (%)')
+    .replace(/_score$/, ' score')
+    .replace(/_/g, ' ');
+}
+
 /** Return a badge `<span>` HTML string for a given status.
  *  When status is "running" and pct is provided, includes a small SVG progress ring. */
 export function badgeHtml(status: string, pct?: number): string {

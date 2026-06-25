@@ -21,6 +21,7 @@ import {
 } from "../../state/settings";
 import { buildChartData, collectChartKeys } from "../../lib/chart-data";
 import { isLowerBetter } from "../../lib/colors";
+import { fmtMetricName } from "../../lib/format";
 import { MiniMetricsChart } from "./mini-metrics-chart";
 import { navigateToIdea } from "../../lib/navigate";
 import { getCssVar, getCssVarPx } from "../../lib/css-vars";
@@ -258,10 +259,10 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
         <span>
           Metric:{" "}
           <select value={metric} onChange={(e) => { setMetric((e.target as HTMLSelectElement).value); }}>
-            {grouped.metrics.length > 0 && <optgroup label="Metrics">{grouped.metrics.map((k) => <option key={k} value={k}>{k}</option>)}</optgroup>}
-            {grouped.nested.length > 0 && <optgroup label="Nested">{grouped.nested.map((k) => <option key={k} value={k}>{k}</option>)}</optgroup>}
-            {grouped.timing.length > 0 && <optgroup label="Timing">{grouped.timing.map((k) => <option key={k} value={k}>{k}</option>)}</optgroup>}
-            {grouped.meta.length > 0 && <optgroup label="Meta">{grouped.meta.map((k) => <option key={k} value={k}>{k}</option>)}</optgroup>}
+            {grouped.metrics.length > 0 && <optgroup label="Metrics">{grouped.metrics.map((k) => <option key={k} value={k}>{fmtMetricName(k)}</option>)}</optgroup>}
+            {grouped.nested.length > 0 && <optgroup label="Nested">{grouped.nested.map((k) => <option key={k} value={k}>{fmtMetricName(k)}</option>)}</optgroup>}
+            {grouped.timing.length > 0 && <optgroup label="Timing">{grouped.timing.map((k) => <option key={k} value={k}>{fmtMetricName(k)}</option>)}</optgroup>}
+            {grouped.meta.length > 0 && <optgroup label="Meta">{grouped.meta.map((k) => <option key={k} value={k}>{fmtMetricName(k)}</option>)}</optgroup>}
           </select>
         </span>
         <button type="button" class={`chart-toggle-btn${impOnly ? " active" : ""}`} onClick={() => { improvementsOnly.value = !impOnly; }} title="Show only improvements">
