@@ -866,8 +866,9 @@ body {
 
   /* Experiment grid — one scrollable row on mobile too */
   .exp-grid-legend-note { display: none; }
-  /* Hide direction indicator on mobile (save space) */
+  /* Hide direction indicator and CTA on mobile (save space / prevent wrap) */
   .review-best-direction { display: none; }
+  .review-idle-cta { display: none; }
   /* Hide redundant Workbench button on mobile (tab bar covers this) */
   .review-status-strip .review-primary-action { display: none; }
   .review-status-left {

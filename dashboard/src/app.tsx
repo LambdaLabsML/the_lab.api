@@ -1279,6 +1279,14 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
     return `${Math.floor(hr / 24)}d ago`;
   }
 
+  // Best score for the selected idea (for Idea detail disclosure preview)
+  const selectedIdeaBest = selected != null ? done
+    .filter(e => e.idea_id === selected && e.metrics && typeof e.metrics[metric] === "number")
+    .reduce<number | null>((best, e) => {
+      const v = e.metrics![metric] as number;
+      return best === null || (lower ? v < best : v > best) ? v : best;
+    }, null) : null;
+
   // Idea health breakdown for the Ideas disclosure mini-bar
   const ideaList = Object.values(ideas);
   const ideasActive    = ideaList.filter((i) => i.status === "active" || i.has_running || i.has_queued).length;
@@ -1397,7 +1405,9 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
         <ReviewDisclosure
           id="review-detail"
           title="Idea detail"
-          action={selected ? `idea #${selected}` : "none selected"}
+          action={selected
+            ? `idea #${selected}${selectedIdeaBest != null ? ` · best: ${selectedIdeaBest.toFixed(3)}` : ""}`
+            : "none selected — click any chart dot, table row, or graph node"}
         >
           <div class="review-panel review-detail-panel">
             <DetailPanel />

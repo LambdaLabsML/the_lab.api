@@ -256,6 +256,7 @@ export function TablePanel() {
           <thead>
             <tr>
               <th style="width: 16px"></th>
+              <th style="width: 14px; padding: 4px 2px; text-align: center;" title="New global best at the time it ran">★</th>
               <th
                 class={thClass("label")}
                 onClick={() => handleSort("label")}
@@ -367,9 +368,11 @@ export function TablePanel() {
                       style={`background: ${dotColor(exp)}`}
                     />
                   </td>
+                  <td style="text-align:center; padding:3px 2px;">
+                    {milestoneIds.has(exp.id) && <span class="exp-milestone">\u2605</span>}
+                  </td>
                   <td>
                     <span class="exp-link">
-                      {milestoneIds.has(exp.id) && <span class="exp-milestone" title="New global best at this point">\u2605</span>}
                       exp/{exp.label || exp.id}{exp._running ? " \u25B6" : ""}
                     </span>
                   </td>

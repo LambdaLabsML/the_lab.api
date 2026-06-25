@@ -33,6 +33,12 @@
 }
 .table-panel .status-badge { font-size: var(--text-xs); padding: 1px 5px; border-radius: 3px; color: #fff; }
 .table-panel .exp-milestone {
-  font-size: 9px; margin-right: 3px; vertical-align: middle;
+  font-size: 10px; vertical-align: middle;
   color: var(--yellow); text-shadow: 0 0 4px color-mix(in srgb, var(--yellow) 40%, transparent);
+}
+
+/* On mobile, hide metric columns beyond the first two to keep Status visible */
+@media (max-width: 600px) {
+  .table-panel th:nth-child(n+6),
+  .table-panel td:nth-child(n+6) { display: none; }
 }
