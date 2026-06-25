@@ -1358,7 +1358,9 @@ function ExpMiniResults({ experiments, metric, lower, milestoneIds, ideas }: {
                 <span class="emr-dot" style={{ background: statusDot[status] ?? "var(--border)" }} />
                 <code class="emr-exp">exp/{e.label ?? e.id}</code>
                 <span class="emr-idea">#{e.idea_id}</span>
-                <span class="emr-val">{v !== null ? fmtVal(v) : status}</span>
+                <span class="emr-val" style={v === 0 ? { color: "var(--text-faint)" } : undefined}>
+                  {v !== null ? fmtVal(v) : status}
+                </span>
               </div>
             );
           })}
