@@ -12,6 +12,7 @@
   font-size: var(--text-xs); font-weight: 600; background: var(--bg-elev);
   border: 1px solid var(--border); color: var(--text-muted); cursor: pointer;
   user-select: none; transition: all var(--transition-base);
+  white-space: nowrap; flex-shrink: 0;
 }
 .tag-toggle:hover { border-color: var(--text-muted); color: var(--text); }
 .tag-toggle.active { background: var(--badge-blue-bg); border-color: var(--accent); color: var(--badge-blue-fg); }

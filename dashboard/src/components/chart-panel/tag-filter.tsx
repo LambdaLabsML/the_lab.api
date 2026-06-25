@@ -34,7 +34,11 @@ export function TagFilter() {
         gap: "4px",
         alignItems: "center",
         marginLeft: "12px",
-        flexWrap: "wrap",
+        flexWrap: "nowrap",
+        overflowX: "auto",
+        scrollbarWidth: "none",
+        flexShrink: 1,
+        minWidth: 0,
       }}
     >
       Tags:

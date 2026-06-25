@@ -242,17 +242,21 @@ body {
 
 .exp-grid {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap; /* single scrollable row */
   gap: 2px;
-  align-items: flex-start;
-  max-height: 42px; /* ~3 rows */
-  overflow: hidden;
+  align-items: center;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  padding-bottom: 1px;
 }
+.exp-grid::-webkit-scrollbar { display: none; }
 
 .exp-idea-group {
   display: inline-flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap; /* keep each idea on one line */
   gap: 2px;
+  flex-shrink: 0;
   border-left: 2px solid var(--idea-color, var(--border));
   padding-left: 3px;
 }
@@ -786,8 +790,7 @@ body {
     gap: 8px;
   }
 
-  /* Experiment grid — cap to 2 rows on mobile */
-  .exp-grid { max-height: 24px; overflow: hidden; }
+  /* Experiment grid — one scrollable row on mobile too */
   .exp-grid-legend-note { display: none; }
   /* Hide verbose idle hint on mobile */
   .review-idle-hint { display: none; }

@@ -177,8 +177,12 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+  min-height: 0;
 }
+.dv-panel .filter-bar-standalone::-webkit-scrollbar { display: none; }
 
 .dv-panel #detail-panel { position: relative; width: 100%; height: 100%; border-left: none; }
 .dv-panel #detail-panel.open { width: 100%; }
