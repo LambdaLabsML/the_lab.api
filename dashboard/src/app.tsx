@@ -61,6 +61,7 @@ import { startPolling, stopPolling } from "./state/polling";
 import { startWs, stopWs } from "./state/ws";
 import {
   allExperiments,
+  allIdeas,
   backlogData,
   currentLayout,
   graphData,
@@ -74,7 +75,7 @@ import {
   totalAgentCost,
 } from "./state/signals";
 import { initTouchMoveMenu } from "./lib/touch-move-menu";
-import { getStatusColor } from "./lib/colors";
+import { getStatusColor, isLowerBetter } from "./lib/colors";
 import { navigateToIdea } from "./lib/navigate";
 
 // ---------------------------------------------------------------------------
@@ -1100,53 +1101,83 @@ export function App() {
 function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
   const data = backlogData.value;
   const experiments = allExperiments.value;
+  const ideas = allIdeas.value;
   const cost = totalAgentCost.value;
   const logs = logEntries.value;
   const progress = runningProgress.value;
   const activeIdeas = data?.active_ideas.length ?? 0;
   const totalRunning = data?.total_running ?? 0;
-  const totalPending = data?.total_pending ?? 0;
   const branch = data?.current_branch ?? "--";
-  const finished = experiments.filter((e) => !e._running && e.status !== "running").length;
+  const done = experiments.filter((e) => !e._running && e.status !== "running");
+  const finished = done.length;
   const running = experiments.filter((e) => e._running || e.status === "running").length;
   const queued = data?.total_pending ?? 0;
+  const failed = experiments.filter((e) => e.status === "failed").length;
   const activeRuns = experiments.filter((e) => e._running || e.status === "running");
   const selected = selectedIdea.value;
   const metric = selectedMetric.value || "metric";
-  const latestFinished = experiments.filter((e) => !e._running && e.status !== "running").slice(-1)[0];
+  const latestFinished = done[done.length - 1];
   const avgProgress = activeRuns.length
     ? Math.round(activeRuns.reduce((sum, e) => sum + (progress[e.label || String(e.id)] ?? 0), 0) / activeRuns.length)
     : 0;
 
+  // Compute best score for the selected metric
+  const lower = isLowerBetter(metric);
+  let bestExp: typeof experiments[0] | null = null;
+  for (const e of done) {
+    const v = e.metrics?.[metric];
+    if (typeof v !== "number") continue;
+    if (!bestExp || (lower ? v < bestExp.metrics![metric]! : v > bestExp.metrics![metric]!)) bestExp = e;
+  }
+  const bestVal = bestExp?.metrics?.[metric];
+  const bestIdea = bestExp ? ideas[bestExp.idea_id] : null;
+
+  const liveCount = totalRunning || running;
+  const isLive = liveCount > 0;
+
   return (
     <div class="review-page">
-      <section class="review-hero">
-        <h1>Campaign review</h1>
-        <button class="review-primary-action" onClick={onOpenWorkbench}>Open workbench</button>
-      </section>
-
-      <section class="review-stats" aria-label="Campaign stats">
-        <StatTile href="#review-ops" label="Queued" value={queued} sub="waiting for resources" tone="queued" />
-        <StatTile href="#review-ops" label="Running" value={totalRunning || running} sub="active experiments" tone="running" />
-        <StatTile href="#review-runs" label="Finished" value={finished} sub="completed and stopped runs" tone="finished" />
-        <StatTile href="#review-ideas" label="Ideas" value={activeIdeas} sub="active branches" />
-        <StatTile href="#review-progress" label="Cost" value={cost != null ? `$${cost.toFixed(2)}` : "--"} sub="agent spend" />
-        <StatTile href="#review-ideas" label="Branch" value={branch} sub="current workspace" />
-      </section>
-
-      <section class="review-section review-section--major" id="review-progress">
-        <SectionHeader title="Metric trend" />
-        <div class="review-panel review-chart-panel">
-          <MetricsChart />
+      {/* ── Status strip ─────────────────────────────────────────────── */}
+      <div class="review-status-strip">
+        <div class="review-status-left">
+          <span class={`review-status-dot ${isLive ? "live" : "idle"}`} />
+          <span class="review-status-primary">
+            {isLive ? <><strong>{liveCount}</strong> running{avgProgress > 0 ? ` · ${avgProgress}%` : ""}</> : "idle"}
+          </span>
+          {queued > 0 && <span class="review-status-item"><strong>{queued}</strong> queued</span>}
+          <span class="review-status-item"><strong>{finished}</strong> done</span>
+          {failed > 0 && <span class="review-status-item review-status-item--warn"><strong>{failed}</strong> failed</span>}
+          <span class="review-status-item"><strong>{activeIdeas}</strong> ideas</span>
+          <span class="review-status-sep" />
+          <code class="review-status-branch">{branch}</code>
+          {cost != null && <span class="review-status-item review-status-item--cost">${cost.toFixed(0)}</span>}
         </div>
-      </section>
+        <button class="review-primary-action" onClick={onOpenWorkbench}>Workbench →</button>
+      </div>
 
+      {/* ── Best score callout ───────────────────────────────────────── */}
+      {bestExp != null && bestVal != null && (
+        <div class="review-best-bar">
+          <span class="review-best-label">best {metric}</span>
+          <strong class="review-best-value">{typeof bestVal === "number" ? bestVal.toFixed(3) : bestVal}</strong>
+          <span class="review-best-meta">
+            {bestIdea ? bestIdea.description?.split("\n")[0].slice(0, 60) : `idea #${bestExp.idea_id}`}
+            {" · "}<code>{bestExp.label ?? `exp/${bestExp.id}`}</code>
+          </span>
+        </div>
+      )}
+
+      {/* ── Chart — the main signal ──────────────────────────────────── */}
+      <div class="review-chart-wrap" id="review-progress">
+        <MetricsChart />
+      </div>
+
+      {/* ── Collapsible detail sections ──────────────────────────────── */}
       <div class="review-stack">
         <ReviewDisclosure
           id="review-ideas"
-          title="Branch map"
-          action={`${activeIdeas} active`}
-          preview={<ReviewBranchPreview />}
+          title="Ideas"
+          action={`${activeIdeas} active · ${Object.keys(ideas).length} total`}
         >
           <div class="review-panel review-map-panel">
             <DagView />
@@ -1154,21 +1185,9 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
         </ReviewDisclosure>
 
         <ReviewDisclosure
-          id="review-compare"
-          title="Metric relationship"
-          action="scatter"
-          preview={<ReviewSummaryPills items={[["X", scatterXMetric.value || metric], ["Y", scatterYMetric.value || "elapsed_s"]]} />}
-        >
-          <div class="review-panel review-scatter-panel">
-            <ScatterChart />
-          </div>
-        </ReviewDisclosure>
-
-        <ReviewDisclosure
           id="review-runs"
           title="Experiments"
-          action={`${finished} finished`}
-          preview={<ReviewSummaryPills items={[["finished", finished], ["running", activeRuns.length], ["latest", latestFinished?.label ? `exp/${latestFinished.label}` : "--"]]} />}
+          action={`${finished} done · ${running} running${failed > 0 ? ` · ${failed} failed` : ""}`}
         >
           <div class="review-panel review-table-panel">
             <TablePanel />
@@ -1176,10 +1195,19 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
         </ReviewDisclosure>
 
         <ReviewDisclosure
+          id="review-compare"
+          title="Scatter"
+          action={`${scatterXMetric.value || metric} × ${scatterYMetric.value || "elapsed_s"}`}
+        >
+          <div class="review-panel review-scatter-panel">
+            <ScatterChart />
+          </div>
+        </ReviewDisclosure>
+
+        <ReviewDisclosure
           id="review-detail"
-          title="Selected idea"
+          title="Idea detail"
           action={selected ? `idea #${selected}` : "none selected"}
-          preview={<ReviewSummaryPills items={[["idea", selected ?? "--"], ["metric", metric]]} />}
         >
           <div class="review-panel review-detail-panel">
             <DetailPanel />
@@ -1189,8 +1217,7 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
         <ReviewDisclosure
           id="review-ops"
           title="Queue"
-          action={`${queued} queued`}
-          preview={<ReviewSummaryPills items={[["queued", queued], ["running", totalRunning || running], ["progress", activeRuns.length ? `${avgProgress}%` : "--"]]} />}
+          action={`${queued} queued · ${totalRunning || running} running`}
         >
           <div class="review-panel review-ops-panel">
             <QueueView />
@@ -1199,9 +1226,8 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
 
         <ReviewDisclosure
           id="review-log"
-          title="Activity log"
+          title="Log"
           action={`${logs.length} events`}
-          preview={<ReviewSummaryPills items={[["entries", logs.length], ["latest", logs[0]?.title || "--"]]} />}
         >
           <div class="review-panel review-log-panel">
             <LogView />
@@ -1212,43 +1238,6 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
   );
 }
 
-function StatTile({
-  label,
-  value,
-  sub,
-  href,
-  tone,
-}: {
-  label: string;
-  value: string | number;
-  sub: string;
-  href: string;
-  tone?: "queued" | "running" | "finished";
-}) {
-  return (
-    <a
-      class={`review-stat-tile${tone ? ` review-stat-tile--${tone}` : ""}`}
-      href={href}
-      onClick={() => {
-        const el = document.querySelector(href);
-        if (el instanceof HTMLDetailsElement) el.open = true;
-      }}
-    >
-      <span>{label}</span>
-      <b>{value}</b>
-      <small>{sub}</small>
-    </a>
-  );
-}
-
-function SectionHeader({ title, action }: { title: string; action?: string }) {
-  return (
-    <div class="review-section-head">
-      <h2>{title}</h2>
-      {action && <p>{action}</p>}
-    </div>
-  );
-}
 
 function ReviewDisclosure({
   id,
