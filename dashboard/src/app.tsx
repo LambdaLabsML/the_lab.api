@@ -1296,20 +1296,30 @@ function ScoreDistBar({ experiments, metric, lower }: {
   for (const v of values) counts[Math.min(Math.floor((v - lo) / size), BUCKETS - 1)]++;
   const maxC = Math.max(...counts);
 
+  function fmtN(v: number) {
+    return Math.abs(v) >= 10 ? v.toFixed(0) : v.toFixed(1);
+  }
+
   return (
-    <div class="score-dist-bar" title={`Score distribution ${lo.toFixed(1)}–${hi.toFixed(1)}`}>
-      {counts.map((c, i) => {
-        const frac = lower ? 1 - i / (BUCKETS - 1) : i / (BUCKETS - 1);
-        const h = c > 0 ? Math.max(3, Math.round((c / maxC) * 22)) : 1;
-        // green = good score, red = poor
-        const clr = `hsl(${Math.round(120 * frac)},70%,52%)`;
-        return (
-          <span key={i} class="score-dist-tick"
-            style={{ height: `${h}px`, background: c > 0 ? clr : "var(--border-soft)", opacity: c > 0 ? 0.8 : 0.25 }}
-            title={`${c} exp @ ${(lo + i * size).toFixed(1)}–${(lo + (i+1) * size).toFixed(1)}`}
-          />
-        );
-      })}
+    <div style={{ display: "flex", flexDirection: "column", gap: 2, alignItems: "stretch" }}>
+      <div class="score-dist-bar" title={`Score distribution ${fmtN(lo)}–${fmtN(hi)}`}>
+        {counts.map((c, i) => {
+          const frac = lower ? 1 - i / (BUCKETS - 1) : i / (BUCKETS - 1);
+          const h = c > 0 ? Math.max(3, Math.round((c / maxC) * 22)) : 1;
+          const clr = `hsl(${Math.round(120 * frac)},70%,52%)`;
+          return (
+            <span key={i} class="score-dist-tick"
+              style={{ height: `${h}px`, background: c > 0 ? clr : "var(--border-soft)", opacity: c > 0 ? 0.8 : 0.25 }}
+              title={`${c} exp @ ${(lo + i * size).toFixed(1)}–${(lo + (i+1) * size).toFixed(1)}`}
+            />
+          );
+        })}
+      </div>
+      {/* Range label */}
+      <div style={{ display: "flex", justifyContent: "space-between", width: "90px", fontSize: "8px", color: "var(--text-faint)", fontFamily: "var(--font-mono, monospace)" }}>
+        <span>{fmtN(lo)}</span>
+        <span>{fmtN(hi)}</span>
+      </div>
     </div>
   );
 }

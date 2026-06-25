@@ -195,7 +195,7 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
         const yBounds = clip ? computeYBounds(chartData.values) : {};
         const yScale  = chartRef.current.options.scales!.y!;
         yScale.title  = { display: !minified, text: fmtMetricName(metric), color: getCssVar("--text-faint"), font: { size: 8 } };
-        yScale.min    = yBounds.min;
+        yScale.min    = yBounds.min ?? (isLowerBetter(metric) ? undefined : 0);
         yScale.max    = yBounds.max;
         (yScale as any).type = logScale ? "logarithmic" : "linear";
         (chartRef.current.options.scales!.x as any).ticks.display = !minified;
@@ -464,6 +464,8 @@ function createChart(
           },
           ticks: { color: getCssVar("--text-faint"), font: { size: 8 } },
           grid: { color: getCssVar("--border-soft") },
+          // Ensure chart uses at least 70% of the y range so dots aren't all crammed at bottom
+          suggestedMin: isLowerBetter(metricKey) ? undefined : 0,
         },
       },
       onHover(_evt, elements) {
