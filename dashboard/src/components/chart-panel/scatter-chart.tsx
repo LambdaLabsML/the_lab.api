@@ -23,6 +23,7 @@ import {
 import { filterMetricExperiments, collectChartKeys, resolveNumericValue } from "../../lib/chart-data";
 import { IDEA_PALETTE, _colorForExp, isLowerBetter } from "../../lib/colors";
 import { resolveColor, getCssVar, getCssVarPx } from "../../lib/css-vars";
+import { fmtMetricName } from "../../lib/format";
 import type { Experiment, IdeaNode, SubwayLayout } from "../../lib/types";
 
 /**
@@ -239,8 +240,8 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric }: { i
       ds._expData = filtered;
       const xScale = chartRef.current.options.scales!.x!;
       const yScale = chartRef.current.options.scales!.y!;
-      xScale.title = { display: true, text: xMetric, color: getCssVar("--text-muted"), font: { size: getCssVarPx("--text-xs") } };
-      yScale.title = { display: true, text: yMetric, color: getCssVar("--text-muted"), font: { size: getCssVarPx("--text-xs") } };
+      xScale.title = { display: true, text: fmtMetricName(xMetric), color: getCssVar("--text-muted"), font: { size: getCssVarPx("--text-xs") } };
+      yScale.title = { display: true, text: fmtMetricName(yMetric), color: getCssVar("--text-muted"), font: { size: getCssVarPx("--text-xs") } };
       xScale.min = xBounds.min;
       xScale.max = xBounds.max;
       yScale.min = yBounds.min;
@@ -284,13 +285,13 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric }: { i
         scales: {
           x: {
             ...xBounds,
-            title: { display: true, text: xMetric, color: getCssVar("--text-muted"), font: { size: getCssVarPx("--text-xs") } },
+            title: { display: true, text: fmtMetricName(xMetric), color: getCssVar("--text-muted"), font: { size: getCssVarPx("--text-xs") } },
             ticks: { color: getCssVar("--text-muted"), font: { size: getCssVarPx("--text-xs") } },
             grid: { color: getCssVar("--border-soft") },
           },
           y: {
             ...yBounds,
-            title: { display: true, text: yMetric, color: getCssVar("--text-muted"), font: { size: getCssVarPx("--text-xs") } },
+            title: { display: true, text: fmtMetricName(yMetric), color: getCssVar("--text-muted"), font: { size: getCssVarPx("--text-xs") } },
             ticks: { color: getCssVar("--text-muted"), font: { size: getCssVarPx("--text-xs") } },
             grid: { color: getCssVar("--border-soft") },
           },

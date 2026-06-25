@@ -1304,6 +1304,11 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
               <>
                 <ProgressRing pct={avgProgress} />
                 <strong>{liveCount}</strong> running{avgProgress > 0 ? ` · ${avgProgress}%` : ""}
+                {activeRuns.length > 0 && activeRuns.length <= 4 && (
+                  <span class="review-running-list">
+                    {activeRuns.map((e) => `exp/${e.label ?? e.id}`).join("  ")}
+                  </span>
+                )}
               </>
             ) : (
               <span class="review-status-idle">

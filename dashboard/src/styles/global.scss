@@ -189,6 +189,14 @@ body {
   font-weight: 400;
 }
 
+.review-running-list {
+  font-size: var(--text-xs);
+  color: var(--yellow);
+  opacity: 0.8;
+  font-family: var(--font-mono, monospace);
+  margin-left: 6px;
+}
+
 .review-idle-cta {
   font-size: var(--text-xs);
   color: var(--text-faint);
@@ -869,6 +877,8 @@ body {
   /* Hide direction indicator and CTA on mobile (save space / prevent wrap) */
   .review-best-direction { display: none; }
   .review-idle-cta { display: none; }
+  /* Hide running list on mobile (not enough space) */
+  .review-running-list { display: none; }
   /* Hide redundant Workbench button on mobile (tab bar covers this) */
   .review-status-strip .review-primary-action { display: none; }
   .review-status-left {
