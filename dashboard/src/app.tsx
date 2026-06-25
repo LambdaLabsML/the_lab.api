@@ -1186,14 +1186,24 @@ function BestSparkline({ experiments, metric, lower }: {
     vals.push(best);
   }
   if (vals.length < 2) return null;
-  const recent = vals.slice(-20); // last 20 best-points
+  const recent = vals.slice(-20);
   const lo = Math.min(...recent), hi = Math.max(...recent);
-  const range = hi - lo || 1;
+  const range = hi - lo;
+
+  // If variance is < 0.1% of the value, show a "plateau" dash instead
+  if (range === 0 || (Math.abs(lo) > 0 && range / Math.abs(lo) < 0.001)) {
+    return (
+      <svg width={W} height={H} style={{ display: "block", flexShrink: 0, opacity: 0.5 }}>
+        <line x1={4} y1={H/2} x2={W-4} y2={H/2} stroke="var(--text-faint)" strokeWidth="1.5" strokeDasharray="3 2" strokeLinecap="round" />
+      </svg>
+    );
+  }
+
   const px = (i: number) => (i / (recent.length - 1)) * W;
   const py = (v: number) => H - 2 - ((v - lo) / range) * (H - 4);
   const d = recent.map((v, i) => `${i === 0 ? "M" : "L"}${px(i).toFixed(1)},${py(v).toFixed(1)}`).join(" ");
   return (
-    <svg width={W} height={H} style={{ display: "block", flexShrink: 0, opacity: 0.8 }}>
+    <svg width={W} height={H} style={{ display: "block", flexShrink: 0, opacity: 0.85 }}>
       <path d={d} fill="none" stroke="var(--purple)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
       <circle cx={px(recent.length - 1)} cy={py(recent[recent.length - 1])} r="2" fill="var(--purple)" />
     </svg>

@@ -1,9 +1,44 @@
 /* stats.css — Usage Stats view */
 
-.stats-view { padding: var(--space-4); overflow: hidden; flex: 1; display: flex; flex-direction: column; background: var(--bg-elev); }
+.stats-view { padding: 0 var(--space-4) var(--space-4); overflow: hidden; flex: 1; display: flex; flex-direction: column; background: var(--bg-elev); gap: var(--space-3); }
 .stats-header { display: flex; align-items: baseline; gap: var(--space-3); margin-bottom: var(--space-4); }
 .stats-header h2 { margin: 0; font-size: var(--text-base); color: var(--text); }
 .stats-total { color: var(--accent); font-size: var(--text-base); font-weight: 600; }
+
+.stats-summary-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 6px 0 2px;
+}
+
+.stats-summary-pill {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 5px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  min-width: 0;
+}
+
+.stats-summary-count {
+  font-size: var(--text-base);
+  font-weight: 700;
+  color: var(--accent);
+  font-family: var(--font-mono, monospace);
+  line-height: 1;
+}
+
+.stats-summary-label {
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 120px;
+}
 
 .stats-columns { display: flex; gap: var(--space-3); flex: 1; min-height: 0; }
 @media (max-width: 900px) { .stats-columns { flex-direction: column; } }

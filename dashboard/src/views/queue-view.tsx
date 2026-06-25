@@ -513,57 +513,34 @@ export function QueueView() {
 
   return (
     <div id="queue-container">
-      <div class="queue-header">
-        <div class="queue-header-left">
-          <h2>Queue</h2>
-          <p>
-            Experiment dispatch queue. Adjust priorities, pause the dispatcher,
-            and manage resource pools (each pool is a set of unit slots like GPU
-            indices).
-          </p>
-        </div>
-        <div class="queue-header-right">
-          <div class="queue-summary">{loaded ? summary : "Loading…"}</div>
-          <div class="queue-controls">
-            <label class="queue-toggle">
-              <input
-                type="checkbox"
-                checked={!!snapshot?.config.paused}
-                disabled={!snapshot || busy}
-                onChange={handleTogglePause}
-              />
-              <span>Paused</span>
-            </label>
-            <label class="queue-interval">
-              <span>dispatch_interval_s</span>
-              <input
-                type="number"
-                min={0.1}
-                step={0.1}
-                value={intervalDraft}
-                disabled={!snapshot || busy}
-                onInput={(e) => setIntervalDraft((e.target as HTMLInputElement).value)}
-                onBlur={commitInterval}
-                onKeyDown={(e) => {
-                  if ((e as KeyboardEvent).key === "Enter") {
-                    (e.target as HTMLInputElement).blur();
-                  }
-                }}
-              />
-            </label>
-            <button
-              class="queue-btn"
-              onClick={() => refresh()}
-              disabled={busy}
-              title="Reload queue"
-            >
-              ↻ Refresh
-            </button>
-          </div>
+      <div class="pane-bar">
+        <h2 class="pane-bar-title">Queue</h2>
+        <span class="pane-bar-count">{loaded ? summary : "…"}</span>
+        <div class="pane-bar-actions">
+          <label class="queue-toggle" style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>
+            <input type="checkbox" checked={!!snapshot?.config.paused} disabled={!snapshot || busy} onChange={handleTogglePause} />
+            Paused
+          </label>
+          <button class="queue-btn" style={{ padding: "2px 8px", fontSize: "var(--text-xs)" }} onClick={() => refresh()} disabled={busy}>↺</button>
         </div>
       </div>
 
       {error && <div class="queue-error">{error}</div>}
+
+      {/* Dispatch interval — tucked in a collapsed Advanced section */}
+      <details class="queue-advanced">
+        <summary>Advanced</summary>
+        <label class="queue-interval" style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: "var(--text-xs)", color: "var(--text-muted)", padding: "4px 0" }}>
+          <span>dispatch_interval_s</span>
+          <input
+            type="number" min={0.1} step={0.1} value={intervalDraft}
+            disabled={!snapshot || busy}
+            onInput={(e) => setIntervalDraft((e.target as HTMLInputElement).value)}
+            onBlur={commitInterval}
+            onKeyDown={(e) => { if ((e as KeyboardEvent).key === "Enter") (e.target as HTMLInputElement).blur(); }}
+          />
+        </label>
+      </details>
 
       <section class="queue-section">
         <div class="queue-section-header">

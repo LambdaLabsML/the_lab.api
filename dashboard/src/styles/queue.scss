@@ -587,3 +587,19 @@
   .queue-header-right { margin-left: 0; }
   .queue-controls { justify-content: flex-start; }
 }
+
+.queue-advanced {
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+  padding: 4px 0;
+}
+.queue-advanced summary {
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+  &::-webkit-details-marker { display: none; }
+  &::after { content: " ›"; }
+}
+.queue-advanced[open] summary::after { content: " ↓"; }
+.queue-advanced > *:not(summary) { padding: 6px 0; }
+

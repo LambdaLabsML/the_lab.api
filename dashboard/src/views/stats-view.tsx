@@ -87,11 +87,31 @@ export function StatsView() {
 
   if (!stats) return <div style={{ padding: 20, color: "var(--text-faint)" }}>Loading stats...</div>;
 
+  // Compute quick summary: top 3 endpoints by call count
+  const topEndpoints = (stats.calls ?? []).slice(0, 3);
+  const totalKB = (stats.response_sizes ?? []).reduce((s, r) => s + r.total_kb, 0);
+
   return (
     <div class="stats-view">
-      <div class="stats-header">
-        <h2>API Usage Stats</h2>
-        <span class="stats-total">{stats.total_calls.toLocaleString()} total calls</span>
+      <div class="pane-bar">
+        <h2 class="pane-bar-title">Stats</h2>
+        <span class="pane-bar-count">{stats.total_calls.toLocaleString()} calls</span>
+      </div>
+
+      {/* Quick glance summary */}
+      <div class="stats-summary-row">
+        {topEndpoints.map((e) => (
+          <div class="stats-summary-pill" key={e.endpoint} title={e.endpoint}>
+            <span class="stats-summary-count">{e.count}</span>
+            <span class="stats-summary-label">{e.endpoint.replace(/^(GET|POST|PUT|PATCH|DELETE) \/api\/v1\//, "").replace(/\/\{id\}.*/, "")}</span>
+          </div>
+        ))}
+        {totalKB > 0 && (
+          <div class="stats-summary-pill">
+            <span class="stats-summary-count">{totalKB > 1000 ? `${(totalKB/1000).toFixed(0)}MB` : `${totalKB.toFixed(0)}KB`}</span>
+            <span class="stats-summary-label">total transferred</span>
+          </div>
+        )}
       </div>
 
       {/* Response size table */}

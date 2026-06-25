@@ -880,9 +880,9 @@ body {
     display: none; /* hide description on mobile, keep label+value */
   }
 
-  /* Chart wrap — shorter on mobile to leave room for disclosures */
+  /* Chart wrap — shorter on mobile to show disclosures above fold */
   .review-chart-wrap {
-    height: clamp(260px, 38vh, 360px);
+    height: clamp(220px, 30vh, 300px);
   }
 
   /* Workspace chip row — horizontal scroll */
