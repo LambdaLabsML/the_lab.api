@@ -194,7 +194,7 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
         }
         const yBounds = clip ? computeYBounds(chartData.values) : {};
         const yScale  = chartRef.current.options.scales!.y!;
-        yScale.title  = { display: !minified, text: metric, color: getCssVar("--text-faint"), font: { size: 8 } };
+        yScale.title  = { display: !minified, text: fmtMetricName(metric), color: getCssVar("--text-faint"), font: { size: 8 } };
         yScale.min    = yBounds.min;
         yScale.max    = yBounds.max;
         (yScale as any).type = logScale ? "logarithmic" : "linear";
@@ -451,7 +451,7 @@ function createChart(
           ...(clipOutliers.value ? computeYBounds(chartData.values) : {}),
           title: {
             display: !minified,
-            text: metricKey,
+            text: fmtMetricName(metricKey),
             color: getCssVar("--text-faint"),
             font: { size: 8 },
           },

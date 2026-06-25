@@ -369,7 +369,7 @@ export function TablePanel() {
                   </td>
                   <td>
                     <span class="exp-link">
-                      {milestoneIds.has(exp.id) && <span class="exp-milestone" title="New global best at this point">\u2B50</span>}
+                      {milestoneIds.has(exp.id) && <span class="exp-milestone" title="New global best at this point">\u2605</span>}
                       exp/{exp.label || exp.id}{exp._running ? " \u25B6" : ""}
                     </span>
                   </td>

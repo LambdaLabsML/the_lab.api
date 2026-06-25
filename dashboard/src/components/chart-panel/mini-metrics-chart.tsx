@@ -12,6 +12,7 @@ import { buildChartData } from "../../lib/chart-data";
 import { isLowerBetter } from "../../lib/colors";
 import { navigateToIdea } from "../../lib/navigate";
 import { highlightedIdea } from "../../state/signals";
+import { fmtMetricName } from "../../lib/format";
 import type { Experiment, IdeaNode, SubwayLayout } from "../../lib/types";
 
 const H = 200;

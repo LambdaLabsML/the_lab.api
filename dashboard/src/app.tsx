@@ -1348,7 +1348,7 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
         <ReviewDisclosure
           id="review-runs"
           title="Experiments"
-          action={`${finished} done · ${running} running${failed > 0 ? ` · ${failed} failed` : ""}`}
+          action={`${finished} done · ${running} running${failed > 0 ? ` · ${failed} failed` : ""}${bestVal != null ? ` · best: ${typeof bestVal === "number" ? bestVal.toFixed(3) : bestVal}` : ""}`}
           preview={
             finished + running + failed > 0 ? (
               <div class="idea-health-bar">
@@ -1384,7 +1384,7 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
         <ReviewDisclosure
           id="review-compare"
           title="Scatter"
-          action={`${scatterXMetric.value || metric} × ${scatterYMetric.value || "elapsed_s"}`}
+          action={`${fmtMetricName(scatterXMetric.value || metric)} × ${fmtMetricName(scatterYMetric.value || "elapsed_s")}`}
         >
           <div class="review-panel review-scatter-panel">
             <ScatterChart />
