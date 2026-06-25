@@ -1169,6 +1169,37 @@ function ExperimentGrid({ experiments }: { experiments: import("./lib/types").Ex
   );
 }
 
+/** Mini sparkline of running-best values — shows improvement trajectory */
+function BestSparkline({ experiments, metric, lower }: {
+  experiments: import("./lib/types").Experiment[];
+  metric: string;
+  lower: boolean;
+}) {
+  const W = 48, H = 18;
+  const vals: number[] = [];
+  let best: number | null = null;
+  const sorted = experiments.slice().sort((a, b) => a.id - b.id);
+  for (const e of sorted) {
+    const v = e.metrics?.[metric];
+    if (typeof v !== "number" || !isFinite(v)) continue;
+    if (best === null || (lower ? v < best : v > best)) best = v;
+    vals.push(best);
+  }
+  if (vals.length < 2) return null;
+  const recent = vals.slice(-20); // last 20 best-points
+  const lo = Math.min(...recent), hi = Math.max(...recent);
+  const range = hi - lo || 1;
+  const px = (i: number) => (i / (recent.length - 1)) * W;
+  const py = (v: number) => H - 2 - ((v - lo) / range) * (H - 4);
+  const d = recent.map((v, i) => `${i === 0 ? "M" : "L"}${px(i).toFixed(1)},${py(v).toFixed(1)}`).join(" ");
+  return (
+    <svg width={W} height={H} style={{ display: "block", flexShrink: 0, opacity: 0.8 }}>
+      <path d={d} fill="none" stroke="var(--purple)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx={px(recent.length - 1)} cy={py(recent[recent.length - 1])} r="2" fill="var(--purple)" />
+    </svg>
+  );
+}
+
 function ProgressRing({ pct }: { pct: number }) {
   const size = 14, sw = 2, r = (size - sw) / 2;
   const c = 2 * Math.PI * r;
@@ -1279,6 +1310,7 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
       {bestExp != null && bestVal != null && (
         <div class="review-best-bar">
           <span class="review-best-label">best {metric}</span>
+          <BestSparkline experiments={done} metric={metric} lower={lower} />
           <strong class="review-best-value">{typeof bestVal === "number" ? bestVal.toFixed(3) : bestVal}</strong>
           <span class="review-best-direction" title={lower ? "lower is better" : "higher is better"}>
             {lower ? "↓ lower better" : "↑ higher better"}
@@ -1326,7 +1358,7 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
             finished + running + failed > 0 ? (
               <div class="idea-health-bar">
                 {finished > 0 && <span class="ihb-seg ihb-done"     style={{ flex: finished }} title={`${finished} done`} />}
-                {running > 0  && <span class="ihb-seg ihb-active"   style={{ flex: running }}  title={`${running} running`} />}
+                {running > 0  && <span class="ihb-seg ihb-running"  style={{ flex: running }}  title={`${running} running`} />}
                 {failed > 0   && <span class="ihb-seg ihb-abandoned" style={{ flex: failed }}  title={`${failed} failed`} />}
               </div>
             ) : undefined
