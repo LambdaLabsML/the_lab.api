@@ -125,13 +125,13 @@
 }
 
 .agents-card {
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-soft);
   background: var(--bg);
-  border-radius: var(--radius-sm);
-  padding: 14px var(--space-4);
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
 }
 
@@ -152,10 +152,9 @@
 
 .agents-card-id {
   font-family: var(--font-mono);
-  font-size: var(--text-xl);
-  font-weight: 700;
+  font-size: var(--text-base);
+  font-weight: 600;
   color: var(--text);
-  letter-spacing: 0;
 }
 
 .agents-chip {
@@ -205,11 +204,9 @@
 }
 
 .agents-card-label {
-  flex: 0 0 76px;
-  font-size: var(--text-sm);
-
-  letter-spacing: 0;
-  color: var(--text-muted);
+  flex: 0 0 70px;
+  font-size: var(--text-xs);
+  color: var(--text-faint);
   padding-top: 2px;
 }
 

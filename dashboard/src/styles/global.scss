@@ -86,6 +86,57 @@ body {
   margin: 0 auto;
 }
 
+/* ── Shared pane patterns ──────────────────────────────────────────── */
+
+.pane-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px 6px;
+  border-bottom: 1px solid var(--border-soft);
+  flex-shrink: 0;
+}
+.pane-bar-title {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text);
+  margin: 0;
+}
+.pane-bar-count {
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+  flex-shrink: 0;
+}
+.pane-bar-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.pane-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 40px 24px;
+  text-align: center;
+  color: var(--text-faint);
+}
+.pane-empty-icon { font-size: 24px; opacity: 0.3; }
+.pane-empty-title {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.pane-empty-body {
+  font-size: var(--text-xs);
+  line-height: 1.6;
+  max-width: 280px;
+  code { color: var(--text-muted); font-family: var(--font-mono, monospace); }
+}
+
 /* ── Status strip ──────────────────────────────────────────────────── */
 
 .review-status-strip {

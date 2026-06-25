@@ -94,44 +94,28 @@ export function MessagesView() {
 
   return (
     <div id="messages-container">
-      <div class="agents-header">
-        <div class="agents-header-left">
-          <h2>Messages</h2>
-          <p>
-            Inter-agent messages sent via <code>POST /api/v1/messages</code>.
-            Agents can send to a specific agent, a role, or everyone.
-          </p>
-        </div>
-        <div class="agents-header-right">
-          <div class="agents-summary">{loaded ? countLabel : "Loading..."}</div>
-          <button
-            class="agents-btn"
-            onClick={() => setShowAll((v) => !v)}
-            title={showAll ? "Show unread only" : "Show all messages"}
-          >
+      <div class="pane-bar">
+        <h2 class="pane-bar-title">Messages</h2>
+        <span class="pane-bar-count">{loaded ? countLabel : "…"}</span>
+        <div class="pane-bar-actions">
+          <button class="agents-btn" onClick={() => setShowAll((v) => !v)}>
             {showAll ? `Unread only${unreadCount ? ` (${unreadCount})` : ""}` : "Show all"}
           </button>
-          <button
-            class="agents-btn"
-            onClick={() => refresh()}
-            title="Reload message log"
-          >
-            Refresh
-          </button>
+          <button class="agents-btn" onClick={() => refresh()}>↺</button>
         </div>
       </div>
 
       {error && <div class="agents-error">{error}</div>}
 
       <section class="agents-messages">
-        <div class="agents-messages-header">
-          <h3>Message log</h3>
-          <span class="agents-messages-meta">{countLabel}</span>
-        </div>
         {messageCount === 0 ? (
-          <div class="agents-messages-empty">
-            Inter-agent messages will appear here as agents send them via
-            <code> POST /api/v1/messages</code>.
+          <div class="pane-empty-state">
+            <div class="pane-empty-icon">✉</div>
+            <div class="pane-empty-title">{showAll ? "No messages yet" : "No unread messages"}</div>
+            <div class="pane-empty-body">
+              Messages sent here arrive in agents' <code>_notifications</code> on their next API call.
+              Use the ✉ button below or <code>POST /api/v1/messages</code>.
+            </div>
           </div>
         ) : (
           <ol class="agents-messages-list">

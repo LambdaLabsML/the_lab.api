@@ -137,9 +137,26 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
       const radii = minified
         ? chartData.pointRadii.map(() => 2)
         : chartData.pointRadii;
-      const borderWidths = minified
-        ? chartData.pointBorderWidths.map(() => 0)
-        : chartData.pointBorderWidths;
+      // Compute milestone set for gold rings on new global bests
+      const lowerM = isLowerBetter(metric);
+      const milestoneSetM = new Set<number>();
+      let runBestM: number | null = null;
+      for (let i = 0; i < chartData.values.length; i++) {
+        const v = chartData.values[i];
+        if (!isFinite(v)) continue;
+        if (runBestM === null || (lowerM ? v < runBestM : v > runBestM)) { runBestM = v; milestoneSetM.add(i); }
+      }
+      const yellowM = getCssVar("--yellow") || "#d29922";
+
+      const radiiM = chartData.pointRadii.map((r, i) =>
+        milestoneSetM.has(i) ? (minified ? 4 : Math.max(r, 7)) : (minified ? 2 : r)
+      );
+      const borderWidthsM = chartData.pointBorderWidths.map((w, i) =>
+        milestoneSetM.has(i) ? 2 : (minified ? 0 : w)
+      );
+      const borderColorsM = chartData.pointColors.map((c, i) =>
+        milestoneSetM.has(i) ? yellowM : c
+      );
 
       // Best-line dataset: step-function of running best value
       const bestLineData = bestLine ? computeBestLine(chartData.values, isLowerBetter(metric)) : null;
@@ -156,12 +173,13 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
         const ds = chartRef.current.data.datasets[0];
         ds.data = chartData.values;
         ds.pointBackgroundColor = chartData.pointBgColors as any;
-        ds.pointBorderColor    = chartData.pointColors as any;
-        ds.pointBorderWidth    = borderWidths as any;
+        ds.pointBorderColor    = borderColorsM as any;
+        ds.pointBorderWidth    = borderWidthsM as any;
         ds.pointStyle          = (minified ? chartData.pointStyles.map(() => "circle") : chartData.pointStyles) as any;
-        ds.pointRadius         = radii as any;
+        ds.pointRadius         = radiiM as any;
         ds.pointHoverRadius    = minified ? 4 : 10;
         (ds as any)._expData   = chartData.expData;
+        (ds as any)._milestones = milestoneSetM;
         chartRef.current.data.labels = chartData.labels;
         // Update or add/remove best-line dataset
         if (bestLineData) {
@@ -175,7 +193,7 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
         }
         const yBounds = clip ? computeYBounds(chartData.values) : {};
         const yScale  = chartRef.current.options.scales!.y!;
-        yScale.title  = { display: !minified, text: metric, color: getCssVar("--text-muted"), font: { size: getCssVarPx("--text-xs") } };
+        yScale.title  = { display: !minified, text: metric, color: getCssVar("--text-faint"), font: { size: 8 } };
         yScale.min    = yBounds.min;
         yScale.max    = yBounds.max;
         (yScale as any).type = logScale ? "logarithmic" : "linear";
@@ -352,15 +370,35 @@ function createChart(
   opts: { minified?: boolean; bestLineData?: number[] | null; metricKey?: string } = {}
 ): Chart {
   const { minified = false, bestLineData = null } = opts;
-  const radii = minified ? chartData.pointRadii.map(() => 2) : chartData.pointRadii;
-  const borderWidths = minified ? chartData.pointBorderWidths.map(() => 0) : chartData.pointBorderWidths;
+
+  // Mark experiments that set a new global best — shown with a gold ring
+  const lower = isLowerBetter(metricKey);
+  const milestoneSet = new Set<number>();
+  let runBest: number | null = null;
+  for (let i = 0; i < chartData.values.length; i++) {
+    const v = chartData.values[i];
+    if (!isFinite(v)) continue;
+    if (runBest === null || (lower ? v < runBest : v > runBest)) { runBest = v; milestoneSet.add(i); }
+  }
+  const yellow = getCssVar("--yellow") || "#d29922";
+
+  const radii = chartData.pointRadii.map((r, i) =>
+    milestoneSet.has(i) ? (minified ? 4 : Math.max(r, 7)) : (minified ? 2 : r)
+  );
+  const borderWidths = chartData.pointBorderWidths.map((w, i) =>
+    milestoneSet.has(i) ? 2 : (minified ? 0 : w)
+  );
+  const borderColors = chartData.pointColors.map((c, i) =>
+    milestoneSet.has(i) ? yellow : c
+  );
+
   const datasets: any[] = [
     {
       label: metricKey,
       data: chartData.values,
       borderColor: `color-mix(in srgb, ${getCssVar("--text-muted")} 27%, transparent)`,
       pointBackgroundColor: chartData.pointBgColors,
-      pointBorderColor: chartData.pointColors,
+      pointBorderColor: borderColors,
       pointBorderWidth: borderWidths,
       pointStyle: minified ? chartData.pointStyles.map(() => "circle") : chartData.pointStyles,
       pointRadius: radii,
@@ -369,6 +407,7 @@ function createChart(
       fill: false,
       order: 1,
       _expData: chartData.expData,
+      _milestones: milestoneSet,
     },
   ];
   if (bestLineData) {
@@ -399,12 +438,11 @@ function createChart(
           display: true,
           ticks: {
             display: !minified,
-            color: getCssVar("--text-muted"),
-            font: {
-              size: 10,
-              family: "SF Mono, Fira Code, Consolas, monospace",
-            },
+            color: getCssVar("--text-faint"),
+            font: { size: 8, family: "var(--font-mono, SF Mono, monospace)" },
             autoSkip: true,
+            autoSkipPadding: 6,
+            maxRotation: 45,
           },
           grid: { display: !minified, color: getCssVar("--border-soft") },
         },
@@ -413,10 +451,10 @@ function createChart(
           title: {
             display: !minified,
             text: metricKey,
-            color: getCssVar("--text-muted"),
-            font: { size: getCssVarPx("--text-xs") },
+            color: getCssVar("--text-faint"),
+            font: { size: 8 },
           },
-          ticks: { color: getCssVar("--text-muted"), font: { size: getCssVarPx("--text-xs") } },
+          ticks: { color: getCssVar("--text-faint"), font: { size: 8 } },
           grid: { color: getCssVar("--border-soft") },
         },
       },
@@ -459,9 +497,9 @@ function createChart(
               return "idea #" + d.idea_id + ": " + short;
             },
             afterTitle(items) {
-              // Show the y-axis value prominently
               const mk = items[0].dataset.label!;
-              return mk + " = " + items[0].formattedValue;
+              const isMilestone = (items[0].dataset as any)._milestones?.has(items[0].dataIndex);
+              return (isMilestone ? "⭐ new best · " : "") + mk + " = " + items[0].formattedValue;
             },
             label(item) {
               const d = (item.dataset as any)._expData[item.dataIndex];
