@@ -297,6 +297,11 @@ body {
   flex-shrink: 0;
 }
 
+.review-best-age {
+  color: var(--text-faint);
+  font-size: 9px;
+}
+
 .review-best-direction {
   font-size: var(--text-xs);
   color: var(--text-faint);

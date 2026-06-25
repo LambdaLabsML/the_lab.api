@@ -85,7 +85,7 @@ export const reverseTime = useSetting("reverseTime", true);
 export const showAbandoned = useSetting("showAbandoned", true);
 export const showConcluded = useSetting("showConcluded", true);
 export const showRunning = useSetting("showRunning", true);
-export const clipOutliers = useSetting("clipOutliers", true);
+export const clipOutliers = useSetting("clipOutliers", false);
 export const ideaMean = useSetting("ideaMean", false);
 
 /** Scatter chart axis metric selections. */

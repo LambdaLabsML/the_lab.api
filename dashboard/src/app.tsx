@@ -1139,10 +1139,15 @@ function IdeaMiniLeaderboard({ experiments, ideas, metric, lower }: {
           const idea = ideas[r.ideaId];
           const title = idea?.description?.split("\n")[0].slice(0, 28) ?? `idea #${r.ideaId}`;
           return (
-            <div key={r.ideaId} class={`emr-row${i === 0 ? " emr-milestone" : ""}`}>
+            <div key={r.ideaId} class={`emr-row${i === 0 ? " emr-milestone" : ""}`}
+              style={{ cursor: "pointer" }}
+              onClick={() => navigateToIdea(r.ideaId)}
+              title={`idea #${r.ideaId}: ${idea?.description?.split("\n")[0] ?? ""}`}
+            >
               <span class="emr-rank">{i + 1}</span>
-              <span class="emr-idea" style={{ minWidth: 24 }}>#{r.ideaId}</span>
-              <span class="emr-exp" style={{ color: "var(--text-muted)", maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis" }}>{title}</span>
+              <span class="emr-idea">#{r.ideaId}</span>
+              <span style={{ fontSize: "7px", opacity: 0.7, flexShrink: 0, color: idea?.status === "active" ? "var(--green)" : idea?.status === "concluded" ? "var(--accent)" : "var(--red)" }}>●</span>
+              <span class="emr-exp" style={{ color: "var(--text-muted)", maxWidth: 100, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</span>
               <span class="emr-val">{fmtV(r.best)}</span>
             </div>
           );
@@ -1515,8 +1520,11 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
             {lower ? "↓ lower better" : "↑ higher better"}
           </span>
           <span class="review-best-meta">
-            {bestIdea ? bestIdea.description?.split("\n")[0].slice(0, 55) : `idea #${bestExp.idea_id}`}
+            {bestIdea ? bestIdea.description?.split("\n")[0].slice(0, 50) : `idea #${bestExp.idea_id}`}
             {" · "}<code>{bestExp.label ?? `exp/${bestExp.id}`}</code>
+            {bestExp.finished_at && (
+              <span class="review-best-age"> · {timeAgo(bestExp.finished_at)}</span>
+            )}
           </span>
         </div>
       )}
