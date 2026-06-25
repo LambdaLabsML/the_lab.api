@@ -37,10 +37,12 @@
   color: var(--yellow); text-shadow: 0 0 4px color-mix(in srgb, var(--yellow) 40%, transparent);
 }
 
-/* On mobile, hide ★ column and metric columns beyond Status */
+/* On mobile, compact layout: hide ★ and metric cols, shrink Idea column */
 @media (max-width: 600px) {
   .table-panel th:nth-child(2),
-  .table-panel td:nth-child(2) { display: none; }  /* hide ★ column */
+  .table-panel td:nth-child(2) { display: none; }
   .table-panel th:nth-child(n+6),
-  .table-panel td:nth-child(n+6) { display: none; }  /* hide extra metric cols */
+  .table-panel td:nth-child(n+6) { display: none; }
+  .table-panel .idea-desc { max-width: 110px; }
+  .table-panel .badge { min-width: 64px; font-size: 8px; padding: 1px 4px; }
 }

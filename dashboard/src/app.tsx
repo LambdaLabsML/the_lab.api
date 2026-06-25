@@ -1437,6 +1437,13 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
     return `${Math.floor(hr / 24)}d ago`;
   }
 
+  // Campaign velocity: experiments finished in last 7 days
+  const velocityPerDay = (() => {
+    const sevenDaysAgo = Date.now() - 7 * 24 * 3600 * 1000;
+    const recent = done.filter(e => e.finished_at && Date.parse(e.finished_at) > sevenDaysAgo);
+    return recent.length > 0 ? (recent.length / 7).toFixed(1) : null;
+  })();
+
   // Best score for the selected idea (for Idea detail disclosure preview)
   const selectedIdeaBest = selected != null ? done
     .filter(e => e.idea_id === selected && e.metrics && typeof e.metrics[metric] === "number")
@@ -1520,6 +1527,11 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
           <span class="review-status-item"><strong>{finished}</strong> done</span>
           {failed > 0 && <span class="review-status-item review-status-item--warn"><strong>{failed}</strong> failed</span>}
           <span class="review-status-item"><strong>{activeIdeas}</strong> ideas</span>
+          {velocityPerDay && (
+            <span class="review-status-item review-status-velocity" title={`Avg experiments per day over last 7 days`}>
+              <strong>{velocityPerDay}</strong>/day
+            </span>
+          )}
           <span class="review-status-sep" />
           <code class="review-status-branch">{branch}</code>
           {cost != null && <span class="review-status-item review-status-item--cost">${cost.toFixed(0)}</span>}

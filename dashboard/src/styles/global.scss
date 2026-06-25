@@ -232,6 +232,11 @@ body {
   &--cost { color: var(--text-muted); }
 }
 
+.review-status-velocity {
+  color: var(--text-faint);
+  strong { color: var(--green); }
+}
+
 .review-status-sep {
   width: 1px;
   height: 12px;
@@ -967,6 +972,7 @@ body {
   /* Hide direction indicator and CTA on mobile (save space / prevent wrap) */
   .review-best-direction { display: none; }
   .review-idle-cta { display: none; }
+  .review-status-velocity { display: none; }
   /* Hide running list on mobile (not enough space) */
   .review-running-list { display: none; }
   /* Hide redundant Workbench button on mobile (tab bar covers this) */
