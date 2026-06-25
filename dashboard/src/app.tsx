@@ -1287,6 +1287,20 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
       return best === null || (lower ? v < best : v > best) ? v : best;
     }, null) : null;
 
+  // Count milestone experiments (new global bests, chronologically)
+  const milestonesCount = (() => {
+    if (!metric) return 0;
+    const sorted = done.filter(e => e.metrics && typeof e.metrics[metric] === "number")
+      .slice().sort((a, b) => a.id - b.id);
+    let best: number | null = null;
+    let count = 0;
+    for (const e of sorted) {
+      const v = e.metrics![metric] as number;
+      if (best === null || (lower ? v < best : v > best)) { best = v; count++; }
+    }
+    return count;
+  })();
+
   // Idea health breakdown for the Ideas disclosure mini-bar
   const ideaList = Object.values(ideas);
   const ideasActive    = ideaList.filter((i) => i.status === "active" || i.has_running || i.has_queued).length;
@@ -1364,7 +1378,13 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
         <ReviewDisclosure
           id="review-runs"
           title="Experiments"
-          action={`${finished} done · ${running} running${failed > 0 ? ` · ${failed} failed` : ""}${bestVal != null ? ` · best: ${typeof bestVal === "number" ? bestVal.toFixed(3) : bestVal}` : ""}`}
+          action={[
+            `${finished} done`,
+            running > 0 ? `${running} running` : null,
+            failed > 0 ? `${failed} failed` : null,
+            milestonesCount > 0 ? `${milestonesCount} records` : null,
+            bestVal != null ? `best: ${typeof bestVal === "number" ? bestVal.toFixed(3) : bestVal}` : null,
+          ].filter(Boolean).join(" · ")}
           preview={
             finished + running + failed > 0 ? (
               <div class="idea-health-bar">

@@ -7,7 +7,7 @@ import { navigateToIdea, navigateFromExperiment } from "../lib/navigate";
 import { Lightbox } from "./lightbox";
 import { JsonView } from "./json-view";
 import type { IdeaDetail, Experiment, Note } from "../lib/types";
-import { getStatusColor } from "../lib/colors";
+import { getStatusColor, isLowerBetter } from "../lib/colors";
 
 // ---------------------------------------------------------------------------
 // URL hash helpers — encode/decode lightbox state as shareable deep links.
@@ -1368,10 +1368,30 @@ function ExperimentItem({
   const metricKey = selectedMetric.value;
   const highlights = metricKey ? [metricKey] : [];
 
+  // Check if this experiment was a global best at the time it ran
+  const isMilestone = (() => {
+    if (!metricKey || !exp.metrics || typeof exp.metrics[metricKey] !== "number" || exp._running) return false;
+    const lower = isLowerBetter(metricKey);
+    // Import lazily — avoid circular dep
+    try {
+      const { allExperiments } = require("../state/signals") as typeof import("../state/signals");
+      const allExps = allExperiments.value;
+      const myVal = exp.metrics[metricKey] as number;
+      const earlier = allExps.filter(e => !e._running && e.id < exp.id && e.metrics && typeof e.metrics[metricKey] === "number");
+      if (earlier.length === 0) return true; // first experiment with this metric
+      const prevBest = earlier.reduce<number>((b, e) => {
+        const v = e.metrics![metricKey] as number;
+        return lower ? Math.min(b, v) : Math.max(b, v);
+      }, lower ? Infinity : -Infinity);
+      return lower ? myVal < prevBest : myVal > prevBest;
+    } catch { return false; }
+  })();
+
   return (
     <div class="exp-item" data-exp-label={exp.label || exp.id}>
       <div class="exp-header">
         <span class="exp-id" style={{ cursor: "pointer" }} onClick={() => navigateFromExperiment(exp.idea_id)} title="Scroll to this idea in graph + highlight in charts">
+          {isMilestone && <span style={{ color: "var(--yellow)", marginRight: 4, fontSize: "11px" }} title="New global best at this point">★</span>}
           exp/{exp.label || exp.id}
         </span>
         <span dangerouslySetInnerHTML={{ __html: badgeHtml(exp.status, progress?.pct_complete ?? progress?.pct) }} />
