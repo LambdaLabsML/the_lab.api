@@ -28,7 +28,7 @@
   font-size: var(--text-base);
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 0;
   color: var(--text-muted);
 }
 
@@ -129,7 +129,7 @@
   font-size: var(--text-sm);
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 0;
   color: var(--text-muted);
 }
 
@@ -183,7 +183,7 @@
   display: inline-block;
   font-size: var(--text-xs);
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0;
   padding: 1px 5px;
   border-radius: 3px;
   border: 1px solid var(--border);
@@ -366,7 +366,7 @@
   font-size: var(--text-sm);
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 0;
   color: var(--text-muted);
 }
 

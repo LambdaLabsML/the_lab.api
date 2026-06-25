@@ -31,7 +31,7 @@
 #detail-panel h2 .close-btn:hover { color: var(--text); }
 
 .detail-section { margin-bottom: 14px; }
-.detail-section .label { font-size: var(--text-sm); text-transform: uppercase; color: var(--text-muted); margin-bottom: var(--space-1); letter-spacing: 0.5px; }
+.detail-section .label { font-size: var(--text-sm); text-transform: uppercase; color: var(--text-muted); margin-bottom: var(--space-1); letter-spacing: 0; }
 .detail-section .value { color: var(--text); line-height: 1.5; word-break: break-word; }
 
 /* Notes */
@@ -51,7 +51,7 @@
 
 /* --- JSON viewer --- */
 .json-view { margin: var(--space-1) 0; font-size: var(--text-sm); line-height: 1.5; }
-.json-label { color: var(--text-muted); font-weight: 600; font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.5px; margin-right: var(--space-1); }
+.json-label { color: var(--text-muted); font-weight: 600; font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0; margin-right: var(--space-1); }
 .json-tree { font-family: var(--font-mono); }
 .json-key { color: var(--purple); }
 .json-colon { color: var(--text-faint); }
@@ -107,7 +107,7 @@
 .meta-arrow { color: var(--text-faint); }
 .meta-parents { display: flex; align-items: center; gap: 3px; }
 .meta-stats-row { display: flex; align-items: center; gap: var(--space-1); flex-wrap: wrap; }
-.meta-stat-label { color: var(--text-muted); font-weight: 600; font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.4px; margin-right: 2px; }
+.meta-stat-label { color: var(--text-muted); font-weight: 600; font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0; margin-right: 2px; }
 .meta-pill { font-size: var(--text-xs); padding: 1px 5px; border-radius: 3px; border: 1px solid transparent; }
 /* Experiment status pills */
 .meta-pill-running   { color: var(--yellow); border-color: #d2992244; background: #d2992211; }

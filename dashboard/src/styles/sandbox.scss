@@ -21,7 +21,7 @@
   font-size: var(--text-sm);
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 0;
   color: var(--text-muted);
 }
 
@@ -55,7 +55,7 @@
 .sandbox-save {
   font-size: var(--text-sm);
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0;
   color: var(--text-muted);
 }
 
@@ -100,7 +100,7 @@
   font-size: var(--text-sm);
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 0;
   color: var(--text-muted);
 }
 
@@ -157,7 +157,7 @@
   font-size: var(--text-sm);
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 0;
   color: var(--text-muted);
   border-bottom: 1px solid var(--border-soft);
   padding-bottom: 6px;
@@ -219,7 +219,7 @@
 .sandbox-status-badge {
   font-size: var(--text-sm);
   font-weight: 600;
-  letter-spacing: 0.05em;
+  letter-spacing: 0;
   padding: 3px 8px;
   border-radius: 4px;
   white-space: nowrap;

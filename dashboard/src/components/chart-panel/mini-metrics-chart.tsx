@@ -1,8 +1,8 @@
 /**
  * MiniMetricsChart — landing-page-style SVG chart for the minified mode.
  *
- * Dots = experiments, stepped purple line = running best, gold dots = new
- * global best, dashed vertical drops to x-axis. Colors and ordering follow
+ * Dots = experiments, stepped purple line = current best, gold dots = metric
+ * improvements, dashed vertical drops to x-axis. Colors and ordering follow
  * the normal chart mode exactly (uses buildChartData). Min 8px per point
  * with horizontal scroll when needed. Click a dot to navigate to its idea.
  */
@@ -261,7 +261,7 @@ export function MiniMetricsChart({
                 <text x={x + 6} y={y - 6}
                   fill="var(--yellow, #d29922)" font-size="9"
                   font-family="var(--font-mono, JetBrains Mono, monospace)"
-                >new best</text>
+                >metric improved</text>
               )}
               <circle cx={x} cy={y} r="9" fill="transparent" />
             </g>
@@ -316,7 +316,7 @@ export function MiniMetricsChart({
             experiments left → right
           </text>
           <text x={rightEdge} y={H - 7} text-anchor="end" fill="var(--purple, #bc8cff)">
-            best {fmtVal(bestVal)}
+            current best {fmtVal(bestVal)}
           </text>
         </g>
       </svg>

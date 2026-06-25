@@ -259,7 +259,7 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
           log
         </button>
         <button type="button" class={`chart-toggle-btn${bestLine ? " active" : ""}`} onClick={() => { showBestLine.value = !bestLine; }} title="Show current-best step line">
-          ⌇ Best
+          ⌇ Current Best
         </button>
         <button type="button" class={`chart-toggle-btn${minified ? " active" : ""}`} onClick={() => { chartMinified.value = !minified; }} title="Minified: small dots, global overview">
           ⊡ Mini
@@ -308,7 +308,7 @@ function computeBestLine(values: number[], lowerIsBetter: boolean): number[] {
 /** Chart.js dataset config for the best-line. */
 function makeBestLineDataset(data: number[], metricKey: string) {
   return {
-    label: `best ${metricKey}`,
+    label: `current best ${metricKey}`,
     data,
     borderColor: getCssVar("--purple") || "#a371f7",
     borderWidth: 1.5,

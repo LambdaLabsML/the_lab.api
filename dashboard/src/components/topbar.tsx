@@ -22,6 +22,9 @@ interface LayoutActions {
   onLoadLayout?: (name: string) => void;
   onDeleteLayout?: (name: string) => void;
   getSavedLayouts?: () => string[];
+  onOpenReview?: () => void;
+  onOpenReviewSection?: (id: string) => void;
+  onOpenWorkbench?: () => void;
 }
 
 interface ThemeDef {
@@ -57,7 +60,7 @@ export function Topbar(props: LayoutActions) {
   const reversed = reverseTime.value;
   const isWsConnected = wsConnected.value;
   const isWsAuthFailed = wsAuthFailed.value;
-  const [showLayoutMenu, setShowLayoutMenu] = useState(false);
+  const [showMobileMenu, setShowMobileMenu] = useState(false);
   const [saveName, setSaveName] = useState("");
   const [layoutVersion, setLayoutVersion] = useState(0);
   const [compact, setCompact] = useState(false);
@@ -116,13 +119,195 @@ export function Topbar(props: LayoutActions) {
     return () => ro.disconnect();
   }, []);
 
+  useEffect(() => {
+    if (!showMobileMenu) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setShowMobileMenu(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [showMobileMenu]);
+
   const clampedIdx = statIdx % stats.length;
   const prevStat = () => setStatIdx((i) => (i - 1 + stats.length) % stats.length);
   const nextStat = () => setStatIdx((i) => (i + 1) % stats.length);
 
+  const goReview = (close: () => void) => {
+    props.onOpenReview?.();
+    close();
+  };
+
+  const goSection = (id: string, close: () => void) => {
+    props.onOpenReviewSection?.(id);
+    close();
+  };
+
+  const goWorkbench = (close: () => void) => {
+    props.onOpenWorkbench?.();
+    close();
+  };
+
+  const settingsPanel = (close: () => void) => (
+    <div class="layout-menu-content">
+      <div class="layout-menu-section layout-menu-section--nav">
+        <div class="layout-menu-label">Workspace</div>
+        <div class="layout-menu-nav-grid">
+          <button class="layout-menu-btn" onClick={() => goReview(close)}>Review dashboard</button>
+          <button class="layout-menu-btn" onClick={() => goWorkbench(close)}>Pane workbench</button>
+        </div>
+      </div>
+
+      <div class="layout-menu-section layout-menu-section--nav">
+        <div class="layout-menu-label">Review sections</div>
+        <div class="layout-menu-nav-grid layout-menu-nav-grid--compact">
+          <button class="layout-menu-btn" onClick={() => goSection("review-progress", close)}>Progress</button>
+          <button class="layout-menu-btn" onClick={() => goSection("review-ideas", close)}>Ideas</button>
+          <button class="layout-menu-btn" onClick={() => goSection("review-runs", close)}>Runs</button>
+          <button class="layout-menu-btn" onClick={() => goSection("review-ops", close)}>Queue</button>
+        </div>
+      </div>
+
+      <div class="layout-menu-section">
+        <div class="layout-menu-label">Direction</div>
+        <button
+          class="layout-menu-btn"
+          onClick={() => { reverseTime.value = !reversed; }}
+          title={reversed ? "Newest left/top (click to reverse)" : "Oldest left/top (click to reverse)"}
+        >
+          {reversed ? "Newest first" : "Oldest first"}
+        </button>
+      </div>
+
+      <div class="layout-menu-section">
+        <div class="layout-menu-label">Color theme</div>
+        <div class="theme-picker-grid">
+          {THEMES.map((t) => (
+            <button
+              key={t.id}
+              class={`theme-swatch${activeTheme === t.id ? " theme-swatch--active" : ""}`}
+              onClick={() => { colorTheme.value = t.id; }}
+              title={t.name}
+            >
+              <span class="theme-swatch-colors">
+                {t.swatches.map((c, i) => (
+                  <span key={i} class="theme-swatch-dot" style={`background:${c}`} />
+                ))}
+              </span>
+              <span class="theme-swatch-name">{t.name}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div class="layout-menu-section">
+        <div class="layout-menu-label">Font</div>
+        <div class="font-picker-grid">
+          {FONT_PICKER.map((p) => (
+            <button
+              key={p.id}
+              class={`font-swatch${activeFont === p.id ? " font-swatch--active" : ""}`}
+              style={`font-family:${p.uiFont}`}
+              onClick={() => { fontFamily.value = p.id; }}
+              title={p.label}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div class="layout-menu-section">
+        <div class="layout-menu-label">Size</div>
+        <div class="font-size-row">
+          {FONT_SIZES.map((sz) => (
+            <button
+              key={sz}
+              class={`font-size-btn${activeFontSz === sz ? " font-size-btn--active" : ""}`}
+              onClick={() => { fontSize.value = sz; }}
+            >
+              {sz}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div class="layout-menu-section">
+        <div class="layout-menu-label">Accessibility</div>
+        <button
+          class={`layout-menu-btn${isColorblind ? " layout-menu-btn--active" : ""}`}
+          onClick={() => { colorblindMode.value = !isColorblind; }}
+          title="Okabe-Ito colorblind-safe palette"
+        >
+          {isColorblind ? "Colorblind mode on" : "Colorblind mode"}
+        </button>
+      </div>
+
+      <div class="layout-menu-section">
+        <button class="layout-menu-btn" onClick={() => { props.onResetLayout?.(); close(); }}>
+          Reset workspace
+        </button>
+      </div>
+
+      <div class="layout-menu-section">
+        <div class="layout-menu-label">Save current</div>
+        <div class="layout-save-row">
+          <input
+            class="layout-save-input"
+            placeholder="layout name"
+            value={saveName}
+            onInput={(e) => setSaveName((e.target as HTMLInputElement).value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && saveName.trim()) {
+                props.onSaveLayout?.(saveName.trim());
+                setSaveName("");
+                setLayoutVersion((v) => v + 1);
+              }
+            }}
+          />
+          <button
+            class="layout-menu-btn layout-save-btn"
+            onClick={() => {
+              if (saveName.trim()) {
+                props.onSaveLayout?.(saveName.trim());
+                setSaveName("");
+                setLayoutVersion((v) => v + 1);
+              }
+            }}
+          >
+            Save
+          </button>
+        </div>
+      </div>
+
+      {savedLayouts.length > 0 && (
+        <div class="layout-menu-section">
+          <div class="layout-menu-label">Saved layouts</div>
+          {savedLayouts.map((name) => (
+            <div key={name} class="layout-saved-row">
+              <span
+                class="layout-saved-name"
+                onClick={() => { props.onLoadLayout?.(name); close(); }}
+                title={`Load "${name}"`}
+              >
+                {name}
+              </span>
+              <button
+                class="layout-saved-delete"
+                onClick={() => { props.onDeleteLayout?.(name); setLayoutVersion((v) => v + 1); }}
+                title="Delete"
+              >
+                x
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
   return (
     <div id="topbar" ref={barRef}>
-      <span class="title">The Lab</span>
+      <span class="title">the_lab</span>
       <span
         class={`ws-dot ${isWsAuthFailed ? "ws-dot--auth" : isWsConnected ? "ws-dot--on" : "ws-dot--off"}`}
         title={isWsAuthFailed ? "WebSocket: auth failed" : isWsConnected ? "WebSocket: connected" : "WebSocket: reconnecting..."}
@@ -167,144 +352,40 @@ export function Topbar(props: LayoutActions) {
       </div>
 
       <button
-        class="time-direction-btn"
-        onClick={() => { reverseTime.value = !reversed; }}
-        title={reversed ? "Newest left/top (click to reverse)" : "Oldest left/top (click to reverse)"}
+        class="topbar-icon-btn topbar-menu-btn"
+        onClick={() => setShowMobileMenu(true)}
+        title="Open menu"
+        aria-label="Open menu"
+        aria-expanded={showMobileMenu ? "true" : "false"}
       >
-        {reversed ? "← newest" : "oldest →"}
+        ☰
       </button>
 
-      {/* Layout management */}
-      <div class="layout-menu-container">
-        <button
-          class="time-direction-btn"
-          onClick={() => setShowLayoutMenu(!showLayoutMenu)}
-          title="Manage layouts"
-        >
-          Layouts
-        </button>
-        {showLayoutMenu && (
-          <div class="layout-menu">
-            <div class="layout-menu-section">
-              <div class="layout-menu-label">Color theme:</div>
-              <div class="theme-picker-grid">
-                {THEMES.map((t) => (
-                  <button
-                    key={t.id}
-                    class={`theme-swatch${activeTheme === t.id ? " theme-swatch--active" : ""}`}
-                    onClick={() => { colorTheme.value = t.id; }}
-                    title={t.name}
-                  >
-                    <span class="theme-swatch-colors">
-                      {t.swatches.map((c, i) => (
-                        <span key={i} class="theme-swatch-dot" style={`background:${c}`} />
-                      ))}
-                    </span>
-                    <span class="theme-swatch-name">{t.name}</span>
-                  </button>
-                ))}
+      {showMobileMenu && (
+        <div class="mobile-menu-shell">
+          <button class="mobile-menu-scrim" onClick={() => setShowMobileMenu(false)} aria-label="Close menu" />
+          <div class="mobile-menu">
+            <div class="mobile-menu-head">
+              <div>
+                <div class="mobile-menu-title">the_lab</div>
+                <div class="mobile-menu-subtitle">
+                  {isWsAuthFailed ? "auth failed" : isWsConnected ? "connected" : "reconnecting"}
+                </div>
               </div>
+              <button class="topbar-icon-btn" onClick={() => setShowMobileMenu(false)} title="Close menu" aria-label="Close menu">×</button>
             </div>
-            {/* Font family */}
-            <div class="layout-menu-section">
-              <div class="layout-menu-label">Font:</div>
-              <div class="font-picker-grid">
-                {FONT_PICKER.map((p) => (
-                  <button
-                    key={p.id}
-                    class={`font-swatch${activeFont === p.id ? " font-swatch--active" : ""}`}
-                    style={`font-family:${p.uiFont}`}
-                    onClick={() => { fontFamily.value = p.id; }}
-                    title={p.label}
-                  >
-                    {p.label}
-                  </button>
-                ))}
-              </div>
+            <div class="mobile-menu-stats">
+              {stats.map((s) => (
+                <span key={s.key} class="mobile-stat" title={s.title}>
+                  <span>{s.label}</span>
+                  <b>{s.value}</b>
+                </span>
+              ))}
             </div>
-
-            {/* Font size */}
-            <div class="layout-menu-section">
-              <div class="layout-menu-label">Size:</div>
-              <div class="font-size-row">
-                {FONT_SIZES.map((sz) => (
-                  <button
-                    key={sz}
-                    class={`font-size-btn${activeFontSz === sz ? " font-size-btn--active" : ""}`}
-                    onClick={() => { fontSize.value = sz; }}
-                  >
-                    {sz}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Accessibility */}
-            <div class="layout-menu-section">
-              <div class="layout-menu-label">Accessibility:</div>
-              <button
-                class={`layout-menu-btn${isColorblind ? " layout-menu-btn--active" : ""}`}
-                onClick={() => { colorblindMode.value = !isColorblind; }}
-                title="Okabe-Ito colorblind-safe palette (replaces red/green with vermillion/teal)"
-              >
-                {isColorblind ? "◉ Colorblind mode on" : "◎ Colorblind mode"}
-              </button>
-            </div>
-
-            <div class="layout-menu-section">
-              <button class="layout-menu-btn" onClick={() => { props.onResetLayout?.(); setShowLayoutMenu(false); }}>
-                Reset to Default
-              </button>
-            </div>
-            <div class="layout-menu-section">
-              <div class="layout-menu-label">Save current:</div>
-              <div class="layout-save-row">
-                <input
-                  class="layout-save-input"
-                  placeholder="layout name..."
-                  value={saveName}
-                  onInput={(e) => setSaveName((e.target as HTMLInputElement).value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && saveName.trim()) {
-                      props.onSaveLayout?.(saveName.trim());
-                      setSaveName("");
-                    }
-                  }}
-                />
-                <button
-                  class="layout-menu-btn"
-                  onClick={() => { if (saveName.trim()) { props.onSaveLayout?.(saveName.trim()); setSaveName(""); setLayoutVersion((v) => v + 1); } }}
-                >
-                  Save
-                </button>
-              </div>
-            </div>
-            {savedLayouts.length > 0 && (
-              <div class="layout-menu-section">
-                <div class="layout-menu-label">Saved layouts:</div>
-                {savedLayouts.map((name) => (
-                  <div key={name} class="layout-saved-row">
-                    <span
-                      class="layout-saved-name"
-                      onClick={() => { props.onLoadLayout?.(name); setShowLayoutMenu(false); }}
-                      title={`Load "${name}"`}
-                    >
-                      {name}
-                    </span>
-                    <span
-                      class="layout-saved-delete"
-                      onClick={() => { props.onDeleteLayout?.(name); setLayoutVersion((v) => v + 1); }}
-                      title="Delete"
-                    >
-                      x
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
+            {settingsPanel(() => setShowMobileMenu(false))}
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }

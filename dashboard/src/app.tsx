@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from "preact/hooks";
+import { useEffect, useRef, useCallback, useState } from "preact/hooks";
 import { effect, signal } from "@preact/signals";
 import { render } from "preact";
 
@@ -59,8 +59,23 @@ import {
 } from "./state/settings";
 import { startPolling, stopPolling } from "./state/polling";
 import { startWs, stopWs } from "./state/ws";
-import { setActivatePanel, setCloneChartPanel, setUpdatePanelTitle, setSendToTray } from "./state/signals";
+import {
+  allExperiments,
+  backlogData,
+  currentLayout,
+  graphData,
+  highlightedIdea,
+  logEntries,
+  runningProgress,
+  setActivatePanel,
+  setCloneChartPanel,
+  setUpdatePanelTitle,
+  setSendToTray,
+  totalAgentCost,
+} from "./state/signals";
 import { initTouchMoveMenu } from "./lib/touch-move-menu";
+import { getStatusColor } from "./lib/colors";
+import { navigateToIdea } from "./lib/navigate";
 
 // ---------------------------------------------------------------------------
 // Panel component map — maps panel ID to Preact component
@@ -203,14 +218,14 @@ class PanelHeaderActions implements IHeaderActionsRenderer {
     // Maximize button
     const maxBtn = document.createElement("button");
     maxBtn.className = "dv-header-action-btn";
-    maxBtn.title = "Maximize panel";
+    maxBtn.title = "Focus panel";
     maxBtn.textContent = "⤢";
 
     const updateMaxBtn = () => {
       const dv = (group.api as any).accessor as DockviewComponent;
       const isMax = dv.isMaximizedGroup(group);
       maxBtn.textContent = isMax ? "⤡" : "⤢";
-      maxBtn.title = isMax ? "Restore panel" : "Maximize panel";
+      maxBtn.title = isMax ? "Restore workspace" : "Focus panel";
       maxBtn.className = `dv-header-action-btn${isMax ? " active" : ""}`;
     };
 
@@ -304,31 +319,20 @@ class PanelHeaderActions implements IHeaderActionsRenderer {
 // Task, Suggest, API, Stats, Sandbox, Prompts → tray
 const DEFAULT_LAYOUT: SerializedDockview = {"grid":{"root":{"type":"branch","data":[{"type":"leaf","data":{"views":["filters"],"activeView":"filters","id":"1"},"size":80},{"type":"branch","data":[{"type":"leaf","data":{"views":["metrics"],"activeView":"metrics","id":"2"},"size":1120},{"type":"leaf","data":{"views":["scatter"],"activeView":"scatter","id":"3"},"size":480}],"size":330},{"type":"branch","data":[{"type":"leaf","data":{"views":["table","graph","timeline","queue","log"],"activeView":"table","id":"4"},"size":800},{"type":"leaf","data":{"views":["detail"],"activeView":"detail","id":"5"},"size":800}],"size":590}],"size":1600},"width":1600,"height":1000,"orientation":"VERTICAL"},"panels":{"filters":{"id":"filters","contentComponent":"default","title":"Filters"},"metrics":{"id":"metrics","contentComponent":"default","title":"Metrics"},"scatter":{"id":"scatter","contentComponent":"default","title":"Scatter"},"table":{"id":"table","contentComponent":"default","title":"Table"},"graph":{"id":"graph","contentComponent":"default","title":"Graph"},"timeline":{"id":"timeline","contentComponent":"default","title":"Timeline"},"queue":{"id":"queue","contentComponent":"default","title":"Queue"},"log":{"id":"log","contentComponent":"default","title":"Log"},"detail":{"id":"detail","contentComponent":"default","title":"Detail"}},"activeGroup":"4"} as any;
 
-// Mobile/narrow layout: all panels stacked vertically in two groups
+// Mobile/narrow layout: start with the essentials; specialist panes stay in
+// the pane bar so the workbench does not become a wall of tabs on first open.
 function buildMobileLayout(dv: DockviewComponent) {
-  const top = dv.addPanel({ id: "graph", component: "default", title: "Graph" });
-  dv.addPanel({ id: "metrics", component: "default", title: "Metrics", position: { referencePanel: top } });
-  dv.addPanel({ id: "scatter", component: "default", title: "Scatter", position: { referencePanel: top } });
-  dv.addPanel({ id: "timeline", component: "default", title: "Timeline", position: { referencePanel: top } });
-  dv.addPanel({ id: "log", component: "default", title: "Log", position: { referencePanel: top } });
+  const top = dv.addPanel({ id: "metrics", component: "default", title: "Metrics" });
   dv.addPanel({ id: "table", component: "default", title: "Table", position: { referencePanel: top } });
-
   const bottom = dv.addPanel({
     id: "detail", component: "default", title: "Detail",
     position: { referencePanel: top, direction: "below" },
   });
-  dv.addPanel({ id: "api", component: "default", title: "API", position: { referencePanel: bottom } });
-  dv.addPanel({ id: "filters", component: "default", title: "Filters", position: { referencePanel: bottom } });
-  dv.addPanel({ id: "stats", component: "default", title: "Stats", position: { referencePanel: bottom } });
-  dv.addPanel({ id: "suggest", component: "default", title: "Suggest", position: { referencePanel: bottom } });
-  dv.addPanel({ id: "task", component: "default", title: "Task", position: { referencePanel: bottom } });
-  dv.addPanel({ id: "sandbox", component: "default", title: "Sandbox", position: { referencePanel: bottom } });
-  dv.addPanel({ id: "prompts", component: "default", title: "Prompts", position: { referencePanel: bottom } });
-  dv.addPanel({ id: "agents", component: "default", title: "Agents", position: { referencePanel: bottom } });
   dv.addPanel({ id: "queue", component: "default", title: "Queue", position: { referencePanel: bottom } });
 }
 
 const NARROW_BREAKPOINT = 800;
+type DashboardMode = "review" | "workbench";
 
 function buildDefaultLayout(dv: DockviewComponent) {
   if (typeof window !== "undefined" && window.innerWidth <= NARROW_BREAKPOINT) {
@@ -481,9 +485,11 @@ function syncUrlFromSignals() {
 export function App() {
   const containerRef = useRef<HTMLDivElement>(null);
   const dockviewRef = useRef<DockviewComponent | null>(null);
+  const [dashboardMode, setDashboardMode] = useState<DashboardMode>("review");
 
   // Initialize dockview
   useEffect(() => {
+    if (dashboardMode !== "workbench") return;
     const container = containerRef.current;
     if (!container) return;
 
@@ -807,7 +813,7 @@ export function App() {
       dv.dispose();
       dockviewRef.current = null;
     };
-  }, []);
+  }, [dashboardMode]);
 
   // Polling, URL sync, server defaults
   useEffect(() => {
@@ -831,7 +837,6 @@ export function App() {
   const handleResetLayout = useCallback(() => {
     if (!confirm("Reset to default layout and clear all dashboard preferences (selected metric, tag filters, status toggles, etc.)? Saved named layouts will be kept.")) return;
     const dv = dockviewRef.current;
-    if (!dv) return;
     // Wipe every `the-lab:` localStorage key except saved named layouts.
     // Reload afterwards so signals re-initialise from defaults — they read
     // localStorage at module load, so an in-memory reset would leave stale
@@ -845,8 +850,10 @@ export function App() {
       }
       for (const k of toRemove) localStorage.removeItem(k);
     } catch { /* ignore */ }
-    dv.clear();
-    buildDefaultLayout(dv);
+    if (dv) {
+      dv.clear();
+      buildDefaultLayout(dv);
+    }
     dashboardLayout.value = null;
     location.reload();
   }, []);
@@ -943,6 +950,67 @@ export function App() {
     }
   }, []);
 
+  const handleAddPanel = useCallback((id: string, mode: "dock" | "float" = "dock") => {
+    const dv = dockviewRef.current;
+    if (!dv) return;
+
+    const title = PANEL_NAMES[id] || id;
+    const shouldFloat = mode === "float" || dv.hasMaximizedGroup();
+    const existing = dv.panels.find((p) => p.id === id);
+    if (existing) {
+      if (shouldFloat && existing.group.api.location.type !== "floating") {
+        dv.removePanel(existing);
+      } else {
+        existing.api.setActive();
+        return;
+      }
+    }
+
+    if (shouldFloat) {
+      const width = Math.min(620, Math.max(320, window.innerWidth * 0.44));
+      const height = Math.min(520, Math.max(260, window.innerHeight * 0.48));
+      const offset = 32 + (trayOpen.value.size % 4) * 26;
+      dv.addPanel({
+        id,
+        component: "default",
+        title,
+        floating: {
+          x: Math.max(16, (window.innerWidth - width) / 2 + offset),
+          y: Math.max(52, (window.innerHeight - height) / 2 + offset - 40),
+          width,
+          height,
+        },
+      } as any);
+      const next = new Set(trayOpen.value);
+      next.add(id);
+      trayOpen.value = next;
+    } else {
+      const active = dv.activePanel;
+      dv.addPanel({
+        id,
+        component: "default",
+        title,
+        position: active ? { referencePanel: active } : undefined,
+      });
+    }
+
+    if (!trayPanels.value.includes(id) && DEFAULT_TRAY_IDS.includes(id)) {
+      trayPanels.value = [...trayPanels.value, id];
+    }
+  }, []);
+
+  const focusPanelIds = availablePanels.value;
+  const inFocusMode = isMaximized.value;
+  const isWorkbench = dashboardMode === "workbench";
+  const openReviewSection = useCallback((id: string) => {
+    setDashboardMode("review");
+    requestAnimationFrame(() => {
+      const el = document.getElementById(id);
+      if (el instanceof HTMLDetailsElement) el.open = true;
+      el?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }, []);
+
   return (
     <>
       <Topbar
@@ -951,24 +1019,359 @@ export function App() {
         onLoadLayout={handleLoadLayout}
         onDeleteLayout={handleDeleteLayout}
         getSavedLayouts={getSavedLayouts}
+        onOpenReview={() => setDashboardMode("review")}
+        onOpenReviewSection={openReviewSection}
+        onOpenWorkbench={() => setDashboardMode("workbench")}
       />
-      <div
-        id="dockview-container"
-        ref={containerRef}
-      />
-      <div class="panel-tray">
-        {trayItems.map((id) => (
-          <button
-            key={id}
-            class={_floating.has(id) ? "active" : ""}
-            onClick={() => handleToggleTrayPanel(id)}
-            title={PANEL_NAMES[id] || id}
-          >
-            {PANEL_NAMES[id] || id}
-          </button>
-        ))}
-      </div>
+      <main class="dashboard-page">
+        <div class="dashboard-modebar" aria-label="Dashboard sections">
+          <button class={dashboardMode === "review" ? "active" : ""} onClick={() => setDashboardMode("review")}>Review</button>
+          <a href="#review-progress" onClick={(e) => { e.preventDefault(); openReviewSection("review-progress"); }}>Progress</a>
+          <a href="#review-ideas" onClick={(e) => { e.preventDefault(); openReviewSection("review-ideas"); }}>Ideas</a>
+          <a href="#review-runs" onClick={(e) => { e.preventDefault(); openReviewSection("review-runs"); }}>Runs</a>
+          <a href="#review-detail" onClick={(e) => { e.preventDefault(); openReviewSection("review-detail"); }}>Detail</a>
+          <a href="#review-ops" onClick={(e) => { e.preventDefault(); openReviewSection("review-ops"); }}>Ops</a>
+          <button class={dashboardMode === "workbench" ? "active" : ""} onClick={() => setDashboardMode("workbench")}>Workbench</button>
+        </div>
+
+        {!isWorkbench && <ReviewDashboard onOpenWorkbench={() => setDashboardMode("workbench")} />}
+
+        {isWorkbench && (
+          <>
+            <section class="workspace-shell" aria-label="Dashboard workspace">
+              <div class="workspace-toolbar">
+                <div class="workspace-toolbar-main">
+                  <span class="workspace-eyebrow">Workbench</span>
+                  <span class="workspace-title">Panes</span>
+                  <span class="workspace-meta">{_open.size} panes open</span>
+                </div>
+                <button class="workspace-review-btn" onClick={() => setDashboardMode("review")}>
+                  Review dashboard
+                </button>
+                <div class="workspace-actions" aria-label="Workspace actions">
+                  {ALL_PANEL_IDS.map((id) => {
+                    const isOpen = _open.has(id);
+                    return (
+                      <button
+                        key={id}
+                        class={`workspace-panel-chip${isOpen ? " is-open" : ""}`}
+                        onClick={() => isOpen ? handleToggleTrayPanel(id) : handleAddPanel(id)}
+                        title={isOpen ? `Send ${PANEL_NAMES[id]} to tray` : `Add ${PANEL_NAMES[id]}`}
+                      >
+                        {PANEL_NAMES[id]}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {inFocusMode && focusPanelIds.length > 0 && (
+                <div class="focus-strip">
+                  <span class="focus-strip-label">Focus context</span>
+                  {focusPanelIds.map((id) => (
+                    <button
+                      key={id}
+                      class="focus-strip-btn"
+                      onClick={() => handleAddPanel(id, "float")}
+                      title={`Open ${PANEL_NAMES[id]} as floating context`}
+                    >
+                      + {PANEL_NAMES[id]}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              <div
+                id="dockview-container"
+                ref={containerRef}
+              />
+            </section>
+
+            <div class="panel-tray" aria-label="Panel tray">
+              {trayItems.map((id) => (
+                <button
+                  key={id}
+                  class={_floating.has(id) ? "active" : ""}
+                  onClick={() => handleToggleTrayPanel(id)}
+                  title={PANEL_NAMES[id] || id}
+                >
+                  {PANEL_NAMES[id] || id}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+      </main>
       <ChatPanel />
     </>
+  );
+}
+
+function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
+  const data = backlogData.value;
+  const experiments = allExperiments.value;
+  const cost = totalAgentCost.value;
+  const logs = logEntries.value;
+  const progress = runningProgress.value;
+  const activeIdeas = data?.active_ideas.length ?? 0;
+  const totalRunning = data?.total_running ?? 0;
+  const totalPending = data?.total_pending ?? 0;
+  const branch = data?.current_branch ?? "--";
+  const finished = experiments.filter((e) => !e._running && e.status !== "running").length;
+  const running = experiments.filter((e) => e._running || e.status === "running").length;
+  const queued = data?.total_pending ?? 0;
+  const activeRuns = experiments.filter((e) => e._running || e.status === "running");
+  const selected = selectedIdea.value;
+  const metric = selectedMetric.value || "metric";
+  const latestFinished = experiments.filter((e) => !e._running && e.status !== "running").slice(-1)[0];
+  const avgProgress = activeRuns.length
+    ? Math.round(activeRuns.reduce((sum, e) => sum + (progress[e.label || String(e.id)] ?? 0), 0) / activeRuns.length)
+    : 0;
+
+  return (
+    <div class="review-page">
+      <section class="review-hero">
+        <div>
+          <span class="review-eyebrow">Campaign</span>
+          <h1>Campaign review</h1>
+          <p>Queue, search direction, branch health, and the next useful detail.</p>
+        </div>
+        <button class="review-primary-action" onClick={onOpenWorkbench}>Open workbench</button>
+      </section>
+
+      <section class="review-stats" aria-label="Campaign stats">
+        <StatTile href="#review-ops" label="Queued" value={queued} sub="waiting for resources" tone="queued" />
+        <StatTile href="#review-ops" label="Running" value={totalRunning || running} sub="active experiments" tone="running" />
+        <StatTile href="#review-runs" label="Finished" value={finished} sub="completed and stopped runs" tone="finished" />
+        <StatTile href="#review-ideas" label="Ideas" value={activeIdeas} sub="active branches" />
+        <StatTile href="#review-progress" label="Cost" value={cost != null ? `$${cost.toFixed(2)}` : "--"} sub="agent spend" />
+        <StatTile href="#review-ideas" label="Branch" value={branch} sub="current workspace" />
+      </section>
+
+      <section class="review-section review-section--major" id="review-progress">
+        <SectionHeader kicker="Progress" title="Metric trend" action="Tune metric, filters, and view options inline." />
+        <div class="review-panel review-chart-panel">
+          <MetricsChart />
+        </div>
+      </section>
+
+      <div class="review-stack">
+        <ReviewDisclosure
+          id="review-ideas"
+          kicker="Ideas"
+          title="Branch map"
+          action={`${activeIdeas} active branches`}
+          preview={<ReviewBranchPreview />}
+        >
+          <div class="review-panel review-map-panel">
+            <DagView />
+          </div>
+        </ReviewDisclosure>
+
+        <ReviewDisclosure
+          id="review-compare"
+          kicker="Compare"
+          title="Metric relationship"
+          action="Tradeoff"
+          preview={<ReviewSummaryPills items={[["X", scatterXMetric.value || metric], ["Y", scatterYMetric.value || "elapsed_s"]]} />}
+        >
+          <div class="review-panel review-scatter-panel">
+            <ScatterChart />
+          </div>
+        </ReviewDisclosure>
+
+        <ReviewDisclosure
+          id="review-runs"
+          kicker="Runs"
+          title="Experiments"
+          action={`${finished} finished`}
+          preview={<ReviewSummaryPills items={[["finished", finished], ["running", activeRuns.length], ["latest", latestFinished?.label ? `exp/${latestFinished.label}` : "--"]]} />}
+        >
+          <div class="review-panel review-table-panel">
+            <TablePanel />
+          </div>
+        </ReviewDisclosure>
+
+        <ReviewDisclosure
+          id="review-detail"
+          kicker="Detail"
+          title="Selected idea"
+          action="Selection"
+          preview={<ReviewSummaryPills items={[["idea", selected ?? "--"], ["metric", metric]]} />}
+        >
+          <div class="review-panel review-detail-panel">
+            <DetailPanel />
+          </div>
+        </ReviewDisclosure>
+
+        <ReviewDisclosure
+          id="review-ops"
+          kicker="Operations"
+          title="Queue"
+          action={`${queued} queued`}
+          preview={<ReviewSummaryPills items={[["queued", queued], ["running", totalRunning || running], ["progress", activeRuns.length ? `${avgProgress}%` : "--"]]} />}
+        >
+          <div class="review-panel review-ops-panel">
+            <QueueView />
+          </div>
+        </ReviewDisclosure>
+
+        <ReviewDisclosure
+          id="review-log"
+          kicker="Trace"
+          title="Activity log"
+          action={`${logs.length} events`}
+          preview={<ReviewSummaryPills items={[["entries", logs.length], ["latest", logs[0]?.title || "--"]]} />}
+        >
+          <div class="review-panel review-log-panel">
+            <LogView />
+          </div>
+        </ReviewDisclosure>
+      </div>
+    </div>
+  );
+}
+
+function StatTile({
+  label,
+  value,
+  sub,
+  href,
+  tone,
+}: {
+  label: string;
+  value: string | number;
+  sub: string;
+  href: string;
+  tone?: "queued" | "running" | "finished";
+}) {
+  return (
+    <a
+      class={`review-stat-tile${tone ? ` review-stat-tile--${tone}` : ""}`}
+      href={href}
+      onClick={() => {
+        const el = document.querySelector(href);
+        if (el instanceof HTMLDetailsElement) el.open = true;
+      }}
+    >
+      <span>{label}</span>
+      <b>{value}</b>
+      <small>{sub}</small>
+    </a>
+  );
+}
+
+function SectionHeader({ kicker, title, action }: { kicker: string; title: string; action: string }) {
+  return (
+    <div class="review-section-head">
+      <div>
+        <span class="review-eyebrow">{kicker}</span>
+        <h2>{title}</h2>
+      </div>
+      <p>{action}</p>
+    </div>
+  );
+}
+
+function ReviewDisclosure({
+  id,
+  kicker,
+  title,
+  action,
+  preview,
+  children,
+}: {
+  id: string;
+  kicker: string;
+  title: string;
+  action: string;
+  preview?: preact.ComponentChildren;
+  children: preact.ComponentChildren;
+}) {
+  return (
+    <details class="review-disclosure review-section" id={id}>
+      <summary>
+        <div>
+          <span class="review-eyebrow">{kicker}</span>
+          <h2>{title}</h2>
+        </div>
+        <div class="review-disclosure-summary">
+          <p>{action}</p>
+          {preview}
+        </div>
+      </summary>
+      {children}
+    </details>
+  );
+}
+
+function ReviewSummaryPills({ items }: { items: Array<[string, string | number]> }) {
+  return (
+    <div class="review-summary-pills">
+      {items.map(([label, value]) => (
+        <span class="review-summary-pill" key={label}>
+          <span>{label}</span>
+          <b>{value}</b>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function ReviewBranchPreview() {
+  const graph = graphData.value;
+  const layout = currentLayout.value;
+  const highlighted = highlightedIdea.value;
+  if (!graph || !layout || graph.nodes.length === 0) {
+    return <div class="review-branch-empty">no ideas</div>;
+  }
+
+  const width = 360;
+  const height = 64;
+  const pad = 9;
+  const maxDepth = Math.max(1, layout.maxDepth);
+  const maxLane = Math.max(1, layout.numLanes - 1);
+
+  const pos = (id: number) => ({
+    x: pad + ((layout.depth[id] ?? 0) / maxDepth) * (width - pad * 2),
+    y: pad + ((layout.laneRow[layout.ideaLane[id]] ?? 0) / maxLane) * (height - pad * 2),
+  });
+
+  return (
+    <svg class="review-branch-preview" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Branch map preview">
+      {graph.edges.map((e) => {
+        if (!layout.nodeMap[e.from] || !layout.nodeMap[e.to]) return null;
+        const a = pos(e.from);
+        const b = pos(e.to);
+        const active = highlighted === e.from || highlighted === e.to;
+        return (
+          <path
+            key={`${e.from}-${e.to}`}
+            d={`M ${a.x} ${a.y} C ${(a.x + b.x) / 2} ${a.y}, ${(a.x + b.x) / 2} ${b.y}, ${b.x} ${b.y}`}
+            class={active ? "active" : ""}
+          />
+        );
+      })}
+      {graph.nodes.map((n) => {
+        const p = pos(n.id);
+        const status = n.has_running ? "running" : n.has_queued ? "queued" : n.status;
+        const active = highlighted === n.id;
+        return (
+          <circle
+            key={n.id}
+            cx={p.x}
+            cy={p.y}
+            r={active ? 5 : 3.6}
+            fill={getStatusColor(status)}
+            class={active ? "active" : ""}
+            onMouseEnter={() => { highlightedIdea.value = n.id; }}
+            onMouseLeave={() => { if (highlightedIdea.value === n.id) highlightedIdea.value = null; }}
+            onClick={(e) => { e.preventDefault(); navigateToIdea(n.id); }}
+          >
+            <title>{`idea/${n.id} · ${n.description}`}</title>
+          </circle>
+        );
+      })}
+    </svg>
   );
 }
