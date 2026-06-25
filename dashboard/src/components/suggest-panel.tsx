@@ -62,6 +62,10 @@ export function SuggestPanel() {
 
   return (
     <div id="suggest-panel">
+      <div class="pane-bar">
+        <h2 class="pane-bar-title">Suggest</h2>
+        <span class="pane-bar-count">propose a new idea to the agent</span>
+      </div>
       <div class="suggest-form">
             <div class="form-group">
               <span class="form-label">Description</span>

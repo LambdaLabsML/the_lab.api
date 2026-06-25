@@ -75,11 +75,17 @@ export function TaskBanner() {
   }
 
   return (
-    <div id="task-banner" onClick={startEdit} title="Click to edit current task">
-      <span class="task-label">Task:</span>
-      <span class="task-text">
-        {task?.text || <span class="task-empty">No task set — click to add one</span>}
-      </span>
+    <div id="task-banner">
+      <div class="pane-bar">
+        <h2 class="pane-bar-title">Task</h2>
+        <span class="pane-bar-count">{task?.updated_at ? `updated ${new Date(task.updated_at).toLocaleDateString()}` : "not set"}</span>
+        <div class="pane-bar-actions">
+          <button class="agents-btn" onClick={startEdit} title="Edit current task">Edit</button>
+        </div>
+      </div>
+      <div style={{ padding: "10px 14px", fontSize: "var(--text-sm)", color: task?.text ? "var(--text)" : "var(--text-faint)", lineHeight: 1.5, whiteSpace: "pre-wrap", cursor: "pointer" }} onClick={startEdit} title="Click to edit">
+        {task?.text || "No task set — click Edit to add one"}
+      </div>
     </div>
   );
 }
