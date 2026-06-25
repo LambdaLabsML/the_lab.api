@@ -248,7 +248,13 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
     : (v: string) => { selectedMetric.value = v; };
 
   if (!metric && allKeys.length > 0) {
-    const preferred = ["accuracy_per_mtoken", "agent_accuracy", "accuracy"];
+    const preferred = [
+      // Accuracy / score metrics (common research targets)
+      "accuracy_per_mtoken", "agent_accuracy", "accuracy",
+      "score", "total_score", "progress_score", "final_score",
+      "f1", "bleu", "rouge", "pass_at_1", "pass_at_10",
+      // Avoid timing/cost as defaults — they're often caps or noise
+    ];
     const match = preferred.find((k) => allKeys.includes(k));
     setMetric(match || allKeys[0]);
   }

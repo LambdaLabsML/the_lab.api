@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "preact/hooks";
-import { backlogData, totalAgentCost, totalAgentInputTokens, totalAgentOutputTokens } from "../state/signals";
+import { backlogData, totalAgentCost, totalAgentInputTokens, totalAgentOutputTokens, allIdeas } from "../state/signals";
 import { reverseTime, colorMode, colorTheme, fontFamily, fontSize, colorblindMode } from "../state/settings";
 import { wsConnected, wsAuthFailed } from "../state/ws";
 // Font display data lives here — NOT imported from fonts.ts.
@@ -57,7 +57,14 @@ const THEMES: ThemeDef[] = [
 
 export function Topbar(props: LayoutActions) {
   const data = backlogData.value;
+  const ideas = allIdeas.value;
   const reversed = reverseTime.value;
+
+  // Current idea title from branch name (e.g. "idea/75" → idea #75 description)
+  const currentBranch = data?.current_branch ?? "";
+  const branchIdeaId = currentBranch.startsWith("idea/") ? Number(currentBranch.slice(5)) : null;
+  const branchIdea = branchIdeaId ? ideas[branchIdeaId] : null;
+  const branchTitle = branchIdea?.description?.split("\n")[0].slice(0, 40) ?? null;
   const isWsConnected = wsConnected.value;
   const isWsAuthFailed = wsAuthFailed.value;
   const [showMobileMenu, setShowMobileMenu] = useState(false);
@@ -103,7 +110,7 @@ export function Topbar(props: LayoutActions) {
     { key: "ideas",   label: "Ideas",   value: data ? String(data.active_ideas.length) : "--" },
     { key: "running", label: "Running", value: data ? String(totalRunning) : "--" },
     ...(totalPending > 0 ? [{ key: "pending", label: "Pending", value: String(totalPending) }] : []),
-    { key: "branch",  label: "Branch",  value: data ? data.current_branch : "--" },
+    { key: "branch",  label: "Branch",  value: data ? data.current_branch : "--", title: branchTitle ?? undefined },
     { key: "cost",    label: "Cost",    value: cost != null ? `$${cost.toFixed(2)}` : "--" },
     { key: "tokens",  label: "Tokens",  value: tokLabel, title: tokTitle },
   ];
@@ -330,11 +337,14 @@ export function Topbar(props: LayoutActions) {
             <span
               key={s.key}
               class="stat"
-              title={s.title}
+              title={s.key === "branch" && branchTitle ? `${s.value}: ${branchTitle}` : s.title}
               data-key={s.key}
               data-live={s.key === "running" && s.value !== "0" && s.value !== "--" ? "true" : undefined}
             >
               {s.label}: <b>{s.value}</b>
+              {s.key === "branch" && branchTitle && (
+                <span class="stat-branch-title"> · {branchTitle}</span>
+              )}
             </span>
           ))}
         </div>

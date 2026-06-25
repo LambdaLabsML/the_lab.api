@@ -94,7 +94,23 @@
 .parent-link:hover { text-decoration: underline; color: var(--accent-dim); }
 
 /* Idea description (replaces detail-section wrapper) */
-.detail-desc { color: var(--text); line-height: 1.5; margin-bottom: 10px; font-size: 12px; word-break: break-word; white-space: pre-wrap; }
+.detail-desc { color: var(--text); line-height: 1.5; font-size: 12px; word-break: break-word; white-space: pre-wrap; padding: 8px 0 4px; }
+
+.detail-desc-wrap {
+  border-top: 1px solid var(--border-soft);
+  margin: 4px 0 8px;
+}
+.detail-desc-toggle {
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+  cursor: pointer;
+  padding: 5px 0;
+  user-select: none;
+  list-style: none;
+  &::-webkit-details-marker { display: none; }
+  &::after { content: " ▶"; font-size: 8px; }
+}
+details[open] .detail-desc-toggle::after { content: " ▼"; }
 
 /* ── Compact meta block ─────────────────────────────────── */
 .idea-meta-block {

@@ -24,6 +24,7 @@
 }
 #topbar .stat[data-live="true"] b { color: var(--yellow); }
 #topbar .stat[data-live="true"] { color: var(--yellow); animation: stat-live-pulse 1.8s ease-in-out infinite; }
+#topbar .stat-branch-title { color: var(--text-faint); font-size: var(--text-xs); font-weight: 400; }
 
 /* Shared flex slot that holds both the full stats row and the cycle widget */
 .topbar-stats-area {

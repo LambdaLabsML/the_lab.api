@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useState, useRef } from "preact/hooks";
 import { selectedIdea, selectedMetric, detailTimeline, detailSortNewest } from "../state/settings";
-import { scrollToExperiment, runningProgress } from "../state/signals";
+import { scrollToExperiment, runningProgress, allExperiments } from "../state/signals";
 import { getIdea, getExperimentProgress, getExperimentLog, getExperimentScript, getExperimentOutput, getIdeaDiff } from "../state/api";
 import { formatTime, badgeHtml, escapeHtml } from "../lib/format";
 import { navigateToIdea, navigateFromExperiment } from "../lib/navigate";
@@ -574,10 +574,7 @@ export function DetailPanel() {
 
           {idea && (
             <>
-              {/* Description */}
-              <div class="detail-desc">{idea.description}</div>
-
-              {/* Compact meta block */}
+              {/* Compact meta block — shown FIRST so key stats are above the fold */}
               <div class="idea-meta-block">
 
                 {/* Row 1: branch + parents + diff */}
@@ -631,6 +628,14 @@ export function DetailPanel() {
                   <div class="meta-conclusion">"{idea.conclusion}"</div>
                 )}
               </div>
+
+              {/* Description — below meta so stats are visible first */}
+              <details class="detail-desc-wrap" open={idea.description.length < 200}>
+                <summary class="detail-desc-toggle">
+                  {idea.description.length < 200 ? "Description" : `Description (${idea.description.length} chars)`}
+                </summary>
+                <div class="detail-desc">{idea.description}</div>
+              </details>
 
               {/* View controls */}
               {(notes.length > 0 || experiments.length > 0) && (
@@ -1374,7 +1379,6 @@ function ExperimentItem({
     const lower = isLowerBetter(metricKey);
     // Import lazily — avoid circular dep
     try {
-      const { allExperiments } = require("../state/signals") as typeof import("../state/signals");
       const allExps = allExperiments.value;
       const myVal = exp.metrics[metricKey] as number;
       const earlier = allExps.filter(e => !e._running && e.id < exp.id && e.metrics && typeof e.metrics[metricKey] === "number");
