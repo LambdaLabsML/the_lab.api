@@ -130,6 +130,27 @@ body {
   font-weight: 400;
 }
 
+/* ── Idea health bar ───────────────────────────────────────────────── */
+
+.idea-health-bar {
+  display: flex;
+  height: 6px;
+  width: 80px;
+  border-radius: 3px;
+  overflow: hidden;
+  gap: 1px;
+  flex-shrink: 0;
+}
+
+.ihb-seg {
+  border-radius: 2px;
+  min-width: 4px;
+}
+.ihb-active    { background: var(--green);      opacity: 0.8; }
+.ihb-concluded { background: var(--accent);     opacity: 0.7; }
+.ihb-abandoned { background: var(--red);        opacity: 0.7; }
+.ihb-queued    { background: var(--text-faint); opacity: 0.5; }
+
 .review-status-item {
   strong { color: var(--text); font-weight: 600; }
   &--warn strong { color: var(--red); }
@@ -752,6 +773,8 @@ body {
   /* Experiment grid — cap to 2 rows on mobile */
   .exp-grid { max-height: 24px; overflow: hidden; }
   .exp-grid-legend-note { display: none; }
+  /* Hide verbose idle hint on mobile */
+  .review-idle-hint { display: none; }
   .review-status-left {
     gap: 8px;
     font-size: var(--text-xs);

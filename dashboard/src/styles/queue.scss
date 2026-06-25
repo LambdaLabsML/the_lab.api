@@ -27,9 +27,7 @@
   margin: 0;
   font-size: var(--text-base);
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0;
-  color: var(--text-muted);
+  color: var(--text);
 }
 
 /* hide the descriptive paragraph — too verbose for a compact pane */
@@ -128,8 +126,6 @@
   margin: 0;
   font-size: var(--text-sm);
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0;
   color: var(--text-muted);
 }
 
@@ -182,7 +178,6 @@
 .queue-chip {
   display: inline-block;
   font-size: var(--text-xs);
-  text-transform: uppercase;
   letter-spacing: 0;
   padding: 1px 5px;
   border-radius: 3px;
@@ -365,7 +360,6 @@
 .queue-form-slurm-label {
   font-size: var(--text-sm);
   font-weight: 600;
-  text-transform: uppercase;
   letter-spacing: 0;
   color: var(--text-muted);
 }

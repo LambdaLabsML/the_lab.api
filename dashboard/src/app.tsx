@@ -1206,6 +1206,12 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
   const liveCount = totalRunning || running;
   const isLive = liveCount > 0;
 
+  // Idea health breakdown for the Ideas disclosure mini-bar
+  const ideaList = Object.values(ideas);
+  const ideasActive    = ideaList.filter((i) => i.status === "active" || i.has_running || i.has_queued).length;
+  const ideasConcluded = ideaList.filter((i) => i.status === "concluded").length;
+  const ideasAbandoned = ideaList.filter((i) => i.status === "abandoned").length;
+
   return (
     <div class="review-page">
       {/* ── Status strip ─────────────────────────────────────────────── */}
@@ -1254,7 +1260,14 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
         <ReviewDisclosure
           id="review-ideas"
           title="Ideas"
-          action={`${activeIdeas} active · ${Object.keys(ideas).length} total`}
+          action={`${activeIdeas} active · ${ideasConcluded} concluded · ${ideasAbandoned} abandoned`}
+          preview={
+            <div class="idea-health-bar">
+              {ideasActive > 0    && <span class="ihb-seg ihb-active"    style={{ flex: ideasActive }}    title={`${ideasActive} active`} />}
+              {ideasConcluded > 0 && <span class="ihb-seg ihb-concluded" style={{ flex: ideasConcluded }} title={`${ideasConcluded} concluded`} />}
+              {ideasAbandoned > 0 && <span class="ihb-seg ihb-abandoned" style={{ flex: ideasAbandoned }} title={`${ideasAbandoned} abandoned`} />}
+            </div>
+          }
         >
           <div class="review-panel review-map-panel">
             <DagView />
@@ -1295,6 +1308,14 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
           id="review-ops"
           title="Queue"
           action={`${queued} queued · ${totalRunning || running} running`}
+          preview={
+            queued + liveCount > 0 ? (
+              <div class="idea-health-bar">
+                {liveCount > 0 && <span class="ihb-seg ihb-active" style={{ flex: liveCount }} title={`${liveCount} running`} />}
+                {queued > 0    && <span class="ihb-seg ihb-queued" style={{ flex: queued }}    title={`${queued} queued`} />}
+              </div>
+            ) : undefined
+          }
         >
           <div class="review-panel review-ops-panel">
             <QueueView />

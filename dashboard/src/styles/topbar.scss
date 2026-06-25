@@ -18,6 +18,8 @@
 #topbar .title { font-size: var(--text-lg); font-weight: 700; color: var(--accent); flex-shrink: 0; letter-spacing: 0; }
 #topbar .stat { color: var(--text-muted); white-space: nowrap; }
 #topbar .stat b { color: var(--text); font-weight: 600; }
+#topbar .stat[data-live="true"] b { color: var(--yellow); }
+#topbar .stat[data-live="true"] { color: var(--yellow); opacity: 0.9; }
 
 /* Shared flex slot that holds both the full stats row and the cycle widget */
 .topbar-stats-area {

@@ -323,7 +323,13 @@ export function Topbar(props: LayoutActions) {
           style={compact ? { opacity: 0, pointerEvents: "none" } : undefined}
         >
           {stats.map((s) => (
-            <span key={s.key} class="stat" title={s.title}>
+            <span
+              key={s.key}
+              class="stat"
+              title={s.title}
+              data-key={s.key}
+              data-live={s.key === "running" && s.value !== "0" && s.value !== "--" ? "true" : undefined}
+            >
               {s.label}: <b>{s.value}</b>
             </span>
           ))}
