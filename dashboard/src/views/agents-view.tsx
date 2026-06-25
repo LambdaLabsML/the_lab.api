@@ -498,33 +498,20 @@ export function AgentsView() {
       <AgentHistoryLightbox agentId={historyAgentId} onClose={() => setHistoryAgentId(null)} />
     )}
     <div id="agents-container">
-      <div class="agents-header">
-        <div class="agents-header-left">
-          <h2>Agents</h2>
-          <p>
-            Per-agent git worktrees registered by <code>the-lab-agent</code>.
-            Each agent gets its own branch off the most recent active idea, isolating its
-            edits from other concurrent agents.
-          </p>
-        </div>
-        <div class="agents-header-right">
-          <div class="agents-summary">{loaded ? summary : "Loading..."}</div>
-          <button
-            class="agents-btn"
-            onClick={() => refresh()}
-            title="Reload agent list"
-          >
-            Refresh
-          </button>
+      <div class="pane-bar">
+        <h2 class="pane-bar-title">Agents</h2>
+        <span class="pane-bar-count">{loaded ? summary : "…"}</span>
+        <div class="pane-bar-actions">
+          <button class="agents-btn" onClick={() => refresh()}>↺</button>
         </div>
       </div>
 
       {chartPoints.length > 0 && (
-        <div style={{ padding: "0 0 12px 0" }}>
+        <div style={{ padding: "8px 0 4px" }}>
           <AgentCostChart
             points={chartPoints}
             width={520}
-            height={60}
+            height={56}
             label="All agents — cumulative cost"
           />
         </div>
