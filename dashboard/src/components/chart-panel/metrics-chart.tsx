@@ -332,14 +332,15 @@ function computeBestLine(values: number[], lowerIsBetter: boolean): number[] {
 
 /** Chart.js dataset config for the best-line. */
 function makeBestLineDataset(data: number[], metricKey: string) {
+  const peak = Math.max(...data.filter(isFinite));
   return {
-    label: `current best ${metricKey}`,
+    label: `best ${fmtMetricName(metricKey)}: ${peak.toFixed ? peak.toFixed(3) : peak}`,
     data,
     borderColor: getCssVar("--purple") || "#a371f7",
     borderWidth: 1.5,
     borderDash: [4, 4],
     pointRadius: 0,
-    pointHoverRadius: 0,
+    pointHoverRadius: 3,
     tension: 0,
     fill: false,
     stepped: "before",
