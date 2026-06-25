@@ -450,6 +450,8 @@ body {
   transition: background var(--transition-fast);
   &.emr-milestone { color: var(--text); }
   &:first-child { background: color-mix(in srgb, var(--accent) 4%, transparent); }
+  &[style*="cursor"] { cursor: pointer; }
+  &:hover { background: var(--bg-hi); color: var(--text); }
 }
 
 .emr-rank {
@@ -651,7 +653,7 @@ body {
 
 .review-disclosure summary p {
   margin: 0 0 0 auto;
-  max-width: 190px;
+  max-width: 220px;
   color: var(--text-faint);
   font-size: var(--text-xs);
   text-align: right;

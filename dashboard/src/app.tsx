@@ -1325,7 +1325,11 @@ function ExpMiniResults({ experiments, metric, lower, milestoneIds, ideas }: {
               const isMilestone = milestoneIds.has(e.id);
               const idea = ideas[e.idea_id];
               return (
-                <div key={e.id} class={`emr-row${isMilestone ? " emr-milestone" : ""}`}>
+                <div key={e.id} class={`emr-row${isMilestone ? " emr-milestone" : ""}`}
+                  style={{ cursor: "pointer" }}
+                  onClick={() => navigateToIdea(e.idea_id, e.label ?? String(e.id))}
+                  title={`exp/${e.label ?? e.id} · idea #${e.idea_id}`}
+                >
                   <span class="emr-rank">{i + 1}</span>
                   {isMilestone && <span class="emr-star">★</span>}
                   <code class="emr-exp">exp/{e.label ?? e.id}</code>
@@ -1346,7 +1350,11 @@ function ExpMiniResults({ experiments, metric, lower, milestoneIds, ideas }: {
             const status = e._running ? "running" : (e.status ?? "unknown");
             const v = typeof e.metrics?.[metric] === "number" ? e.metrics![metric] as number : null;
             return (
-              <div key={e.id} class="emr-row">
+              <div key={e.id} class="emr-row"
+                style={{ cursor: "pointer" }}
+                onClick={() => navigateToIdea(e.idea_id, e.label ?? String(e.id))}
+                title={`exp/${e.label ?? e.id} · ${status}`}
+              >
                 <span class="emr-dot" style={{ background: statusDot[status] ?? "var(--border)" }} />
                 <code class="emr-exp">exp/{e.label ?? e.id}</code>
                 <span class="emr-idea">#{e.idea_id}</span>
@@ -1463,6 +1471,16 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
     return count;
   })();
 
+  // Stagnation: if last 10 experiments all score <= 20% of best, flag it
+  const isStagnant = (() => {
+    if (!metric || !bestVal || typeof bestVal !== "number" || bestVal <= 0) return false;
+    const recent10 = done.filter(e => typeof e.metrics?.[metric] === "number")
+      .slice(-10).map(e => e.metrics![metric] as number);
+    if (recent10.length < 3) return false;
+    const recentMax = lower ? Math.min(...recent10) : Math.max(...recent10);
+    return lower ? recentMax > bestVal * 5 : recentMax < bestVal * 0.2;
+  })();
+
   // Idea health breakdown for the Ideas disclosure mini-bar
   const ideaList = Object.values(ideas);
   const ideasActive    = ideaList.filter((i) => i.status === "active" || i.has_running || i.has_queued).length;
@@ -1548,6 +1566,7 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
             running > 0 ? `${running} running` : null,
             failed > 0 ? `${failed} failed` : null,
             milestonesCount > 0 ? `${milestonesCount} records` : null,
+            isStagnant ? "⚠ stagnant" : null,
           ].filter(Boolean).join(" · ")}
           preview={
             <div class="emr-preview">
@@ -1611,7 +1630,7 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
           title="Idea detail"
           action={selected
             ? `idea #${selected}${selectedIdeaBest != null ? ` · best: ${selectedIdeaBest.toFixed(3)}` : ""}`
-            : "none selected — click any chart dot, table row, or graph node"}
+            : "none selected"}
         >
           <div class="review-panel review-detail-panel">
             <DetailPanel />
