@@ -512,8 +512,13 @@ export function DetailPanel() {
     return (
       <div id="detail-panel" class="open">
         <div id="detail-content">
-          <div style={{ padding: "20px", color: "var(--text-muted)", fontSize: "12px" }}>
-            Select an idea from the graph, timeline, or chart to see details here.
+          <div class="detail-empty-state">
+            <div class="detail-empty-icon">⬡</div>
+            <div class="detail-empty-title">No idea selected</div>
+            <div class="detail-empty-body">
+              Click any node in the Graph, a row in the Table, a dot in the chart,
+              or a bar in the Timeline to load idea details here.
+            </div>
           </div>
         </div>
       </div>

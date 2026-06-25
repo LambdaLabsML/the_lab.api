@@ -20,7 +20,7 @@
   margin: 0;
   font-size: var(--text-sm);
   font-weight: 600;
-  text-transform: uppercase;
+
   letter-spacing: 0;
   color: var(--text-muted);
 }
@@ -54,7 +54,7 @@
 
 .sandbox-save {
   font-size: var(--text-sm);
-  text-transform: uppercase;
+
   letter-spacing: 0;
   color: var(--text-muted);
 }
@@ -99,7 +99,7 @@
 .sandbox-panel-title {
   font-size: var(--text-sm);
   font-weight: 600;
-  text-transform: uppercase;
+
   letter-spacing: 0;
   color: var(--text-muted);
 }
@@ -156,7 +156,7 @@
   margin: var(--space-2) 0 -4px;
   font-size: var(--text-sm);
   font-weight: 600;
-  text-transform: uppercase;
+
   letter-spacing: 0;
   color: var(--text-muted);
   border-bottom: 1px solid var(--border-soft);

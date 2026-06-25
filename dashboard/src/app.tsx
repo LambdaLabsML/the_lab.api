@@ -1253,6 +1253,10 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
       {/* ── Chart — the main signal ──────────────────────────────────── */}
       <div class="review-chart-wrap" id="review-progress">
         <MetricsChart />
+        <a class="review-chart-skip" href="#review-ideas" onClick={(e) => {
+          e.preventDefault();
+          document.getElementById("review-ideas")?.scrollIntoView({ behavior: "smooth", block: "start" });
+        }}>↓ ideas & experiments</a>
       </div>
 
       {/* ── Collapsible detail sections ──────────────────────────────── */}
