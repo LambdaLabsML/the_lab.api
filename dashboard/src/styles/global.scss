@@ -414,6 +414,27 @@ body {
   padding: 2px 6px;
 }
 
+/* ── Score distribution histogram ─────────────────────────────────── */
+
+.score-dist-bar {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 26px;
+  width: 90px;
+  flex-shrink: 0;
+  align-self: flex-end;
+}
+
+.score-dist-tick {
+  flex: 1;
+  border-radius: 1px 1px 0 0;
+  min-width: 4px;
+  transition: opacity var(--transition-fast);
+  cursor: default;
+  &:hover { opacity: 1 !important; }
+}
+
 /* ── Experiment mini results (collapsed disclosure preview) ────────── */
 
 .emr-preview {

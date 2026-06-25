@@ -1276,6 +1276,44 @@ function BestSparkline({ experiments, metric, lower }: {
 }
 
 
+// ── Score distribution histogram ─────────────────────────────────────────────
+
+function ScoreDistBar({ experiments, metric, lower }: {
+  experiments: import("./lib/types").Experiment[];
+  metric: string;
+  lower: boolean;
+}) {
+  const values = experiments
+    .filter(e => !e._running && typeof e.metrics?.[metric] === "number")
+    .map(e => e.metrics![metric] as number);
+  if (values.length < 3) return null;
+  const lo = Math.min(...values), hi = Math.max(...values);
+  if (hi === lo) return null;
+
+  const BUCKETS = 10;
+  const size = (hi - lo) / BUCKETS;
+  const counts = new Array(BUCKETS).fill(0);
+  for (const v of values) counts[Math.min(Math.floor((v - lo) / size), BUCKETS - 1)]++;
+  const maxC = Math.max(...counts);
+
+  return (
+    <div class="score-dist-bar" title={`Score distribution ${lo.toFixed(1)}–${hi.toFixed(1)}`}>
+      {counts.map((c, i) => {
+        const frac = lower ? 1 - i / (BUCKETS - 1) : i / (BUCKETS - 1);
+        const h = c > 0 ? Math.max(3, Math.round((c / maxC) * 22)) : 1;
+        // green = good score, red = poor
+        const clr = `hsl(${Math.round(120 * frac)},70%,52%)`;
+        return (
+          <span key={i} class="score-dist-tick"
+            style={{ height: `${h}px`, background: c > 0 ? clr : "var(--border-soft)", opacity: c > 0 ? 0.8 : 0.25 }}
+            title={`${c} exp @ ${(lo + i * size).toFixed(1)}–${(lo + (i+1) * size).toFixed(1)}`}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
 // ── Mini results list for collapsed Experiments disclosure ───────────────────
 
 function ExpMiniResults({ experiments, metric, lower, milestoneIds, ideas }: {
@@ -1584,11 +1622,8 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
           ].filter(Boolean).join(" · ")}
           preview={
             <div class="emr-preview">
-              <div class="idea-health-bar" style={{ marginBottom: 6 }}>
-                {finished > 0 && <span class="ihb-seg ihb-done"     style={{ flex: finished }} title={`${finished} done`} />}
-                {running > 0  && <span class="ihb-seg ihb-running"  style={{ flex: running }}  title={`${running} running`} />}
-                {failed > 0   && <span class="ihb-seg ihb-abandoned" style={{ flex: failed }}  title={`${failed} failed`} />}
-              </div>
+              {/* Score distribution histogram — how are scores spread? */}
+              <ScoreDistBar experiments={experiments} metric={metric} lower={lower} />
               <ExpMiniResults
                 experiments={experiments}
                 metric={metric}
