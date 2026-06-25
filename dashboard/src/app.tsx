@@ -1210,6 +1210,18 @@ function BestSparkline({ experiments, metric, lower }: {
   );
 }
 
+/** Human-readable metric name: duration_s → duration (s), accuracy_per_mtoken → accuracy/Mtok */
+function fmtMetricName(key: string): string {
+  return key
+    .replace(/_per_mtoken$/, "/Mtok")
+    .replace(/_per_token$/, "/tok")
+    .replace(/_ms$/, " (ms)")
+    .replace(/_s$/, " (s)")
+    .replace(/_pct$/, " (%)")
+    .replace(/_score$/, " score")
+    .replace(/_/g, " ");
+}
+
 function ProgressRing({ pct }: { pct: number }) {
   const size = 14, sw = 2, r = (size - sw) / 2;
   const c = 2 * Math.PI * r;
@@ -1319,7 +1331,7 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
       {/* ── Best score callout ───────────────────────────────────────── */}
       {bestExp != null && bestVal != null && (
         <div class="review-best-bar">
-          <span class="review-best-label">best {metric}</span>
+          <span class="review-best-label">best {fmtMetricName(metric)}</span>
           <BestSparkline experiments={done} metric={metric} lower={lower} />
           <strong class="review-best-value">{typeof bestVal === "number" ? bestVal.toFixed(3) : bestVal}</strong>
           <span class="review-best-direction" title={lower ? "lower is better" : "higher is better"}>
@@ -1335,31 +1347,14 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
       {/* ── Chart — the main signal ──────────────────────────────────── */}
       <div class="review-chart-wrap" id="review-progress">
         <MetricsChart />
-        <a class="review-chart-skip" href="#review-ideas" onClick={(e) => {
+        <a class="review-chart-skip" href="#review-runs" onClick={(e) => {
           e.preventDefault();
-          document.getElementById("review-ideas")?.scrollIntoView({ behavior: "smooth", block: "start" });
-        }}>↓ ideas & experiments</a>
+          document.getElementById("review-runs")?.scrollIntoView({ behavior: "smooth", block: "start" });
+        }}>↓ experiments & ideas</a>
       </div>
 
-      {/* ── Collapsible detail sections ──────────────────────────────── */}
+      {/* ── Collapsible detail sections — Experiments first (results > structure) ── */}
       <div class="review-stack">
-        <ReviewDisclosure
-          id="review-ideas"
-          title="Ideas"
-          action={`${activeIdeas} active · ${ideasConcluded} concluded · ${ideasAbandoned} abandoned`}
-          preview={
-            <div class="idea-health-bar">
-              {ideasActive > 0    && <span class="ihb-seg ihb-active"    style={{ flex: ideasActive }}    title={`${ideasActive} active`} />}
-              {ideasConcluded > 0 && <span class="ihb-seg ihb-concluded" style={{ flex: ideasConcluded }} title={`${ideasConcluded} concluded`} />}
-              {ideasAbandoned > 0 && <span class="ihb-seg ihb-abandoned" style={{ flex: ideasAbandoned }} title={`${ideasAbandoned} abandoned`} />}
-            </div>
-          }
-        >
-          <div class="review-panel review-map-panel">
-            <DagView />
-          </div>
-        </ReviewDisclosure>
-
         <ReviewDisclosure
           id="review-runs"
           title="Experiments"
@@ -1376,6 +1371,23 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
         >
           <div class="review-panel review-table-panel">
             <TablePanel />
+          </div>
+        </ReviewDisclosure>
+
+        <ReviewDisclosure
+          id="review-ideas"
+          title="Ideas"
+          action={`${activeIdeas} active · ${ideasConcluded} concluded · ${ideasAbandoned} abandoned`}
+          preview={
+            <div class="idea-health-bar">
+              {ideasActive > 0    && <span class="ihb-seg ihb-active"    style={{ flex: ideasActive }}    title={`${ideasActive} active`} />}
+              {ideasConcluded > 0 && <span class="ihb-seg ihb-concluded" style={{ flex: ideasConcluded }} title={`${ideasConcluded} concluded`} />}
+              {ideasAbandoned > 0 && <span class="ihb-seg ihb-abandoned" style={{ flex: ideasAbandoned }} title={`${ideasAbandoned} abandoned`} />}
+            </div>
+          }
+        >
+          <div class="review-panel review-map-panel">
+            <DagView />
           </div>
         </ReviewDisclosure>
 

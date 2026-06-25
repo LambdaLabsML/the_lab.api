@@ -3,21 +3,32 @@
 .table-panel table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
 .table-panel th {
   position: sticky; top: 0; z-index: 1;
-  background: #161b22; color: #8b949e;
+  background: var(--bg-elev); color: var(--text-muted);
   padding: 4px 8px; text-align: left; cursor: pointer;
-  border-bottom: 1px solid #30363d; font-weight: 600;
+  border-bottom: 1px solid var(--border); font-weight: 600;
   white-space: nowrap; user-select: none;
 }
 .table-panel th:hover { color: var(--text); }
 .table-panel th.sorted { color: var(--accent); }
 .table-panel th.metric-selected { background: color-mix(in srgb, var(--accent) 8%, transparent); }
-.table-panel td { padding: 3px 8px; border-bottom: 1px solid #21262d; color: #c9d1d9; white-space: nowrap; }
-.table-panel tr:hover { background: #21262d; }
+.table-panel td {
+  padding: 3px 8px; border-bottom: 1px solid var(--border-soft);
+  color: var(--text); white-space: nowrap;
+}
+.table-panel tr:hover td { background: var(--bg-hi); }
 .table-panel tr { cursor: pointer; }
-.table-panel .exp-link { color: #58a6ff; font-weight: 600; cursor: pointer; }
-.table-panel .exp-link:hover { text-decoration: underline; color: #79c0ff; }
-.table-panel .color-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; }
-.table-panel .metric-val { font-family: 'SF Mono', 'Fira Code', Consolas, monospace; text-align: right; }
-.table-panel td.metric-selected { background: #58a6ff08; }
-.table-panel .idea-desc { max-width: 200px; overflow: hidden; text-overflow: ellipsis; display: inline-block; color: var(--text-muted); font-size: var(--text-xs); vertical-align: middle; }
+.table-panel .exp-link { color: var(--accent); font-weight: 600; cursor: pointer; font-family: var(--font-mono, monospace); }
+.table-panel .exp-link:hover { text-decoration: underline; }
+.table-panel .color-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; flex-shrink: 0; }
+.table-panel .metric-val { font-family: var(--font-mono, monospace); text-align: right; color: var(--text-muted); font-size: var(--text-xs); }
+.table-panel td.metric-selected { background: color-mix(in srgb, var(--accent) 5%, transparent); }
+.table-panel .idea-desc {
+  max-width: 220px; overflow: hidden; text-overflow: ellipsis; display: inline-block;
+  color: var(--text-muted); font-size: var(--text-xs); vertical-align: middle;
+}
+/* Ensure status badge is never truncated */
+.table-panel .badge {
+  min-width: 72px; justify-content: center; font-size: var(--text-xs);
+  white-space: nowrap; flex-shrink: 0;
+}
 .table-panel .status-badge { font-size: var(--text-xs); padding: 1px 5px; border-radius: 3px; color: #fff; }
