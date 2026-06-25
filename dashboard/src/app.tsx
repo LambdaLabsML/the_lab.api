@@ -1099,6 +1099,59 @@ export function App() {
   );
 }
 
+// ── Idea mini leaderboard ─────────────────────────────────────────────────────
+
+function IdeaMiniLeaderboard({ experiments, ideas, metric, lower }: {
+  experiments: import("./lib/types").Experiment[];
+  ideas: Record<number, import("./lib/types").IdeaNode>;
+  metric: string;
+  lower: boolean;
+}) {
+  if (!metric) return null;
+
+  // Compute best score per idea
+  const ideaBest: Record<number, { best: number; expLabel: string; expId: number }> = {};
+  for (const e of experiments) {
+    if (e._running || typeof e.metrics?.[metric] !== "number") continue;
+    const v = e.metrics![metric] as number;
+    const cur = ideaBest[e.idea_id];
+    if (!cur || (lower ? v < cur.best : v > cur.best)) {
+      ideaBest[e.idea_id] = { best: v, expLabel: e.label ?? String(e.id), expId: e.id };
+    }
+  }
+
+  const ranked = Object.entries(ideaBest)
+    .map(([id, d]) => ({ ideaId: Number(id), ...d }))
+    .sort((a, b) => lower ? a.best - b.best : b.best - a.best)
+    .slice(0, 5);
+
+  if (ranked.length === 0) return null;
+
+  function fmtV(v: number) {
+    return Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(2) : v.toFixed(3);
+  }
+
+  return (
+    <div class="emr-section">
+      <span class="emr-label">top ideas</span>
+      <div class="emr-rows">
+        {ranked.map((r, i) => {
+          const idea = ideas[r.ideaId];
+          const title = idea?.description?.split("\n")[0].slice(0, 28) ?? `idea #${r.ideaId}`;
+          return (
+            <div key={r.ideaId} class={`emr-row${i === 0 ? " emr-milestone" : ""}`}>
+              <span class="emr-rank">{i + 1}</span>
+              <span class="emr-idea" style={{ minWidth: 24 }}>#{r.ideaId}</span>
+              <span class="emr-exp" style={{ color: "var(--text-muted)", maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis" }}>{title}</span>
+              <span class="emr-val">{fmtV(r.best)}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ── Glanceable experiment grid ────────────────────────────────────────────────
 
 import { IDEA_PALETTE } from "./lib/colors";
@@ -1513,12 +1566,20 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
         <ReviewDisclosure
           id="review-ideas"
           title="Ideas"
-          action={`${activeIdeas} active · ${ideasConcluded} concluded · ${ideasAbandoned} abandoned`}
+          action={`${activeIdeas} active · ${ideasConcluded} concluded${ideasAbandoned > 0 ? ` · ${ideasAbandoned} abandoned` : ""}`}
           preview={
-            <div class="idea-health-bar">
-              {ideasActive > 0    && <span class="ihb-seg ihb-active"    style={{ flex: ideasActive }}    title={`${ideasActive} active`} />}
-              {ideasConcluded > 0 && <span class="ihb-seg ihb-concluded" style={{ flex: ideasConcluded }} title={`${ideasConcluded} concluded`} />}
-              {ideasAbandoned > 0 && <span class="ihb-seg ihb-abandoned" style={{ flex: ideasAbandoned }} title={`${ideasAbandoned} abandoned`} />}
+            <div class="emr-preview">
+              <div class="idea-health-bar" style={{ marginBottom: 6 }}>
+                {ideasActive > 0    && <span class="ihb-seg ihb-active"    style={{ flex: ideasActive }}    title={`${ideasActive} active`} />}
+                {ideasConcluded > 0 && <span class="ihb-seg ihb-concluded" style={{ flex: ideasConcluded }} title={`${ideasConcluded} concluded`} />}
+                {ideasAbandoned > 0 && <span class="ihb-seg ihb-abandoned" style={{ flex: ideasAbandoned }} title={`${ideasAbandoned} abandoned`} />}
+              </div>
+              <IdeaMiniLeaderboard
+                experiments={experiments}
+                ideas={ideas}
+                metric={metric}
+                lower={lower}
+              />
             </div>
           }
         >

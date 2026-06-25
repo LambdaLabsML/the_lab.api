@@ -130,12 +130,15 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric }: { i
   if (!showConcluded.value) hiddenStatuses.add("concluded");
   const hideRunning = !showRunning.value;
 
-  // Auto-select metrics if not set
+  // Auto-select metrics — prefer meaningful pairs
   if (!xMetric && metricKeys.length > 0) {
-    setX(metricKeys[0]);
+    const preferredX = ["score", "total_score", "progress_score", "accuracy", "f1"];
+    setX(preferredX.find(k => metricKeys.includes(k)) ?? metricKeys[0]);
   }
   if (!yMetric && metricKeys.length > 1) {
-    setY(metricKeys.length > 1 ? metricKeys[1] : metricKeys[0]);
+    const preferredY = ["elapsed_s", "n_levels_completed", "n_environments_completed", "duration_s"];
+    const px = preferredY.find(k => metricKeys.includes(k) && k !== xMetric);
+    setY(px ?? (metricKeys.find(k => k !== xMetric) ?? metricKeys[0]));
   }
 
   // Destroy chart on unmount
