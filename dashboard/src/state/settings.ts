@@ -154,7 +154,7 @@ export const fontFamily = useSetting<string>("fontFamily", "mono");
 export const fontSize = useSetting<string>("fontSize", "m");
 
 /** Show a step-function "current best" line on the metrics chart. */
-export const showBestLine = useSetting("showBestLine", false);
+export const showBestLine = useSetting("showBestLine", true);
 
 /** Minified chart: tiny dots, no axis labels — global overview mode. */
 export const chartMinified = useSetting("chartMinified", false);
