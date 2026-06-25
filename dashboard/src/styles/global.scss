@@ -48,7 +48,7 @@ body {
   z-index: calc(var(--z-topbar) - 1);
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 2px;
   margin: -2px 0 10px;
   padding: 6px 0;
   background: color-mix(in srgb, var(--bg), transparent 5%);
@@ -166,10 +166,8 @@ body {
 }
 
 .review-stat-tile span {
-  color: var(--text-faint);
+  color: var(--text-muted);
   font-size: var(--text-xs);
-  text-transform: uppercase;
-  letter-spacing: 0;
 }
 
 .review-stat-tile b {
@@ -475,8 +473,6 @@ body {
   min-width: 0;
   overflow-x: auto;
   scrollbar-width: none;
-  opacity: 0.2;
-  transition: opacity var(--transition-base);
 }
 
 .workspace-review-btn {
@@ -498,10 +494,6 @@ body {
   background: var(--bg-elev);
 }
 
-.workspace-shell:hover .workspace-actions,
-.workspace-actions:focus-within {
-  opacity: 1;
-}
 
 .workspace-actions::-webkit-scrollbar { display: none; }
 
@@ -595,12 +587,8 @@ body {
   overflow-y: hidden;
   scrollbar-width: thin;
   scrollbar-color: var(--border) transparent;
-  opacity: 0.28;
-  transition: opacity var(--transition-base);
 }
 .panel-tray:empty { display: none; }
-.panel-tray:hover,
-.panel-tray:focus-within { opacity: 1; }
 .panel-tray::-webkit-scrollbar { height: 3px; }
 .panel-tray::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 .panel-tray button {

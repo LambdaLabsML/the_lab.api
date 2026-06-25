@@ -1024,13 +1024,8 @@ export function App() {
         onOpenWorkbench={() => setDashboardMode("workbench")}
       />
       <main class="dashboard-page">
-        <div class="dashboard-modebar" aria-label="Dashboard sections">
+        <div class="dashboard-modebar" aria-label="Dashboard mode">
           <button class={dashboardMode === "review" ? "active" : ""} onClick={() => setDashboardMode("review")}>Review</button>
-          <a href="#review-progress" onClick={(e) => { e.preventDefault(); openReviewSection("review-progress"); }}>Progress</a>
-          <a href="#review-ideas" onClick={(e) => { e.preventDefault(); openReviewSection("review-ideas"); }}>Ideas</a>
-          <a href="#review-runs" onClick={(e) => { e.preventDefault(); openReviewSection("review-runs"); }}>Runs</a>
-          <a href="#review-detail" onClick={(e) => { e.preventDefault(); openReviewSection("review-detail"); }}>Detail</a>
-          <a href="#review-ops" onClick={(e) => { e.preventDefault(); openReviewSection("review-ops"); }}>Ops</a>
           <button class={dashboardMode === "workbench" ? "active" : ""} onClick={() => setDashboardMode("workbench")}>Workbench</button>
         </div>
 
@@ -1040,13 +1035,8 @@ export function App() {
           <>
             <section class="workspace-shell" aria-label="Dashboard workspace">
               <div class="workspace-toolbar">
-                <div class="workspace-toolbar-main">
-                  <span class="workspace-eyebrow">Workbench</span>
-                  <span class="workspace-title">Panes</span>
-                  <span class="workspace-meta">{_open.size} panes open</span>
-                </div>
                 <button class="workspace-review-btn" onClick={() => setDashboardMode("review")}>
-                  Review dashboard
+                  ← Review
                 </button>
                 <div class="workspace-actions" aria-label="Workspace actions">
                   {ALL_PANEL_IDS.map((id) => {
@@ -1131,11 +1121,7 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
   return (
     <div class="review-page">
       <section class="review-hero">
-        <div>
-          <span class="review-eyebrow">Campaign</span>
-          <h1>Campaign review</h1>
-          <p>Queue, search direction, branch health, and the next useful detail.</p>
-        </div>
+        <h1>Campaign review</h1>
         <button class="review-primary-action" onClick={onOpenWorkbench}>Open workbench</button>
       </section>
 
@@ -1149,7 +1135,7 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
       </section>
 
       <section class="review-section review-section--major" id="review-progress">
-        <SectionHeader kicker="Progress" title="Metric trend" action="Tune metric, filters, and view options inline." />
+        <SectionHeader title="Metric trend" />
         <div class="review-panel review-chart-panel">
           <MetricsChart />
         </div>
@@ -1158,9 +1144,8 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
       <div class="review-stack">
         <ReviewDisclosure
           id="review-ideas"
-          kicker="Ideas"
           title="Branch map"
-          action={`${activeIdeas} active branches`}
+          action={`${activeIdeas} active`}
           preview={<ReviewBranchPreview />}
         >
           <div class="review-panel review-map-panel">
@@ -1170,9 +1155,8 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
 
         <ReviewDisclosure
           id="review-compare"
-          kicker="Compare"
           title="Metric relationship"
-          action="Tradeoff"
+          action="scatter"
           preview={<ReviewSummaryPills items={[["X", scatterXMetric.value || metric], ["Y", scatterYMetric.value || "elapsed_s"]]} />}
         >
           <div class="review-panel review-scatter-panel">
@@ -1182,7 +1166,6 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
 
         <ReviewDisclosure
           id="review-runs"
-          kicker="Runs"
           title="Experiments"
           action={`${finished} finished`}
           preview={<ReviewSummaryPills items={[["finished", finished], ["running", activeRuns.length], ["latest", latestFinished?.label ? `exp/${latestFinished.label}` : "--"]]} />}
@@ -1194,9 +1177,8 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
 
         <ReviewDisclosure
           id="review-detail"
-          kicker="Detail"
           title="Selected idea"
-          action="Selection"
+          action={selected ? `idea #${selected}` : "none selected"}
           preview={<ReviewSummaryPills items={[["idea", selected ?? "--"], ["metric", metric]]} />}
         >
           <div class="review-panel review-detail-panel">
@@ -1206,7 +1188,6 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
 
         <ReviewDisclosure
           id="review-ops"
-          kicker="Operations"
           title="Queue"
           action={`${queued} queued`}
           preview={<ReviewSummaryPills items={[["queued", queued], ["running", totalRunning || running], ["progress", activeRuns.length ? `${avgProgress}%` : "--"]]} />}
@@ -1218,7 +1199,6 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
 
         <ReviewDisclosure
           id="review-log"
-          kicker="Trace"
           title="Activity log"
           action={`${logs.length} events`}
           preview={<ReviewSummaryPills items={[["entries", logs.length], ["latest", logs[0]?.title || "--"]]} />}
@@ -1261,28 +1241,23 @@ function StatTile({
   );
 }
 
-function SectionHeader({ kicker, title, action }: { kicker: string; title: string; action: string }) {
+function SectionHeader({ title, action }: { title: string; action?: string }) {
   return (
     <div class="review-section-head">
-      <div>
-        <span class="review-eyebrow">{kicker}</span>
-        <h2>{title}</h2>
-      </div>
-      <p>{action}</p>
+      <h2>{title}</h2>
+      {action && <p>{action}</p>}
     </div>
   );
 }
 
 function ReviewDisclosure({
   id,
-  kicker,
   title,
   action,
   preview,
   children,
 }: {
   id: string;
-  kicker: string;
   title: string;
   action: string;
   preview?: preact.ComponentChildren;
@@ -1292,7 +1267,6 @@ function ReviewDisclosure({
     <details class="review-disclosure review-section" id={id}>
       <summary>
         <div>
-          <span class="review-eyebrow">{kicker}</span>
           <h2>{title}</h2>
         </div>
         <div class="review-disclosure-summary">
