@@ -81,7 +81,7 @@ body {
 .review-page {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 10px;
   max-width: 1540px;
   margin: 0 auto;
 }
@@ -107,13 +107,21 @@ body {
   color: var(--text-muted);
 }
 
+@keyframes dot-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--green) 50%, transparent); }
+  50%       { box-shadow: 0 0 0 4px color-mix(in srgb, var(--green) 0%, transparent); }
+}
+
 .review-status-dot {
   flex-shrink: 0;
-  width: 7px;
-  height: 7px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
-  &.live  { background: var(--green); box-shadow: 0 0 6px var(--green); }
-  &.idle  { background: var(--text-faint); }
+  &.live  {
+    background: var(--green);
+    animation: dot-pulse 1.8s ease-in-out infinite;
+  }
+  &.idle  { background: var(--text-faint); opacity: 0.5; }
 }
 
 .review-status-primary {

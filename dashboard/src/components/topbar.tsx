@@ -88,7 +88,7 @@ export function Topbar(props: LayoutActions) {
   }
 
   const tokLabel = (inTok != null && outTok != null)
-    ? `↓${fmtTok(inTok)} ↑${fmtTok(outTok)}`
+    ? `${fmtTok(inTok)} in · ${fmtTok(outTok)} out`
     : "--";
   const tokTitle = (inTok != null && outTok != null)
     ? `Input (consumed): ${inTok.toLocaleString()} · Output (generated): ${outTok.toLocaleString()}`
