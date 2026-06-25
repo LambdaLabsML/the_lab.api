@@ -62,8 +62,12 @@
   color: #8b949e;
   border-bottom: 1px solid #21262d;
   flex-shrink: 0;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
 }
+.chart-toolbar::-webkit-scrollbar { display: none; }
 .chart-toolbar select {
   background: var(--bg-elev);
   color: var(--text);

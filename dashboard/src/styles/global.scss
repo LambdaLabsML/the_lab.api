@@ -205,6 +205,39 @@ body {
   code { color: var(--text-faint); font-family: var(--font-mono, monospace); }
 }
 
+/* ── Experiment grid ───────────────────────────────────────────────── */
+
+.exp-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  padding: 6px 0 2px;
+}
+
+.exp-grid-sq {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  opacity: 0.85;
+  flex-shrink: 0;
+  cursor: default;
+  transition: opacity var(--transition-fast), transform var(--transition-fast);
+}
+
+.exp-grid-sq:hover {
+  opacity: 1;
+  transform: scale(1.4);
+}
+
+/* ── Workspace all-open label ──────────────────────────────────────── */
+
+.workspace-all-open {
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+  padding: 2px 6px;
+}
+
 /* ── Chart hero ────────────────────────────────────────────────────── */
 
 .review-chart-wrap {
@@ -651,31 +684,50 @@ body {
     margin-bottom: 8px;
   }
 
-  .review-hero {
-    align-items: flex-start;
-    padding: 10px 2px 6px;
+  /* Status strip — stack cost below on very narrow screens */
+  .review-status-strip {
+    flex-wrap: wrap;
+    gap: 8px;
   }
 
-  .review-hero h1 {
-    font-size: 22px;
+  /* Experiment grid — cap to 2 rows on mobile */
+  .exp-grid {
+    max-height: 22px;
+    overflow: hidden;
   }
-
-  .review-hero p {
+  .review-status-left {
+    gap: 8px;
+    font-size: var(--text-xs);
+  }
+  .review-status-primary {
     font-size: var(--text-sm);
   }
 
-  .review-primary-action {
-    margin-top: 2px;
-    white-space: nowrap;
+  /* Best bar — truncate description more aggressively */
+  .review-best-bar {
+    padding: 6px 10px;
+  }
+  .review-best-meta {
+    display: none; /* hide description on mobile, keep label+value */
   }
 
-  .review-stats {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  /* Chart wrap — shorter on mobile to leave room for disclosures */
+  .review-chart-wrap {
+    height: clamp(260px, 38vh, 360px);
   }
 
-  .review-stat-tile {
-    min-height: 74px;
-    padding: 10px;
+  /* Workspace chip row — horizontal scroll */
+  .workspace-actions {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+  }
+
+  /* Table — allow horizontal scroll */
+  .review-table-panel,
+  .review-detail-panel,
+  .review-ops-panel,
+  .review-log-panel {
+    height: 480px;
   }
 
   .review-section-head {

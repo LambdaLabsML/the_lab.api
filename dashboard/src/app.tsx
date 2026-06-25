@@ -1040,19 +1040,19 @@ export function App() {
                   ← Review
                 </button>
                 <div class="workspace-actions" aria-label="Workspace actions">
-                  {ALL_PANEL_IDS.map((id) => {
-                    const isOpen = _open.has(id);
-                    return (
-                      <button
-                        key={id}
-                        class={`workspace-panel-chip${isOpen ? " is-open" : ""}`}
-                        onClick={() => isOpen ? handleToggleTrayPanel(id) : handleAddPanel(id)}
-                        title={isOpen ? `Send ${PANEL_NAMES[id]} to tray` : `Add ${PANEL_NAMES[id]}`}
-                      >
-                        {PANEL_NAMES[id]}
-                      </button>
-                    );
-                  })}
+                  {ALL_PANEL_IDS.filter((id) => !_open.has(id)).map((id) => (
+                    <button
+                      key={id}
+                      class="workspace-panel-chip"
+                      onClick={() => handleAddPanel(id)}
+                      title={`Open ${PANEL_NAMES[id]}`}
+                    >
+                      + {PANEL_NAMES[id]}
+                    </button>
+                  ))}
+                  {ALL_PANEL_IDS.filter((id) => !_open.has(id)).length === 0 && (
+                    <span class="workspace-all-open">all panels open</span>
+                  )}
                 </div>
               </div>
 
@@ -1095,6 +1095,44 @@ export function App() {
       </main>
       <ChatPanel />
     </>
+  );
+}
+
+// ── Glanceable experiment grid ────────────────────────────────────────────────
+
+const STATUS_SQUARE_COLOR: Record<string, string> = {
+  running:   "var(--yellow)",
+  completed: "var(--green)",
+  active:    "var(--green)",
+  failed:    "var(--red)",
+  abandoned: "var(--red)",
+  concluded: "var(--accent)",
+  queued:    "var(--text-faint)",
+  pending:   "var(--text-faint)",
+  cancelled: "var(--border)",
+};
+
+function ExperimentGrid({ experiments }: { experiments: import("./lib/types").Experiment[] }) {
+  if (experiments.length === 0) return null;
+  // Show most recent ~120, sorted by id desc
+  const sorted = experiments.slice().sort((a, b) => b.id - a.id).slice(0, 120);
+
+  return (
+    <div class="exp-grid" title="Each square = one experiment. Hover for details.">
+      {sorted.map((e) => {
+        const status = e._running ? "running" : (e.status ?? "unknown");
+        const color = STATUS_SQUARE_COLOR[status] ?? "var(--border)";
+        const label = `${e.label ?? e.id} · ${status}`;
+        return (
+          <span
+            key={e.id}
+            class="exp-grid-sq"
+            style={{ background: color }}
+            title={label}
+          />
+        );
+      })}
+    </div>
   );
 }
 
@@ -1154,6 +1192,9 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
         </div>
         <button class="review-primary-action" onClick={onOpenWorkbench}>Workbench →</button>
       </div>
+
+      {/* ── Experiment grid — glanceable status tiles ────────────────── */}
+      <ExperimentGrid experiments={experiments} />
 
       {/* ── Best score callout ───────────────────────────────────────── */}
       {bestExp != null && bestVal != null && (
