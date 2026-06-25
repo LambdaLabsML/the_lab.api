@@ -1301,6 +1301,9 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
               <span class="review-status-idle">
                 idle
                 {lastFinishedAt && <span class="review-idle-hint"> · last {timeAgo(lastFinishedAt)}</span>}
+                {lastFinishedAt && Date.now() - Date.parse(lastFinishedAt) > 3600_000 && (
+                  <span class="review-idle-cta"> — run <code>the-lab-agent</code> to continue</span>
+                )}
               </span>
             )}
           </span>
@@ -1404,7 +1407,9 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
         <ReviewDisclosure
           id="review-ops"
           title="Queue"
-          action={`${queued} queued · ${totalRunning || running} running`}
+          action={queued + liveCount > 0
+            ? `${queued} queued · ${liveCount} running`
+            : `ready · ${liveCount} running`}
           preview={
             queued + liveCount > 0 ? (
               <div class="idea-health-bar">
@@ -1422,7 +1427,9 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
         <ReviewDisclosure
           id="review-log"
           title="Log"
-          action={`${logs.length} events`}
+          action={logs.length > 0
+            ? `${logs.length} events · last: ${logs[0].title?.slice(0, 40) || logs[0].type}`
+            : "no events yet"}
         >
           <div class="review-panel review-log-panel">
             <LogView />

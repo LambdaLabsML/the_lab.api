@@ -189,6 +189,12 @@ body {
   font-weight: 400;
 }
 
+.review-idle-cta {
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+  code { color: var(--accent); font-family: var(--font-mono, monospace); font-size: var(--text-xs); }
+}
+
 /* ── Idea health bar ───────────────────────────────────────────────── */
 
 .idea-health-bar {
