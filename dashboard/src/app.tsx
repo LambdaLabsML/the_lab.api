@@ -1099,6 +1099,65 @@ export function App() {
   );
 }
 
+// ── Idea exploration ring ─────────────────────────────────────────────────────
+
+function IdeaRing({ active, concluded, abandoned }: { active: number; concluded: number; abandoned: number }) {
+  const total = active + concluded + abandoned;
+  if (total === 0) return null;
+  const size = 32, sw = 5, r = (size - sw) / 2;
+  const c = 2 * Math.PI * r;
+  const concludedFrac = concluded / total;
+  const activeFrac = active / total;
+  const concludedLen = c * concludedFrac;
+  const activeLen = c * activeFrac;
+  const abandonedLen = c * (abandoned / total);
+  // concluded arc starts at top (-90°), active follows, abandoned last
+  const concludedOffset = 0;
+  const activeOffset = c - concludedLen;
+  const abandonedOffset = c - concludedLen - activeLen;
+
+  return (
+    <svg width={size} height={size} style={{ flexShrink: 0 }} title={`${concluded} concluded · ${active} active · ${abandoned} abandoned`}>
+      {/* Background track */}
+      <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="var(--border)" strokeWidth={sw} />
+      {/* Concluded arc (blue) */}
+      {concludedLen > 0 && (
+        <circle cx={size/2} cy={size/2} r={r} fill="none"
+          stroke="var(--accent)" strokeWidth={sw} strokeOpacity={0.7}
+          strokeDasharray={`${concludedLen} ${c - concludedLen}`}
+          strokeDashoffset={c / 4}
+          strokeLinecap="butt"
+          transform={`rotate(-90 ${size/2} ${size/2})`}
+        />
+      )}
+      {/* Active arc (green) */}
+      {activeLen > 0 && (
+        <circle cx={size/2} cy={size/2} r={r} fill="none"
+          stroke="var(--green)" strokeWidth={sw} strokeOpacity={0.8}
+          strokeDasharray={`${activeLen} ${c - activeLen}`}
+          strokeDashoffset={c / 4 + concludedLen}
+          strokeLinecap="butt"
+          transform={`rotate(-90 ${size/2} ${size/2})`}
+        />
+      )}
+      {/* Abandoned arc (red) */}
+      {abandonedLen > 0 && (
+        <circle cx={size/2} cy={size/2} r={r} fill="none"
+          stroke="var(--red)" strokeWidth={sw} strokeOpacity={0.6}
+          strokeDasharray={`${abandonedLen} ${c - abandonedLen}`}
+          strokeDashoffset={c / 4 + concludedLen + activeLen}
+          strokeLinecap="butt"
+          transform={`rotate(-90 ${size/2} ${size/2})`}
+        />
+      )}
+      {/* Center label */}
+      <text x={size/2} y={size/2 + 3} textAnchor="middle" fontSize="8" fill="var(--text-muted)" fontFamily="var(--font-mono, monospace)">
+        {total}
+      </text>
+    </svg>
+  );
+}
+
 // ── Idea mini leaderboard ─────────────────────────────────────────────────────
 
 function IdeaMiniLeaderboard({ experiments, ideas, metric, lower }: {
@@ -1655,10 +1714,16 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
           action={`${activeIdeas} active · ${ideasConcluded} concluded${ideasAbandoned > 0 ? ` · ${ideasAbandoned} abandoned` : ""}`}
           preview={
             <div class="emr-preview">
-              <div class="idea-health-bar" style={{ marginBottom: 6 }}>
-                {ideasActive > 0    && <span class="ihb-seg ihb-active"    style={{ flex: ideasActive }}    title={`${ideasActive} active`} />}
-                {ideasConcluded > 0 && <span class="ihb-seg ihb-concluded" style={{ flex: ideasConcluded }} title={`${ideasConcluded} concluded`} />}
-                {ideasAbandoned > 0 && <span class="ihb-seg ihb-abandoned" style={{ flex: ideasAbandoned }} title={`${ideasAbandoned} abandoned`} />}
+              {/* Exploration ring + health bar row */}
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                <IdeaRing active={ideasActive} concluded={ideasConcluded} abandoned={ideasAbandoned} />
+                <div style={{ flex: 1 }}>
+                  <div class="idea-health-bar">
+                    {ideasActive > 0    && <span class="ihb-seg ihb-active"    style={{ flex: ideasActive }}    title={`${ideasActive} active`} />}
+                    {ideasConcluded > 0 && <span class="ihb-seg ihb-concluded" style={{ flex: ideasConcluded }} title={`${ideasConcluded} concluded`} />}
+                    {ideasAbandoned > 0 && <span class="ihb-seg ihb-abandoned" style={{ flex: ideasAbandoned }} title={`${ideasAbandoned} abandoned`} />}
+                  </div>
+                </div>
               </div>
               <IdeaMiniLeaderboard
                 experiments={experiments}
