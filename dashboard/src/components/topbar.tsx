@@ -94,11 +94,15 @@ export function Topbar(props: LayoutActions) {
     ? `Input (consumed): ${inTok.toLocaleString()} · Output (generated): ${outTok.toLocaleString()}`
     : undefined;
 
+  const totalRunning = data?.total_running ?? 0;
+  const totalPending = data?.total_pending ?? 0;
+
   // Build the stats array once so it's shared between compact and full renders
+  // Hide Pending when 0 — it's almost always 0 and wastes topbar space
   const stats = [
     { key: "ideas",   label: "Ideas",   value: data ? String(data.active_ideas.length) : "--" },
-    { key: "running", label: "Running", value: data ? String(data.total_running) : "--" },
-    { key: "pending", label: "Pending", value: data ? String(data.total_pending) : "--" },
+    { key: "running", label: "Running", value: data ? String(totalRunning) : "--" },
+    ...(totalPending > 0 ? [{ key: "pending", label: "Pending", value: String(totalPending) }] : []),
     { key: "branch",  label: "Branch",  value: data ? data.current_branch : "--" },
     { key: "cost",    label: "Cost",    value: cost != null ? `$${cost.toFixed(2)}` : "--" },
     { key: "tokens",  label: "Tokens",  value: tokLabel, title: tokTitle },
