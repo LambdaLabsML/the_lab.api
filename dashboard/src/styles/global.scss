@@ -47,38 +47,35 @@ body {
   top: 45px;
   z-index: calc(var(--z-topbar) - 1);
   display: flex;
-  align-items: center;
-  gap: 2px;
-  margin: -2px 0 10px;
-  padding: 6px 0;
-  background: color-mix(in srgb, var(--bg), transparent 5%);
-  backdrop-filter: blur(10px);
+  align-items: stretch;
+  gap: 0;
+  margin: 0 0 10px;
+  padding: 0;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border-soft);
   overflow-x: auto;
   scrollbar-width: none;
 }
-
 .dashboard-modebar::-webkit-scrollbar { display: none; }
 
-.dashboard-modebar a,
 .dashboard-modebar button {
   flex: 0 0 auto;
-  border: 1px solid var(--border-soft);
-  background: var(--bg);
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
   color: var(--text-muted);
-  border-radius: var(--radius-sm);
-  padding: 6px 10px;
+  padding: 8px 16px;
   font: inherit;
   font-size: var(--text-sm);
-  text-decoration: none;
   cursor: pointer;
+  transition: color var(--transition-fast), border-color var(--transition-fast);
+  margin-bottom: -1px; /* sit on top of the border-bottom */
 }
-
-.dashboard-modebar a:hover,
-.dashboard-modebar button:hover,
-.dashboard-modebar .active {
+.dashboard-modebar button:hover { color: var(--text); }
+.dashboard-modebar button.active {
   color: var(--text);
-  border-color: var(--text-muted);
-  background: var(--bg-elev);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
 }
 
 .review-page {
@@ -123,6 +120,14 @@ body {
   color: var(--text);
   font-size: var(--text-base);
   strong { font-weight: 700; }
+}
+
+.review-status-idle { color: var(--text-muted); }
+
+.review-idle-hint {
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+  font-weight: 400;
 }
 
 .review-status-item {
@@ -207,11 +212,28 @@ body {
 
 /* ── Experiment grid ───────────────────────────────────────────────── */
 
+@keyframes sq-pulse {
+  0%, 100% { opacity: 0.9; }
+  50%       { opacity: 0.4; }
+}
+
+.exp-grid-wrap { display: flex; flex-direction: column; gap: 4px; }
+
 .exp-grid {
   display: flex;
   flex-wrap: wrap;
-  gap: 3px;
-  padding: 6px 0 2px;
+  gap: 2px;
+  align-items: flex-start;
+  max-height: 42px; /* ~3 rows */
+  overflow: hidden;
+}
+
+.exp-idea-group {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  border-left: 2px solid var(--idea-color, var(--border));
+  padding-left: 3px;
 }
 
 .exp-grid-sq {
@@ -219,15 +241,52 @@ body {
   width: 9px;
   height: 9px;
   border-radius: 2px;
-  opacity: 0.85;
   flex-shrink: 0;
   cursor: default;
-  transition: opacity var(--transition-fast), transform var(--transition-fast);
+  transition: transform var(--transition-fast);
+  &:hover { transform: scale(1.5); }
 }
 
-.exp-grid-sq:hover {
-  opacity: 1;
-  transform: scale(1.4);
+/* Status colors */
+.sq-done      { background: var(--green);       opacity: 0.75; }
+.sq-running   { background: var(--yellow);      animation: sq-pulse 1.2s ease-in-out infinite; }
+.sq-failed    { background: var(--red);         opacity: 0.9; }
+.sq-concluded { background: var(--accent);      opacity: 0.7; }
+.sq-queued    { background: var(--text-faint);  opacity: 0.5; }
+.sq-cancelled { background: var(--border);      opacity: 0.4; }
+
+/* Legend */
+.exp-grid-legend {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.sq-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+  &::before {
+    content: "";
+    display: inline-block;
+    width: 8px; height: 8px;
+    border-radius: 2px;
+  }
+}
+.sq-legend.sq-done::before      { background: var(--green);      opacity: 0.75; }
+.sq-legend.sq-running::before   { background: var(--yellow); }
+.sq-legend.sq-failed::before    { background: var(--red); }
+.sq-legend.sq-concluded::before { background: var(--accent);     opacity: 0.7; }
+.sq-legend.sq-queued::before    { background: var(--text-faint); opacity: 0.5; }
+
+.exp-grid-legend-note {
+  margin-left: auto;
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+  opacity: 0.6;
 }
 
 /* ── Workspace all-open label ──────────────────────────────────────── */
@@ -691,10 +750,8 @@ body {
   }
 
   /* Experiment grid — cap to 2 rows on mobile */
-  .exp-grid {
-    max-height: 22px;
-    overflow: hidden;
-  }
+  .exp-grid { max-height: 24px; overflow: hidden; }
+  .exp-grid-legend-note { display: none; }
   .review-status-left {
     gap: 8px;
     font-size: var(--text-xs);

@@ -1047,7 +1047,7 @@ export function App() {
                       onClick={() => handleAddPanel(id)}
                       title={`Open ${PANEL_NAMES[id]}`}
                     >
-                      + {PANEL_NAMES[id]}
+                      {PANEL_NAMES[id]}
                     </button>
                   ))}
                   {ALL_PANEL_IDS.filter((id) => !_open.has(id)).length === 0 && (
@@ -1100,38 +1100,71 @@ export function App() {
 
 // ── Glanceable experiment grid ────────────────────────────────────────────────
 
-const STATUS_SQUARE_COLOR: Record<string, string> = {
-  running:   "var(--yellow)",
-  completed: "var(--green)",
-  active:    "var(--green)",
-  failed:    "var(--red)",
-  abandoned: "var(--red)",
-  concluded: "var(--accent)",
-  queued:    "var(--text-faint)",
-  pending:   "var(--text-faint)",
-  cancelled: "var(--border)",
+import { IDEA_PALETTE } from "./lib/colors";
+
+const STATUS_SQ_CLASS: Record<string, string> = {
+  running:   "sq-running",
+  completed: "sq-done",
+  active:    "sq-done",
+  failed:    "sq-failed",
+  abandoned: "sq-failed",
+  concluded: "sq-concluded",
+  queued:    "sq-queued",
+  pending:   "sq-queued",
+  cancelled: "sq-cancelled",
 };
 
 function ExperimentGrid({ experiments }: { experiments: import("./lib/types").Experiment[] }) {
   if (experiments.length === 0) return null;
-  // Show most recent ~120, sorted by id desc
-  const sorted = experiments.slice().sort((a, b) => b.id - a.id).slice(0, 120);
+
+  // Group by idea in chronological order
+  const ideaOrder: number[] = [];
+  const byIdea = new Map<number, typeof experiments[0][]>();
+  const chrono = experiments.slice().sort((a, b) => a.id - b.id);
+  for (const e of chrono) {
+    if (!byIdea.has(e.idea_id)) { byIdea.set(e.idea_id, []); ideaOrder.push(e.idea_id); }
+    byIdea.get(e.idea_id)!.push(e);
+  }
+
+  // Build idea → palette color index
+  const ideaColor: Record<number, string> = {};
+  ideaOrder.forEach((id, i) => { ideaColor[id] = IDEA_PALETTE[i % IDEA_PALETTE.length]; });
+
+  const hasRunning = experiments.some((e) => e._running || e.status === "running");
+  const hasFailed  = experiments.some((e) => e.status === "failed" || e.status === "abandoned");
 
   return (
-    <div class="exp-grid" title="Each square = one experiment. Hover for details.">
-      {sorted.map((e) => {
-        const status = e._running ? "running" : (e.status ?? "unknown");
-        const color = STATUS_SQUARE_COLOR[status] ?? "var(--border)";
-        const label = `${e.label ?? e.id} · ${status}`;
-        return (
-          <span
-            key={e.id}
-            class="exp-grid-sq"
-            style={{ background: color }}
-            title={label}
-          />
-        );
-      })}
+    <div class="exp-grid-wrap">
+      <div class="exp-grid">
+        {ideaOrder.map((ideaId, gi) => {
+          const exps = byIdea.get(ideaId)!;
+          const ideaCol = ideaColor[ideaId];
+          return (
+            <span key={ideaId} class="exp-idea-group" style={gi > 0 ? { marginLeft: 5 } : {}}>
+              {exps.map((e) => {
+                const status = e._running ? "running" : (e.status ?? "unknown");
+                const cls = `exp-grid-sq ${STATUS_SQ_CLASS[status] ?? "sq-cancelled"}`;
+                return (
+                  <span
+                    key={e.id}
+                    class={cls}
+                    style={{ "--idea-color": ideaCol } as any}
+                    title={`${e.label ?? e.id} · idea #${e.idea_id} · ${status}`}
+                  />
+                );
+              })}
+            </span>
+          );
+        })}
+      </div>
+      <div class="exp-grid-legend">
+        {hasRunning && <span class="sq-legend sq-running">running</span>}
+        <span class="sq-legend sq-done">done</span>
+        {hasFailed && <span class="sq-legend sq-failed">failed</span>}
+        <span class="sq-legend sq-concluded">concluded</span>
+        <span class="sq-legend sq-queued">queued</span>
+        <span class="exp-grid-legend-note">← each square = one experiment, grouped by idea →</span>
+      </div>
     </div>
   );
 }
@@ -1180,7 +1213,10 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
         <div class="review-status-left">
           <span class={`review-status-dot ${isLive ? "live" : "idle"}`} />
           <span class="review-status-primary">
-            {isLive ? <><strong>{liveCount}</strong> running{avgProgress > 0 ? ` · ${avgProgress}%` : ""}</> : "idle"}
+            {isLive
+              ? <><strong>{liveCount}</strong> running{avgProgress > 0 ? ` · ${avgProgress}%` : ""}</>
+              : <span class="review-status-idle">idle <span class="review-idle-hint">— no experiments running</span></span>
+            }
           </span>
           {queued > 0 && <span class="review-status-item"><strong>{queued}</strong> queued</span>}
           <span class="review-status-item"><strong>{finished}</strong> done</span>
