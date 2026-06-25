@@ -623,6 +623,27 @@ export function DetailPanel() {
                   </div>
                 )}
 
+                {/* Best metric score for this idea */}
+                {(() => {
+                  const mk = selectedMetric.value;
+                  if (!mk || experiments.length === 0) return null;
+                  const lower = isLowerBetter(mk);
+                  let best: number | null = null;
+                  for (const e of experiments) {
+                    if (typeof e.metrics?.[mk] !== "number" || e._running) continue;
+                    const v = e.metrics![mk] as number;
+                    if (best === null || (lower ? v < best : v > best)) best = v;
+                  }
+                  if (best === null) return null;
+                  const fmtBest = Math.abs(best) >= 100 ? best.toFixed(0) : Math.abs(best) >= 1 ? best.toFixed(2) : best.toFixed(3);
+                  return (
+                    <div class="meta-row" style={{ gap: 6 }}>
+                      <span class="meta-stat-label">best {mk.replace(/_/g, " ")}</span>
+                      <span style={{ color: "var(--purple)", fontFamily: "var(--font-mono, monospace)", fontWeight: 700, fontSize: "var(--text-sm)" }}>{fmtBest}</span>
+                    </div>
+                  );
+                })()}
+
                 {/* Conclusion */}
                 {idea.conclusion && (
                   <div class="meta-conclusion">"{idea.conclusion}"</div>
@@ -1398,6 +1419,15 @@ function ExperimentItem({
           {isMilestone && <span style={{ color: "var(--yellow)", marginRight: 4, fontSize: "11px" }} title="New global best at this point">★</span>}
           exp/{exp.label || exp.id}
         </span>
+        {/* Primary metric value — most important number at a glance */}
+        {metricKey && exp.metrics && typeof exp.metrics[metricKey] === "number" && !exp._running && (
+          <span class="exp-metric-badge" title={`${metricKey} = ${exp.metrics[metricKey]}`}>
+            {(exp.metrics[metricKey] as number).toFixed(
+              Math.abs(exp.metrics[metricKey] as number) >= 100 ? 0 :
+              Math.abs(exp.metrics[metricKey] as number) >= 1 ? 2 : 3
+            )}
+          </span>
+        )}
         <span dangerouslySetInnerHTML={{ __html: badgeHtml(exp.status, progress?.pct_complete ?? progress?.pct) }} />
       </div>
       <div class="exp-desc">{exp.description}</div>

@@ -52,9 +52,19 @@
 
 /* Experiment items */
 .exp-item { padding: var(--space-2); margin-bottom: 6px; border-radius: var(--radius-sm); background: var(--bg); border: 1px solid var(--border); }
-.exp-item .exp-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--space-1); }
-.exp-item .exp-id { font-weight: 600; color: var(--accent); font-size: 12px; transition: color var(--transition-fast); }
+.exp-item .exp-header { display: flex; justify-content: flex-start; align-items: center; gap: 8px; margin-bottom: var(--space-1); flex-wrap: wrap; }
+.exp-item .exp-id { font-weight: 600; color: var(--accent); font-size: 12px; transition: color var(--transition-fast); margin-right: auto; }
 .exp-item .exp-id:hover { color: var(--accent-dim); text-decoration: underline; }
+.exp-metric-badge {
+  font-family: var(--font-mono, monospace);
+  font-size: var(--text-sm);
+  font-weight: 700;
+  color: var(--purple);
+  background: color-mix(in srgb, var(--purple) 10%, transparent);
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  flex-shrink: 0;
+}
 .exp-item.exp-highlight { background: color-mix(in srgb, var(--accent) 8%, transparent); outline: 1px solid color-mix(in srgb, var(--accent) 27%, transparent); border-radius: var(--radius-sm); transition: background var(--transition-slow), outline var(--transition-slow); }
 
 /* --- JSON viewer --- */
