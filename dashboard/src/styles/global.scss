@@ -483,7 +483,8 @@ body {
 
 @media (max-width: 800px) {
   .exp-mini-results { gap: 0; }
-  .emr-section:last-child { display: none; }
+  /* On mobile: only hide RECENT section (the 2nd child) — keep TOP IDEAS/TOP 5 */
+  .exp-mini-results .emr-section:nth-child(2) { display: none; }
 }
 
 /* ── Chart skip link ───────────────────────────────────────────────── */
