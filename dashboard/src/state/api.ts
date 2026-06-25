@@ -261,6 +261,15 @@ export async function listMessages(limit: number = 100): Promise<MessageEntry[]>
   return res.messages ?? [];
 }
 
+/** POST /api/v1/messages — send a message to agents */
+export async function sendMessage(to: string, text: string): Promise<MessageEntry> {
+  return fetchJson<MessageEntry>("/api/v1/messages", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ to, text }),
+  });
+}
+
 /** DELETE /api/v1/agents/:id?keep_branch=true|false */
 export async function unregisterAgent(
   id: string,

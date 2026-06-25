@@ -1,247 +1,119 @@
-import { useState, useEffect, useLayoutEffect, useRef } from "preact/hooks";
-import { getChatStatus, streamChat } from "../state/api";
+/**
+ * Message FAB — floating button that opens a quick message composer.
+ * Sends messages to agents via POST /api/v1/messages and shows recent history.
+ * Replaces the old "Research Chat" LLM panel.
+ */
+import { useState, useEffect, useRef } from "preact/hooks";
+import { listMessages, sendMessage } from "../state/api";
+import type { MessageEntry } from "../lib/types";
 
-interface Message {
-  role: "user" | "assistant";
-  content: string;
-}
-
-const STORAGE_KEY = "the-lab-chat-position";
 const FAB_SIZE = 44;
 const CLAMP_MARGIN = 10;
 
-function getPanelSize(): { width: number; height: number } {
-  if (typeof window === "undefined") return { width: 420, height: 540 };
-  const w = window.innerWidth;
-  if (w <= 500) {
-    return {
-      width: Math.max(0, w - 20),
-      height: Math.max(0, window.innerHeight - 80),
-    };
-  }
-  return { width: 420, height: 540 };
-}
-
-function getDefaultMargins(): { x: number; y: number } {
-  return window.innerWidth <= 500 ? { x: 10, y: 10 } : { x: 20, y: 20 };
-}
-
-function defaultPosition(): { left: number; top: number } {
-  const { width, height } = getPanelSize();
-  const m = getDefaultMargins();
-  return clamp(
-    window.innerWidth - width - m.x,
-    window.innerHeight - height - m.y,
-    width,
-    height,
-  );
-}
-
-function clamp(
-  left: number,
-  top: number,
-  width: number,
-  height: number,
-): { left: number; top: number } {
-  const m = CLAMP_MARGIN;
-  const maxW = window.innerWidth;
-  const maxH = window.innerHeight;
+function clamp(left: number, top: number): { left: number; top: number } {
+  const panelW = window.innerWidth <= 500 ? Math.max(0, window.innerWidth - 20) : 380;
+  const panelH = 420;
   return {
-    left: Math.min(Math.max(m, left), maxW - width - m),
-    top: Math.min(Math.max(m, top), maxH - height - m),
+    left: Math.min(Math.max(CLAMP_MARGIN, left), window.innerWidth - panelW - CLAMP_MARGIN),
+    top: Math.min(Math.max(CLAMP_MARGIN, top), window.innerHeight - panelH - CLAMP_MARGIN),
   };
 }
 
-function loadPosition(): { left: number; top: number } | null {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    const p = JSON.parse(raw) as unknown;
-    if (
-      p &&
-      typeof p === "object" &&
-      "left" in p &&
-      "top" in p &&
-      typeof (p as { left: unknown }).left === "number" &&
-      typeof (p as { top: unknown }).top === "number"
-    ) {
-      return { left: (p as { left: number }).left, top: (p as { top: number }).top };
-    }
-  } catch {
-    /* ignore */
-  }
-  return null;
-}
-
-function savePosition(p: { left: number; top: number }) {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(p));
-  } catch {
-    /* ignore */
-  }
+function relTime(iso: string): string {
+  const sec = Math.max(0, Math.floor((Date.now() - Date.parse(iso)) / 1000));
+  if (sec < 60) return `${sec}s ago`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  return `${Math.floor(min / 60)}h ago`;
 }
 
 export function ChatPanel() {
-  const [available, setAvailable] = useState<boolean | null>(null);
   const [open, setOpen] = useState(false);
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messages, setMessages] = useState<MessageEntry[]>([]);
   const [input, setInput] = useState("");
-  const [streaming, setStreaming] = useState(false);
+  const [to, setTo] = useState("all");
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
   const [dragging, setDragging] = useState(false);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
-  const abortRef = useRef<AbortController | null>(null);
   const dragRef = useRef<{ dx: number; dy: number } | null>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
 
+  // Default position: bottom-right corner
   useEffect(() => {
-    getChatStatus()
-      .then((s) => setAvailable(s.available))
-      .catch(() => setAvailable(false));
+    const panelW = window.innerWidth <= 500 ? window.innerWidth - 20 : 380;
+    const panelH = 420;
+    const m = window.innerWidth <= 500 ? 10 : 20;
+    setPos(clamp(window.innerWidth - panelW - m, window.innerHeight - panelH - m));
   }, []);
 
-  useLayoutEffect(() => {
-    if (available !== true) return;
-    const saved = loadPosition();
-    const { width, height } = getPanelSize();
-    if (saved) {
-      setPos(clamp(saved.left, saved.top, width, height));
-    } else {
-      setPos(defaultPosition());
-    }
-  }, [available]);
-
+  // Resize handler
   useEffect(() => {
-    if (available !== true) return;
-    const onResize = () => {
-      setPos((p) => {
-        if (!p) return p;
-        const { width, height } = getPanelSize();
-        return clamp(p.left, p.top, width, height);
-      });
-    };
+    const onResize = () => setPos((p) => p ? clamp(p.left, p.top) : p);
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
-  }, [available]);
+  }, []);
 
+  // Poll messages when open
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+    if (!open) return;
+    const load = () => listMessages(30).then(setMessages).catch(() => {});
+    load();
+    const t = window.setInterval(load, 5000);
+    return () => clearInterval(t);
+  }, [open]);
 
   useEffect(() => {
     if (open && inputRef.current) inputRef.current.focus();
   }, [open]);
 
-  if (available === null || available === false || pos === null) return null;
+  useEffect(() => {
+    listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
+  }, [messages]);
 
-  const position = pos;
-  const { width: panelW, height: panelH } = getPanelSize();
-  const fabLeft = position.left + panelW - FAB_SIZE;
-  const fabTop = position.top + panelH - FAB_SIZE;
+  if (pos === null) return null;
 
-  function handleHeaderPointerDown(e: PointerEvent) {
-    if ((e.target as HTMLElement).closest("button")) return;
-    dragRef.current = { dx: e.clientX - position.left, dy: e.clientY - position.top };
+  const fabLeft = pos.left + (window.innerWidth <= 500 ? window.innerWidth - 20 : 380) - FAB_SIZE;
+  const fabTop  = pos.top  + 420 - FAB_SIZE;
+
+  function handlePointerDown(e: PointerEvent) {
+    if ((e.target as HTMLElement).closest("button,textarea,select")) return;
+    dragRef.current = { dx: e.clientX - pos!.left, dy: e.clientY - pos!.top };
     setDragging(true);
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
   }
-
-  function handleHeaderPointerMove(e: PointerEvent) {
+  function handlePointerMove(e: PointerEvent) {
     if (!dragRef.current) return;
-    const { width, height } = getPanelSize();
-    setPos(
-      clamp(
-        e.clientX - dragRef.current.dx,
-        e.clientY - dragRef.current.dy,
-        width,
-        height,
-      ),
-    );
+    setPos(clamp(e.clientX - dragRef.current.dx, e.clientY - dragRef.current.dy));
   }
-
-  function handleHeaderPointerUp(e: PointerEvent) {
-    const drag = dragRef.current;
-    if (drag) {
-      const { width, height } = getPanelSize();
-      const next = clamp(
-        e.clientX - drag.dx,
-        e.clientY - drag.dy,
-        width,
-        height,
-      );
-      setPos(next);
-      savePosition(next);
-    }
+  function handlePointerUp() {
     dragRef.current = null;
     setDragging(false);
-    (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
   }
 
-  function handleSend() {
+  async function handleSend() {
     const text = input.trim();
-    if (!text || streaming) return;
-    setInput("");
-
-    const userMsg: Message = { role: "user", content: text };
-    const allMessages = [...messages, userMsg];
-    setMessages([...allMessages, { role: "assistant", content: "" }]);
-    setStreaming(true);
-
-    const controller = new AbortController();
-    abortRef.current = controller;
-
-    const assistantIdx = allMessages.length;
-
-    streamChat(
-      allMessages.map((m) => ({ role: m.role, content: m.content })),
-      (chunk) => {
-        setMessages((prev) => {
-          const updated = [...prev];
-          updated[assistantIdx] = {
-            ...updated[assistantIdx],
-            content: updated[assistantIdx].content + chunk,
-          };
-          return updated;
-        });
-      },
-      () => {
-        setStreaming(false);
-        abortRef.current = null;
-      },
-      (err) => {
-        setMessages((prev) => {
-          const updated = [...prev];
-          updated[assistantIdx] = {
-            ...updated[assistantIdx],
-            content: updated[assistantIdx].content || `Error: ${err}`,
-          };
-          return updated;
-        });
-        setStreaming(false);
-        abortRef.current = null;
-      },
-      controller.signal,
-    );
-  }
-
-  function handleStop() {
-    abortRef.current?.abort();
-    setStreaming(false);
-    abortRef.current = null;
+    if (!text || sending) return;
+    setSending(true);
+    setError(null);
+    try {
+      await sendMessage(to, text);
+      setInput("");
+      const updated = await listMessages(30);
+      setMessages(updated);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to send");
+    } finally {
+      setSending(false);
+    }
   }
 
   function handleKeyDown(e: KeyboardEvent) {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
-    }
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
   }
 
-  function handleClear() {
-    if (!streaming) {
-      setMessages([]);
-    }
-  }
+  const panelW = window.innerWidth <= 500 ? Math.max(0, window.innerWidth - 20) : 380;
 
   return (
     <>
@@ -251,80 +123,81 @@ export function ChatPanel() {
           type="button"
           style={{ left: fabLeft, top: fabTop }}
           onClick={() => setOpen(true)}
-          title="Ask about research"
+          title="Message agents"
         >
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+            <path d="M22 2L11 13" /><path d="M22 2L15 22l-4-9-9-4 20-7z" />
           </svg>
         </button>
       )}
 
       {open && (
-        <div id="chat-panel" style={{ left: position.left, top: position.top }}>
-          <div
-            class={`chat-header${dragging ? " chat-header-dragging" : ""}`}
-            onPointerDown={handleHeaderPointerDown}
-            onPointerMove={handleHeaderPointerMove}
-            onPointerUp={handleHeaderPointerUp}
-            onPointerCancel={handleHeaderPointerUp}
-          >
-            <span class="chat-title">Research Chat</span>
-            <div class="chat-header-actions">
-              {messages.length > 0 && !streaming && (
-                <button class="chat-clear-btn" onClick={handleClear} title="Clear conversation">
-                  Clear
-                </button>
-              )}
-              <button class="chat-close-btn" onClick={() => setOpen(false)} title="Close">
-                &times;
-              </button>
-            </div>
+        <div
+          id="chat-panel"
+          style={{ left: pos.left, top: pos.top, width: panelW }}
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          onPointerCancel={handlePointerUp}
+        >
+          <div class={`chat-header${dragging ? " chat-header-dragging" : ""}`}>
+            <span class="chat-title">Message agents</span>
+            <button class="chat-close-btn" onClick={() => setOpen(false)} title="Close">×</button>
           </div>
 
-          <div class="chat-messages">
-            {messages.length === 0 && (
+          {/* Recent messages */}
+          <div class="chat-messages" ref={listRef}>
+            {messages.length === 0 ? (
               <div class="chat-empty">
-                Ask anything about your research project — experiment comparisons,
-                best results, key insights, or trends.
+                Messages sent here are delivered to all running agents via
+                <code> _notifications</code>. Use this to give instructions mid-run.
               </div>
-            )}
-            {messages.map((msg, i) => (
-              <div key={i} class={`chat-msg chat-msg-${msg.role}`}>
-                <div class="chat-msg-label">{msg.role === "user" ? "You" : "Assistant"}</div>
-                <div class="chat-msg-content">
-                  {msg.content || (streaming && i === messages.length - 1 ? "..." : "")}
+            ) : (
+              [...messages].reverse().map((m) => (
+                <div key={m.id} class={`chat-msg chat-msg-${m.from_agent ? "agent" : "user"}`}>
+                  <div class="chat-msg-label">
+                    {m.from_agent
+                      ? (m.from_role ? `${m.from_agent} (${m.from_role})` : m.from_agent)
+                      : "you"}
+                    <span class="chat-msg-time">{m.created_at ? relTime(m.created_at) : ""}</span>
+                  </div>
+                  <div class="chat-msg-content">{m.text}</div>
                 </div>
-              </div>
-            ))}
-            <div ref={messagesEndRef} />
+              ))
+            )}
           </div>
+
+          {error && <div class="chat-error">{error}</div>}
 
           <div class="chat-input-area">
-            <textarea
-              ref={inputRef}
-              class="chat-input"
-              value={input}
-              onInput={(e) => setInput((e.target as HTMLTextAreaElement).value)}
-              onKeyDown={handleKeyDown}
-              placeholder="Ask a question..."
-              rows={2}
-              disabled={streaming}
-            />
-            {streaming ? (
-              <button class="chat-send-btn chat-stop-btn" onClick={handleStop} title="Stop">
-                Stop
-              </button>
-            ) : (
+            <select
+              class="chat-to-select"
+              value={to}
+              onChange={(e) => setTo((e.target as HTMLSelectElement).value)}
+            >
+              <option value="all">→ all agents</option>
+              <option value="role:default">→ role: default</option>
+            </select>
+            <div class="chat-input-row">
+              <textarea
+                ref={inputRef}
+                class="chat-input"
+                value={input}
+                onInput={(e) => setInput((e.target as HTMLTextAreaElement).value)}
+                onKeyDown={handleKeyDown}
+                placeholder="Message agents… (Enter to send)"
+                rows={2}
+                disabled={sending}
+              />
               <button
                 class="chat-send-btn"
                 onClick={handleSend}
-                disabled={!input.trim()}
-                title="Send (Enter)"
+                disabled={!input.trim() || sending}
               >
-                Send
+                {sending ? "…" : "Send"}
               </button>
-            )}
+            </div>
           </div>
         </div>
       )}
