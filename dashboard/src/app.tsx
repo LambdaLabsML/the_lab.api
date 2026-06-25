@@ -1218,6 +1218,90 @@ function BestSparkline({ experiments, metric, lower }: {
 }
 
 
+// ── Mini results list for collapsed Experiments disclosure ───────────────────
+
+function ExpMiniResults({ experiments, metric, lower, milestoneIds, ideas }: {
+  experiments: import("./lib/types").Experiment[];
+  metric: string;
+  lower: boolean;
+  milestoneIds: Set<number>;
+  ideas: Record<number, import("./lib/types").IdeaNode>;
+}) {
+  const withMetric = experiments.filter(
+    (e) => !e._running && typeof e.metrics?.[metric] === "number",
+  );
+  if (withMetric.length === 0 && experiments.filter(e => e._running).length === 0) return null;
+
+  // Top 5 by metric
+  const top5 = [...withMetric]
+    .sort((a, b) => {
+      const va = a.metrics![metric] as number;
+      const vb = b.metrics![metric] as number;
+      return lower ? va - vb : vb - va;
+    })
+    .slice(0, 5);
+
+  // Last 3 by id (most recent runs — show what just happened)
+  const recent3 = [...experiments]
+    .sort((a, b) => b.id - a.id)
+    .slice(0, 3);
+
+  function fmtVal(v: number) {
+    return Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(2) : v.toFixed(3);
+  }
+
+  const statusDot: Record<string, string> = {
+    running: "var(--yellow)", completed: "var(--green)", failed: "var(--red)",
+    cancelled: "var(--text-faint)", queued: "var(--text-faint)",
+  };
+
+  return (
+    <div class="exp-mini-results">
+      {/* Top 5 by metric */}
+      {top5.length > 0 && (
+        <div class="emr-section">
+          <span class="emr-label">top {top5.length}</span>
+          <div class="emr-rows">
+            {top5.map((e, i) => {
+              const v = e.metrics![metric] as number;
+              const isMilestone = milestoneIds.has(e.id);
+              const idea = ideas[e.idea_id];
+              return (
+                <div key={e.id} class={`emr-row${isMilestone ? " emr-milestone" : ""}`}>
+                  <span class="emr-rank">{i + 1}</span>
+                  {isMilestone && <span class="emr-star">★</span>}
+                  <code class="emr-exp">exp/{e.label ?? e.id}</code>
+                  <span class="emr-idea">#{e.idea_id}</span>
+                  <span class="emr-val">{fmtVal(v)}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Recent 3 */}
+      <div class="emr-section">
+        <span class="emr-label">recent</span>
+        <div class="emr-rows">
+          {recent3.map((e) => {
+            const status = e._running ? "running" : (e.status ?? "unknown");
+            const v = typeof e.metrics?.[metric] === "number" ? e.metrics![metric] as number : null;
+            return (
+              <div key={e.id} class="emr-row">
+                <span class="emr-dot" style={{ background: statusDot[status] ?? "var(--border)" }} />
+                <code class="emr-exp">exp/{e.label ?? e.id}</code>
+                <span class="emr-idea">#{e.idea_id}</span>
+                <span class="emr-val">{v !== null ? fmtVal(v) : status}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ProgressRing({ pct }: { pct: number }) {
   const size = 14, sw = 2, r = (size - sw) / 2;
   const c = 2 * Math.PI * r;
@@ -1292,6 +1376,20 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
       const v = e.metrics![metric] as number;
       return best === null || (lower ? v < best : v > best) ? v : best;
     }, null) : null;
+
+  // Milestone set AND count (new global bests, chronologically)
+  const milestoneIdsSet = (() => {
+    if (!metric) return new Set<number>();
+    const sorted = done.filter(e => e.metrics && typeof e.metrics[metric] === "number")
+      .slice().sort((a, b) => a.id - b.id);
+    let best: number | null = null;
+    const set = new Set<number>();
+    for (const e of sorted) {
+      const v = e.metrics![metric] as number;
+      if (best === null || (lower ? v < best : v > best)) { best = v; set.add(e.id); }
+    }
+    return set;
+  })();
 
   // Count milestone experiments (new global bests, chronologically)
   const milestonesCount = (() => {
@@ -1389,16 +1487,22 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
             running > 0 ? `${running} running` : null,
             failed > 0 ? `${failed} failed` : null,
             milestonesCount > 0 ? `${milestonesCount} records` : null,
-            bestVal != null ? `best: ${typeof bestVal === "number" ? bestVal.toFixed(3) : bestVal}` : null,
           ].filter(Boolean).join(" · ")}
           preview={
-            finished + running + failed > 0 ? (
-              <div class="idea-health-bar">
+            <div class="emr-preview">
+              <div class="idea-health-bar" style={{ marginBottom: 6 }}>
                 {finished > 0 && <span class="ihb-seg ihb-done"     style={{ flex: finished }} title={`${finished} done`} />}
                 {running > 0  && <span class="ihb-seg ihb-running"  style={{ flex: running }}  title={`${running} running`} />}
                 {failed > 0   && <span class="ihb-seg ihb-abandoned" style={{ flex: failed }}  title={`${failed} failed`} />}
               </div>
-            ) : undefined
+              <ExpMiniResults
+                experiments={experiments}
+                metric={metric}
+                lower={lower}
+                milestoneIds={milestoneIdsSet}
+                ideas={ideas}
+              />
+            </div>
           }
         >
           <div class="review-panel review-table-panel">
