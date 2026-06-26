@@ -257,6 +257,7 @@ body {
 
 @media (max-width: 800px) {
   .activity-spark { display: none; }
+  .activity-idle-label { display: none; }
 }
 
 .review-status-sep {
@@ -327,6 +328,23 @@ body {
 .review-best-age {
   color: var(--text-faint);
   font-size: 9px;
+}
+
+.review-best-trend {
+  font-size: var(--text-sm);
+  font-weight: 700;
+  flex-shrink: 0;
+  &--up   { color: var(--green); }
+  &--down { color: var(--red); }
+  &--flat { color: var(--text-faint); }
+}
+
+.activity-idle-label {
+  font-size: 9px;
+  color: var(--text-faint);
+  white-space: nowrap;
+  flex-shrink: 0;
+  font-style: italic;
 }
 
 .review-best-direction {

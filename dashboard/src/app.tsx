@@ -1565,6 +1565,35 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
     return buckets.map(c => c / maxB); // normalized 0-1
   })();
 
+  // Experiment success rate: % that scored above zero for the primary metric
+  const successRate = (() => {
+    if (!metric) return null;
+    const withMetric = done.filter(e => typeof e.metrics?.[metric] === "number");
+    if (withMetric.length < 5) return null;
+    const scored = withMetric.filter(e => {
+      const v = e.metrics![metric] as number;
+      return lower ? v < Infinity : v > 0;
+    });
+    return Math.round((scored.length / withMetric.length) * 100);
+  })();
+
+  // Trend: compare last-10 avg vs overall avg — ↑ improving, → flat, ↓ declining
+  const scoreTrend = (() => {
+    if (!metric || !bestVal || typeof bestVal !== "number") return null;
+    const withMetric = done.filter(e => typeof e.metrics?.[metric] === "number")
+      .slice().sort((a, b) => a.id - b.id);
+    if (withMetric.length < 20) return null;
+    const all = withMetric.map(e => e.metrics![metric] as number);
+    const recent10 = all.slice(-10);
+    const prev10 = all.slice(-20, -10);
+    const avgRecent = recent10.reduce((s, v) => s + v, 0) / 10;
+    const avgPrev = prev10.reduce((s, v) => s + v, 0) / 10;
+    const diff = lower ? avgPrev - avgRecent : avgRecent - avgPrev;
+    if (diff > avgPrev * 0.05) return "↑";
+    if (diff < -avgPrev * 0.05) return "↓";
+    return "→";
+  })();
+
   // Best score for the selected idea (for Idea detail disclosure preview)
   const selectedIdeaBest = selected != null ? done
     .filter(e => e.idea_id === selected && e.metrics && typeof e.metrics[metric] === "number")
@@ -1658,15 +1687,19 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
           {cost != null && <span class="review-status-item review-status-item--cost">${cost.toFixed(0)}</span>}
         </div>
         {/* 14-day activity sparkline — hidden on mobile */}
-        <div class="activity-spark" title="Experiment activity over last 14 days">
-          {activityBars.map((h, i) => (
-            <span key={i} class="activity-bar" style={{
-              height: `${h > 0 ? Math.max(4, Math.round(h * 16)) : 2}px`,
-              background: h > 0 ? "var(--accent)" : "var(--border)",
-              opacity: h > 0 ? 0.7 + h * 0.3 : 0.4,
-            }} />
-          ))}
-        </div>
+        {activityBars.some(h => h > 0) ? (
+          <div class="activity-spark" title="Experiment activity over last 14 days (each bar = 1 day)">
+            {activityBars.map((h, i) => (
+              <span key={i} class="activity-bar" style={{
+                height: `${h > 0 ? Math.max(4, Math.round(h * 16)) : 2}px`,
+                background: h > 0 ? "var(--accent)" : "var(--border)",
+                opacity: h > 0 ? 0.7 + h * 0.3 : 0.25,
+              }} />
+            ))}
+          </div>
+        ) : (
+          <span class="activity-idle-label">no activity in 14d</span>
+        )}
         <button class="review-primary-action" onClick={onOpenWorkbench}>Workbench →</button>
       </div>
 
@@ -1682,6 +1715,12 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
           <span class="review-best-direction" title={lower ? "lower is better" : "higher is better"}>
             {lower ? "↓ lower better" : "↑ higher better"}
           </span>
+          {scoreTrend && (
+            <span class={`review-best-trend review-best-trend--${scoreTrend === "↑" ? "up" : scoreTrend === "↓" ? "down" : "flat"}`}
+              title={`Recent 10 vs previous 10: ${scoreTrend === "↑" ? "improving" : scoreTrend === "↓" ? "declining" : "flat"}`}>
+              {scoreTrend}
+            </span>
+          )}
           <span class="review-best-meta">
             {bestIdea ? bestIdea.description?.split("\n")[0].slice(0, 50) : `idea #${bestExp.idea_id}`}
             {" · "}<code>{bestExp.label ?? `exp/${bestExp.id}`}</code>
@@ -1710,6 +1749,7 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
             `${finished} done`,
             running > 0 ? `${running} running` : null,
             failed > 0 ? `${failed} failed` : null,
+            successRate !== null ? `${successRate}% scored` : null,
             milestonesCount > 0 ? `${milestonesCount} records` : null,
             isStagnant ? "⚠ stagnant" : null,
           ].filter(Boolean).join(" · ")}
