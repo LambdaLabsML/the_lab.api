@@ -9,6 +9,7 @@
 
 import { useRef, useEffect, useState } from "preact/hooks";
 import { navigateToIdea } from "../lib/navigate";
+import { SearchFilter, type FilterItem } from "../components/search-filter/search-filter";
 import type { IdeaNode, StationPos, SubwayLayout } from "../lib/types";
 import { graphData, currentLayout, highlightedIdea, allIdeas, allExperiments, runningProgress } from "../state/signals";
 import { colorMode, selectedIdea, selectedMetric, activeTagFilters, tagFilterMode, reverseTime, showAbandoned, showConcluded, showRunning, colorTheme, showNodeText } from "../state/settings";
@@ -772,7 +773,28 @@ export function DagView() {
           Lives in the non-scrolling wrapper so it stays pinned while the map
           scrolls. TEXT flips showNodeText (off → compact node-only map, labels
           hidden). MINI flips improvementsOnly (the existing compact-only mode). */}
-      <div class="subway-toolbar" role="group" aria-label="Node display mode">
+      <div class="subway-toolbar" role="group" aria-label="Graph controls">
+        <SearchFilter
+          class="subway-search"
+          placeholder="find idea…"
+          applied={[]}
+          suggest={(q) => {
+            const query = q.trim().toLowerCase();
+            if (!query) return [];
+            const out: FilterItem[] = [];
+            for (const id in ideas) {
+              const title = ideaTitle(ideas[id]?.description ?? "");
+              if (`#${id}`.includes(query) || String(id).includes(query) || title.toLowerCase().includes(query)) {
+                out.push({ id: `idea:${id}`, category: "idea", label: `#${id} ${title}`, value: String(id) });
+              }
+              if (out.length >= 8) break;
+            }
+            return out;
+          }}
+          onApply={(item) => navigateToIdea(Number(item.value))}
+          onToggle={() => {}}
+          onRemove={() => {}}
+        />
         <button
           type="button"
           class={"ui-toggle" + (showNodeText.value ? " is-active" : "")}

@@ -28,7 +28,7 @@ import { getCssVar, getCssVarPx } from "../../lib/css-vars";
 import { Toggle, IconButton } from "../ui";
 import type { ChartDataResult } from "../../lib/chart-data";
 
-export function MetricsChart({ instanceId, initialMetric }: { instanceId?: string; initialMetric?: string } = {}) {
+export function MetricsChart({ instanceId, initialMetric, hideClone }: { instanceId?: string; initialMetric?: string; hideClone?: boolean } = {}) {
   // Cloned instances use local state; the original uses the global signal
   const isClone = !!instanceId;
   const [localMetric, setLocalMetric] = useState(initialMetric || "");
@@ -325,9 +325,12 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
         <Toggle active={minified} onClick={() => { chartMinified.value = !minified; }} title="Minified: small dots, global overview">
           ⊡ Mini
         </Toggle>
-        <IconButton onClick={() => { if (cloneChartPanel) cloneChartPanel("metrics", metric); }} title="Clone this chart as a new tab">
-          + Clone
-        </IconButton>
+        {/* Clone is hidden in the single-chart review (hideClone); kept in the workbench */}
+        {!hideClone && (
+          <IconButton onClick={() => { if (cloneChartPanel) cloneChartPanel("metrics", metric); }} title="Clone this chart as a new tab">
+            + Clone
+          </IconButton>
+        )}
         {/* Current best badge — quickly visible without needing to hover the chart */}
         {bestLine && (() => {
           const vals = allExperiments.value.filter(e => !e._running && typeof e.metrics?.[metric] === "number").map(e => e.metrics![metric] as number);

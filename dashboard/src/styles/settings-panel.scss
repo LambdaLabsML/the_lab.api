@@ -7,6 +7,9 @@
 
 .settings-panel {
   height: 100%;
+  /* responsive grids key off the (resizable) sidebar width */
+  container-type: inline-size;
+  container-name: settings;
 }
 
 /* Scrollable vertical stack of sections, separated by hairlines. */
@@ -44,8 +47,14 @@
 
 .settings-theme-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: 1fr;            /* narrow sidebar → 1 column */
   gap: var(--space-2);
+}
+@container settings (min-width: 230px) {
+  .settings-theme-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@container settings (min-width: 350px) {
+  .settings-theme-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
 .settings-swatch {

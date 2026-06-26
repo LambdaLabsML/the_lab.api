@@ -10,15 +10,16 @@ import { sidebarWidth, sidebarCollapsed } from "../state/settings";
 import { wsConnected, wsAuthFailed } from "../state/ws";
 import { Tooltip } from "./ui";
 
-export type NavSection = "activity" | "review" | "queue" | "workbench";
+export type NavSection = "review" | "activity" | "queue" | "workbench" | "tools";
 
 interface RailItem { id: NavSection; label: string; icon: string }
 
 const PRIMARY: RailItem[] = [
+  { id: "review",    label: "Overview",  icon: "▦" },
   { id: "activity",  label: "Activity",  icon: "◉" },
-  { id: "review",    label: "Review",    icon: "▦" },
   { id: "queue",     label: "Queue",     icon: "≡" },
   { id: "workbench", label: "Workbench", icon: "⊞" },
+  { id: "tools",     label: "Tools",     icon: "⚒" },
 ];
 
 export function NavRail({

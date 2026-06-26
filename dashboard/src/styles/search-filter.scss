@@ -1,0 +1,241 @@
+/* search-filter.scss — the reusable SearchFilter component (search + pills).
+   Design language (see dashboard/DESIGN.md): hairline field not a box, flat fills,
+   one accent, token type. The suggestions menu is a flat elevated surface with a
+   hairline + soft shadow, mirroring `.ui-tip` — positioned fixed and clamped to
+   the viewport in search-filter.tsx so it never clips inside scroll containers. */
+
+.sf {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+/* ── Input field (hairline, not a box) ─────────────────────────────────── */
+
+.sf-field {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: 4px var(--space-2);
+  background: var(--bg-elev);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  transition: border-color var(--transition-fast);
+
+  &:focus-within { border-color: var(--accent); }
+}
+
+.sf-icon {
+  flex-shrink: 0;
+  color: var(--text-faint);
+}
+
+.sf-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-base);
+  line-height: 1.4;
+
+  &::placeholder { color: var(--text-faint); }
+}
+
+/* small ghost × that clears just the typed text */
+.sf-input-clear {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-faint);
+  font-size: var(--text-lg);
+  line-height: 1;
+  cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast);
+
+  &:hover { color: var(--text); background: var(--bg-hi); }
+}
+
+/* clear-all affordance — reads as a faint ghost action */
+.sf-clear-all {
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+  transition: color var(--transition-fast), background var(--transition-fast);
+
+  &:hover { color: var(--text); background: var(--bg-hi); }
+}
+
+/* ── Applied pills ─────────────────────────────────────────────────────── */
+
+.sf-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  min-width: 0;
+  /* fallback accent if the consumer supplies no categoryColor */
+  --sf-pill-accent: var(--accent);
+}
+
+.sf-pill {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  border: 1px solid color-mix(in srgb, var(--sf-pill-accent) 38%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--sf-pill-accent) 10%, transparent);
+  overflow: hidden;
+  transition: opacity var(--transition-fast), border-color var(--transition-fast),
+    background var(--transition-fast);
+}
+
+/* inactive (toggled off) — dimmed + struck label */
+.sf-pill.is-off {
+  border-color: var(--border-soft);
+  background: transparent;
+  opacity: 0.6;
+
+  .sf-pill-dot { background: var(--text-faint); }
+  .sf-pill-label { color: var(--text-faint); text-decoration: line-through; }
+}
+
+.sf-pill-body {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 2px 6px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  cursor: pointer;
+  transition: background var(--transition-fast);
+
+  &:hover { background: var(--bg-hi); }
+}
+
+/* the category-colored accent dot */
+.sf-pill-dot {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--sf-pill-accent);
+}
+
+.sf-pill-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sf-pill-x {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: stretch;
+  width: 18px;
+  padding: 0;
+  border: none;
+  /* hairline divider from the body, not a box */
+  box-shadow: inset 1px 0 var(--border-soft);
+  background: transparent;
+  color: var(--text-faint);
+  font-size: var(--text-base);
+  line-height: 1;
+  cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast);
+
+  &:hover { color: var(--red); background: var(--bg-hi); }
+}
+
+/* ── Suggestions menu (flat elevated surface — like .ui-tip) ───────────── */
+
+.sf-menu {
+  position: fixed;
+  z-index: var(--z-modal);
+  max-height: min(320px, 60vh);
+  overflow-y: auto;
+  padding: var(--space-1) 0;
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  /* hairline + soft elevation, mirroring .ui-tip */
+  box-shadow: 0 0 0 1px var(--border), 0 8px 22px rgba(0, 0, 0, 0.42);
+  font-family: var(--font-mono);
+  animation: sf-menu-in 0.1s ease-out;
+}
+@keyframes sf-menu-in { from { opacity: 0; transform: translateY(-2px); } }
+
+.sf-group { --sf-pill-accent: var(--accent); }
+.sf-group + .sf-group { margin-top: 2px; }
+
+/* subtle category eyebrow per group */
+.sf-group-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px var(--space-3) 3px;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.sf-group-dot {
+  flex-shrink: 0;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--sf-pill-accent);
+}
+
+.sf-option {
+  padding: 4px var(--space-3);
+  color: var(--text-muted);
+  font-size: var(--text-base);
+  line-height: 1.4;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: color var(--transition-fast), background var(--transition-fast);
+
+  &:hover { color: var(--text); }
+  &.is-active {
+    color: var(--text);
+    background: var(--bg-hi);
+  }
+}
+
+/* emphasized matched substring */
+.sf-mark {
+  font-style: normal;
+  color: var(--accent);
+  font-weight: 700;
+}

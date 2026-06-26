@@ -27,6 +27,7 @@ import "./styles/table.scss";
 import "./styles/_shell.scss";
 import "./styles/activity.scss";
 import "./styles/settings-panel.scss";
+import "./styles/search-filter.scss";
 
 // Apply theme / font-family / font-size on every change
 effect(() => {

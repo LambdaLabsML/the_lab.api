@@ -89,6 +89,60 @@ body {
   margin: 0 auto;
 }
 
+/* ── Review search / filter (#34) — full-width row above the sections ── */
+.review-search {
+  width: 100%;
+}
+.review-search-field {
+  width: 100%;
+}
+
+/* ── Chart head (#36) — eyebrow + prominent metric selector above chart ── */
+.review-chart-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 2px 2px 0;
+}
+.review-metric-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+}
+.review-metric-select-label {
+  color: var(--text-faint);
+}
+.review-metric-select-input {
+  /* on-brand select — .ui-toggle language: hairline field, accent on focus */
+  appearance: none;
+  background: var(--bg-elev);
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  border-radius: var(--radius-md);
+  padding: 4px 26px 4px 10px;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  line-height: 1.3;
+  cursor: pointer;
+  outline: none;
+  /* a small caret, drawn flat (no gradient) */
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--accent) 50%),
+    linear-gradient(135deg, var(--accent) 50%, transparent 50%);
+  background-position:
+    calc(100% - 14px) calc(50% - 1px),
+    calc(100% - 9px) calc(50% - 1px);
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  transition: border-color var(--transition-fast), background-color var(--transition-fast);
+  &:hover { background-color: var(--bg-hi); border-color: var(--accent); }
+  &:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent); }
+  optgroup, option { background: var(--bg-elev); color: var(--text); font-weight: 400; }
+}
+
 /* ── Shared pane patterns ──────────────────────────────────────────── */
 
 .pane-bar {

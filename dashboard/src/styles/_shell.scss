@@ -148,6 +148,7 @@
   transition: color var(--transition-fast), background var(--transition-fast);
   &:hover { color: var(--text); background: var(--bg-hi); }
   &.is-open { color: var(--text-faint); }
+  &.is-active { color: var(--text); background: var(--bg-hi); box-shadow: inset 2px 0 var(--accent); }
 }
 .nav-secondary-icon { width: 14px; text-align: center; color: var(--text-faint); flex-shrink: 0; }
 .nav-secondary-dot {

@@ -49,6 +49,7 @@ import { DetailPanel } from "./components/detail-panel";
 import { MetricsChart } from "./components/chart-panel/metrics-chart";
 import { ScatterChart } from "./components/chart-panel/scatter-chart";
 import { FilterBar } from "./components/filter-bar";
+import { SearchFilter, type FilterItem } from "./components/search-filter/search-filter";
 import { Eyebrow, Stat, Tooltip } from "./components/ui";
 import { NavRail, SecondaryPanel, type NavSection } from "./components/nav-rail";
 import { ActivityPane } from "./components/activity/activity-pane";
@@ -62,6 +63,7 @@ import {
   scatterXMetric, scatterYMetric,
   applyServerDefaults,
   dashboardLayout,
+  filterText,
 } from "./state/settings";
 import { startPolling, stopPolling } from "./state/polling";
 import { startWs, stopWs } from "./state/ws";
@@ -84,6 +86,7 @@ import { initTouchMoveMenu } from "./lib/touch-move-menu";
 import { getStatusColor, isLowerBetter } from "./lib/colors";
 import { navigateToIdea } from "./lib/navigate";
 import { fmtMetricName } from "./lib/format";
+import { collectChartKeys } from "./lib/chart-data";
 
 // ---------------------------------------------------------------------------
 // Panel component map — maps panel ID to Preact component
@@ -107,6 +110,29 @@ const REVIEW_SECTIONS: { id: string; label: string; icon: string }[] = [
   { id: "review-compare", label: "Correlation", icon: "⊞" },
   { id: "review-detail",  label: "Idea Detail", icon: "▸" },
 ];
+
+// Tools surfaced from the rail (grouped), rendered in the center when active.
+type ToolView = "agents" | "sandbox" | "prompts" | "stats" | "api" | "messages" | "suggest" | "task";
+const TOOL_GROUPS: { group: string; items: { id: ToolView; label: string }[] }[] = [
+  { group: "Run",     items: [{ id: "agents", label: "Agents" }, { id: "sandbox", label: "Sandbox" }, { id: "prompts", label: "Prompts" }] },
+  { group: "Inspect", items: [{ id: "stats", label: "Stats" }, { id: "api", label: "API" }, { id: "messages", label: "Messages" }] },
+  { group: "Plan",    items: [{ id: "suggest", label: "Suggest" }, { id: "task", label: "Task" }] },
+];
+const TOOL_VIEWS: Record<ToolView, () => preact.JSX.Element> = {
+  agents: () => <AgentsView />, sandbox: () => <SandboxView />, prompts: () => <PromptsView />,
+  stats: () => <StatsView />, api: () => <ApiView />, messages: () => <MessagesView />,
+  suggest: () => <SuggestPanel />, task: () => <TaskBanner />,
+};
+
+// URL hash ⇄ nav selection (deep-linkable). `#section` or `#tools/<tool>`.
+const NAV_SECTIONS = ["review", "activity", "queue", "workbench", "tools"];
+function parseNavHash(): { section: NavSection; tool: ToolView } {
+  const h = (location.hash || "").replace(/^#\/?/, "");
+  const [sec, tool] = h.split("/");
+  const section = (NAV_SECTIONS.includes(sec) ? sec : "review") as NavSection;
+  const t = (tool && tool in TOOL_VIEWS ? tool : "agents") as ToolView;
+  return { section, tool: t };
+}
 
 const PANEL_MAP: Record<string, (params?: any) => preact.JSX.Element> = {
   graph: () => <DagView />,
@@ -501,10 +527,23 @@ function syncUrlFromSignals() {
 export function App() {
   const containerRef = useRef<HTMLDivElement>(null);
   const dockviewRef = useRef<DockviewComponent | null>(null);
-  const [navSection, setNavSection] = useState<NavSection>("activity");
+  const initialNav = parseNavHash();
+  const [navSection, setNavSection] = useState<NavSection>(initialNav.section);
+  const [toolView, setToolView] = useState<ToolView>(initialNav.tool);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [layoutName, setLayoutName] = useState("");
   const [layoutVersion, setLayoutVersion] = useState(0);
+
+  // Keep the URL hash in sync with the active section (deep-linkable).
+  useEffect(() => {
+    const target = navSection === "tools" ? `#tools/${toolView}` : `#${navSection}`;
+    if (location.hash !== target) history.replaceState(null, "", target);
+  }, [navSection, toolView]);
+  useEffect(() => {
+    const onHash = () => { const p = parseNavHash(); setNavSection(p.section); setToolView(p.tool); };
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
 
   // Initialize dockview
   useEffect(() => {
@@ -1029,7 +1068,7 @@ export function App() {
     });
   }, []);
 
-  const showSecondary = settingsOpen || navSection === "review" || navSection === "queue" || navSection === "workbench";
+  const showSecondary = settingsOpen || navSection === "review" || navSection === "queue" || navSection === "workbench" || navSection === "tools";
   void layoutVersion; // re-read saved layouts after a save/delete
   const savedLayouts = getSavedLayouts();
   return (
@@ -1043,7 +1082,7 @@ export function App() {
 
       {showSecondary && (
         <SecondaryPanel
-          label={settingsOpen ? "Settings" : navSection === "workbench" ? "Workbench" : navSection === "queue" ? "Queue" : "Review sections"}
+          label={settingsOpen ? "Settings" : navSection === "workbench" ? "Workbench" : navSection === "queue" ? "Queue" : navSection === "tools" ? "Tools" : "Review sections"}
         >
           {settingsOpen ? (
             <SettingsPanel />
@@ -1064,6 +1103,25 @@ export function App() {
                 </>
               )}
               {navSection === "queue" && <ActivityShortlog />}
+              {navSection === "tools" && (
+                <nav class="nav-secondary-list">
+                  {TOOL_GROUPS.map((g) => (
+                    <div key={g.group}>
+                      <div class="nav-secondary-sub"><Eyebrow>{g.group}</Eyebrow></div>
+                      {g.items.map((it) => (
+                        <button
+                          key={it.id}
+                          class={`nav-secondary-btn${toolView === it.id ? " is-active" : ""}`}
+                          onClick={() => setToolView(it.id)}
+                        >
+                          <span class="nav-secondary-dot" data-open={toolView === it.id ? "true" : undefined} />
+                          {it.label}
+                        </button>
+                      ))}
+                    </div>
+                  ))}
+                </nav>
+              )}
               {navSection === "workbench" && (
                 <nav class="nav-secondary-list">
                   <div class="nav-secondary-head"><Eyebrow>Add panel</Eyebrow></div>
@@ -1157,6 +1215,14 @@ export function App() {
             <div class="app-scroll">
               <main class="dashboard-page">
                 <QueueView />
+              </main>
+            </div>
+          )}
+
+          {navSection === "tools" && (
+            <div class="app-scroll">
+              <main class="dashboard-page">
+                {TOOL_VIEWS[toolView]()}
               </main>
             </div>
           )}
@@ -1891,6 +1957,160 @@ function IdeaPortfolio({ active, concluded, abandoned, untested }: {
   );
 }
 
+// ── Review search/filter (#34) ───────────────────────────────────────────────
+// Single search field at the top of the review content. Categories: idea, tag,
+// experiment, free-text. Active pills push into the existing global filter
+// signals so the whole page filters in sync; inactive pills keep the chip but
+// stop filtering.
+const REVIEW_FILTER_COLORS: Record<string, string> = {
+  idea: "var(--accent)",
+  tag: "var(--purple)",
+  experiment: "var(--green)",
+  text: "var(--text-muted)",
+};
+
+function ReviewSearchFilter({ experiments, ideas }: {
+  experiments: import("./lib/types").Experiment[];
+  ideas: Record<number, import("./lib/types").IdeaNode>;
+}) {
+  type Pill = FilterItem & { active?: boolean };
+  const [applied, setApplied] = useState<Pill[]>([]);
+
+  // Initialize pills from current signal values on mount so the bar reflects
+  // any filters already in effect (deep-link, prior session, other views).
+  useEffect(() => {
+    const init: Pill[] = [];
+    for (const t of activeTagFilters.value) {
+      init.push({ id: `tag:${t}`, category: "tag", label: t, value: t, active: true });
+    }
+    const ft = filterText.value.trim();
+    if (ft) init.push({ id: `text:${ft}`, category: "text", label: ft, value: ft, active: true });
+    const sel = selectedIdea.value;
+    if (sel != null) {
+      const desc = ideas[sel]?.description?.split("\n")[0] ?? "";
+      init.push({ id: `idea:${sel}`, category: "idea", label: `#${sel}${desc ? ` ${desc.slice(0, 40)}` : ""}`, value: String(sel), active: true });
+    }
+    if (init.length) setApplied(init);
+    // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Derive the global filter signals from the ACTIVE pills (in an effect so we
+  // never write signals during a state-updater / render). tag → activeTagFilters,
+  // text → filterText, idea/experiment → selectedIdea (the page reacts to these).
+  // `primed` gates the derive until after the mount-init effect has run, so we
+  // don't clobber existing signal values on first paint.
+  const primed = useRef(false);
+  useEffect(() => {
+    if (!primed.current) { primed.current = true; return; }
+    const on = applied.filter(p => p.active !== false);
+    const nextTags = on.filter(p => p.category === "tag").map(p => p.value);
+    if (JSON.stringify(nextTags) !== JSON.stringify(activeTagFilters.value)) activeTagFilters.value = nextTags;
+    const text = on.filter(p => p.category === "text").map(p => p.value).join(" ");
+    if (text !== filterText.value) filterText.value = text;
+    // last active idea/experiment pill wins for the selected idea
+    const ideaLike = on.filter(p => p.category === "idea" || p.category === "experiment");
+    if (ideaLike.length === 0) {
+      if (selectedIdea.value !== null) selectedIdea.value = null;
+    } else {
+      const idNum = Number(ideaLike[ideaLike.length - 1].value);
+      if (!Number.isNaN(idNum) && selectedIdea.value !== idNum) selectedIdea.value = idNum;
+    }
+  }, [applied]);
+
+  function suggest(query: string): FilterItem[] {
+    const q = query.toLowerCase();
+    const out: FilterItem[] = [];
+    // ideas — by #id and description
+    const ideaArr = Object.values(ideas);
+    for (const idea of ideaArr) {
+      const desc = (idea.description ?? "").split("\n")[0];
+      const hay = `#${idea.id} ${desc}`.toLowerCase();
+      if (hay.includes(q)) {
+        out.push({ id: `idea:${idea.id}`, category: "idea", label: `#${idea.id} ${desc.slice(0, 48)}`.trim(), value: String(idea.id) });
+      }
+      if (out.filter(o => o.category === "idea").length >= 8) break;
+    }
+    // tags — campaign tag set (same source as the existing tag filter)
+    const tagSet = new Set<string>();
+    for (const e of experiments) if (e.tags) for (const t of e.tags) tagSet.add(t);
+    for (const idea of ideaArr) { const it = (idea as any).tags as string[] | undefined; if (it) for (const t of it) tagSet.add(t); }
+    for (const t of [...tagSet].sort()) {
+      if (t.toLowerCase().includes(q)) out.push({ id: `tag:${t}`, category: "tag", label: t, value: t });
+    }
+    // experiments — by label; value carries the idea_id for navigation
+    let nExp = 0;
+    for (const e of experiments) {
+      const lab = e.label ?? String(e.id);
+      if (lab.toLowerCase().includes(q)) {
+        out.push({ id: `experiment:${e.id}`, category: "experiment", label: `exp/${lab}`, value: String(e.idea_id) });
+        if (++nExp >= 8) break;
+      }
+    }
+    return out;
+  }
+
+  function addPill(item: FilterItem) {
+    setApplied(prev => prev.some(p => p.id === item.id) ? prev : [...prev, { ...item, active: true }]);
+    // idea/experiment also navigate immediately (open the idea detail)
+    if (item.category === "idea") navigateToIdea(Number(item.value));
+    else if (item.category === "experiment") navigateToIdea(Number(item.value), item.label.replace(/^exp\//, ""));
+  }
+
+  function addText(text: string) {
+    const id = `text:${text}`;
+    setApplied(prev => prev.some(p => p.id === id) ? prev : [...prev, { id, category: "text", label: text, value: text, active: true }]);
+  }
+
+  function toggle(id: string) {
+    setApplied(prev => prev.map(p => p.id === id ? { ...p, active: p.active === false } : p));
+  }
+
+  function remove(id: string) {
+    setApplied(prev => prev.filter(p => p.id !== id));
+  }
+
+  return (
+    <div class="review-search">
+      <SearchFilter
+        class="review-search-field"
+        placeholder="Filter review — idea #, description, tag, or experiment…"
+        applied={applied}
+        suggest={suggest}
+        onApply={addPill}
+        onApplyText={addText}
+        onToggle={toggle}
+        onRemove={remove}
+        categoryColor={(c) => REVIEW_FILTER_COLORS[c] ?? "var(--text-muted)"}
+      />
+    </div>
+  );
+}
+
+// ── Review metric selector (#36) — prominent, on-brand <select> driving the
+// single review chart's metric. Lives just above the chart so the choice is
+// obvious instead of buried in the chart toolbar.
+function ReviewMetricSelect({ experiments }: { experiments: import("./lib/types").Experiment[] }) {
+  const metric = selectedMetric.value;
+  const grouped = collectChartKeys(experiments);
+  const allKeys = [...grouped.metrics, ...grouped.nested, ...grouped.timing, ...grouped.meta];
+  if (allKeys.length === 0) return null;
+  return (
+    <label class="review-metric-select" title="Choose the metric charted below and summarized above">
+      <span class="ui-eyebrow review-metric-select-label">metric</span>
+      <select
+        class="review-metric-select-input"
+        value={metric}
+        onChange={(e) => { selectedMetric.value = (e.target as HTMLSelectElement).value; }}
+      >
+        {grouped.metrics.length > 0 && <optgroup label="Metrics">{grouped.metrics.map((k) => <option key={k} value={k}>{fmtMetricName(k)}</option>)}</optgroup>}
+        {grouped.nested.length > 0 && <optgroup label="Nested">{grouped.nested.map((k) => <option key={k} value={k}>{fmtMetricName(k)}</option>)}</optgroup>}
+        {grouped.timing.length > 0 && <optgroup label="Timing">{grouped.timing.map((k) => <option key={k} value={k}>{fmtMetricName(k)}</option>)}</optgroup>}
+        {grouped.meta.length > 0 && <optgroup label="Meta">{grouped.meta.map((k) => <option key={k} value={k}>{fmtMetricName(k)}</option>)}</optgroup>}
+      </select>
+    </label>
+  );
+}
+
 function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
   const data = backlogData.value;
   const experiments = allExperiments.value;
@@ -2052,6 +2272,11 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
 
   return (
     <div class="review-page">
+      {/* ── Search / filter (#34) — full width, top of the review content.
+          Active pills drive the global filter signals so the whole page
+          (chart, tables, graph) filters in sync. */}
+      <ReviewSearchFilter experiments={experiments} ideas={ideas} />
+
       {/* ══ Header — one calm instrument cluster ════════════════════════
           A single status line + a hairline KPI grid + the experiment grid.
           Replaces the old status-strip / jump-nav / best-bar / snapshot /
@@ -2161,6 +2386,12 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
       {/* ── Experiment grid — glanceable per-experiment status tiles ───── */}
       <ExperimentGrid experiments={experiments} successRate={successRate} milestoneIds={milestoneIdsSet} ideas={ideas} metric={metric} />
 
+      {/* ── Metric selector (#36) — prominent, just above the single chart ── */}
+      <div class="review-chart-head">
+        <span class="ui-eyebrow">progress over experiments</span>
+        <ReviewMetricSelect experiments={experiments} />
+      </div>
+
       {/* ── Chart — collapses to compact empty state when no metric selected ── */}
       {(() => {
         const hasChartData = selectedMetric.value !== "" &&
@@ -2168,7 +2399,7 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
         return (
           <div class="review-chart-wrap" id="review-progress"
             style={!hasChartData ? { height: "136px", minHeight: "136px" } : undefined}>
-            <MetricsChart />
+            <MetricsChart hideClone />
             <a class="review-chart-skip" href="#review-runs" onClick={(e) => {
               e.preventDefault();
               document.getElementById("review-runs")?.scrollIntoView({ behavior: "smooth", block: "start" });
