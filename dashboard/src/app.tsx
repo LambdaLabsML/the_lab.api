@@ -1941,9 +1941,15 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
               parts.push(
                 <span title={runIdea?.description?.split("\n")[0] ?? undefined}>
                   {liveCount} running{pct != null && pct > 0 ? ` ${pct}%` : ""}
-                  {elapsedMin != null && elapsedMin > 0 && (
-                    <span style={{ color: "var(--text-faint)", fontSize: "var(--text-xs)" }}> {elapsedMin}m</span>
-                  )}
+                  {elapsedMin != null && elapsedMin > 0 && (() => {
+                    const etaMin = pct != null && pct > 5 ? Math.round((elapsedMin / pct) * (100 - pct)) : null;
+                    const etaStr = etaMin != null ? (etaMin > 90 ? `~${Math.round(etaMin/60)}h left` : `~${etaMin}m left`) : null;
+                    return (
+                      <span style={{ color: "var(--text-faint)", fontSize: "var(--text-xs)" }}>
+                        {" "}{elapsedMin}m{etaStr ? <span title="Estimated time remaining based on progress"> · {etaStr}</span> : null}
+                      </span>
+                    );
+                  })()}
                   {runDesc ? <span style={{ color: "var(--text-faint)" }}> · {runDesc}…</span> : null}
                 </span>
               );
