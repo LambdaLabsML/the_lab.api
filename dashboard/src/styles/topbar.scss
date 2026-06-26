@@ -108,6 +108,14 @@
   transition: background var(--transition-fast);
   &:hover { background: var(--text-muted); }
   &--active { background: var(--accent); }
+  &--live { background: var(--yellow); opacity: 0.8; }
+  &--active#{&}--live { background: var(--yellow); opacity: 1; }
+}
+
+/* Ambient live indicator: subtle left accent when running */
+.topbar-stat-cycle[data-live="true"] {
+  border-left: 2px solid color-mix(in srgb, var(--yellow) 60%, transparent);
+  padding-left: 4px;
 }
 
 /* WebSocket connection status dot */

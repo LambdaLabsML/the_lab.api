@@ -375,18 +375,24 @@ export function Topbar(props: LayoutActions) {
 
         {/* Compact cycling widget — absolutely overlays the stats row when it overflows */}
         {compact && (
-          <div class="topbar-stat-cycle">
+          <div
+            class="topbar-stat-cycle"
+            data-live={totalRunning > 0 ? "true" : undefined}
+            data-live-stat={stats[clampedIdx].key === "running" && stats[clampedIdx].value !== "0" ? "true" : undefined}
+          >
             <button class="topbar-cycle-btn" onClick={prevStat} title="Previous stat">‹</button>
             <span class="topbar-cycle-stat" title={stats[clampedIdx].title}>
               <span class="topbar-cycle-label">{stats[clampedIdx].label}</span>
-              <b>{stats[clampedIdx].value}</b>
+              <b style={stats[clampedIdx].key === "running" && stats[clampedIdx].value !== "0" ? { color: "var(--yellow)" } : undefined}>
+                {stats[clampedIdx].value}
+              </b>
             </span>
             <button class="topbar-cycle-btn" onClick={nextStat} title="Next stat">›</button>
             <div class="topbar-cycle-dots">
-              {stats.map((_, i) => (
+              {stats.map((s, i) => (
                 <span
                   key={i}
-                  class={`topbar-cycle-dot${i === clampedIdx ? " topbar-cycle-dot--active" : ""}`}
+                  class={`topbar-cycle-dot${i === clampedIdx ? " topbar-cycle-dot--active" : ""}${s.key === "running" && s.value !== "0" && s.value !== "--" ? " topbar-cycle-dot--live" : ""}`}
                   onClick={() => setStatIdx(i)}
                 />
               ))}
