@@ -8,7 +8,7 @@ import {
 import { collectChartKeys, resolveNumericValue } from "../lib/chart-data";
 import { _colorForExp, isLowerBetter } from "../lib/colors";
 import { navigateToIdea } from "../lib/navigate";
-import { badgeHtml } from "../lib/format";
+import { badgeHtml, fmtMetricName } from "../lib/format";
 import type { Experiment } from "../lib/types";
 
 // ---------------------------------------------------------------------------
@@ -323,7 +323,7 @@ export function TablePanel() {
                   }}
                   style={`${dragOverCol === mk ? "border-left: 2px solid var(--accent);" : ""}cursor: grab;`}
                 >
-                  {mk}{sortArrow(mk)}
+                  {fmtMetricName(mk)}{sortArrow(mk)}
                 </th>
               ))}
               {hiddenCols.size > 0 && (

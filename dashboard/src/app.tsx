@@ -2098,7 +2098,12 @@ function ReviewDisclosure({
 }) {
   // Use a ref so we can imperatively open/close without re-rendering
   const ref = (el: HTMLDetailsElement | null) => {
-    if (el && autoOpen !== undefined) el.open = autoOpen;
+    if (!el) return;
+    if (autoOpen !== undefined) el.open = autoOpen;
+    // Dispatch resize when details opens so inner canvas-based components re-render
+    el.addEventListener("toggle", () => {
+      if (el.open) window.dispatchEvent(new Event("resize"));
+    }, { once: false });
   };
   return (
     <details ref={ref} class="review-disclosure review-section" id={id}>

@@ -7,7 +7,7 @@
 // crossing adjustments, and SVG line rendering.
 // ------------------------------------------------------------
 
-import { useRef, useEffect } from "preact/hooks";
+import { useRef, useEffect, useState } from "preact/hooks";
 import { navigateToIdea } from "../lib/navigate";
 import type { IdeaNode, StationPos, SubwayLayout } from "../lib/types";
 import { graphData, currentLayout, highlightedIdea, allIdeas, allExperiments, runningProgress } from "../state/signals";
@@ -36,6 +36,28 @@ const colWidthOverrides = useSetting<Record<string, number>>("dagColWidths", {})
 
 export function DagView() {
   const containerRef = useRef<HTMLDivElement>(null);
+  const [visibleKey, setVisibleKey] = useState(0);
+
+  // Re-render when container transitions from hidden (inside <details>) to visible
+  // Also auto-scroll to show recent ideas (rightmost in graph)
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      for (const e of entries) {
+        if (e.contentRect.width > 10 && e.contentRect.height > 10) {
+          setVisibleKey(k => k + 1);
+          // Scroll to show the most recent ideas (right end of graph)
+          requestAnimationFrame(() => {
+            const graphEl = el.querySelector("#graph-container, #graph") as HTMLElement;
+            if (graphEl) el.scrollLeft = graphEl.scrollWidth;
+          });
+        }
+      }
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   const theme = colorTheme.value;  // subscribe so graph redraws on theme change
   const data = graphData.value;
@@ -641,7 +663,7 @@ export function DagView() {
 
     // Apply current highlight state (in case it was set before render)
     applyHighlight(highlightedIdea.value);
-  }, [data, layout, mode, metric, ideas, experiments, effectiveCompactMode, tags, tagMode, reversed, showAbandoned.value, showConcluded.value, showRunning.value, theme]);
+  }, [data, layout, mode, metric, ideas, experiments, effectiveCompactMode, tags, tagMode, reversed, showAbandoned.value, showConcluded.value, showRunning.value, theme, visibleKey]);
 
   // =========================================================================
   // HIGHLIGHT EFFECT — reacts to highlightedIdea changes without full re-render

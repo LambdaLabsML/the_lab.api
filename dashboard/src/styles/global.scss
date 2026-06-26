@@ -730,7 +730,11 @@ body {
   height: 430px;
 }
 
-.review-map-panel,
+.review-map-panel {
+  height: 420px;
+  overflow: auto;  /* DagView renders wide SVG — needs scrolling */
+}
+
 .review-scatter-panel {
   height: 420px;
 }
