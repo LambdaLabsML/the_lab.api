@@ -1933,7 +1933,18 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
               </span>
             )}
           </span>
-          {queued > 0 && <span class="review-status-item"><strong>{queued}</strong> queued</span>}
+          {queued > 0 && (
+            <span class="review-status-item review-status-queue"
+              title={`${queued} experiment${queued !== 1 ? "s" : ""} pending in queue`}>
+              <strong>{queued}</strong> queued
+              <span class="queue-depth-dots">
+                {Array.from({ length: Math.min(queued, 8) }).map((_, i) => (
+                  <span key={i} class="queue-dot" />
+                ))}
+                {queued > 8 && <span class="queue-dot-overflow">+{queued - 8}</span>}
+              </span>
+            </span>
+          )}
           <span class="review-status-item"><strong>{finished}</strong> done</span>
           {failed > 0 && <span class="review-status-item review-status-item--warn"><strong>{failed}</strong> failed</span>}
           {activeIdeas > 0 && <span class="review-status-item"><strong>{activeIdeas}</strong> ideas</span>}

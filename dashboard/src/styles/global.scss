@@ -247,6 +247,33 @@ body {
   strong { color: var(--green); }
 }
 
+/* Queue depth mini-visualization */
+.review-status-queue {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.queue-depth-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.queue-dot {
+  display: inline-block;
+  width: 4px;
+  height: 4px;
+  border-radius: 1px;
+  background: var(--accent);
+  opacity: 0.6;
+  flex-shrink: 0;
+}
+.queue-dot-overflow {
+  font-size: 8px;
+  color: var(--text-faint);
+  font-family: var(--font-mono, monospace);
+  margin-left: 1px;
+}
+
 .review-campaign-age {
   color: var(--text-faint);
   font-size: var(--text-xs);
