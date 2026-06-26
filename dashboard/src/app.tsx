@@ -1206,8 +1206,15 @@ function IdeaMiniLeaderboard({ experiments, ideas, metric, lower }: {
               <span class="emr-rank">{i + 1}</span>
               <span class="emr-idea">#{r.ideaId}</span>
               <span style={{ fontSize: "7px", opacity: 0.7, flexShrink: 0, color: idea?.status === "active" ? "var(--green)" : idea?.status === "concluded" ? "var(--accent)" : "var(--red)" }}>●</span>
-              <span class="emr-exp" style={{ color: "var(--text-muted)", maxWidth: 100, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</span>
+              <span class="emr-exp" style={{ color: "var(--text-muted)", maxWidth: 80, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</span>
               <span class="emr-val">{fmtV(r.best)}</span>
+              {i > 0 && ranked[0].best !== r.best && (
+                <span style={{ fontSize: "8px", color: "var(--text-faint)", marginLeft: 2, flexShrink: 0 }}>
+                  {lower
+                    ? `+${(r.best - ranked[0].best).toFixed(1)}`
+                    : `-${(ranked[0].best - r.best).toFixed(1)}`}
+                </span>
+              )}
             </div>
           );
         })}
@@ -1361,7 +1368,7 @@ function ScoreDistBar({ experiments, metric, lower }: {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 2, alignItems: "stretch" }}>
-      <div class="score-dist-bar" title={`Score distribution ${fmtN(lo)}–${fmtN(hi)}`}>
+      <div class="score-dist-bar" title={`Score distribution: red=low scores, green=high scores. Range ${fmtN(lo)}–${fmtN(hi)}`}>
         {counts.map((c, i) => {
           const frac = lower ? 1 - i / (BUCKETS - 1) : i / (BUCKETS - 1);
           const h = c > 0 ? Math.max(3, Math.round((c / maxC) * 22)) : 1;
@@ -1698,7 +1705,7 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
             ))}
           </div>
         ) : (
-          <span class="activity-idle-label">no activity in 14d</span>
+          <span class="activity-idle-label">quiet 14d</span>
         )}
         <button class="review-primary-action" onClick={onOpenWorkbench}>Workbench →</button>
       </div>
