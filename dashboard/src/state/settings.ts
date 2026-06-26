@@ -186,3 +186,37 @@ export const reviewOpenSections = useSetting<Record<string, boolean>>("reviewOpe
 
 /** Slight hacker-noise ambient texture behind the UI. Applied as data-texture. */
 export const uiTexture = useSetting("uiTexture", true);
+
+// ---------------------------------------------------------------------------
+// One-time default migrations
+//
+// localStorage always wins over a hardcoded default, so changing a default
+// never reaches users who already have a stored value. When we change an
+// *intended* default and want it to land on existing sessions too, bump
+// SETTINGS_DEFAULTS_VERSION and add a guarded re-apply below: it overrides the
+// stored value exactly once, then records the new version so the user's later
+// toggles persist normally.
+// ---------------------------------------------------------------------------
+const DEFAULTS_VERSION_KEY = PREFIX + "defaultsVersion";
+const SETTINGS_DEFAULTS_VERSION = 1;
+
+(function applyDefaultMigrations() {
+  let v = 0;
+  try {
+    v = Number(localStorage.getItem(DEFAULTS_VERSION_KEY)) || 0;
+  } catch {
+    // Storage unavailable — treat as fresh.
+  }
+  if (v >= SETTINGS_DEFAULTS_VERSION) return;
+
+  // v < 1 — "Step" (improvements-only) is the default chart flag. Re-apply once
+  // so sessions that toggled to "All" before this default land on the
+  // step-function view too.
+  if (v < 1) improvementsOnly.value = true;
+
+  try {
+    localStorage.setItem(DEFAULTS_VERSION_KEY, String(SETTINGS_DEFAULTS_VERSION));
+  } catch {
+    // Storage unavailable — skip; migration will retry next load.
+  }
+})();
