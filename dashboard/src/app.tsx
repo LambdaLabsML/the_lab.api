@@ -1975,15 +1975,25 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
             const overdue = expsSinceBest - avgPer;
             if (overdue <= 0) return null;
             const overdueColor = overdue > avgPer * 0.7 ? "var(--red)" : overdue > avgPer * 0.3 ? "var(--yellow)" : "var(--text-faint)";
+            // Stagnation gauge: fill = expsSinceBest / (avgPer * 2), capped at 100%
+            const gaugePct = Math.min(100, Math.round((expsSinceBest / (avgPer * 2)) * 100));
+            const gaugeColor = gaugePct > 75 ? "var(--red)" : gaugePct > 40 ? "var(--yellow)" : "var(--green)";
             return (
-              <span style={{ color: overdueColor, fontSize: "var(--text-xs)", fontWeight: overdue > avgPer * 0.5 ? 600 : 400 }}>
-                {" "}({overdue} overdue · avg 1/{avgPer} exp)
-              </span>
+              <>
+                <span style={{ color: overdueColor, fontSize: "var(--text-xs)", fontWeight: overdue > avgPer * 0.5 ? 600 : 400 }}>
+                  {" "}({overdue} overdue · avg 1/{avgPer})
+                </span>
+                {" "}
+                <span style={{ display: "inline-block", width: 40, height: 4, background: "var(--border-soft)", borderRadius: 2, verticalAlign: "middle", overflow: "hidden" }}
+                  title={`Stagnation gauge: ${gaugePct}% of 2× average window`}>
+                  <span style={{ display: "block", width: `${gaugePct}%`, height: "100%", background: gaugeColor, borderRadius: 2 }} />
+                </span>
+              </>
             );
           })()}
           {" · "}
           <a href="#review-ops" class="review-pivot-link"
-            onClick={(e) => { e.preventDefault(); document.getElementById("review-ops")?.scrollIntoView({ behavior: "smooth" }); }}>
+            onClick={(e) => { e.preventDefault(); const el = document.getElementById("review-ops") as HTMLDetailsElement | null; if (el) { el.open = true; el.scrollIntoView({ behavior: "smooth" }); } }}>
             open queue
           </a>
           {" · "}
@@ -2016,11 +2026,20 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
                 <div class="rmt-bar">
                   <div class="rmt-active" style={{ width: `${lastPct.toFixed(1)}%` }} />
                   <div class="rmt-idle"   style={{ width: `${(100 - lastPct).toFixed(1)}%` }} />
-                  {milestones.map((e) => {
+                  {milestones.map((e, mi) => {
                     const pct = ((Date.parse(e.finished_at!) - tStart) / totalMs) * 100;
-                    const v = typeof e.metrics?.[metric] === "number" ? (e.metrics![metric] as number).toFixed(2) : "";
+                    const v = typeof e.metrics?.[metric] === "number" ? (e.metrics![metric] as number) : null;
+                    const vStr = v !== null ? (Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(2) : v.toFixed(3)) : "";
+                    const isLast = mi === milestones.length - 1;
                     return (
-                      <span key={e.id} class="rmt-dot" style={{ left: `${pct.toFixed(1)}%` }} title={`${e.label ?? `exp/${e.id}`}: ${v}`} />
+                      <span key={e.id}>
+                        <span class={`rmt-dot${isLast ? " rmt-dot--best" : ""}`} style={{ left: `${pct.toFixed(1)}%` }} title={`${e.label ?? `exp/${e.id}`}: ${vStr}`} />
+                        {isLast && vStr && (
+                          <span style={{ position: "absolute", left: `${pct.toFixed(1)}%`, transform: "translateX(-50%)", top: "-14px", fontSize: "8px", color: "var(--purple)", fontFamily: "var(--font-mono)", fontWeight: 600, whiteSpace: "nowrap" }}>
+                            {vStr}
+                          </span>
+                        )}
+                      </span>
                     );
                   })}
                 </div>
