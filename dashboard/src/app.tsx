@@ -1168,14 +1168,20 @@ function IdeaMiniLeaderboard({ experiments, ideas, metric, lower }: {
 }) {
   if (!metric) return null;
 
-  // Compute best score per idea
-  const ideaBest: Record<number, { best: number; expLabel: string; expId: number }> = {};
+  // Compute best score and experiment count per idea
+  const ideaBest: Record<number, { best: number; expLabel: string; expId: number; count: number }> = {};
   for (const e of experiments) {
-    if (e._running || typeof e.metrics?.[metric] !== "number") continue;
+    if (e._running) continue;
+    if (typeof e.metrics?.[metric] !== "number") continue;
     const v = e.metrics![metric] as number;
     const cur = ideaBest[e.idea_id];
-    if (!cur || (lower ? v < cur.best : v > cur.best)) {
-      ideaBest[e.idea_id] = { best: v, expLabel: e.label ?? String(e.id), expId: e.id };
+    if (!cur) {
+      ideaBest[e.idea_id] = { best: v, expLabel: e.label ?? String(e.id), expId: e.id, count: 1 };
+    } else {
+      cur.count++;
+      if (lower ? v < cur.best : v > cur.best) {
+        cur.best = v; cur.expLabel = e.label ?? String(e.id); cur.expId = e.id;
+      }
     }
   }
 
@@ -1206,7 +1212,8 @@ function IdeaMiniLeaderboard({ experiments, ideas, metric, lower }: {
               <span class="emr-rank">{i + 1}</span>
               <span class="emr-idea">#{r.ideaId}</span>
               <span style={{ fontSize: "7px", opacity: 0.7, flexShrink: 0, color: idea?.status === "active" ? "var(--green)" : idea?.status === "concluded" ? "var(--accent)" : "var(--red)" }}>●</span>
-              <span class="emr-exp" style={{ color: "var(--text-muted)", maxWidth: 80, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</span>
+              <span class="emr-exp" style={{ color: "var(--text-muted)", maxWidth: 72, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</span>
+              <span style={{ fontSize: "8px", color: "var(--text-faint)", flexShrink: 0 }}>{r.count}×</span>
               <span class="emr-val">{fmtV(r.best)}</span>
               {i > 0 && ranked[0].best !== r.best && (
                 <span class="emr-gap">
