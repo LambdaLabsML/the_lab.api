@@ -1345,7 +1345,7 @@ const STATUS_SQ_CLASS: Record<string, string> = {
   cancelled: "sq-cancelled",
 };
 
-function ExperimentGrid({ experiments }: { experiments: import("./lib/types").Experiment[] }) {
+function ExperimentGrid({ experiments, successRate }: { experiments: import("./lib/types").Experiment[]; successRate: number | null }) {
   if (experiments.length === 0) return null;
 
   // Group by idea in chronological order
@@ -1401,6 +1401,12 @@ function ExperimentGrid({ experiments }: { experiments: import("./lib/types").Ex
         <span class="sq-legend sq-concluded">concluded</span>
         <span class="sq-legend sq-queued">queued</span>
         <span class="exp-grid-legend-note">← each square = one experiment, grouped by idea →</span>
+        {successRate !== null && (
+          <span style={{ marginLeft: "auto", fontSize: "8px", color: successRate < 20 ? "var(--yellow)" : "var(--text-faint)", fontFamily: "var(--font-mono)", flexShrink: 0 }}
+            title={`${successRate}% of experiments scored above zero`}>
+            {successRate}% scored
+          </span>
+        )}
       </div>
     </div>
   );
@@ -1877,7 +1883,7 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
           }} title={`${successRate}% of experiments scored above zero`} />
         </div>
       )}
-      <ExperimentGrid experiments={experiments} />
+      <ExperimentGrid experiments={experiments} successRate={successRate} />
 
       {/* ── Campaign narrative — one-sentence plain-English state ──────── */}
       {bestVal != null && typeof bestVal === "number" && (
