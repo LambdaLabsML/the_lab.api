@@ -567,6 +567,9 @@ async def ws_endpoint(websocket: WebSocket, since: int = 0, token: str = ""):
 def spa_fallback(path: str):
     if path.startswith("api/"):
         raise HTTPException(404)
-    if _SPA_HTML:
-        return _SPA_HTML
+    if _STATIC_DIR.exists() and (_STATIC_DIR / "index.html").exists():
+        html = (_STATIC_DIR / "index.html").read_text()
+        if _AUTH_ENABLED:
+            html = html.replace("</head>", f"{_token_script}</head>", 1)
+        return html
     return _load_dashboard()

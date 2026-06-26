@@ -1202,7 +1202,7 @@ function IdeaMiniLeaderboard({ experiments, ideas, metric, lower }: {
       <div class="emr-rows">
         {ranked.map((r, i) => {
           const idea = ideas[r.ideaId];
-          const title = idea?.description?.split("\n")[0].slice(0, 28) ?? `idea #${r.ideaId}`;
+          const title = idea?.description?.split("\n")[0].slice(0, 40) ?? `idea #${r.ideaId}`;
           return (
             <div key={r.ideaId} class={`emr-row${i === 0 ? " emr-milestone" : ""}`}
               style={{ cursor: "pointer" }}
@@ -1212,8 +1212,8 @@ function IdeaMiniLeaderboard({ experiments, ideas, metric, lower }: {
               <span class="emr-rank">{i + 1}</span>
               <span class="emr-idea">#{r.ideaId}</span>
               <span style={{ fontSize: "7px", opacity: 0.7, flexShrink: 0, color: idea?.status === "active" ? "var(--green)" : idea?.status === "concluded" ? "var(--accent)" : "var(--red)" }}>●</span>
-              <span class="emr-exp" style={{ color: "var(--text-muted)", maxWidth: 72, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</span>
-              <span class="emr-count">{r.count}</span>
+              <span class="emr-exp" style={{ color: "var(--text-muted)", maxWidth: 100, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</span>
+              <span class="emr-count" style={{ color: r.count < 5 ? "var(--yellow)" : r.count > 30 ? "var(--text-faint)" : "var(--text-muted)" }}>{r.count}</span>
               <span class="emr-val">{fmtV(r.best)}</span>
               {i > 0 && ranked[0].best !== r.best && (
                 <span class="emr-gap">
@@ -1567,6 +1567,12 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
     return `${Math.floor(hr / 24)}d ago`;
   }
 
+  // Experiments run since last breakthrough (new global best)
+  const expsSinceBest = (() => {
+    if (!bestExp) return null;
+    return done.filter(e => e.id > bestExp!.id).length;
+  })();
+
   // Campaign age: days since first experiment created
   const campaignAgeDays = (() => {
     const earliest = experiments.reduce<string | null>((e, x) => {
@@ -1675,9 +1681,9 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
 
   // Idea health breakdown for the Ideas disclosure mini-bar
   const ideaList = Object.values(ideas);
-  const ideasActive    = ideaList.filter((i) => i.status === "active" || i.has_running || i.has_queued).length;
   const ideasConcluded = ideaList.filter((i) => i.status === "concluded").length;
   const ideasAbandoned = ideaList.filter((i) => i.status === "abandoned").length;
+  const ideasActive    = ideaList.length - ideasConcluded - ideasAbandoned;
 
   return (
     <div class="review-page">
@@ -1758,6 +1764,11 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
             {" · "}<code>{bestExp.label ?? `exp/${bestExp.id}`}</code>
             {bestExp.finished_at && (
               <span class="review-best-age"> · {timeAgo(bestExp.finished_at)}</span>
+            )}
+            {expsSinceBest != null && expsSinceBest > 5 && (
+              <span class="review-best-since" style={{ color: expsSinceBest > 50 ? "var(--red)" : expsSinceBest > 20 ? "var(--yellow)" : "var(--text-faint)" }}>
+                {" "}· +{expsSinceBest} since
+              </span>
             )}
           </span>
         </div>
@@ -1859,7 +1870,7 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
             const num = xs.reduce((s, x, i) => s + (x - mx) * (ys[i] - my), 0);
             const den = Math.sqrt(xs.reduce((s,x) => s + (x-mx)**2, 0) * ys.reduce((s,y) => s + (y-my)**2, 0));
             const r = den === 0 ? 0 : num / den;
-            const corr = Math.abs(r) < 0.15 ? "no r" : r > 0 ? `r=${r.toFixed(2)}↑` : `r=${r.toFixed(2)}↓`;
+            const corr = Math.abs(r) < 0.15 ? "r≈0" : r > 0 ? `r=${r.toFixed(2)}↑` : `r=${r.toFixed(2)}↓`;
             return `${fmtMetricName(xk)} × ${fmtMetricName(yk)} · ${pairs.length} pts · ${corr}`;
           })()}
         >
