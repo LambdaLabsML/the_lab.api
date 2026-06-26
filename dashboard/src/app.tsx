@@ -2187,12 +2187,13 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
             const ideaExpCounts: Record<number, number> = {};
             for (const e of done) { if (typeof e.metrics?.[metric] === "number") ideaExpCounts[e.idea_id] = (ideaExpCounts[e.idea_id] || 0) + 1; }
             const activeList = Object.values(ideas).filter(i => i.status !== "concluded" && i.status !== "abandoned");
-            const neverTested = activeList.filter(i => (ideaExpCountsAll[i.id] ?? 0) === 0).length;
+            const hasLoadedExps = experiments.length > 20; // only trust counts when data has loaded
+            const neverTested = hasLoadedExps ? activeList.filter(i => (ideaExpCountsAll[i.id] ?? 0) === 0).length : 0;
             const underExplored = activeList.filter(i => (ideaExpCounts[i.id] ?? 0) < 5).length;
             const base = `${activeIdeas} active · ${ideasConcluded} concluded${ideasAbandoned > 0 ? ` · ${ideasAbandoned} abandoned` : ""}`;
             const parts = [base];
             if (neverTested > 0) parts.push(`${neverTested} untested`);
-            else if (underExplored > 0) parts.push(`${underExplored} under-explored`);
+            else if (underExplored > 0 && hasLoadedExps) parts.push(`${underExplored} under-explored`);
             return parts.join(" · ");
           })()}
           preview={
@@ -2231,7 +2232,7 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
                     {ideasActive > 0    && <span><span style={{ color: "var(--green)" }}>●</span> {ideasActive} active</span>}
                     {ideasConcluded > 0 && <span><span style={{ color: "var(--accent)" }}>●</span> {ideasConcluded} done</span>}
                     {ideasAbandoned > 0 && <span><span style={{ color: "var(--red)" }}>●</span> {ideasAbandoned} abandoned</span>}
-                    {(() => {
+                    {experiments.length > 20 && (() => {
                       const ideaExpCountsAll: Record<number, number> = {};
                       for (const e of experiments) { if (!e._running) ideaExpCountsAll[e.idea_id] = (ideaExpCountsAll[e.idea_id] || 0) + 1; }
                       const nt = Object.values(ideas).filter(i => i.status !== "concluded" && i.status !== "abandoned" && (ideaExpCountsAll[i.id] ?? 0) === 0).length;
