@@ -1629,15 +1629,27 @@ function ExpMiniResults({ experiments, metric, lower, milestoneIds, ideas }: {
         </div>
       )}
 
-      {/* Recent 3 — highlight stagnation when all score zero */}
+      {/* Recent 3 — highlight stagnation when all score zero, show streak */}
       {(() => {
         const recentScores = recent3.filter(e => !e._running && typeof e.metrics?.[metric] === "number")
           .map(e => e.metrics![metric] as number);
         const allZero = recentScores.length >= 2 && recentScores.every(v => v === 0);
+        // Count consecutive zeroes across all done experiments
+        const zeroStreak = (() => {
+          if (!allZero) return 0;
+          let streak = 0;
+          for (let i = done.length - 1; i >= 0; i--) {
+            const v = typeof done[i].metrics?.[metric] === "number" ? done[i].metrics![metric] as number : null;
+            if (v === null) break; // stop at experiments without this metric
+            if (v <= 0) streak++;
+            else break;
+          }
+          return streak;
+        })();
         return (
       <div class="emr-section">
         <span class="emr-label" style={allZero ? { color: "var(--red)", fontWeight: 600 } : undefined}>
-          {allZero ? "recent ↓ 0s" : "recent"}
+          {allZero ? `recent ↓ 0s${zeroStreak > 3 ? ` (${zeroStreak}×)` : ""}` : "recent"}
         </span>
         <div class="emr-rows">
           {recent3.map((e) => {
