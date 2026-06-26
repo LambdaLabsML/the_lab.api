@@ -1810,8 +1810,19 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
             // Stagnation goes FIRST so it's visible even when truncated on narrow screens
             const parts: preact.ComponentChildren[] = [];
             if (stagnantEl) parts.push(stagnantEl);
-            if (isLive) parts.push(`${liveCount} running`);
-            else if (lastFinishedAt) parts.push(`idle ${timeAgo(lastFinishedAt)}`);
+            if (isLive) {
+              // Show running experiment's idea description if available
+              const runExp = activeRuns[0];
+              const runIdea = runExp ? ideas[runExp.idea_id] : null;
+              const runDesc = runIdea?.description?.split("\n")[0].slice(0, 32);
+              const pct = runExp ? Math.round(progress[runExp.label || String(runExp.id)] ?? 0) : null;
+              parts.push(
+                <span title={runIdea?.description?.split("\n")[0] ?? undefined}>
+                  {liveCount} running{pct != null && pct > 0 ? ` ${pct}%` : ""}
+                  {runDesc ? <span style={{ color: "var(--text-faint)" }}> · {runDesc}…</span> : null}
+                </span>
+              );
+            } else if (lastFinishedAt) parts.push(`idle ${timeAgo(lastFinishedAt)}`);
             if (finished > 0) parts.push(`${finished} exp`);
             if (successRate !== null) parts.push(`${successRate}% scored`);
             if (!stagnantEl && bestExp?.finished_at) parts.push(`best set ${timeAgo(bestExp.finished_at)}`);
