@@ -1863,12 +1863,13 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
       {/* ── Experiment grid — glanceable status tiles ────────────────── */}
       {/* ── Experiment quality bar — micro indicator above the grid ────── */}
       {successRate !== null && finished > 10 && (
-        <div style={{ height: 2, background: "var(--border-soft)", borderRadius: 1, overflow: "hidden", marginBottom: -2 }}>
+        <div style={{ height: 3, background: "var(--border-soft)", borderRadius: 1, overflow: "hidden", marginBottom: -3 }}>
           <div style={{
             height: "100%",
             width: `${successRate}%`,
             background: successRate > 30 ? "var(--green)" : successRate > 10 ? "var(--yellow)" : "var(--red)",
-            opacity: 0.5,
+            opacity: 0.6,
+            transition: "width 0.5s ease",
           }} title={`${successRate}% of experiments scored above zero`} />
         </div>
       )}
@@ -1957,9 +1958,9 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
             const avgPer = Math.round(finished / milestonesCount);
             const overdue = expsSinceBest - avgPer;
             if (overdue <= 0) return null;
-            const overdueColor = overdue > avgPer ? "var(--red)" : overdue > avgPer * 0.5 ? "var(--yellow)" : "var(--text-faint)";
+            const overdueColor = overdue > avgPer * 0.7 ? "var(--red)" : overdue > avgPer * 0.3 ? "var(--yellow)" : "var(--text-faint)";
             return (
-              <span style={{ color: overdueColor, fontSize: "var(--text-xs)", fontWeight: overdue > avgPer ? 600 : 400 }}>
+              <span style={{ color: overdueColor, fontSize: "var(--text-xs)", fontWeight: overdue > avgPer * 0.5 ? 600 : 400 }}>
                 {" "}({overdue} overdue · avg 1/{avgPer} exp)
               </span>
             );

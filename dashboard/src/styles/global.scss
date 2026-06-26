@@ -163,6 +163,11 @@ body {
   50%       { box-shadow: 0 0 0 4px color-mix(in srgb, var(--green) 0%, transparent); }
 }
 
+@keyframes dot-pulse-amber {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--yellow) 50%, transparent); }
+  50%       { box-shadow: 0 0 0 4px color-mix(in srgb, var(--yellow) 0%, transparent); }
+}
+
 .review-status-dot {
   flex-shrink: 0;
   width: 8px;
@@ -174,10 +179,10 @@ body {
   }
   &.live.stagnant {
     background: var(--yellow);
-    animation: dot-pulse 2.5s ease-in-out infinite;
+    animation: dot-pulse-amber 2.5s ease-in-out infinite;
   }
   &.idle  { background: var(--text-faint); opacity: 0.5; }
-  &.idle.stagnant { background: var(--yellow); opacity: 0.6; }
+  &.idle.stagnant { background: var(--yellow); opacity: 0.6; animation: dot-pulse-amber 3s ease-in-out infinite; }
 }
 
 .review-status-primary {
