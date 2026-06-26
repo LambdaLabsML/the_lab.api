@@ -1150,9 +1150,12 @@ function IdeaRing({ active, concluded, abandoned }: { active: number; concluded:
           transform={`rotate(-90 ${size/2} ${size/2})`}
         />
       )}
-      {/* Center label: total count */}
-      <text x={size/2} y={size/2 + 3} textAnchor="middle" fontSize="9" fontWeight="600" fill="var(--text)" fontFamily="var(--font-mono, monospace)">
-        {total}
+      {/* Center: active count (more actionable than total) */}
+      <text x={size/2} y={size/2 + 1} textAnchor="middle" fontSize="8" fontWeight="600" fill="var(--green)" fontFamily="var(--font-mono, monospace)">
+        {active}
+      </text>
+      <text x={size/2} y={size/2 + 9} textAnchor="middle" fontSize="6" fill="var(--text-faint)" fontFamily="var(--font-mono, monospace)">
+        active
       </text>
     </svg>
   );
@@ -2048,6 +2051,17 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
                   <span style={{ marginLeft: `${lastPct.toFixed(1)}%`, transform: "translateX(-50%)" }} class="rmt-last-label">
                     last record · {timeAgo(milestones[milestones.length - 1].finished_at!)}
                   </span>
+                  {/* Show stagnation days in the amber zone */}
+                  {(() => {
+                    const stagnantMs = Date.now() - Date.parse(milestones[milestones.length - 1].finished_at!);
+                    const stagnantDays = Math.floor(stagnantMs / 86400000);
+                    const midPct = lastPct + (100 - lastPct) / 2;
+                    return stagnantDays > 0 ? (
+                      <span style={{ position: "absolute", left: `${midPct.toFixed(1)}%`, transform: "translateX(-50%)", color: "color-mix(in srgb, var(--yellow) 60%, transparent)", fontSize: "7px" }}>
+                        {stagnantDays}d idle
+                      </span>
+                    ) : null;
+                  })()}
                   <span style={{ marginLeft: "auto" }}>now</span>
                 </div>
               </>
