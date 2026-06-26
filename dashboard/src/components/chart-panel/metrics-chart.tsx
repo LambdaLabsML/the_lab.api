@@ -319,6 +319,11 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
         return (
           <div class="chart-dist-hint">
             {vals.length} exp
+            {impOnly && (
+              <span style={{ color: "var(--text-faint)", fontSize: "8px" }}>
+                {" "}({milestoneSet.size || pctAtPeak} milestones)
+              </span>
+            )}
             <span style={{ color: "var(--text-faint)" }}> · </span>
             <span style={{ color: "var(--border-soft)", fontWeight: 600 }}>·</span>
             {" "}median {Math.abs(median) >= 1 ? median.toFixed(1) : median.toFixed(2)}
