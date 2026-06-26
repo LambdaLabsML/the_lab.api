@@ -261,13 +261,18 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
     const current = selectedMetric.value;
     const alreadyPreferred = current && preferred.includes(current);
     if (alreadyPreferred) return; // already on a good metric
-    // Pick best preferred metric with non-zero values, then fall back
+    // Pick best preferred metric: prefer non-zero values AND meaningful variance (not constants)
     const nonZeroKeys = allKeys.filter(k => {
       const lower = isLowerBetter(k);
-      return experiments.some(e => {
-        const v = e.metrics?.[k];
-        return typeof v === "number" && (lower ? v < Infinity : v > 0);
-      });
+      const vals = experiments
+        .filter(e => !e._running && typeof e.metrics?.[k] === "number")
+        .map(e => e.metrics![k] as number);
+      if (vals.length === 0) return false;
+      const hasNonZero = lower ? vals.some(v => v < Infinity) : vals.some(v => v > 0);
+      if (!hasNonZero) return false;
+      // Exclude constant metrics (all same value) — they're config params, not performance
+      const hasVariance = vals.some(v => v !== vals[0]);
+      return hasVariance;
     });
     const keyPool = nonZeroKeys.length > 0 ? nonZeroKeys : allKeys;
     const best = preferred.find(k => keyPool.includes(k)) || preferred.find(k => allKeys.includes(k));
@@ -287,8 +292,8 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
             {grouped.meta.length > 0 && <optgroup label="Meta">{grouped.meta.map((k) => <option key={k} value={k}>{fmtMetricName(k)}</option>)}</optgroup>}
           </select>
         </span>
-        <button type="button" class={`chart-toggle-btn${impOnly ? " active" : ""}`} onClick={() => { improvementsOnly.value = !impOnly; }} title="Show only improvements">
-          ▲ Improvements
+        <button type="button" class={`chart-toggle-btn${impOnly ? " active" : ""}`} onClick={() => { improvementsOnly.value = !impOnly; }} title={impOnly ? "Currently: step-function (click for all experiments)" : "Show step-function — only new bests"}>
+          ▲ {impOnly ? "Step" : "All"}
         </button>
         <button type="button" class={`chart-toggle-btn${mean ? " active" : ""}`} onClick={() => { ideaMean.value = !mean; }} title="One point per idea (mean)">
           μ Idea Mean
@@ -357,7 +362,11 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
       })()}
       {/* Empty state — shown when no metric selected or no data yet */}
       {(!metric || allKeys.length === 0) && (
-        <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, color: "var(--text-faint)", fontSize: "var(--text-sm)", fontFamily: "var(--font-mono)" }}>
+        <div
+          style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, color: "var(--text-faint)", fontSize: "var(--text-sm)", fontFamily: "var(--font-mono)", cursor: allKeys.length > 0 ? "pointer" : "default" }}
+          onClick={allKeys.length > 0 ? () => { innerRef.current?.querySelector("select")?.focus(); (innerRef.current?.querySelector("select") as HTMLElement)?.click?.(); } : undefined}
+          title={allKeys.length > 0 ? "Click to select a metric" : undefined}
+        >
           {allKeys.length === 0 ? (
             <>
               <span style={{ fontSize: "20px", opacity: 0.3 }}>◈</span>
@@ -365,9 +374,9 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
             </>
           ) : (
             <>
-              <span style={{ fontSize: "20px", opacity: 0.3 }}>◇</span>
-              <span>select a metric above</span>
-              {allKeys.length > 0 && <span style={{ fontSize: "10px", opacity: 0.5 }}>{allKeys.length} metrics available</span>}
+              <span style={{ fontSize: "24px", opacity: 0.4 }}>◇</span>
+              <span style={{ fontWeight: 500 }}>select a metric above ↑</span>
+              <span style={{ fontSize: "10px", opacity: 0.5 }}>{allKeys.length} metrics available · click here to select</span>
             </>
           )}
         </div>
