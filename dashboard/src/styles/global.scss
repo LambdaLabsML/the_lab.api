@@ -172,7 +172,12 @@ body {
     background: var(--green);
     animation: dot-pulse 1.8s ease-in-out infinite;
   }
+  &.live.stagnant {
+    background: var(--yellow);
+    animation: dot-pulse 2.5s ease-in-out infinite;
+  }
   &.idle  { background: var(--text-faint); opacity: 0.5; }
+  &.idle.stagnant { background: var(--yellow); opacity: 0.6; }
 }
 
 .review-status-primary {

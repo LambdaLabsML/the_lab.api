@@ -1735,7 +1735,9 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
       {/* ── Status strip ─────────────────────────────────────────────── */}
       <div class="review-status-strip">
         <div class="review-status-left">
-          <span class={`review-status-dot ${isLive ? "live" : "idle"}`} />
+          <span class={`review-status-dot ${isLive ? "live" : "idle"}${expsSinceBest != null && expsSinceBest > 50 ? " stagnant" : ""}`}
+            title={expsSinceBest != null && expsSinceBest > 50 ? `Stagnant: ${expsSinceBest} experiments since last breakthrough` : undefined}
+          />
           <span class="review-status-primary">
             {isLive ? (
               <>
@@ -1971,11 +1973,16 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
                     </span>
                   )}
                 </div>
-                <div style={{ flex: 1 }}>
+                <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 3 }}>
                   <div class="idea-health-bar">
                     {ideasActive > 0    && <span class="ihb-seg ihb-active"    style={{ flex: ideasActive }}    title={`${ideasActive} active`} />}
                     {ideasConcluded > 0 && <span class="ihb-seg ihb-concluded" style={{ flex: ideasConcluded }} title={`${ideasConcluded} concluded`} />}
                     {ideasAbandoned > 0 && <span class="ihb-seg ihb-abandoned" style={{ flex: ideasAbandoned }} title={`${ideasAbandoned} abandoned`} />}
+                  </div>
+                  <div style={{ display: "flex", gap: 6, fontSize: "7px", fontFamily: "var(--font-mono)", color: "var(--text-faint)" }}>
+                    {ideasActive > 0    && <span><span style={{ color: "var(--green)" }}>●</span> {ideasActive} active</span>}
+                    {ideasConcluded > 0 && <span><span style={{ color: "var(--accent)" }}>●</span> {ideasConcluded} done</span>}
+                    {ideasAbandoned > 0 && <span><span style={{ color: "var(--red)" }}>●</span> {ideasAbandoned} abandoned</span>}
                   </div>
                 </div>
               </div>
