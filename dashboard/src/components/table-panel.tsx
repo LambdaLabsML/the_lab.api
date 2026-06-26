@@ -393,10 +393,28 @@ export function TablePanel() {
                   {visibleMetrics.map((mk) => {
                     const v = resolveNumericValue(exp, mk);
                     const isSelected = mk === metric;
+                    // Color-code selected metric column by value quality
+                    let valColor: string | undefined;
+                    if (isSelected && v !== undefined) {
+                      const lower = isLowerBetter(mk);
+                      const allVals = sorted.filter(e => resolveNumericValue(e, mk) !== undefined).map(e => resolveNumericValue(e, mk) as number);
+                      if (allVals.length > 1) {
+                        const mn = Math.min(...allVals), mx = Math.max(...allVals);
+                        const range = mx - mn;
+                        if (range > 0) {
+                          const frac = lower ? 1 - (v - mn) / range : (v - mn) / range;
+                          if (frac >= 0.75) valColor = "var(--green)";
+                          else if (frac >= 0.4) valColor = "var(--yellow)";
+                          else if (frac > 0) valColor = "var(--text-muted)";
+                          else valColor = "var(--text-faint)";
+                        }
+                      }
+                    }
                     return (
                       <td
                         key={mk}
                         class={`metric-val${isSelected ? " metric-selected" : ""}`}
+                        style={valColor ? { color: valColor, fontWeight: valColor === "var(--green)" ? "700" : undefined } : undefined}
                       >
                         {v !== undefined ? fmtNum(v) : ""}
                       </td>

@@ -165,6 +165,20 @@
   background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
+/* Data distribution hint strip below toolbar */
+.chart-dist-hint {
+  font-size: 8px;
+  color: var(--text-faint);
+  font-family: var(--font-mono, monospace);
+  padding: 2px 8px;
+  background: color-mix(in srgb, var(--bg-elev) 60%, transparent);
+  border-bottom: 1px solid var(--border-soft);
+  flex-shrink: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* Current best badge in chart toolbar */
 .chart-best-badge {
   font-family: var(--font-mono, monospace);

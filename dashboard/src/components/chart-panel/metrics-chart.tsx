@@ -306,6 +306,22 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
           );
         })()}
       </div>
+      {/* Data distribution hint — shown when most values cluster near bottom */}
+      {(() => {
+        const vals = allExperiments.value.filter(e => !e._running && typeof e.metrics?.[metric] === "number").map(e => e.metrics![metric] as number);
+        if (vals.length < 5) return null;
+        const lower = isLowerBetter(metric);
+        const peak = lower ? Math.min(...vals) : Math.max(...vals);
+        const median = [...vals].sort((a,b) => a-b)[Math.floor(vals.length/2)];
+        const pctAtPeak = vals.filter(v => lower ? v === peak : v === peak).length;
+        // Show hint only when data is sparse at top (median < 25% of peak)
+        if (peak === 0 || median / peak > 0.3) return null;
+        return (
+          <div class="chart-dist-hint">
+            {vals.length} experiments · median {Math.abs(median) >= 1 ? median.toFixed(1) : median.toFixed(2)} · best {Math.abs(peak) >= 100 ? peak.toFixed(0) : peak.toFixed(2)}
+          </div>
+        );
+      })()}
       <div id="chart-wrap" style={{ flex: 1, minHeight: 0 }}>
         {minified ? (
           <div style={{ width: "100%", height: "100%" }}>

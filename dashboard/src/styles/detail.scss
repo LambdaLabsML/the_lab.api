@@ -141,7 +141,7 @@ details[open] .detail-desc-toggle::after { content: " ▼"; }
 .meta-arrow { color: var(--text-faint); }
 .meta-parents { display: flex; align-items: center; gap: 3px; }
 .meta-stats-row { display: flex; align-items: center; gap: var(--space-1); flex-wrap: wrap; }
-.meta-stat-label { color: var(--text-muted); font-weight: 600; font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0; margin-right: 2px; }
+.meta-stat-label { color: var(--text-muted); font-weight: 600; font-size: var(--text-xs); margin-right: 2px; }
 .meta-pill { font-size: var(--text-xs); padding: 1px 5px; border-radius: 3px; border: 1px solid transparent; }
 /* Experiment status pills */
 .meta-pill-running   { color: var(--yellow); border-color: #d2992244; background: #d2992211; }
