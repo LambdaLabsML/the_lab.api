@@ -423,18 +423,20 @@ body {
   position: absolute;
   top: 50%;
   transform: translate(-50%, -50%);
-  width: 8px;
-  height: 8px;
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
   background: var(--purple);
-  border: 1.5px solid var(--bg);
+  border: 2px solid var(--bg);
   cursor: default;
   z-index: 1;
+  transition: transform 0.15s;
+  &:hover { transform: translate(-50%, -50%) scale(1.4); }
 }
 .rmt-labels {
   display: flex;
   align-items: baseline;
-  font-size: 7px;
+  font-size: 8px;
   color: var(--text-faint);
   font-family: var(--font-mono, monospace);
   margin-top: 3px;

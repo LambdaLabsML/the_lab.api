@@ -2111,11 +2111,21 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
           preview={logs.length > 0 ? (
             <div style={{ display: "flex", gap: 3, alignItems: "center" }}>
               {logs.slice(0, 6).map((e, i) => {
-                const c = e.type === "experiment_completed" ? "var(--green)"
-                  : e.type === "experiment_failed" ? "var(--red)"
-                  : e.type === "idea_created" ? "var(--accent)"
-                  : "var(--text-faint)";
-                return <span key={i} style={{ width: 6, height: 6, borderRadius: "50%", background: c, flexShrink: 0, opacity: 1 - i * 0.12 }} title={e.title || e.type} />;
+                let c: string, dotTitle: string;
+                if (e.type === "experiment_completed") {
+                  // Show score quality: bright green=scored, amber=low, gray=zero
+                  const s = metric ? (e.metrics?.[metric] as number | undefined) : undefined;
+                  const scored = typeof s === "number" && s > 0;
+                  c = scored ? "var(--green)" : "var(--text-faint)";
+                  dotTitle = `${e.title || "completed"}${s != null ? ` · ${fmtMetricName(metric)}: ${typeof s === "number" ? s.toFixed(3) : s}` : ""}`;
+                } else if (e.type === "experiment_failed") {
+                  c = "var(--red)"; dotTitle = e.title || "failed";
+                } else if (e.type === "idea_created") {
+                  c = "var(--accent)"; dotTitle = e.title || "idea created";
+                } else {
+                  c = "var(--text-faint)"; dotTitle = e.title || e.type;
+                }
+                return <span key={i} style={{ width: 6, height: 6, borderRadius: "50%", background: c, flexShrink: 0, opacity: 1 - i * 0.12 }} title={dotTitle} />;
               })}
             </div>
           ) : undefined}
