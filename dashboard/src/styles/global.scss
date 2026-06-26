@@ -304,6 +304,17 @@ body {
 
 /* ── Best score bar ────────────────────────────────────────────────── */
 
+.review-narrative {
+  font-size: 9px;
+  color: var(--text-faint);
+  font-family: var(--font-mono, monospace);
+  padding: 3px 12px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .review-best-bar {
   display: flex;
   align-items: center;
@@ -373,18 +384,18 @@ body {
 }
 .rmt-active {
   height: 100%;
-  background: color-mix(in srgb, var(--purple) 55%, var(--bg-hi));
+  background: var(--accent);
   border-radius: 3px 0 0 3px;
   flex-shrink: 0;
-  opacity: 0.7;
+  opacity: 0.45;
 }
 .rmt-idle {
   height: 100%;
-  background: color-mix(in srgb, var(--border) 80%, transparent);
+  background: color-mix(in srgb, var(--yellow) 35%, var(--bg-hi));
   border-radius: 0 3px 3px 0;
   flex: 1;
   flex-shrink: 0;
-  opacity: 0.4;
+  opacity: 0.35;
 }
 .rmt-dot {
   position: absolute;
@@ -1161,6 +1172,9 @@ body {
   }
   .review-best-meta {
     display: none; /* hide description on mobile, keep label+value */
+  }
+  .review-narrative {
+    display: none; /* narrative is in the best-bar area on mobile */
   }
 
   /* Chart wrap — shorter on mobile to show disclosures above fold */

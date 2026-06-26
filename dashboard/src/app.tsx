@@ -1795,6 +1795,22 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
       {/* ── Experiment grid — glanceable status tiles ────────────────── */}
       <ExperimentGrid experiments={experiments} />
 
+      {/* ── Campaign narrative — one-sentence plain-English state ──────── */}
+      {bestVal != null && typeof bestVal === "number" && (
+        <div class="review-narrative">
+          {(() => {
+            const parts: string[] = [];
+            if (isLive) parts.push(`${liveCount} running`);
+            else if (lastFinishedAt) parts.push(`idle ${timeAgo(lastFinishedAt)}`);
+            if (finished > 0) parts.push(`${finished} experiments tried`);
+            if (successRate !== null) parts.push(`${successRate}% scored`);
+            if (expsSinceBest != null && expsSinceBest > 10) parts.push(`no improvement in last ${expsSinceBest}`);
+            else if (bestExp?.finished_at) parts.push(`best set ${timeAgo(bestExp.finished_at)}`);
+            return parts.join(" · ");
+          })()}
+        </div>
+      )}
+
       {/* ── Best score callout ───────────────────────────────────────── */}
       {bestExp != null && bestVal != null && (
         <div class="review-best-bar">
