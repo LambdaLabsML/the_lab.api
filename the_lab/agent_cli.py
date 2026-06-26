@@ -23,6 +23,44 @@ def _find_repo_root(*paths: Path) -> Path | None:
     return None
 
 
+def _resolve_api(args, repo_root: "Path | None"):
+    """Resolve the Lab API base URL and an SSL context for the agent's calls.
+
+    Precedence for the scheme: --url override > --https flag > the api_scheme the
+    server records in runtime.json (the same source sandbox_guest reads) > http.
+    HTTPS to a localhost self-signed cert can't be verified, so for a local
+    https endpoint we return an unverified context; remote https keeps normal
+    verification. Returns (api_base, ssl_ctx, insecure).
+    """
+    import ssl as _ssl
+    import urllib.parse as _uparse
+
+    url = getattr(args, "url", None)
+    if url:
+        base = url.rstrip("/")
+        scheme = "https" if base.startswith("https://") else "http"
+    else:
+        scheme = "http"
+        if getattr(args, "https", False):
+            scheme = "https"
+        elif repo_root is not None:
+            try:
+                from .sandbox import load_runtime_info
+                scheme = load_runtime_info(repo_root).get("api_scheme", "http")
+            except Exception:
+                scheme = "http"
+        base = f"{scheme}://localhost:{args.port}/api/v1"
+
+    host = _uparse.urlparse(base).hostname or "localhost"
+    insecure = scheme == "https" and host in ("localhost", "127.0.0.1", "0.0.0.0")
+    ctx = None
+    if insecure:
+        ctx = _ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = _ssl.CERT_NONE
+    return base, ctx, insecure
+
+
 def _agent_binary(agent: str) -> str:
     name = "claude" if agent == "claude" else "codex"
     # Resolve to absolute path so the binary is reachable inside the sandbox
@@ -140,6 +178,19 @@ def main():
         help="Port of the Lab API server (default: 8000)",
     )
     parser.add_argument(
+        "--https",
+        action="store_true",
+        help="Talk to the Lab API over HTTPS. Usually unnecessary — the scheme "
+             "is auto-detected from the server's runtime.json (set when the "
+             "server runs with --https).",
+    )
+    parser.add_argument(
+        "--url",
+        default=None,
+        help="Override the Lab API base URL entirely "
+             "(e.g. https://host:9009/api/v1). Takes precedence over --port/--https.",
+    )
+    parser.add_argument(
         "--role",
         default=None,
         help="Role-specific prompt to use (looks up .the_lab/PROMPT.<role>.md). "
@@ -193,9 +244,13 @@ def main():
     import tempfile as _tempfile
 
     project_dir = Path.cwd()
-    api_base = f"http://localhost:{args.port}/api/v1"
+    # Resolve the API base + TLS context once (scheme auto-detected from the
+    # server's runtime.json, so the agent works against an --https server too).
+    _api_repo = (Path(args.repo).resolve() if args.repo else _find_repo_root(Path.cwd())) or Path.cwd()
+    api_base, _api_ssl_ctx, _api_insecure = _resolve_api(args, _api_repo)
     api_content = _PROMPT_API.read_text().strip() if _PROMPT_API.exists() else ""
-    api_header = f"**Lab API base URL:** `{api_base}`\n\nAll API endpoints below are relative to this base URL. Use `curl {api_base}/orient` to get started.\n\n"
+    _curl = "curl -k" if _api_insecure else "curl"  # -k: self-signed localhost cert
+    api_header = f"**Lab API base URL:** `{api_base}`\n\nAll API endpoints below are relative to this base URL. Use `{_curl} {api_base}/orient` to get started.\n\n"
 
     # Resolve role → concrete prompt content.
     # Look under <repo>/.the_lab/PROMPT.<role>.md; fall back to the default
@@ -274,10 +329,12 @@ def main():
             mcp_script = local
             print(f"MCP bridge: using local copy at {local} (THE_LAB_LOCAL_MCP=1)", file=sys.stderr)
     if mcp_script.exists():
-        api_base = f"http://localhost:{args.port}/api/v1"
         # Thread auth credentials through to the bridge so it can attach
         # Authorization headers when the API has Basic Auth enabled.
         _bridge_env: dict[str, str] = {"PYTHONUNBUFFERED": "1", "THE_LAB_API_URL": api_base}
+        # Self-signed localhost https → tell the bridge to skip cert verification.
+        if _api_insecure:
+            _bridge_env["THE_LAB_API_INSECURE"] = "1"
         for _k in ("THE_LAB_USER", "THE_LAB_PASSWORD"):
             _v = os.environ.get(_k, "").strip()
             if _v:
@@ -404,7 +461,7 @@ def main():
         import json as _json
         import re as _re
 
-        api_base_for_register = f"http://localhost:{args.port}/api/v1"
+        api_base_for_register = api_base
 
         _lab_user = os.environ.get("THE_LAB_USER", "").strip()
         _lab_pw   = os.environ.get("THE_LAB_PASSWORD", "").strip()
@@ -446,7 +503,7 @@ def main():
                         f"{api_base_for_register}/agents/past",
                     ):
                         _req = _urlreq.Request(_endpoint, headers=_reg_headers)
-                        with _urlreq.urlopen(_req, timeout=10) as _r:
+                        with _urlreq.urlopen(_req, timeout=10, context=_api_ssl_ctx) as _r:
                             _entries = _json.loads(_r.read().decode())
                         for _entry in _entries:
                             _wt = _entry.get("worktree", "")
@@ -493,7 +550,7 @@ def main():
                     data=payload, method="POST",
                     headers=_reg_headers,
                 )
-                with _urlreq.urlopen(req_obj, timeout=10) as resp:
+                with _urlreq.urlopen(req_obj, timeout=10, context=_api_ssl_ctx) as resp:
                     reg = _json.loads(resp.read().decode())
                 agent_id = reg["agent_id"]
                 agent_worktree = Path(reg["worktree"]).resolve()
@@ -565,7 +622,7 @@ def main():
                                 data=payload2, method="POST",
                                 headers=_reg_headers,
                             )
-                            with _urlreq.urlopen(req_obj2, timeout=10) as resp2:
+                            with _urlreq.urlopen(req_obj2, timeout=10, context=_api_ssl_ctx) as resp2:
                                 reg = _json.loads(resp2.read().decode())
                             agent_id = reg["agent_id"]
                             agent_worktree = Path(reg["worktree"]).resolve()
@@ -969,10 +1026,11 @@ def main():
                     ).decode()
                 _resp = _urlreq.urlopen(
                     _urlreq.Request(
-                        f"http://localhost:{args.port}/api/v1/agents/{agent_id}",
+                        f"{api_base}/agents/{agent_id}",
                         method="DELETE", headers=_del_headers,
                     ),
                     timeout=10,
+                    context=_api_ssl_ctx,
                 )
                 _resp.read()
             except Exception as e:

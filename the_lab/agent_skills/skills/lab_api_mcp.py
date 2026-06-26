@@ -20,6 +20,20 @@ import urllib.parse
 
 API_BASE = os.environ.get("THE_LAB_API_URL", "http://localhost:8000/api/v1")
 
+# Self-signed localhost https can't be verified. The agent launcher sets
+# THE_LAB_API_INSECURE=1 when it points us at such an endpoint; in that case we
+# disable TLS verification (HTTP and remote valid-cert https are unaffected:
+# _SSL_CTX stays None → default behaviour).
+def _build_ssl_ctx():
+    if os.environ.get("THE_LAB_API_INSECURE", "").strip() not in ("1", "true", "yes"):
+        return None
+    ctx = _ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = _ssl.CERT_NONE
+    return ctx
+
+_SSL_CTX = _build_ssl_ctx()
+
 # Only expose these paths as MCP tools (keeps system prompt lean).
 # Format: (method, path) → tool_name override (or None for auto-name).
 INCLUDE = {
@@ -78,7 +92,7 @@ def fetch_openapi_spec():
             f"{_user}:{_pw}".encode()
         ).decode()
     req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req, timeout=15) as resp:
+    with urllib.request.urlopen(req, timeout=15, context=_SSL_CTX) as resp:
         return json.loads(resp.read())
 
 
@@ -270,7 +284,7 @@ def proxy_call(tool_name, arguments, tool_meta):
     req = urllib.request.Request(url, data=body_data, headers=headers, method=method)
 
     try:
-        with urllib.request.urlopen(req, timeout=300) as resp:
+        with urllib.request.urlopen(req, timeout=300, context=_SSL_CTX) as resp:
             return resp.read().decode()
     except urllib.error.HTTPError as e:
         body = e.read().decode() if e.fp else ""
@@ -303,7 +317,7 @@ def _ws_connect(host: str, port: int, path_qs: str, use_ssl: bool):
 
     sock = _socket.create_connection((host, port), timeout=10)
     if use_ssl:
-        ctx = _ssl.create_default_context()
+        ctx = _SSL_CTX or _ssl.create_default_context()
         sock = ctx.wrap_socket(sock, server_hostname=host)
     sock.settimeout(None)  # switch to blocking (no timeout after connect)
 
