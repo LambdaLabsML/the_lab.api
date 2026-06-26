@@ -237,6 +237,28 @@ body {
   strong { color: var(--green); }
 }
 
+/* ── 14-day activity sparkline ─────────────────────────────────────── */
+.activity-spark {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 18px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border-soft);  /* baseline track */
+  padding-bottom: 1px;
+}
+.activity-bar {
+  width: 4px;
+  border-radius: 1px 1px 0 0;
+  background: var(--accent);
+  flex-shrink: 0;
+  min-height: 1px;
+}
+
+@media (max-width: 800px) {
+  .activity-spark { display: none; }
+}
+
 .review-status-sep {
   width: 1px;
   height: 12px;

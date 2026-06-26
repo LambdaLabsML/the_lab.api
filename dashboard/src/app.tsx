@@ -1104,7 +1104,7 @@ export function App() {
 function IdeaRing({ active, concluded, abandoned }: { active: number; concluded: number; abandoned: number }) {
   const total = active + concluded + abandoned;
   if (total === 0) return null;
-  const size = 32, sw = 5, r = (size - sw) / 2;
+  const size = 36, sw = 6, r = (size - sw) / 2;
   const c = 2 * Math.PI * r;
   const concludedFrac = concluded / total;
   const activeFrac = active / total;
@@ -1375,7 +1375,7 @@ function ScoreDistBar({ experiments, metric, lower }: {
         })}
       </div>
       {/* Range label */}
-      <div style={{ display: "flex", justifyContent: "space-between", width: "90px", fontSize: "8px", color: "var(--text-faint)", fontFamily: "var(--font-mono, monospace)" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", width: "90px", fontSize: "9px", color: "var(--text-muted)", fontFamily: "var(--font-mono, monospace)" }}>
         <span>{fmtN(lo)}</span>
         <span>{fmtN(hi)}</span>
       </div>
@@ -1551,6 +1551,20 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
     return recent.length > 0 ? (recent.length / 7).toFixed(1) : null;
   })();
 
+  // 14-day activity sparkline: count experiments finished each day
+  const activityBars = (() => {
+    const DAYS = 14;
+    const now = Date.now();
+    const buckets = new Array(DAYS).fill(0);
+    for (const e of done) {
+      if (!e.finished_at) continue;
+      const daysAgo = (now - Date.parse(e.finished_at)) / (24 * 3600 * 1000);
+      if (daysAgo < DAYS) buckets[DAYS - 1 - Math.floor(daysAgo)]++;
+    }
+    const maxB = Math.max(...buckets, 1);
+    return buckets.map(c => c / maxB); // normalized 0-1
+  })();
+
   // Best score for the selected idea (for Idea detail disclosure preview)
   const selectedIdeaBest = selected != null ? done
     .filter(e => e.idea_id === selected && e.metrics && typeof e.metrics[metric] === "number")
@@ -1642,6 +1656,16 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
           <span class="review-status-sep" />
           <code class="review-status-branch">{branch}</code>
           {cost != null && <span class="review-status-item review-status-item--cost">${cost.toFixed(0)}</span>}
+        </div>
+        {/* 14-day activity sparkline — hidden on mobile */}
+        <div class="activity-spark" title="Experiment activity over last 14 days">
+          {activityBars.map((h, i) => (
+            <span key={i} class="activity-bar" style={{
+              height: `${h > 0 ? Math.max(4, Math.round(h * 16)) : 2}px`,
+              background: h > 0 ? "var(--accent)" : "var(--border)",
+              opacity: h > 0 ? 0.7 + h * 0.3 : 0.4,
+            }} />
+          ))}
         </div>
         <button class="review-primary-action" onClick={onOpenWorkbench}>Workbench →</button>
       </div>
@@ -1742,7 +1766,12 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
         <ReviewDisclosure
           id="review-compare"
           title="Scatter"
-          action={`${fmtMetricName(scatterXMetric.value || metric)} × ${fmtMetricName(scatterYMetric.value || "elapsed_s")}`}
+          action={(() => {
+            const xk = scatterXMetric.value || metric;
+            const yk = scatterYMetric.value || "elapsed_s";
+            const pts = done.filter(e => typeof e.metrics?.[xk] === "number" && typeof e.metrics?.[yk] === "number").length;
+            return `${fmtMetricName(xk)} × ${fmtMetricName(yk)}${pts > 0 ? ` · ${pts} pts` : ""}`;
+          })()}
         >
           <div class="review-panel review-scatter-panel">
             <ScatterChart />
