@@ -227,11 +227,11 @@
   z-index: var(--z-modal);
   pointer-events: none;
   max-width: 300px;
-  padding: 6px 9px;
+  padding: 7px 10px;
   background: var(--bg);
   color: var(--text);
-  box-shadow: 0 0 0 1px var(--border), 0 8px 22px rgba(0, 0, 0, 0.42);
-  border-radius: var(--radius-sm);
+  box-shadow: 0 0 0 1px var(--purple), 0 10px 26px rgba(0, 0, 0, 0.5);
+  border-radius: var(--radius-md);
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   line-height: 1.5;
@@ -242,13 +242,17 @@
 @keyframes ui-tip-in { from { opacity: 0; } }
 
 /* structured tooltip content helpers */
-.ui-tip-title { color: var(--text); font-weight: 700; display: block; }
+.ui-tip-title {
+  color: var(--text); font-weight: 700; display: block;
+  padding-bottom: 4px; margin-bottom: 3px;
+  box-shadow: inset 0 -1px var(--border-soft);   /* hairline under the title */
+}
 .ui-tip-row {
-  display: flex; gap: 12px; justify-content: space-between;
-  color: var(--text-muted); font-variant-numeric: tabular-nums;
+  display: flex; gap: 14px; justify-content: space-between; align-items: baseline;
+  color: var(--text-faint); font-variant-numeric: tabular-nums;
   b { color: var(--text); font-weight: 600; }
 }
-.ui-tip-dim { color: var(--text-faint); }
+.ui-tip-dim { color: var(--text-muted); margin-top: 1px; }
 .ui-tip-sep { display: block; height: 1px; margin: 4px 0; background: var(--border-soft); }
 
 /* ── Thin scrollbars (global) ──────────────────────────────────────────── */

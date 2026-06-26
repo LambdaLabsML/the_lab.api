@@ -13,26 +13,32 @@
  *    user's font-size setting instead of hardcoding font-size="9".
  *  - Flat purple tint under the best-line — no gradient.
  *  - Click/hover routed through the shared useEntityNav hook.
+ *  - Hover card is the shared `.ui-tip` HTML overlay rendering
+ *    `experimentTipContent`, positioned by the dot's getBoundingClientRect —
+ *    visually identical to the timeline/table tooltips.
  *
- * Step mode (impOnly): the run list collapses to just the milestone
- * (record-setting) experiments up to the last record, then shows ALL
- * experiments after the last record (the in-progress push toward the next
- * record). Long flat stretches between early records collapse to step points.
+ * Step mode (impOnly): the run collapses to ONLY the record-setting experiments
+ * (the steps) up to and INCLUDING the most recent record, then shows EVERY
+ * experiment after that last record (the current "dry streak") as normal dots.
+ * Flat stretches between early records collapse to their step points.
  *
  * Point size: dot radii are multiplied by a factor driven by chartPointSize
  * (s | m | l → 0.75 | 1 | 1.4).
  */
 
-import { useEffect, useRef, useState } from "preact/hooks";
+import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
 import { buildChartData } from "../../lib/chart-data";
 import { isLowerBetter } from "../../lib/colors";
 import { useEntityNav } from "../../lib/hooks";
 import { highlightedIdea } from "../../state/signals";
 import { fmtMetricName } from "../../lib/format";
+import { experimentTipContent } from "../ui";
 import type { Experiment, IdeaNode, SubwayLayout } from "../../lib/types";
 
 const MIN_PX_PER_POINT = 8;
 const PAD = { l: 34, r: 12, t: 10, b: 18 };
+const TIP_MARGIN = 8; // min gap from viewport edge (matches shared Tooltip)
+const TIP_GAP = 8;    // gap between dot and card
 
 /** Dot-radius multiplier per chartPointSize step. */
 const PT_SIZE_SCALE: Record<"s" | "m" | "l", number> = { s: 0.75, m: 1, l: 1.4 };
@@ -55,21 +61,6 @@ function fmtVal(v: number): string {
   return v.toFixed(3);
 }
 
-function wrapText(text: string, maxChars: number, maxRows: number): string[] {
-  const clean = (text ?? "").replace(/\s+/g, " ").trim().slice(0, maxChars);
-  const words = clean.split(" ");
-  const rowChars = Math.ceil(maxChars / maxRows);
-  const rows: string[] = [];
-  for (const word of words) {
-    const cur = rows[rows.length - 1] ?? "";
-    if (!cur) { rows.push(word); }
-    else if (`${cur} ${word}`.length <= rowChars) { rows[rows.length - 1] = `${cur} ${word}`; }
-    else if (rows.length < maxRows) { rows.push(word); }
-    else { rows[rows.length - 1] = `${cur}...`; break; }
-  }
-  return rows.slice(0, maxRows);
-}
-
 // ── single dot (its own component so it can use the nav hook) ──────────────────
 
 function MiniDot({
@@ -79,8 +70,9 @@ function MiniDot({
   x: number; y: number; baselineY: number;
   color: string; isMilestone: boolean; fontXs: number; note?: string;
   sizeScale: number;
-  onHoverChange: (hovered: boolean) => void;
+  onHoverChange: (hovered: boolean, rect: DOMRect | null) => void;
 }) {
+  const groupRef = useRef<SVGGElement>(null);
   const ideaId = exp?.idea_id ?? -1;
   const label = exp?.label ?? (exp?.id != null ? String(exp.id) : undefined);
   const nav = useEntityNav(ideaId, label);
@@ -101,9 +93,10 @@ function MiniDot({
 
   return (
     <g
+      ref={groupRef}
       style={exp ? "cursor:pointer;" : undefined}
-      onMouseEnter={() => { onHoverChange(true); if (exp) nav.bind.onMouseEnter(); }}
-      onMouseLeave={() => { onHoverChange(false); if (exp) nav.bind.onMouseLeave(); }}
+      onMouseEnter={() => { onHoverChange(true, groupRef.current?.getBoundingClientRect() ?? null); if (exp) nav.bind.onMouseEnter(); }}
+      onMouseLeave={() => { onHoverChange(false, null); if (exp) nav.bind.onMouseLeave(); }}
       onClick={exp ? (nav.bind.onClick as any) : undefined}
     >
       <line x1={x} x2={x} y1={y} y2={baselineY}
@@ -124,6 +117,49 @@ function MiniDot({
       )}
       <circle cx={x} cy={y} r="9" fill="transparent" />
     </g>
+  );
+}
+
+// ── HTML overlay tooltip (shared .ui-tip card) ─────────────────────────────────
+
+/**
+ * Renders the shared `.ui-tip` card at a hovered dot's screen rect, clamped to
+ * the viewport the same way the shared <Tooltip> does (two-pass measure, flip
+ * top↔bottom, nudge horizontally). Keeps the chart tooltip pixel-identical to
+ * the timeline/table tooltips.
+ */
+function MiniTooltip({ anchor, children }: { anchor: DOMRect; children: any }) {
+  const cardRef = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+
+  useLayoutEffect(() => {
+    if (!cardRef.current) return;
+    const card = cardRef.current.getBoundingClientRect();
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const cx = anchor.left + anchor.width / 2;
+    // Prefer above the dot; flip below if it would clip.
+    let top = anchor.top - card.height - TIP_GAP;
+    if (top < TIP_MARGIN) top = anchor.bottom + TIP_GAP;
+    top = Math.max(TIP_MARGIN, Math.min(top, vh - card.height - TIP_MARGIN));
+    let left = cx - card.width / 2;
+    left = Math.max(TIP_MARGIN, Math.min(left, vw - card.width - TIP_MARGIN));
+    setPos({ left, top });
+  }, [anchor]);
+
+  return (
+    <div
+      ref={cardRef}
+      class="ui-tip"
+      role="tooltip"
+      style={{
+        left: `${pos ? pos.left : anchor.left}px`,
+        top: `${pos ? pos.top : anchor.top}px`,
+        visibility: pos ? "visible" : "hidden",
+      }}
+    >
+      {children}
+    </div>
   );
 }
 
@@ -150,7 +186,8 @@ export function MiniMetricsChart({
   clip?: boolean;
   pointSize?: "s" | "m" | "l";
 }) {
-  const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
+  // hovered dot index + its screen rect (for the HTML overlay tooltip)
+  const [hovered, setHovered] = useState<{ idx: number; rect: DOMRect } | null>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ w: 560, h: 180 });
   // font sizes read from the --text-* tokens so the chart honours font-size setting
@@ -194,55 +231,58 @@ export function MiniMetricsChart({
   const sizeScale = PT_SIZE_SCALE[pointSize] ?? 1;
 
   // ── Milestone (record) detection over the FULL ordered list ──────────────────
-  // Records are tracked in display order. The "running best" line is stepped to
-  // these. When reversed, the chronological order is the reverse of display
-  // order, so we scan accordingly and keep runningBest aligned to display index.
+  // `chartData` is already in display order (buildChartData reverses when
+  // `reversed`). We scan in CHRONOLOGICAL order so records and the running-best
+  // are correct, then keep everything indexed by DISPLAY position.
+  //
+  //   chrono i = reversed ? (n-1 - displayIdx) : displayIdx
+  //
+  // The "most recent record" is the last record in chronological order; the
+  // "dry streak" is every experiment chronologically AFTER it. We translate both
+  // back to display indices so the kept set is direction-agnostic.
   const fullValues = chartData.values;
   const fullN = fullValues.length;
-  const fullMilestones = new Set<number>();   // display indices that set a record
-  const runningBestFull: number[] = new Array(fullN);
-  let lastRecordIdx = -1;                      // display index of the most recent record
-  if (reversed) {
+  const fullMilestones = new Set<number>();          // DISPLAY indices that set a record
+  const runningBestFull: number[] = new Array(fullN); // by DISPLAY index
+  const toDisplay = (chrono: number) => (reversed ? fullN - 1 - chrono : chrono);
+  let lastRecordChrono = -1;                          // chronological index of most recent record
+  {
     let best: number | null = null;
-    for (let i = fullN - 1; i >= 0; i--) {
-      const v = fullValues[i];
+    for (let c = 0; c < fullN; c++) {
+      const d = toDisplay(c);
+      const v = fullValues[d];
       const isBetter = isFinite(v) && (best === null || (lower ? v < best : v > best));
-      if (isBetter) { best = v; fullMilestones.add(i); lastRecordIdx = Math.max(lastRecordIdx, i); }
-      runningBestFull[i] = best ?? v;
-    }
-  } else {
-    let best: number | null = null;
-    for (let i = 0; i < fullN; i++) {
-      const v = fullValues[i];
-      const isBetter = isFinite(v) && (best === null || (lower ? v < best : v > best));
-      if (isBetter) { best = v; fullMilestones.add(i); lastRecordIdx = i; }
-      runningBestFull[i] = best ?? v;
+      if (isBetter) { best = v; fullMilestones.add(d); lastRecordChrono = c; }
+      runningBestFull[d] = best ?? v;
     }
   }
 
-  // ── Step-mode collapse (#69) ─────────────────────────────────────────────────
-  // Keep: every record up to (and including) the last record, PLUS every
-  // experiment AFTER the last record (running optimization toward the next
-  // record — these are the only non-record points worth showing). Flat
-  // stretches between early records collapse to their step points.
+  // ── Step-mode collapse (#79) ─────────────────────────────────────────────────
+  // KEEP rule (display index d, chronological index c = reversed ? n-1-d : d):
+  //   keep(d) = isRecord(d)  OR  c > lastRecordChrono
+  // i.e. every record up to & including the most recent record (steps; flat
+  // stretches between early records collapse), PLUS every experiment after the
+  // most recent record (the current dry streak) as normal dots. Works in both
+  // time directions because the dry-streak test is chronological.
   let keepIdx: number[];
   if (impOnly) {
     keepIdx = [];
-    for (let i = 0; i < fullN; i++) {
-      if (fullMilestones.has(i) || i > lastRecordIdx) keepIdx.push(i);
+    for (let d = 0; d < fullN; d++) {
+      const c = reversed ? fullN - 1 - d : d;
+      if (fullMilestones.has(d) || c > lastRecordChrono) keepIdx.push(d);
     }
   } else {
-    keepIdx = fullValues.map((_, i) => i);
+    keepIdx = Array.from({ length: fullN }, (_, d) => d);
   }
 
-  // Project the full arrays onto the kept indices.
-  const values = keepIdx.map((i) => fullValues[i]);
-  const pointColors = keepIdx.map((i) => chartData.pointColors[i]);
-  const expData = keepIdx.map((i) => chartData.expData[i]);
-  const labels = keepIdx.map((i) => chartData.labels[i]);
-  const runningBest = keepIdx.map((i) => runningBestFull[i]);
+  // Project the full arrays onto the kept indices (preserving display order).
+  const values = keepIdx.map((d) => fullValues[d]);
+  const pointColors = keepIdx.map((d) => chartData.pointColors[d]);
+  const expData = keepIdx.map((d) => chartData.expData[d]);
+  const labels = keepIdx.map((d) => chartData.labels[d]);
+  const runningBest = keepIdx.map((d) => runningBestFull[d]);
   const milestones = new Set<number>();
-  keepIdx.forEach((srcI, dstI) => { if (fullMilestones.has(srcI)) milestones.add(dstI); });
+  keepIdx.forEach((srcD, dstI) => { if (fullMilestones.has(srcD)) milestones.add(dstI); });
   const n = values.length;
 
   // 1:1 pixel coordinate space — viewBox matches measured size, no scaling.
@@ -314,11 +354,12 @@ export function MiniMetricsChart({
         {/* Y grid + labels */}
         {yTicks.map((ty, i) => {
           const v = useLog ? Math.pow(10, ty) : ty;
+          const gy = PAD.t + (1 - (ty - yMin) / (yMax - yMin)) * plotH;
           return (
             <g key={i}>
-              <line x1={PAD.l} x2={rightEdge} y1={PAD.t + (1 - (ty - yMin) / (yMax - yMin)) * plotH} y2={PAD.t + (1 - (ty - yMin) / (yMax - yMin)) * plotH}
+              <line x1={PAD.l} x2={rightEdge} y1={gy} y2={gy}
                 stroke="var(--border-soft)" stroke-width="1" />
-              <text x={PAD.l - 5} y={PAD.t + (1 - (ty - yMin) / (yMax - yMin)) * plotH + font.xs * 0.34}
+              <text x={PAD.l - 5} y={gy + font.xs * 0.34}
                 fill="var(--text-faint)" font-size={font.xs} text-anchor="end"
                 font-family="var(--font-mono)">{fmtVal(v)}</text>
             </g>
@@ -353,60 +394,12 @@ export function MiniMetricsChart({
               fontXs={font.xs}
               note={note}
               sizeScale={sizeScale}
-              onHoverChange={(h) => setHoveredIdx(h ? i : (cur) => (cur === i ? null : cur))}
+              onHoverChange={(h, rect) =>
+                setHovered(h && rect ? { idx: i, rect } : (cur) => (cur?.idx === i ? null : cur))
+              }
             />
           );
         })}
-
-        {/* Hover tooltip — canonical experiment fields (matches timeline/table):
-            exp/label · value (bold), idea #N · status, dim title excerpt, ★ record. */}
-        {hoveredIdx !== null && (() => {
-          const i = hoveredIdx;
-          const x = toX(i);
-          const y = toY(values[i]);
-          const exp = expData?.[i];
-          const label = labels?.[i] ?? String(i);
-          const idea = exp ? ideas[exp.idea_id] : null;
-          const status = idea?.status ?? "";
-          const ideaRows = wrapText(idea?.description ?? "", 92, 2);
-          const isMs = milestones.has(i);
-          const lh = font.xs + 3;
-          const headRows = 4; // metric · exp/value · idea/status · best
-          const tooltipW = 214;
-          const tooltipH = lh * (headRows + ideaRows.length) + 12;
-          const tx = Math.max(PAD.l + 2, Math.min(svgW - tooltipW - PAD.r, x + 10));
-          const ty = Math.max(PAD.t + 2, y - tooltipH - 8);
-          const ny = (k: number) => ty + lh * k;
-          return (
-            <g pointer-events="none" font-family="var(--font-mono)">
-              <line x1={x} y1={y - 4} x2={tx + 10} y2={ty + tooltipH}
-                stroke="var(--border)" stroke-width="1" />
-              <rect x={tx} y={ty} width={tooltipW} height={tooltipH} rx="3"
-                fill="var(--bg)" stroke="var(--purple)" stroke-width="1"
-                style="filter:drop-shadow(0 6px 14px rgba(0,0,0,0.45));" />
-              <text x={tx + 8} y={ny(1)} fill="var(--text-faint)" font-size={font.xs}
-                style="text-transform:uppercase;letter-spacing:0.08em;">
-                {metric ? fmtMetricName(metric) : "metric"}
-              </text>
-              <text x={tx + 8} y={ny(2)} fill="var(--text)" font-size={font.sm} font-weight="700">
-                {label} · {fmtVal(values[i])}{isMs ? "  ★ record" : ""}
-              </text>
-              <text x={tx + 8} y={ny(3)} fill="var(--purple)" font-size={font.xs}>
-                idea #{exp?.idea_id}{status ? ` · ${status}` : ""}
-              </text>
-              <text x={tx + 8} y={ny(4)} fill={isMs ? "var(--yellow)" : "var(--text-muted)"} font-size={font.xs}>
-                best so far {fmtVal(runningBest[i])}{isMs ? " · new record" : ""}
-              </text>
-              {ideaRows.length > 0 && (
-                <text x={tx + 8} y={ny(5)} fill="var(--text-muted)" font-size={font.xs}>
-                  {ideaRows.map((row, idx) => (
-                    <tspan key={idx} x={tx + 8} dy={idx === 0 ? 0 : lh}>{row}</tspan>
-                  ))}
-                </text>
-              )}
-            </g>
-          );
-        })()}
 
         {/* Bottom labels */}
         <g font-family="var(--font-mono)" font-size={font.xs}>
@@ -416,6 +409,30 @@ export function MiniMetricsChart({
           </text>
         </g>
       </svg>
+
+      {/* Shared HTML hover card — visually identical to timeline/table tooltips */}
+      {hovered !== null && (() => {
+        const i = hovered.idx;
+        if (i >= n) return null;
+        const exp = expData?.[i];
+        if (!exp) return null;
+        const label = (exp.label ?? exp.id ?? labels?.[i] ?? String(i)) as string;
+        const idea = ideas[exp.idea_id];
+        return (
+          <MiniTooltip anchor={hovered.rect}>
+            {experimentTipContent({
+              label: String(label),
+              ideaId: exp.idea_id,
+              ideaTitle: idea?.description,
+              status: idea?.status,
+              metricName: metric ? fmtMetricName(metric) : undefined,
+              value: values[i],
+              record: milestones.has(i),
+              running: (exp as any)._running ?? false,
+            })}
+          </MiniTooltip>
+        );
+      })()}
     </div>
   );
 }

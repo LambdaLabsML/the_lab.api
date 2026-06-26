@@ -358,7 +358,13 @@ export function DagView() {
       }
     }
 
-    // Build slots per column: just stations, sorted by status then activity
+    // Build slots per column. The vertical order is driven by the GLOBAL lane
+    // row (layout.laneRow): the longest lane is row 0 and hugs the top, the next
+    // longest is below it, etc. Stacking every column by the same lane order
+    // keeps each lane on a stable horizontal band across columns, so the graph
+    // grows rightward (single-direction scroll) instead of drifting diagonally
+    // down. Status / subtree-activity remain as tie-breaks for the rare case of
+    // two stations sharing a column slot order.
     interface Slot {
       type: string;
       nodeId: number;
@@ -366,6 +372,7 @@ export function DagView() {
       h: number;
       statusRank: number;
       act: string;
+      row: number;
     }
     const colSlots: Record<number, Slot[]> = {};
     for (let c = 0; c <= layout.maxDepth; c++) {
@@ -382,15 +389,54 @@ export function DagView() {
           h: heights[n.id],
           statusRank: sr,
           act: laneFullAct[li] || "",
+          row: layout.laneRow[li] ?? li,
         });
       }
-      // Sort: 1) status (concluded=0, active=1, abandoned=2)  2) subtree activity desc
+      // Sort: 1) lane row (longest lane on top, then next, ...)  2) status
+      //       3) subtree activity desc  4) node id (stable)
       slots.sort((a, b) => {
+        if (a.row !== b.row) return a.row - b.row;
         if (a.statusRank !== b.statusRank) return a.statusRank - b.statusRank;
         if (a.act !== b.act) return b.act > a.act ? 1 : -1;
-        return 0;
+        return a.nodeId - b.nodeId;
       });
       colSlots[c] = slots;
+    }
+
+    // --- Primary parent per node (for merge alignment) ---
+    // A multi-parent (merge) node visually CONTINUES one chain — its lane. If we
+    // clamp it below ALL parents it jumps to a different row than the chain it
+    // continues (the "step"). Instead we pick a single PRIMARY parent and align
+    // the node to that one only; the other parent edges curve in (handled by the
+    // branch router in subway-lines.ts). Primary = the same-lane parent (the
+    // backbone the node continues); failing that, the parent on the topmost lane
+    // (lowest laneRow = longest/most-active), tie-broken by subtree activity then
+    // id. This keeps the dominant line flat across merges without diagonal drift.
+    const primaryParent: Record<number, number> = {};
+    for (let idx = 0; idx < data.nodes.length; idx++) {
+      const n = data.nodes[idx];
+      const pids = (n.parent_ids || []).filter((p) => layout.nodeMap[p]);
+      if (!pids.length) continue;
+      const myLane = layout.ideaLane[n.id];
+      let best = pids[0];
+      let bestSameLane = layout.ideaLane[pids[0]] === myLane;
+      for (let j = 1; j < pids.length; j++) {
+        const p = pids[j];
+        const pSame = layout.ideaLane[p] === myLane;
+        if (pSame !== bestSameLane) {
+          if (pSame) { best = p; bestSameLane = true; }
+          continue;
+        }
+        // Same same-lane status → prefer topmost lane (lowest row), then activity, then id
+        const pRow = layout.laneRow[layout.ideaLane[p]] ?? layout.ideaLane[p];
+        const bRow = layout.laneRow[layout.ideaLane[best]] ?? layout.ideaLane[best];
+        if (pRow !== bRow) { if (pRow < bRow) best = p; continue; }
+        const pAct = laneFullAct[layout.ideaLane[p]] || "";
+        const bAct = laneFullAct[layout.ideaLane[best]] || "";
+        if (pAct !== bAct) { if (pAct > bAct) best = p; continue; }
+        if (p < best) best = p;
+      }
+      primaryParent[n.id] = best;
     }
 
     // === PASS 1: stack stations without pass-throughs ===
@@ -402,12 +448,12 @@ export function DagView() {
       for (let i = 0; i < slots.length; i++) {
         const slot = slots[i];
         let minY = y;
-        // Children never above parent
-        const pids = (layout.nodeMap[slot.nodeId]?.parent_ids || []);
-        for (let j = 0; j < pids.length; j++) {
-          const pp = stationPos[pids[j]];
-          if (pp) minY = Math.max(minY, pp.y);
-        }
+        // A node never sits above its PRIMARY parent (the chain it continues), so
+        // the dominant line stays flat across a merge. Secondary parents are not
+        // used to clamp — their edges curve in instead — which avoids the
+        // multi-parent "step" while preserving the no-diagonal-drift property.
+        const pp = stationPos[primaryParent[slot.nodeId]];
+        if (pp) minY = Math.max(minY, pp.y);
         y = minY;
         const isCompact = effectiveCompactMode && !isImportant[slot.nodeId];
         const nodeW = isCompact ? COMPACT_W : colWidth[c];
@@ -769,10 +815,11 @@ export function DagView() {
   // =========================================================================
   return (
     <div class="subway-wrap">
-      {/* Floating chrome — quiet .ui-toggle chips over the top-right of the map.
-          Lives in the non-scrolling wrapper so it stays pinned while the map
-          scrolls. TEXT flips showNodeText (off → compact node-only map, labels
-          hidden). MINI flips improvementsOnly (the existing compact-only mode). */}
+      {/* Toolbar header strip — quiet .ui-toggle chips + the find-idea search.
+          Lives in normal flow ABOVE #graph-container (not floating over it) so
+          it reserves its own height and never overlaps the top row of stations.
+          TEXT flips showNodeText (off → compact node-only map, labels hidden);
+          MINI flips improvementsOnly (the existing compact-only mode). */}
       <div class="subway-toolbar" role="group" aria-label="Graph controls">
         <SearchFilter
           class="subway-search"

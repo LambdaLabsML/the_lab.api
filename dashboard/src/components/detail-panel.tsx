@@ -47,7 +47,16 @@ function setHash(params: Record<string, string | number | null>) {
   history.replaceState(null, "", qs ? `#${qs}` : location.pathname + location.search);
 }
 
-export function DetailPanel() {
+/**
+ * @param embedded  When true, the panel is rendered inside a host that already
+ *   provides an "Idea Detail" heading + idea identity (the Overview review's
+ *   `.review-detail-flush` section, which renders its own `<h2>Idea Detail</h2>`
+ *   and an `idea #N · best …` sub-line). In that context we suppress the panel's
+ *   own top-level identity chrome (`.detail-head`: the "Idea #N" title, status
+ *   badge, and close button) so the header isn't shown twice. Defaults to false
+ *   (the standalone workbench dockview panel keeps its full identity header).
+ */
+export function DetailPanel({ embedded = false }: { embedded?: boolean } = {}) {
   const ideaId = selectedIdea.value;
   const [idea, setIdea] = useState<IdeaDetail | null>(null);
   const [loading, setLoading] = useState(false);
@@ -664,13 +673,17 @@ export function DetailPanel() {
       <div id="detail-panel" class="open">
         {loading && <div class="detail-loading-bar" />}
         <div id="detail-content">
-          <div class="detail-head">
-            <span class="detail-head-title">
-              <span class="detail-head-id">Idea #{ideaId}</span>
-              {idea && <span dangerouslySetInnerHTML={{ __html: badgeHtml(idea.status) }} />}
-            </span>
-            <button type="button" class="detail-close" onClick={close} title="Close">&times;</button>
-          </div>
+          {/* Identity header — suppressed when embedded, since the review section
+              already renders an "Idea Detail" heading + "idea #N" sub-line (#85). */}
+          {!embedded && (
+            <div class="detail-head">
+              <span class="detail-head-title">
+                <span class="detail-head-id">Idea #{ideaId}</span>
+                {idea && <span dangerouslySetInnerHTML={{ __html: badgeHtml(idea.status) }} />}
+              </span>
+              <button type="button" class="detail-close" onClick={close} title="Close">&times;</button>
+            </div>
+          )}
 
           {loading && !idea && (
             <div class="detail-loading-text">Loading…</div>
@@ -681,6 +694,15 @@ export function DetailPanel() {
               {/* Compact meta block — shown FIRST so key stats are above the fold.
                   Flat --bg surface, hairline-separated rows; no boxed border. */}
               <div class="idea-meta-block">
+
+                {/* When embedded the identity header is suppressed; surface the
+                    status badge here so the idea's status stays visible (it is
+                    NOT shown by the review heading). */}
+                {embedded && (
+                  <div class="meta-row">
+                    <span dangerouslySetInnerHTML={{ __html: badgeHtml(idea.status) }} />
+                  </div>
+                )}
 
                 {/* Row 1: branch + parents + diff */}
                 {(idea.branch || (idea.parent_ids && idea.parent_ids.length > 0)) && (

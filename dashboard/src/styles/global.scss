@@ -84,9 +84,13 @@ body {
 .review-page {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  /* (#78) more breathing room between header elements; the whole page (header
+     + section panes below) shares this max-width + centering, so everything
+     lines up horizontally. */
+  gap: 14px;
   max-width: 1540px;
   margin: 0 auto;
+  width: 100%;
 }
 
 /* ── Top row (#45) — [ metric select ] [ search … ], one tidy labeled row.
@@ -97,6 +101,8 @@ body {
   align-items: flex-start; /* (#53) labels sit above their controls, tops aligned */
   gap: var(--space-3);
   flex-wrap: wrap;
+  /* (#78) a little extra space below the search/metric row before the KPIs */
+  margin-bottom: 2px;
 }
 .review-topbar-field {
   display: flex;
@@ -260,13 +266,18 @@ body {
    A row of confident mono Stats on the landingpage hairline-grid trick
    (gap:1px on a --border bg). Calm, flat, one purple accent for "best". */
 
-/* KPI cluster (#63): a SINGLE row by default — auto-fit columns that fill the
-   width when there's room (all KPIs on one line) and wrap to a 2nd row only
-   when too narrow for the min cell width. auto-fit collapses empty tracks so
-   the hairline-grid never shows a gap on a partial last row. Balanced, no
-   overflow at any width. */
+/* KPI cluster (#77): by-COLUMN wrap. Items flow top→bottom and pack into tidy
+   columns, wrapping into more columns as width allows — capped at 2 rows so it
+   reads as a compact 2-deep block (no ragged single-item rows). Columns fill
+   the width when there's room; scroll horizontally only when truly too narrow.
+   The hairline-grid (gap:1px on --border bg) draws the dividers. */
 .review-kpis {
-  grid-template-columns: repeat(auto-fit, minmax(clamp(120px, 15%, 168px), 1fr));
+  /* Stay a grid (the element also has .ui-hairline-grid → display:grid, which
+     would otherwise win the cascade). auto-fit = one row when wide, wrapping to
+     balanced filled rows as it narrows. Hairline separators come from the 1px
+     gap + --border background of .ui-hairline-grid. */
+  grid-auto-flow: row;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
 }
 
 .review-kpi {
@@ -274,7 +285,7 @@ body {
   flex-direction: column;
   gap: 5px;
   padding: var(--space-2) var(--space-3);
-  min-width: 0; /* allow the cell to shrink instead of overflowing the grid */
+  min-width: 0;
 }
 
 .review-kpi-row {
@@ -380,6 +391,8 @@ body {
   gap: 4px;
   min-width: 0;
 }
+/* (#81) all group eyebrows are neutral — the squares carry the color, not the
+   label text (records is no longer purple). */
 .tl-group-label {
   font-family: var(--font-mono, monospace);
   font-size: var(--text-xs);
@@ -389,9 +402,6 @@ body {
   color: var(--text-faint);
   b { color: var(--text-muted); font-weight: 700; margin-left: 2px; }
 }
-.tl-group--records .tl-group-label { color: var(--purple); }
-.tl-group--running .tl-group-label { color: var(--yellow); }
-.tl-group--queued  .tl-group-label { color: var(--yellow); }
 .tl-tiles {
   display: flex;
   flex-wrap: wrap;
@@ -749,20 +759,23 @@ body {
   white-space: nowrap;
   flex-shrink: 0;
 }
-/* Real aligned table (#22): ONE grid owns the column tracks; every row is a
-   subgrid spanning all columns, so cells line up across header + all rows. */
+/* Real aligned table (#22): every row is its own grid with the SAME fixed
+   template so columns line up across header + all rows. (Data rows are wrapped
+   in a Tooltip trigger (#84), so identical per-row templates rather than
+   subgrid.) */
 .review-mst-table {
+  display: flex;
+  flex-direction: column;
+  font-family: var(--font-mono, monospace);
+  font-size: var(--text-sm);
+}
+/* the Tooltip wraps each data row — let the trigger be a full-width block row */
+.review-mst-table > .ui-tip-trigger { display: block; }
+.review-mst-row {
   display: grid;
   /* (#59) ★ · exp · idea# · what-it-tried · value · Δ · when — fixed tracks so
      nothing overflows; "what it tried" is the only flexible column. */
   grid-template-columns: 2.4em minmax(4.5em, auto) 3.2em minmax(0, 1fr) 4.4em 3.6em 2.8em;
-  font-family: var(--font-mono, monospace);
-  font-size: var(--text-sm);
-}
-.review-mst-row {
-  display: grid;
-  grid-column: 1 / -1;
-  grid-template-columns: subgrid;
   align-items: center;
   gap: 8px;
   padding: 3px 6px;
@@ -1011,10 +1024,10 @@ body {
   /* On mobile keep the milestones table — it's the point of the section.
      Drop "what it tried" + "when"; the remaining 5 cells
      (★ · exp · idea · value · Δ) re-flow into 5 columns. */
-  .review-mst-table {
+  .review-mst-row {
     grid-template-columns: 2.4em minmax(4.5em, 1fr) 3.2em 4.4em 3.6em;
+    gap: 6px;
   }
-  .review-mst-row { gap: 6px; }
   .review-mst-c-exptext,
   .review-mst-c-when { display: none; }
 }

@@ -4,8 +4,9 @@
    The lane colour survives as a thin left stripe; connections (the point of
    the map) are kept but quieted — thinner strokes, lower branch opacity. */
 
-/* Non-scrolling positioning context. The floating toolbar lives here so it
-   stays pinned while #graph-container scrolls the (often very wide) map. */
+/* Column layout: a normal-flow toolbar header strip sits ABOVE the scrolling
+   #graph-container, so the toolbar reserves its own space and never overlaps
+   the top row of stations. */
 .subway-wrap {
   flex: 1 1 0%;
   position: relative;
@@ -22,22 +23,25 @@
 #graph-container { flex: 1 1 0%; position: relative; overflow: auto; min-height: 0; min-width: 0; }
 #graph { position: relative; min-height: 100%; }
 
-/* ── Floating toolbar — TEXT / MINI toggles ─────────────────────────────────
-   Sits over the top-right of the map. Uses the .ui-toggle primitive so it
-   reads as chrome, not content. */
+/* ── Toolbar — find-idea search + TEXT / MINI toggles ───────────────────────
+   A normal-flow header strip ABOVE #graph-container. Living in flow (rather than
+   absolutely floating over the map) means it reserves its own height, so it can
+   never overlap the top row of stations — the old absolute placement covered
+   them. Right-aligned chrome reads as controls, not content; the SearchFilter
+   dropdown is viewport-fixed (see search-filter.tsx) so it is never clipped by
+   the toolbar or the scroll container. */
 .subway-toolbar {
-  position: absolute;
-  top: var(--space-2);
-  right: var(--space-2);
+  flex: 0 0 auto;
+  align-self: flex-end;        /* keep the chrome to the top-right */
   z-index: 6;
   display: flex;
   align-items: center;
   gap: var(--space-1);
+  margin: var(--space-2) var(--space-2) var(--space-1);
   padding: var(--space-1);
-  background: color-mix(in srgb, var(--bg-elev) 88%, transparent);
+  background: var(--bg-elev);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-md);
-  backdrop-filter: blur(6px);
 }
 .subway-toolbar .subway-search { width: 190px; flex-shrink: 0; }
 @media (max-width: 600px) { .subway-toolbar .subway-search { width: 130px; } }

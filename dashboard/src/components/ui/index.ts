@@ -11,3 +11,4 @@ export {
 } from "./primitives";
 export type { BadgeTone } from "./primitives";
 export { Tooltip } from "./tooltip";
+export { experimentTipContent, ideaTipContent } from "./entity-tip";

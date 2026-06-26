@@ -50,7 +50,7 @@ import { MetricsChart } from "./components/chart-panel/metrics-chart";
 import { ScatterChart } from "./components/chart-panel/scatter-chart";
 import { FilterBar } from "./components/filter-bar";
 import { SearchFilter, type FilterItem } from "./components/search-filter/search-filter";
-import { Eyebrow, Stat, Tooltip } from "./components/ui";
+import { Eyebrow, Stat, Tooltip, experimentTipContent, ideaTipContent } from "./components/ui";
 import { NavRail, SecondaryPanel, type NavSection } from "./components/nav-rail";
 import { ActivityPane } from "./components/activity/activity-pane";
 import { ActivityShortlog } from "./components/activity/activity-shortlog";
@@ -1438,27 +1438,19 @@ function IdeaMiniLeaderboard({ experiments, ideas, metric, lower }: {
             ? `↳ ${getAncestor2(idea?.parent_ids?.[0] ? ideas[idea.parent_ids[0]] : undefined)}`
             : rawDesc2.slice(0, 40) || `idea #${r.ideaId}`;
           const history = ideaHistory[r.ideaId] ?? [];
-          const lastTxt = r.lastFinished ? (() => {
-            const h = Math.floor((Date.now() - Date.parse(r.lastFinished!)) / 3600000);
-            return h < 24 ? `${h}h ago` : `${Math.floor(h / 24)}d ago`;
-          })() : null;
           const gap = i > 0 && ranked[0].best !== r.best
             ? (lower ? `+${(r.best - ranked[0].best).toFixed(2)}` : `−${(ranked[0].best - r.best).toFixed(2)}`)
             : null;
           return (
             <Tooltip
               key={r.ideaId}
-              content={
-                <>
-                  <span class="ui-tip-title">idea #{r.ideaId}{i === 0 ? "  ★ best" : ""}</span>
-                  <span class="ui-tip-row">best {fmtMetricName(metric)} <b>{fmtV(r.best)}</b></span>
-                  <span class="ui-tip-row">runs <b>{r.count}</b></span>
-                  {gap && <span class="ui-tip-row">vs #1 <b>{gap}</b></span>}
-                  <span class="ui-tip-row">status <b>{idea?.status ?? "—"}</b></span>
-                  {lastTxt && <span class="ui-tip-row">last run <b>{lastTxt}</b></span>}
-                  {rawDesc2 && <span class="ui-tip-dim">{rawDesc2.slice(0, 64)}</span>}
-                </>
-              }
+              content={ideaTipContent({
+                id: r.ideaId,
+                status: idea?.status,
+                title: rawDesc2 || undefined,
+                best: { metricName: fmtMetricName(metric), value: r.best },
+                runs: r.count,
+              })}
             >
               <div class={`emr-lb-row${i === 0 ? " emr-lb-row--best" : ""}`}
                 role="row"
@@ -1509,33 +1501,27 @@ const EXP_STATUS_WORD: Record<string, string> = {
 function fmtScoreShort(v: number) {
   return Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(2) : v.toFixed(3);
 }
-function clipText(s: string, n: number) { return s.length > n ? s.slice(0, n - 1) + "…" : s; }
 
-/** Shared hover card for a timeline experiment (matches the mini-chart tooltip). */
-function timelineTipContent(
+/** (#84) Map a review experiment → the SHARED experiment tooltip content, so
+   timeline squares/chips and milestone rows render identically to the chart. */
+function expTip(
   exp: import("./lib/types").Experiment,
   ideas: Record<number, import("./lib/types").IdeaNode>,
   metric: string,
   isMilestone: boolean,
-  recNo?: number,
 ) {
   const status = exp._running ? "running" : (exp.status ?? "unknown");
-  const idea = ideas[exp.idea_id];
-  const ideaText = idea?.description?.split("\n")[0] ?? "";
-  const expText = (exp.description ?? "").split("\n")[0];
   const score = exp.metrics?.[metric];
-  return (
-    <>
-      <span class="ui-tip-title">exp/{exp.label ?? exp.id}{isMilestone ? "  ★" : ""}</span>
-      {typeof score === "number" && isFinite(score) && (
-        <span class="ui-tip-row">{fmtMetricName(metric)} <b>{fmtScoreShort(score)}</b></span>
-      )}
-      <span class="ui-tip-row">idea #{exp.idea_id} <b>{EXP_STATUS_WORD[status] ?? status}</b></span>
-      {isMilestone && <span class="ui-tip-dim" style={{ color: "var(--purple)" }}>★ new record{recNo ? ` #${recNo}` : ""}</span>}
-      {ideaText && <span class="ui-tip-dim">{clipText(ideaText, 64)}</span>}
-      {expText && expText !== ideaText && <span class="ui-tip-dim">{clipText(expText, 64)}</span>}
-    </>
-  );
+  return experimentTipContent({
+    label: String(exp.label ?? exp.id),
+    ideaId: exp.idea_id,
+    ideaTitle: ideas[exp.idea_id]?.description?.split("\n")[0] ?? undefined,
+    status,
+    metricName: fmtMetricName(metric),
+    value: typeof score === "number" && isFinite(score) ? score : null,
+    record: isMilestone,
+    running: !!exp._running,
+  });
 }
 
 /** Compact summary square (#54): a small box only (like the legend swatches),
@@ -1554,7 +1540,7 @@ function TimelineSquare({ exp, ideas, metric, isMilestone, recNo, sqClsOverride 
   const status = exp._running ? "running" : (exp.status ?? "unknown");
   const sqCls = sqClsOverride ?? STATUS_SQ_CLASS[status] ?? "sq-cancelled";
   return (
-    <Tooltip content={timelineTipContent(exp, ideas, metric, isMilestone, recNo)}>
+    <Tooltip content={expTip(exp, ideas, metric, isMilestone)}>
       <span
         class={`tl-sq ${sqCls}${isMilestone ? " sq-milestone" : ""}${on ? " is-highlighted" : ""}${dim ? " is-dimmed" : ""}`}
         onMouseEnter={() => { highlightedIdea.value = exp.idea_id; }}
@@ -1583,7 +1569,7 @@ function TimelineChip({ exp, ideaCol, ideas, metric, isMilestone, recNo }: {
   const score = exp.metrics?.[metric];
   const hasScore = typeof score === "number" && isFinite(score);
   return (
-    <Tooltip content={timelineTipContent(exp, ideas, metric, isMilestone, recNo)}>
+    <Tooltip content={expTip(exp, ideas, metric, isMilestone)}>
       <span
         class={`tl-tile${isMilestone ? " tl-milestone" : ""}${on ? " is-highlighted" : ""}${dim ? " is-dimmed" : ""}`}
         style={{ "--idea-color": ideaCol } as any}
@@ -1675,13 +1661,11 @@ function ExperimentGrid({ experiments, milestoneIds, ideas, metric }: {
               isMilestone={kind === "records"} recNo={msRecNo.get(e.id)} />
           ))}
           {queuedNodes?.map(n => (
-            <Tooltip key={`q${n.id}`} content={
-              <>
-                <span class="ui-tip-title">idea #{n.id} · queued</span>
-                {n.description && <span class="ui-tip-dim">{(n.description.split("\n")[0]).slice(0, 64)}</span>}
-                <span class="ui-tip-dim">has experiments waiting to run</span>
-              </>
-            }>
+            <Tooltip key={`q${n.id}`} content={ideaTipContent({
+              id: n.id,
+              status: "queued",
+              title: n.description?.split("\n")[0] ?? undefined,
+            })}>
               <span class="tl-sq sq-queued" onClick={() => navigateToIdea(n.id)} />
             </Tooltip>
           ))}
@@ -1948,30 +1932,30 @@ function MilestonesTable({ experiments, metric, lower, ideas }: {
           const ideaText = idea?.description?.split("\n")[0] ?? "";
           const expText = (r.exp.description ?? "").split("\n")[0] || ideaText;
           return (
-            <div
-              key={r.exp.id}
-              class={`review-mst-row${isLatest ? " review-mst-row--latest" : ""}`}
-              role="row"
-              style={{ cursor: "pointer" }}
-              onMouseEnter={() => { highlightedIdea.value = r.exp.idea_id; }}
-              onMouseLeave={() => { if (highlightedIdea.value === r.exp.idea_id) highlightedIdea.value = null; }}
-              onClick={() => navigateToIdea(r.exp.idea_id, r.exp.label ?? String(r.exp.id))}
-              title={`record #${recNo} · exp/${r.exp.label ?? r.exp.id}${expText ? ` — ${expText}` : ""} · idea #${r.exp.idea_id} ${ideaText}`}
-            >
-              <span class="review-mst-c-rank" role="cell">
-                <span class="review-mst-star">★</span>{recNo}
-              </span>
-              <code class="review-mst-c-exp" role="cell">exp/{r.exp.label ?? r.exp.id}</code>
-              <span class="review-mst-c-idea" role="cell">#{r.exp.idea_id}</span>
-              <span class="review-mst-c-exptext" role="cell">{expText || "—"}</span>
-              <span class="review-mst-c-val" role="cell">{fmtV(r.val)}</span>
-              <span class="review-mst-c-delta" role="cell">
-                {r.delta == null
-                  ? <span class="review-mst-first">first</span>
-                  : <>{lower ? "−" : "+"}{fmtV(r.delta)}</>}
-              </span>
-              <span class="review-mst-c-when" role="cell">{whenAgo(r.exp.finished_at || r.exp.created_at)}</span>
-            </div>
+            <Tooltip key={r.exp.id} content={expTip(r.exp, ideas, metric, true)}>
+              <div
+                class={`review-mst-row${isLatest ? " review-mst-row--latest" : ""}`}
+                role="row"
+                style={{ cursor: "pointer" }}
+                onMouseEnter={() => { highlightedIdea.value = r.exp.idea_id; }}
+                onMouseLeave={() => { if (highlightedIdea.value === r.exp.idea_id) highlightedIdea.value = null; }}
+                onClick={() => navigateToIdea(r.exp.idea_id, r.exp.label ?? String(r.exp.id))}
+              >
+                <span class="review-mst-c-rank" role="cell">
+                  <span class="review-mst-star">★</span>{recNo}
+                </span>
+                <code class="review-mst-c-exp" role="cell">exp/{r.exp.label ?? r.exp.id}</code>
+                <span class="review-mst-c-idea" role="cell">#{r.exp.idea_id}</span>
+                <span class="review-mst-c-exptext" role="cell">{expText || "—"}</span>
+                <span class="review-mst-c-val" role="cell">{fmtV(r.val)}</span>
+                <span class="review-mst-c-delta" role="cell">
+                  {r.delta == null
+                    ? <span class="review-mst-first">first</span>
+                    : <>{lower ? "−" : "+"}{fmtV(r.delta)}</>}
+                </span>
+                <span class="review-mst-c-when" role="cell">{whenAgo(r.exp.finished_at || r.exp.created_at)}</span>
+              </div>
+            </Tooltip>
           );
         })}
         {hidden > 0 && (
@@ -2109,6 +2093,24 @@ function ReviewSearchFilter({ experiments, ideas }: {
     const q = query.toLowerCase();
     const out: FilterItem[] = [];
     const ideaArr = Object.values(ideas);
+
+    // (#83) `24/` or `#24/` initiates experiment selection WITHIN idea 24 —
+    // return that idea's experiments, label-matching the part after `/` (all
+    // when empty). value carries the idea_id for navigation.
+    const initiator = query.match(/^#?(\d+)\/(.*)$/);
+    if (initiator) {
+      const ideaId = Number(initiator[1]);
+      const sub = initiator[2].toLowerCase();
+      for (const e of experiments) {
+        if (e.idea_id !== ideaId) continue;
+        const lab = e.label ?? String(e.id);
+        if (!sub || lab.toLowerCase().includes(sub)) {
+          out.push({ id: `experiment:${e.id}`, category: "experiment", label: `exp/${lab}`, value: String(e.idea_id) });
+        }
+      }
+      return out;
+    }
+
     const wantIdeas = !category || category === "idea";
     const wantTags = !category || category === "tag";
     const wantExps = !category || category === "experiment";
@@ -2734,7 +2736,7 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
           {/* Flush (#23): no gray --bg-elev card — DetailPanel sits directly
               on the page background under the heading. */}
           <div class="review-detail-flush">
-            <DetailPanel />
+            <DetailPanel embedded />
           </div>
         </section>
       </div>
