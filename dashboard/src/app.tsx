@@ -1715,12 +1715,6 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
           <span class="review-best-direction" title={lower ? "lower is better" : "higher is better"}>
             {lower ? "↓ lower better" : "↑ higher better"}
           </span>
-          {scoreTrend && (
-            <span class={`review-best-trend review-best-trend--${scoreTrend === "↑" ? "up" : scoreTrend === "↓" ? "down" : "flat"}`}
-              title={`Recent 10 vs previous 10: ${scoreTrend === "↑" ? "improving" : scoreTrend === "↓" ? "declining" : "flat"}`}>
-              {scoreTrend}
-            </span>
-          )}
           <span class="review-best-meta">
             {bestIdea ? bestIdea.description?.split("\n")[0].slice(0, 50) : `idea #${bestExp.idea_id}`}
             {" · "}<code>{bestExp.label ?? `exp/${bestExp.id}`}</code>
@@ -1751,6 +1745,7 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
             failed > 0 ? `${failed} failed` : null,
             successRate !== null ? `${successRate}% scored` : null,
             milestonesCount > 0 ? `${milestonesCount} records` : null,
+            scoreTrend && velocityPerDay ? `trend ${scoreTrend}` : null,
             isStagnant ? "⚠ stagnant" : null,
           ].filter(Boolean).join(" · ")}
           preview={

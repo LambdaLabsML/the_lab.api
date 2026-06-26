@@ -450,6 +450,30 @@ function createChart(
   if (bestLineData) {
     datasets.unshift(makeBestLineDataset(bestLineData, metricKey));
   }
+
+  // Median reference line — subtle gray horizontal showing typical performance
+  const finiteVals = chartData.values.filter(isFinite);
+  if (finiteVals.length >= 5) {
+    const sorted = [...finiteVals].sort((a, b) => a - b);
+    const median = sorted[Math.floor(sorted.length / 2)];
+    const peak = lower ? Math.min(...finiteVals) : Math.max(...finiteVals);
+    // Only show median line when there's meaningful gap (median < 60% of peak)
+    if (peak !== 0 && Math.abs(median / peak) < 0.6) {
+      datasets.unshift({
+        label: `median ${fmtMetricName(metricKey)}`,
+        data: chartData.labels.map(() => median),
+        borderColor: getCssVar("--border"),
+        borderWidth: 1,
+        borderDash: [2, 6],
+        pointRadius: 0,
+        pointHoverRadius: 0,
+        tension: 0,
+        fill: false,
+        stepped: false,
+        order: -1,
+      } as any);
+    }
+  }
   return new Chart(canvas, {
     type: "line",
     data: {
