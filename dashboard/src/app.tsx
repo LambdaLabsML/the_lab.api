@@ -1442,7 +1442,7 @@ function ExpMiniResults({ experiments, metric, lower, milestoneIds, ideas }: {
                 <div key={e.id} class={`emr-row${isMilestone ? " emr-milestone" : ""}`}
                   style={{ cursor: "pointer" }}
                   onClick={() => navigateToIdea(e.idea_id, e.label ?? String(e.id))}
-                  title={`exp/${e.label ?? e.id} · idea #${e.idea_id}`}
+                  title={`${e.description?.slice(0, 100) ?? ""}  ·  exp/${e.label ?? e.id} · idea #${e.idea_id}`}
                 >
                   <span class="emr-rank">{i + 1}</span>
                   {isMilestone && <span class="emr-star">★</span>}
@@ -1830,6 +1830,7 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
         <ReviewDisclosure
           id="review-detail"
           title="Idea detail"
+          autoOpen={!!selected}
           action={selected
             ? `idea #${selected}${selectedIdeaBest != null ? ` · best: ${selectedIdeaBest.toFixed(3)}` : ""}`
             : "none selected"}
@@ -1882,15 +1883,21 @@ function ReviewDisclosure({
   action,
   preview,
   children,
+  autoOpen,
 }: {
   id: string;
   title: string;
   action: string;
   preview?: preact.ComponentChildren;
   children: preact.ComponentChildren;
+  autoOpen?: boolean;
 }) {
+  // Use a ref so we can imperatively open/close without re-rendering
+  const ref = (el: HTMLDetailsElement | null) => {
+    if (el && autoOpen !== undefined) el.open = autoOpen;
+  };
   return (
-    <details class="review-disclosure review-section" id={id}>
+    <details ref={ref} class="review-disclosure review-section" id={id}>
       <summary>
         <div>
           <h2>{title}</h2>
