@@ -122,14 +122,15 @@ export function Topbar(props: LayoutActions) {
     return Math.abs(best) >= 100 ? best.toFixed(0) : Math.abs(best) >= 1 ? best.toFixed(2) : best.toFixed(3);
   })();
 
-  // Build the stats array once so it's shared between compact and full renders
-  // Hide Pending when 0 — it's almost always 0 and wastes topbar space
+  // Build the stats array once so it's shared between compact and full renders.
+  // Best score goes FIRST so mobile compact mode shows the most important stat by default.
+  // Hide Pending when 0 — it's almost always 0 and wastes topbar space.
   const stats = [
+    ...(bestScoreLabel ? [{ key: "best", label: "Best", value: `★ ${bestScoreLabel}` }] : []),
     { key: "ideas",   label: "Ideas",   value: data ? String(data.active_ideas.length) : "--" },
     { key: "running", label: "Running", value: data ? String(totalRunning) : "--" },
     ...(totalPending > 0 ? [{ key: "pending", label: "Pending", value: String(totalPending) }] : []),
     { key: "branch",  label: "Branch",  value: data ? data.current_branch : "--", title: branchTitle ?? undefined },
-    ...(bestScoreLabel ? [{ key: "best", label: "Best", value: `★ ${bestScoreLabel}` }] : []),
     { key: "cost",    label: "Cost",    value: cost != null ? `$${cost.toFixed(2)}` : "--" },
     { key: "tokens",  label: "Tokens",  value: tokLabel, title: tokTitle },
   ];

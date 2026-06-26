@@ -1197,7 +1197,11 @@ function IdeaMiniLeaderboard({ experiments, ideas, metric, lower }: {
 
   const ranked = Object.entries(ideaBest)
     .map(([id, d]) => ({ ideaId: Number(id), ...d }))
-    .sort((a, b) => lower ? a.best - b.best : b.best - a.best)
+    .sort((a, b) => {
+      const scoreDiff = lower ? a.best - b.best : b.best - a.best;
+      if (Math.abs(scoreDiff) > 1e-9) return scoreDiff; // different scores
+      return a.count - b.count; // tied: fewer experiments = more efficient = ranked higher
+    })
     .slice(0, 5);
 
   if (ranked.length === 0) return null;

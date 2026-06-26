@@ -325,6 +325,12 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
             <span style={{ color: "var(--text-faint)" }}> · </span>
             <span style={{ color: "var(--purple)", fontWeight: 600 }}>·</span>
             {" "}best {Math.abs(peak) >= 100 ? peak.toFixed(0) : Math.abs(peak) >= 1 ? peak.toFixed(2) : peak.toFixed(3)}
+            {impOnly && allExperiments.value.some(e => e._running) && (
+              <>
+                <span style={{ color: "var(--text-faint)" }}> · </span>
+                <span style={{ color: "var(--yellow)", fontSize: "8px" }}>△ running</span>
+              </>
+            )}
           </div>
         );
       })()}
