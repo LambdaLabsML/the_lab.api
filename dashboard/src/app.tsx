@@ -1872,7 +1872,6 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
             const yk = scatterYMetric.value || "elapsed_s";
             const pairs = done.filter(e => typeof e.metrics?.[xk] === "number" && typeof e.metrics?.[yk] === "number");
             if (pairs.length < 5) return `${fmtMetricName(xk)} × ${fmtMetricName(yk)}`;
-            // Compute Pearson r to show correlation direction
             const xs = pairs.map(e => e.metrics![xk] as number);
             const ys = pairs.map(e => e.metrics![yk] as number);
             const mx = xs.reduce((a,b) => a+b, 0) / xs.length;
@@ -1882,6 +1881,28 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
             const r = den === 0 ? 0 : num / den;
             const corr = Math.abs(r) < 0.15 ? "r≈0" : r > 0 ? `r=${r.toFixed(2)}↑` : `r=${r.toFixed(2)}↓`;
             return `${fmtMetricName(xk)} × ${fmtMetricName(yk)} · ${pairs.length} pts · ${corr}`;
+          })()}
+          preview={(() => {
+            const xk = scatterXMetric.value || metric;
+            const yk = scatterYMetric.value || "elapsed_s";
+            const pairs = done.filter(e => typeof e.metrics?.[xk] === "number" && typeof e.metrics?.[yk] === "number");
+            if (pairs.length < 5) return undefined;
+            const xs = pairs.map(e => e.metrics![xk] as number);
+            const ys = pairs.map(e => e.metrics![yk] as number);
+            const mx = xs.reduce((a,b) => a+b, 0) / xs.length;
+            const my = ys.reduce((a,b) => a+b, 0) / ys.length;
+            const num = xs.reduce((s, x, i) => s + (x - mx) * (ys[i] - my), 0);
+            const den = Math.sqrt(xs.reduce((s,x) => s + (x-mx)**2, 0) * ys.reduce((s,y) => s + (y-my)**2, 0));
+            const r = den === 0 ? 0 : num / den;
+            const absR = Math.abs(r);
+            const color = absR > 0.7 ? "var(--green)" : absR > 0.3 ? "var(--yellow)" : "var(--text-faint)";
+            const label = absR < 0.15 ? "r≈0" : `r=${r.toFixed(2)}`;
+            const dir = r > 0 ? "↑" : r < 0 ? "↓" : "";
+            return (
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 3, background: "var(--bg-hi)", borderRadius: 4, padding: "1px 6px", fontSize: "9px", fontFamily: "var(--font-mono)", color, fontWeight: 600 }}>
+                {label}{dir && <span style={{ color, opacity: 0.8 }}>{dir}</span>}
+              </span>
+            );
           })()}
         >
           <div class="review-panel review-scatter-panel">
