@@ -1959,9 +1959,10 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
               }} />
             ))}
           </div>
-        ) : (
-          <span class="activity-idle-label">quiet 14d</span>
-        )}
+        ) : finished > 5 ? (
+          <span class="activity-idle-label" title="No experiments in the last 14 days">quiet 14d</span>
+        ) : null
+        /* hide 'quiet 14d' during loading state when finished=0 */}
         <button class="review-primary-action" onClick={onOpenWorkbench}>Workbench →</button>
       </div>
 
