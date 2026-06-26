@@ -278,4 +278,23 @@
   .chart-col {
     flex: 1 1 100%;
   }
+
+  /* Keep metric selector inline on mobile — constrain select width */
+  .chart-toolbar {
+    padding: 4px 6px;
+    gap: 4px;
+  }
+  .chart-toolbar > span {
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+  .chart-toolbar select {
+    max-width: 120px;
+  }
+  .chart-toggle-btn {
+    padding: 3px 7px;
+    font-size: 10px;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
 }
