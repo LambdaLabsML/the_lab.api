@@ -2217,7 +2217,9 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
           title="Queue"
           action={queued + liveCount > 0
             ? `${queued} queued · ${liveCount} running`
-            : `ready · ${liveCount} running`}
+            : lastFinishedAt
+              ? `ready · idle ${timeAgo(lastFinishedAt)}`
+              : `ready · 0 running`}
           preview={
             queued + liveCount > 0 ? (
               <div class="idea-health-bar">
@@ -2237,7 +2239,7 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
           title="Log"
           action={logs.length > 0
             ? `${logs.length} events · last: ${logs[0].title?.slice(0, 40) || logs[0].type}`
-            : "no events yet"}
+            : lastFinishedAt ? `no events · exp finished ${timeAgo(lastFinishedAt)}` : "no events yet"}
           preview={logs.length > 0 ? (() => {
             const dotItems = logs.slice(0, 6).map((e, i) => {
               let c: string, dotTitle: string;
