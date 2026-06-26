@@ -375,31 +375,40 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
       })()}
       {/* Empty state — shown when no metric selected or no data yet */}
       {(!metric || allKeys.length === 0) && (
-        <div
-          style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, color: "var(--text-faint)", fontSize: "var(--text-sm)", fontFamily: "var(--font-mono)", cursor: allKeys.length > 0 ? "pointer" : "default" }}
-          onClick={allKeys.length > 0 ? () => { innerRef.current?.querySelector("select")?.focus(); (innerRef.current?.querySelector("select") as HTMLElement)?.click?.(); } : undefined}
-          title={allKeys.length > 0 ? "Click to select a metric" : undefined}
-        >
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 10, padding: "8px 16px" }}>
           {allKeys.length === 0 ? (
             <>
-              <span style={{ fontSize: "20px", opacity: 0.3 }}>◈</span>
-              <span>loading experiments…</span>
-              <span style={{ fontSize: "10px", opacity: 0.4 }}>waiting for data</span>
+              <span style={{ fontSize: "20px", opacity: 0.3, fontFamily: "var(--font-mono)" }}>◈</span>
+              <span style={{ fontSize: "var(--text-sm)", color: "var(--text-faint)", fontFamily: "var(--font-mono)" }}>loading experiments…</span>
+              <span style={{ fontSize: "10px", opacity: 0.4, fontFamily: "var(--font-mono)", color: "var(--text-faint)" }}>waiting for data</span>
             </>
           ) : (
             <>
-              <span style={{ fontSize: "24px", opacity: 0.4 }}>◇</span>
-              <span style={{ fontWeight: 500 }}>select a metric above ↑</span>
-              <span style={{ fontSize: "10px", opacity: 0.5 }}>{allKeys.length} metrics available · click here to select</span>
-              {/* Show preferred metrics as quick-select options */}
-              <div style={{ display: "flex", gap: 6, marginTop: 4, flexWrap: "wrap", justifyContent: "center", maxWidth: 400 }}>
-                {["score","n_levels_completed","accuracy","f1","total_score"].filter(k => allKeys.includes(k)).slice(0, 4).map(k => (
-                  <span key={k} style={{ fontSize: "9px", padding: "2px 8px", border: "1px solid color-mix(in srgb, var(--accent) 40%, transparent)", borderRadius: 4, color: "var(--accent)", cursor: "pointer", background: "color-mix(in srgb, var(--accent) 8%, transparent)" }}
-                    onClick={(ev) => { ev.stopPropagation(); const sel = innerRef.current?.querySelector("select") as HTMLSelectElement | null; if (sel) { sel.value = k; sel.dispatchEvent(new Event("change", {bubbles: true})); } }}>
-                    {k.replace(/_/g, " ")}
-                  </span>
-                ))}
+              {/* Featured metric cards — quick overview of key metrics */}
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center", width: "100%" }}>
+                {["score","n_levels_completed","accuracy","f1","total_score","pass_at_1"]
+                  .filter(k => allKeys.includes(k))
+                  .slice(0, 4)
+                  .map(k => {
+                    const lower = isLowerBetter(k);
+                    const vals = experiments.filter(e => !e._running && typeof e.metrics?.[k] === "number").map(e => e.metrics![k] as number);
+                    const best = vals.length > 0 ? (lower ? Math.min(...vals) : Math.max(...vals)) : null;
+                    const fmt = best === null ? "--" : Math.abs(best) >= 100 ? best.toFixed(0) : Math.abs(best) >= 1 ? best.toFixed(2) : best.toFixed(3);
+                    return (
+                      <div key={k}
+                        style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3, padding: "8px 14px", border: "1px solid var(--border-soft)", borderRadius: "var(--radius-md)", background: "var(--bg-elev)", cursor: "pointer", minWidth: 80 }}
+                        onClick={(ev) => { ev.stopPropagation(); const sel = innerRef.current?.querySelector("select") as HTMLSelectElement | null; if (sel) { sel.value = k; sel.dispatchEvent(new Event("change", {bubbles: true})); } }}
+                        title={`Click to chart ${k.replace(/_/g, " ")}`}
+                      >
+                        <span style={{ fontSize: "9px", color: "var(--text-faint)", fontFamily: "var(--font-mono)", textTransform: "uppercase", letterSpacing: "0.05em" }}>{k.replace(/_/g, " ")}</span>
+                        <span style={{ fontSize: "18px", fontWeight: 700, fontFamily: "var(--font-mono)", color: best !== null ? "var(--purple)" : "var(--text-faint)", lineHeight: 1 }}>{fmt}</span>
+                        {best !== null && <span style={{ fontSize: "8px", color: "var(--text-faint)" }}>★ best · {vals.length} exp</span>}
+                      </div>
+                    );
+                  })
+                }
               </div>
+              <span style={{ fontSize: "9px", opacity: 0.45, fontFamily: "var(--font-mono)", color: "var(--text-faint)" }}>click any card or use the metric selector above ↑</span>
             </>
           )}
         </div>
