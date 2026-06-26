@@ -318,7 +318,7 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
         if (peak === 0 || median / peak > 0.3) return null;
         return (
           <div class="chart-dist-hint">
-            {vals.length} experiments · median {Math.abs(median) >= 1 ? median.toFixed(1) : median.toFixed(2)} · best {Math.abs(peak) >= 100 ? peak.toFixed(0) : peak.toFixed(2)}
+            {vals.length} exp · <span style={{ color: "var(--border-soft)" }}>───</span> median {Math.abs(median) >= 1 ? median.toFixed(1) : median.toFixed(2)} · <span style={{ color: "var(--purple)" }}>- - -</span> best {Math.abs(peak) >= 100 ? peak.toFixed(0) : peak.toFixed(2)}
           </div>
         );
       })()}

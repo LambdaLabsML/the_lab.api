@@ -1463,9 +1463,16 @@ function ExpMiniResults({ experiments, metric, lower, milestoneIds, ideas }: {
         </div>
       )}
 
-      {/* Recent 3 */}
+      {/* Recent 3 — highlight stagnation when all score zero */}
+      {(() => {
+        const recentScores = recent3.filter(e => !e._running && typeof e.metrics?.[metric] === "number")
+          .map(e => e.metrics![metric] as number);
+        const allZero = recentScores.length >= 2 && recentScores.every(v => v === 0);
+        return (
       <div class="emr-section">
-        <span class="emr-label">recent</span>
+        <span class="emr-label" style={allZero ? { color: "var(--red)", fontWeight: 600 } : undefined}>
+          {allZero ? "recent ↓ 0s" : "recent"}
+        </span>
         <div class="emr-rows">
           {recent3.map((e) => {
             const status = e._running ? "running" : (e.status ?? "unknown");
@@ -1487,6 +1494,8 @@ function ExpMiniResults({ experiments, metric, lower, milestoneIds, ideas }: {
           })}
         </div>
       </div>
+        );
+      })()}
     </div>
   );
 }
@@ -1825,8 +1834,18 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
           action={(() => {
             const xk = scatterXMetric.value || metric;
             const yk = scatterYMetric.value || "elapsed_s";
-            const pts = done.filter(e => typeof e.metrics?.[xk] === "number" && typeof e.metrics?.[yk] === "number").length;
-            return `${fmtMetricName(xk)} × ${fmtMetricName(yk)}${pts > 0 ? ` · ${pts} pts` : ""}`;
+            const pairs = done.filter(e => typeof e.metrics?.[xk] === "number" && typeof e.metrics?.[yk] === "number");
+            if (pairs.length < 5) return `${fmtMetricName(xk)} × ${fmtMetricName(yk)}`;
+            // Compute Pearson r to show correlation direction
+            const xs = pairs.map(e => e.metrics![xk] as number);
+            const ys = pairs.map(e => e.metrics![yk] as number);
+            const mx = xs.reduce((a,b) => a+b, 0) / xs.length;
+            const my = ys.reduce((a,b) => a+b, 0) / ys.length;
+            const num = xs.reduce((s, x, i) => s + (x - mx) * (ys[i] - my), 0);
+            const den = Math.sqrt(xs.reduce((s,x) => s + (x-mx)**2, 0) * ys.reduce((s,y) => s + (y-my)**2, 0));
+            const r = den === 0 ? 0 : num / den;
+            const corr = Math.abs(r) < 0.15 ? "no corr" : r > 0 ? `r=${r.toFixed(2)} ↑` : `r=${r.toFixed(2)} ↓`;
+            return `${fmtMetricName(xk)} × ${fmtMetricName(yk)} · ${pairs.length} pts · ${corr}`;
           })()}
         >
           <div class="review-panel review-scatter-panel">
