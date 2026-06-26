@@ -1919,7 +1919,28 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
                 })()}
                 {activeRuns.length > 0 && activeRuns.length <= 4 && (
                   <span class="review-running-list">
-                    {activeRuns.map((e) => `exp/${e.label ?? e.id}`).join("  ")}
+                    {activeRuns.map((e) => {
+                      const pct = progress[e.label || String(e.id)] ?? 0;
+                      const sz = 12, sw = 1.5, r = (sz - sw) / 2;
+                      const circ = 2 * Math.PI * r;
+                      const off = circ * (1 - Math.min(Math.max(pct, 0), 100) / 100);
+                      return (
+                        <span key={e.id} style={{ display: "inline-flex", alignItems: "center", gap: 2, marginLeft: 6 }}
+                          title={`exp/${e.label ?? e.id}${pct > 0 ? ` · ${Math.round(pct)}%` : ""}`}>
+                          {pct > 0 ? (
+                            <svg width={sz} height={sz} style={{ display: "inline-block", verticalAlign: "middle", flexShrink: 0 }}>
+                              <circle cx={sz/2} cy={sz/2} r={r} fill="none" stroke="var(--border)" strokeWidth={sw} />
+                              <circle cx={sz/2} cy={sz/2} r={r} fill="none" stroke="var(--yellow)" strokeWidth={sw}
+                                strokeDasharray={circ} strokeDashoffset={off} strokeLinecap="round"
+                                transform={`rotate(-90 ${sz/2} ${sz/2})`} />
+                            </svg>
+                          ) : (
+                            <span class="sq-running" style={{ width: 5, height: 5, borderRadius: "50%", display: "inline-block" }} />
+                          )}
+                          <code style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>exp/{e.label ?? e.id}</code>
+                        </span>
+                      );
+                    })}
                   </span>
                 )}
               </>
