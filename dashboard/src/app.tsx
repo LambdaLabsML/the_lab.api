@@ -1208,8 +1208,15 @@ function IdeaMiniLeaderboard({ experiments, ideas, metric, lower }: {
 
   // Tiny sparkline for an idea's score history
   function IdeaSparkline({ vals, lower: lo }: { vals: number[]; lower: boolean }) {
-    if (vals.length < 2) return null;
+    if (vals.length === 0) return null;
     const W = 28, H = 10;
+    if (vals.length === 1) {
+      return (
+        <svg width={W} height={H} style={{ flexShrink: 0, opacity: 0.5 }}>
+          <circle cx={W/2} cy={H/2} r={2} fill="var(--text-faint)" />
+        </svg>
+      );
+    }
     const lo_ = Math.min(...vals), hi_ = Math.max(...vals);
     const range = hi_ - lo_;
     if (range < 1e-9) {
