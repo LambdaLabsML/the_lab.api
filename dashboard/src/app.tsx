@@ -1199,17 +1199,18 @@ function IdeaMiniLeaderboard({ experiments, ideas, metric, lower }: {
     );
   }
 
-  // Compute best score and experiment count per idea
-  const ideaBest: Record<number, { best: number; expLabel: string; expId: number; count: number }> = {};
+  // Compute best score, count, and last-run time per idea
+  const ideaBest: Record<number, { best: number; expLabel: string; expId: number; count: number; lastFinished: string | null }> = {};
   for (const e of experiments) {
     if (e._running) continue;
     if (typeof e.metrics?.[metric] !== "number") continue;
     const v = e.metrics![metric] as number;
     const cur = ideaBest[e.idea_id];
     if (!cur) {
-      ideaBest[e.idea_id] = { best: v, expLabel: e.label ?? String(e.id), expId: e.id, count: 1 };
+      ideaBest[e.idea_id] = { best: v, expLabel: e.label ?? String(e.id), expId: e.id, count: 1, lastFinished: e.finished_at ?? null };
     } else {
       cur.count++;
+      if (e.finished_at && (!cur.lastFinished || e.finished_at > cur.lastFinished)) cur.lastFinished = e.finished_at;
       if (lower ? v < cur.best : v > cur.best) {
         cur.best = v; cur.expLabel = e.label ?? String(e.id); cur.expId = e.id;
       }
@@ -1295,6 +1296,16 @@ function IdeaMiniLeaderboard({ experiments, ideas, metric, lower }: {
               <span class="emr-count" style={{ color: r.count < 5 ? "var(--yellow)" : r.count > 30 ? "var(--text-faint)" : "var(--text-muted)" }}>{r.count}</span>
               <IdeaSparkline vals={history} lower={lower} />
               <span class="emr-val">{fmtV(r.best)}</span>
+              {r.lastFinished && (() => {
+                const daysAgo = Math.floor((Date.now() - Date.parse(r.lastFinished)) / 86400000);
+                const isStale = daysAgo > 7;
+                return (
+                  <span style={{ fontSize: "7px", color: isStale ? "var(--yellow)" : "var(--text-faint)", flexShrink: 0, fontFamily: "var(--font-mono)" }}
+                    title={`Last experiment: ${daysAgo}d ago`}>
+                    {daysAgo}d
+                  </span>
+                );
+              })()}
               {i > 0 && ranked[0].best !== r.best && (
                 <span class="emr-gap">
                   {lower
@@ -1917,11 +1928,13 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
           {milestonesCount > 1 && finished > 0 && (() => {
             const avgPer = Math.round(finished / milestonesCount);
             const overdue = expsSinceBest - avgPer;
-            return overdue > 0 ? (
-              <span style={{ color: "var(--text-faint)", fontSize: "var(--text-xs)" }}>
-                {" "}({overdue} overdue — avg 1 record/{avgPer} exp)
+            if (overdue <= 0) return null;
+            const overdueColor = overdue > avgPer ? "var(--red)" : overdue > avgPer * 0.5 ? "var(--yellow)" : "var(--text-faint)";
+            return (
+              <span style={{ color: overdueColor, fontSize: "var(--text-xs)", fontWeight: overdue > avgPer ? 600 : 400 }}>
+                {" "}({overdue} overdue · avg 1/{avgPer} exp)
               </span>
-            ) : null;
+            );
           })()}
           {" · "}
           <a href="#review-ops" class="review-pivot-link"
