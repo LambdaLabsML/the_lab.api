@@ -1971,12 +1971,20 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
               const scoreStr = lastScore !== null
                 ? (Math.abs(lastScore) >= 1 ? lastScore.toFixed(2) : lastScore.toFixed(3))
                 : null;
+              const lastIdea = lastFinishedExp ? ideas[lastFinishedExp.idea_id] : null;
+              const lastIdeaDesc = lastIdea?.description?.split("\n")[0].slice(0, 28);
               parts.push(
                 <span>
                   idle {timeAgo(lastFinishedAt)}
                   {scoreStr !== null && (
                     <span style={{ color: lastScore! > 0 ? "var(--green)" : "var(--text-faint)", fontSize: "var(--text-xs)" }}>
                       {" "}→ {scoreStr}
+                    </span>
+                  )}
+                  {lastIdeaDesc && (
+                    <span style={{ color: "var(--text-faint)", fontSize: "var(--text-xs)" }}
+                      title={lastIdea?.description?.split("\n")[0]}>
+                      {" · "}{lastIdeaDesc}…
                     </span>
                   )}
                 </span>
@@ -2171,14 +2179,22 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
         </div>
       )}
 
-      {/* ── Chart — the main signal ──────────────────────────────────── */}
-      <div class="review-chart-wrap" id="review-progress">
-        <MetricsChart />
-        <a class="review-chart-skip" href="#review-runs" onClick={(e) => {
-          e.preventDefault();
-          document.getElementById("review-runs")?.scrollIntoView({ behavior: "smooth", block: "start" });
-        }}>↓ experiments & ideas</a>
-      </div>
+      {/* ── Chart — collapses to compact empty state when no metric selected ── */}
+      {/* Chart: compact when no metric has real data to show */}
+      {(() => {
+        const hasChartData = selectedMetric.value !== "" &&
+          done.some(e => typeof e.metrics?.[selectedMetric.value] === "number");
+        return (
+          <div class="review-chart-wrap" id="review-progress"
+            style={!hasChartData ? { height: "136px", minHeight: "136px" } : undefined}>
+            <MetricsChart />
+            <a class="review-chart-skip" href="#review-runs" onClick={(e) => {
+              e.preventDefault();
+              document.getElementById("review-runs")?.scrollIntoView({ behavior: "smooth", block: "start" });
+            }}>↓ experiments & ideas</a>
+          </div>
+        );
+      })()}
 
       {/* ── Collapsible detail sections — Experiments first (results > structure) ── */}
       <div class="review-stack">
