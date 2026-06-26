@@ -2595,7 +2595,7 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
                       {Math.round((ideasConcluded / (ideasConcluded + ideasActive + ideasAbandoned)) * 100)}% done
                       {(() => {
                         // Coverage: % of active ideas that have been tried at least once
-                        if (!hasLoadedExps || activeIdeas === 0) return null;
+                        if (experiments.length <= 20 || activeIdeas === 0) return null;
                         const ideaExpCountsRing: Record<number, number> = {};
                         for (const e of experiments) { if (!e._running) ideaExpCountsRing[e.idea_id] = (ideaExpCountsRing[e.idea_id] || 0) + 1; }
                         const activeList2 = Object.values(ideas).filter(i => i.status !== "concluded" && i.status !== "abandoned");

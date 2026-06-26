@@ -355,7 +355,7 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
             {vals.length} exp
             {impOnly && (
               <span style={{ color: "var(--text-faint)", fontSize: "8px" }}>
-                {" "}({milestoneSet.size || pctAtPeak} milestones)
+                {" "}({pctAtPeak} milestones)
               </span>
             )}
             <span style={{ color: "var(--text-faint)" }}> · </span>
