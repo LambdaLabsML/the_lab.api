@@ -292,6 +292,19 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
         <button type="button" class="chart-toggle-btn" onClick={() => { if (cloneChartPanel) cloneChartPanel("metrics", metric); }} title="Clone this chart as a new tab">
           + Clone
         </button>
+        {/* Current best badge — quickly visible without needing to hover the chart */}
+        {bestLine && (() => {
+          const vals = allExperiments.value.filter(e => !e._running && typeof e.metrics?.[metric] === "number").map(e => e.metrics![metric] as number);
+          if (vals.length === 0) return null;
+          const lower = isLowerBetter(metric);
+          const peak = lower ? Math.min(...vals) : Math.max(...vals);
+          const fmt = Math.abs(peak) >= 100 ? peak.toFixed(0) : Math.abs(peak) >= 1 ? peak.toFixed(2) : peak.toFixed(3);
+          return (
+            <span class="chart-best-badge" title={`Current best ${fmtMetricName(metric)}`}>
+              ★ {fmt}
+            </span>
+          );
+        })()}
       </div>
       <div id="chart-wrap" style={{ flex: 1, minHeight: 0 }}>
         {minified ? (

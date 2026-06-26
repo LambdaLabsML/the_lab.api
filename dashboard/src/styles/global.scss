@@ -373,6 +373,12 @@ body {
   flex-shrink: 0;
   border-left: 2px solid var(--idea-color, var(--border));
   padding-left: 3px;
+  border-radius: 0 2px 2px 0;
+  transition: background var(--transition-fast);
+  &:hover {
+    background: color-mix(in srgb, var(--idea-color, var(--border)) 12%, transparent);
+    .exp-grid-sq { transform: scale(1.2); }
+  }
 }
 
 .exp-grid-sq {

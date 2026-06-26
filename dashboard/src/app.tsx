@@ -1150,8 +1150,8 @@ function IdeaRing({ active, concluded, abandoned }: { active: number; concluded:
           transform={`rotate(-90 ${size/2} ${size/2})`}
         />
       )}
-      {/* Center label */}
-      <text x={size/2} y={size/2 + 3} textAnchor="middle" fontSize="8" fill="var(--text-muted)" fontFamily="var(--font-mono, monospace)">
+      {/* Center label: total count */}
+      <text x={size/2} y={size/2 + 3} textAnchor="middle" fontSize="9" fontWeight="600" fill="var(--text)" fontFamily="var(--font-mono, monospace)">
         {total}
       </text>
     </svg>
@@ -1740,7 +1740,14 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
             <div class="emr-preview">
               {/* Exploration ring + health bar row */}
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                <IdeaRing active={ideasActive} concluded={ideasConcluded} abandoned={ideasAbandoned} />
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+                  <IdeaRing active={ideasActive} concluded={ideasConcluded} abandoned={ideasAbandoned} />
+                  {ideasConcluded + ideasActive + ideasAbandoned > 0 && (
+                    <span style={{ fontSize: "8px", color: "var(--text-faint)", fontFamily: "var(--font-mono, monospace)", whiteSpace: "nowrap" }}>
+                      {Math.round((ideasConcluded / (ideasConcluded + ideasActive + ideasAbandoned)) * 100)}% done
+                    </span>
+                  )}
+                </div>
                 <div style={{ flex: 1 }}>
                   <div class="idea-health-bar">
                     {ideasActive > 0    && <span class="ihb-seg ihb-active"    style={{ flex: ideasActive }}    title={`${ideasActive} active`} />}
