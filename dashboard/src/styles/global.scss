@@ -1228,7 +1228,12 @@ body {
   .review-disclosure summary p {
     max-width: none;
     text-align: left;
-    display: none;
+    font-size: 8px;
+    color: var(--text-faint);
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    line-height: 1.3;
   }
 
   .review-summary-pills {
