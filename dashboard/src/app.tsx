@@ -2278,7 +2278,11 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
           {expsSinceBest != null && expsSinceBest > 0 && (
             <span class="rcs-item" style={{ position: "relative" }}
               title={expsSinceBest > 0 && milestonesCount > 0 ? `${expsSinceBest} experiments since last record · avg was ${Math.round(finished/milestonesCount)} per record` : `${expsSinceBest} experiments since last new best`}>
-              <span class="rcs-label">since ★</span>
+              <span class="rcs-label">since ★{milestonesCount > 0 && finished > 0 && expsSinceBest > Math.round(finished/milestonesCount) ? (
+                <span style={{ color: "var(--text-faint)", fontWeight: 400, marginLeft: 2 }}>
+                  +{expsSinceBest - Math.round(finished/milestonesCount)}
+                </span>
+              ) : null}</span>
               <span class="rcs-value" style={{ color: expsSinceBest > 80 ? "var(--red)" : expsSinceBest > 30 ? "var(--yellow)" : "var(--text)" }}>
                 {expsSinceBest}
               </span>
