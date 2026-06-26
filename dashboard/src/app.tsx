@@ -2078,8 +2078,8 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
                             {vStr}
                           </span>
                         )}
-                        {expsBetween != null && expsBetween > 1 && midPct != null && (
-                          <span style={{ position: "absolute", left: `${midPct.toFixed(1)}%`, transform: "translateX(-50%)", top: "-11px", fontSize: "7px", color: "var(--text-faint)", fontFamily: "var(--font-mono)", whiteSpace: "nowrap" }}
+                        {expsBetween != null && expsBetween > 5 && midPct != null && (
+                          <span style={{ position: "absolute", left: `${midPct.toFixed(1)}%`, transform: "translateX(-50%)", top: "-12px", fontSize: "7px", color: "var(--text-muted)", fontFamily: "var(--font-mono)", whiteSpace: "nowrap", fontWeight: 500 }}
                             title={`${expsBetween} experiments between milestones`}>
                             {expsBetween}
                           </span>
@@ -2143,9 +2143,18 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
                 {successRate !== null && (
                   <div style={{ width: "90px", display: "flex", flexDirection: "column", gap: 1 }}>
                     <div style={{ height: 3, background: "var(--border-soft)", borderRadius: 2, overflow: "hidden" }} title={`${successRate}% of experiments scored above zero`}>
-                      <div style={{ height: "100%", width: `${successRate}%`, background: successRate > 30 ? "var(--green)" : successRate > 10 ? "var(--yellow)" : "var(--red)", borderRadius: 2 }} />
+                      <div style={{ height: "100%", width: `${successRate}%`, background: successRate > 30 ? "var(--green)" : successRate > 10 ? "var(--yellow)" : "var(--red)", borderRadius: 2, transition: "width 0.5s ease" }} />
                     </div>
                     <span style={{ fontSize: "7px", color: "var(--text-faint)", fontFamily: "var(--font-mono)" }}>{successRate}% scored</span>
+                  </div>
+                )}
+                {milestonesCount > 0 && finished > 0 && (
+                  <div style={{ width: "90px", display: "flex", flexDirection: "column", gap: 1 }}
+                    title={`${milestonesCount} new best scores found in ${finished} experiments`}>
+                    <div style={{ height: 3, background: "var(--border-soft)", borderRadius: 2, overflow: "hidden" }}>
+                      <div style={{ height: "100%", width: `${Math.min(100, milestonesCount * 20)}%`, background: "var(--purple)", borderRadius: 2, opacity: 0.7 }} />
+                    </div>
+                    <span style={{ fontSize: "7px", color: "var(--text-faint)", fontFamily: "var(--font-mono)" }}>{milestonesCount} records · 1/{Math.round(finished/milestonesCount)}</span>
                   </div>
                 )}
               </div>
@@ -2180,7 +2189,16 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
               {/* Exploration ring + health bar row */}
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
                 <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, position: "relative" }}>
-                  {isLive && <span class="sq-running" style={{ position: "absolute", top: 1, right: 1, width: 5, height: 5, borderRadius: "50%", zIndex: 2 }} title={`${liveCount} running`} />}
+                  {isLive && (() => {
+                    const runExp = activeRuns[0];
+                    const runPct = runExp ? Math.round(progress[runExp.label || String(runExp.id)] ?? 0) : null;
+                    const runIdea = runExp ? ideas[runExp.idea_id] : null;
+                    const runDesc = runIdea?.description?.split("\n")[0].slice(0, 40) ?? "";
+                    return (
+                      <span class="sq-running" style={{ position: "absolute", top: 1, right: 1, width: 5, height: 5, borderRadius: "50%", zIndex: 2 }}
+                        title={`${liveCount} running now: exp/${runExp?.label ?? runExp?.id}${runPct ? ` (${runPct}%)` : ""}${runDesc ? `\n${runDesc}` : ""}`} />
+                    );
+                  })()}
                   <IdeaRing active={ideasActive} concluded={ideasConcluded} abandoned={ideasAbandoned} />
                   {ideasConcluded + ideasActive + ideasAbandoned > 0 && (
                     <span style={{ fontSize: "8px", color: "var(--text-faint)", fontFamily: "var(--font-mono, monospace)", whiteSpace: "nowrap", textAlign: "center" }}>
