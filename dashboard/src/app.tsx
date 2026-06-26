@@ -1678,11 +1678,12 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
   const liveCount = totalRunning || running;
   const isLive = liveCount > 0;
 
-  // Last-activity: most recent finished_at across all experiments
-  const lastFinishedAt = done.reduce<string | null>((latest, e) => {
+  // Last-activity: most recent finished experiment
+  const lastFinishedExp = done.reduce<typeof done[0] | null>((latest, e) => {
     if (!e.finished_at) return latest;
-    return !latest || e.finished_at > latest ? e.finished_at : latest;
+    return !latest || e.finished_at > latest.finished_at! ? e : latest;
   }, null);
+  const lastFinishedAt = lastFinishedExp?.finished_at ?? null;
   function timeAgo(iso: string | null): string {
     if (!iso) return "";
     const sec = Math.max(0, Math.floor((Date.now() - Date.parse(iso)) / 1000));
@@ -2293,7 +2294,9 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
           title="Log"
           action={logs.length > 0
             ? `${logs.length} events · last: ${logs[0].title?.slice(0, 40) || logs[0].type}`
-            : lastFinishedAt ? `no events · exp finished ${timeAgo(lastFinishedAt)}` : "no events yet"}
+            : lastFinishedExp
+              ? `no events · ${lastFinishedExp.label ?? `exp/${lastFinishedExp.id}`} finished ${timeAgo(lastFinishedAt)}`
+              : "no events yet"}
           preview={logs.length > 0 ? (() => {
             const dotItems = logs.slice(0, 6).map((e, i) => {
               let c: string, dotTitle: string;
