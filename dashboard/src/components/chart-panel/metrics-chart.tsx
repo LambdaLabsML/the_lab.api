@@ -292,9 +292,22 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
             {grouped.meta.length > 0 && <optgroup label="Meta">{grouped.meta.map((k) => <option key={k} value={k}>{fmtMetricName(k)}</option>)}</optgroup>}
           </select>
         </span>
-        <button type="button" class={`chart-toggle-btn${impOnly ? " active" : ""}`} onClick={() => { improvementsOnly.value = !impOnly; }} title={impOnly ? "Currently: step-function (click for all experiments)" : "Show step-function — only new bests"}>
-          ▲ {impOnly ? "Step" : "All"}
-        </button>
+        {(() => {
+          // Count milestones for the Step button label
+          const lower = isLowerBetter(metric);
+          let best: number | null = null, mCount = 0;
+          for (const e of experiments) {
+            if (e._running) continue;
+            const v = e.metrics?.[metric];
+            if (typeof v !== "number") continue;
+            if (best === null || (lower ? v < best : v > best)) { best = v; mCount++; }
+          }
+          return (
+            <button type="button" class={`chart-toggle-btn${impOnly ? " active" : ""}`} onClick={() => { improvementsOnly.value = !impOnly; }} title={impOnly ? `Step-function: ${mCount} new bests (click for all experiments)` : "Show step-function — only new bests"}>
+              ▲ {impOnly ? `Step${mCount > 0 ? ` (${mCount})` : ""}` : "All"}
+            </button>
+          );
+        })()}
         <button type="button" class={`chart-toggle-btn${mean ? " active" : ""}`} onClick={() => { ideaMean.value = !mean; }} title="One point per idea (mean)">
           μ Idea Mean
         </button>
