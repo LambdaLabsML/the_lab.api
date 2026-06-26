@@ -1190,13 +1190,18 @@ function IdeaMiniLeaderboard({ experiments, ideas, metric, lower }: {
             const idea = ideas[Number(id)];
             const title = idea?.description?.split("\n")[0].slice(0, 40) ?? `idea #${id}`;
             const isActive = idea?.status !== "concluded" && idea?.status !== "abandoned";
+            // Check if this idea has a currently running experiment
+            const hasRunning = experiments.some(e => (e._running || e.status === "running") && e.idea_id === Number(id));
             return (
               <div key={id} class={`emr-row${i === 0 ? " emr-milestone" : ""}`} style={{ cursor: "pointer" }}
-                onClick={() => navigateToIdea(Number(id))} title={title}>
+                onClick={() => navigateToIdea(Number(id))} title={`${title}${hasRunning ? " · running now" : ""}`}>
                 <span class="emr-rank">{i + 1}</span>
                 <span class="emr-idea">#{id}</span>
-                <span style={{ fontSize: "7px", opacity: 0.7, flexShrink: 0, color: isActive ? "var(--green)" : "var(--accent)" }}>●</span>
-                <span class="emr-exp" style={{ color: "var(--text-muted)", maxWidth: 95, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</span>
+                {hasRunning
+                  ? <span class="sq-running" style={{ width: 6, height: 6, borderRadius: "50%", flexShrink: 0, display: "inline-block" }} title="running now" />
+                  : <span style={{ fontSize: "7px", opacity: 0.7, flexShrink: 0, color: isActive ? "var(--green)" : "var(--accent)" }}>●</span>
+                }
+                <span class="emr-exp" style={{ color: hasRunning ? "var(--text)" : "var(--text-muted)", maxWidth: 95, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: hasRunning ? 600 : 400 }}>{title}</span>
                 <span class="emr-count" style={{ color: "var(--text-faint)", fontSize: "7px" }}>{data.count}×</span>
               </div>
             );
@@ -2058,7 +2063,7 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
                       <span key={e.id}>
                         <span class={`rmt-dot${isLast ? " rmt-dot--best" : ""}`} style={{ left: `${pct.toFixed(1)}%` }} title={`${e.label ?? `exp/${e.id}`}: ${vStr}`} />
                         {isLast && vStr && (
-                          <span style={{ position: "absolute", left: `${pct.toFixed(1)}%`, transform: "translateX(-50%)", top: "-14px", fontSize: "8px", color: "var(--purple)", fontFamily: "var(--font-mono)", fontWeight: 600, whiteSpace: "nowrap" }}>
+                          <span style={{ position: "absolute", left: `${pct.toFixed(1)}%`, transform: "translateX(-50%)", top: "-15px", fontSize: "9px", color: "var(--purple)", fontFamily: "var(--font-mono)", fontWeight: 700, whiteSpace: "nowrap", letterSpacing: "-0.02em" }}>
                             {vStr}
                           </span>
                         )}
@@ -2157,7 +2162,8 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
             <div class="emr-preview">
               {/* Exploration ring + health bar row */}
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, position: "relative" }}>
+                  {isLive && <span class="sq-running" style={{ position: "absolute", top: 1, right: 1, width: 5, height: 5, borderRadius: "50%", zIndex: 2 }} title={`${liveCount} running`} />}
                   <IdeaRing active={ideasActive} concluded={ideasConcluded} abandoned={ideasAbandoned} />
                   {ideasConcluded + ideasActive + ideasAbandoned > 0 && (
                     <span style={{ fontSize: "8px", color: "var(--text-faint)", fontFamily: "var(--font-mono, monospace)", whiteSpace: "nowrap", textAlign: "center" }}>
