@@ -1166,7 +1166,38 @@ function IdeaMiniLeaderboard({ experiments, ideas, metric, lower }: {
   metric: string;
   lower: boolean;
 }) {
-  if (!metric) return null;
+  // When no metric data yet (metric not loaded / "metric" fallback): show by experiment count
+  const hasMetricData = experiments.some(e => !e._running && typeof e.metrics?.[metric] === "number");
+  if (!hasMetricData) {
+    const ideaExpCount: Record<number, number> = {};
+    for (const e of experiments) {
+      if (e._running) continue;
+      ideaExpCount[e.idea_id] = (ideaExpCount[e.idea_id] ?? 0) + 1;
+    }
+    const top5 = Object.entries(ideaExpCount)
+      .sort((a, b) => b[1] - a[1]).slice(0, 5);
+    if (top5.length === 0) return null;
+    return (
+      <div class="emr-section">
+        <span class="emr-label">top ideas</span>
+        <div class="emr-rows">
+          {top5.map(([id, count], i) => {
+            const idea = ideas[Number(id)];
+            const title = idea?.description?.split("\n")[0].slice(0, 40) ?? `idea #${id}`;
+            return (
+              <div key={id} class={`emr-row${i === 0 ? " emr-milestone" : ""}`} style={{ cursor: "pointer" }}
+                onClick={() => navigateToIdea(Number(id))} title={title}>
+                <span class="emr-rank">{i + 1}</span>
+                <span class="emr-idea">#{id}</span>
+                <span class="emr-exp" style={{ color: "var(--text-muted)", maxWidth: 100, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</span>
+                <span class="emr-count" style={{ color: "var(--text-faint)" }}>{count}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
 
   // Compute best score and experiment count per idea
   const ideaBest: Record<number, { best: number; expLabel: string; expId: number; count: number }> = {};
@@ -1778,7 +1809,15 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
           )}
           <span class="review-status-sep" />
           <code class="review-status-branch">{branch}</code>
-          {cost != null && <span class="review-status-item review-status-item--cost">${cost.toFixed(0)}</span>}
+          {cost != null && (
+            <span class="review-status-item review-status-item--cost"
+              title={milestonesCount > 0 ? `$${(cost / milestonesCount).toFixed(0)} per new record` : undefined}>
+              ${cost.toFixed(0)}
+              {milestonesCount > 0 && cost > 100 && (
+                <span style={{ color: "var(--text-faint)", fontSize: "var(--text-xs)" }}> / {milestonesCount}★</span>
+              )}
+            </span>
+          )}
           {campaignAgeDays !== null && campaignAgeDays > 0 && (
             <span class="review-status-item review-campaign-age" title={`Campaign started ${campaignAgeDays} days ago`}>
               {campaignAgeDays}d campaign
