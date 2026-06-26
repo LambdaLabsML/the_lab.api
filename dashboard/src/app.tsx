@@ -1963,7 +1963,25 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
                   {runDesc ? <span style={{ color: "var(--text-faint)" }}> · {runDesc}…</span> : null}
                 </span>
               );
-            } else if (lastFinishedAt) parts.push(`idle ${timeAgo(lastFinishedAt)}`);
+            } else if (lastFinishedAt) {
+              // Show last experiment's score if known
+              const lastScore = lastFinishedExp && metric && typeof lastFinishedExp.metrics?.[metric] === "number"
+                ? (lastFinishedExp.metrics![metric] as number)
+                : null;
+              const scoreStr = lastScore !== null
+                ? (Math.abs(lastScore) >= 1 ? lastScore.toFixed(2) : lastScore.toFixed(3))
+                : null;
+              parts.push(
+                <span>
+                  idle {timeAgo(lastFinishedAt)}
+                  {scoreStr !== null && (
+                    <span style={{ color: lastScore! > 0 ? "var(--green)" : "var(--text-faint)", fontSize: "var(--text-xs)" }}>
+                      {" "}→ {scoreStr}
+                    </span>
+                  )}
+                </span>
+              );
+            }
             if (finished > 0) parts.push(`${finished} exp`);
             // Show recent scoring trend: if last 20 all scored 0, flag it
             const recent20 = done.slice(-20).filter(e => typeof e.metrics?.[metric] === "number");
