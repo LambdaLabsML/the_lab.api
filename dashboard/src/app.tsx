@@ -1391,7 +1391,7 @@ const STATUS_SQ_CLASS: Record<string, string> = {
   cancelled: "sq-cancelled",
 };
 
-function ExperimentGrid({ experiments, successRate }: { experiments: import("./lib/types").Experiment[]; successRate: number | null }) {
+function ExperimentGrid({ experiments, successRate, milestoneIds }: { experiments: import("./lib/types").Experiment[]; successRate: number | null; milestoneIds?: Set<number> }) {
   if (experiments.length === 0) return null;
 
   // Group by idea in chronological order
@@ -1409,6 +1409,7 @@ function ExperimentGrid({ experiments, successRate }: { experiments: import("./l
 
   const hasRunning = experiments.some((e) => e._running || e.status === "running");
   const hasFailed  = experiments.some((e) => e.status === "failed" || e.status === "abandoned");
+  const hasMilestones = milestoneIds && milestoneIds.size > 0;
 
   return (
     <div class="exp-grid-wrap">
@@ -1426,13 +1427,14 @@ function ExperimentGrid({ experiments, successRate }: { experiments: import("./l
             >
               {exps.map((e) => {
                 const status = e._running ? "running" : (e.status ?? "unknown");
-                const cls = `exp-grid-sq ${STATUS_SQ_CLASS[status] ?? "sq-cancelled"}`;
+                const isMilestone = milestoneIds?.has(e.id);
+                const cls = `exp-grid-sq ${STATUS_SQ_CLASS[status] ?? "sq-cancelled"}${isMilestone ? " sq-milestone" : ""}`;
                 return (
                   <span
                     key={e.id}
                     class={cls}
                     style={{ "--idea-color": ideaCol } as any}
-                    title={`${e.label ?? e.id} · idea #${e.idea_id} · ${status}`}
+                    title={`${e.label ?? e.id} · idea #${e.idea_id} · ${status}${isMilestone ? " · ★ new record" : ""}`}
                   />
                 );
               })}
@@ -1446,6 +1448,7 @@ function ExperimentGrid({ experiments, successRate }: { experiments: import("./l
         {hasFailed && <span class="sq-legend sq-failed">failed</span>}
         <span class="sq-legend sq-concluded">concluded</span>
         <span class="sq-legend sq-queued">queued</span>
+        {hasMilestones && <span class="sq-legend sq-milestone">★ record</span>}
         <span class="exp-grid-legend-note">← each square = one experiment, grouped by idea →</span>
         {successRate !== null && (() => {
           const r = 7, sw = 2.5, size = 18;
@@ -2006,7 +2009,7 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
           }} title={`${successRate}% of experiments scored above zero`} />
         </div>
       )}
-      <ExperimentGrid experiments={experiments} successRate={successRate} />
+      <ExperimentGrid experiments={experiments} successRate={successRate} milestoneIds={milestoneIdsSet} />
 
       {/* ── Campaign narrative — one-sentence plain-English state ──────── */}
       {bestVal != null && typeof bestVal === "number" && (

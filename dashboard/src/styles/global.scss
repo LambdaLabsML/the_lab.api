@@ -427,7 +427,18 @@ body {
 }
 
 @media (max-width: 600px) {
-  .review-campaign-snapshot { display: none; }
+  .review-campaign-snapshot {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    padding: 4px 8px;
+    /* hide scrollbar but keep scroll */
+    &::-webkit-scrollbar { display: none; }
+    /* Compact sizing on mobile */
+    .rcs-item { padding: 3px 8px; }
+    .rcs-value { font-size: 13px; }
+    .rcs-label { font-size: 7px; }
+  }
 }
 
 /* ── Best score bar ──────────────────────────────────────────────────── */
@@ -613,6 +624,12 @@ body {
 .sq-concluded { background: var(--accent);      opacity: 0.7; }
 .sq-queued    { background: var(--text-faint);  opacity: 0.5; }
 .sq-cancelled { background: var(--border);      opacity: 0.4; }
+/* Milestone override — shown on top of any status */
+.exp-grid-sq.sq-milestone {
+  background: var(--purple);
+  opacity: 1;
+  box-shadow: 0 0 3px var(--purple);
+}
 
 /* Legend */
 .exp-grid-legend {
@@ -640,6 +657,7 @@ body {
 .sq-legend.sq-failed::before    { background: var(--red); }
 .sq-legend.sq-concluded::before { background: var(--accent);     opacity: 0.7; }
 .sq-legend.sq-queued::before    { background: var(--text-faint); opacity: 0.5; }
+.sq-legend.sq-milestone::before { background: var(--purple); box-shadow: 0 0 3px var(--purple); }
 
 .exp-grid-legend-note {
   margin-left: auto;
