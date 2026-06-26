@@ -1194,7 +1194,20 @@ function IdeaMiniLeaderboard({ experiments, ideas, metric, lower }: {
         <div class="emr-rows">
           {allRows.map(({ id, data, untested }, i) => {
             const idea = ideas[Number(id)];
-            const title = idea?.description?.split("\n")[0].slice(0, 40) ?? `idea #${id}`;
+            const rawDesc = idea?.description?.split("\n")[0] ?? "";
+            // For child ideas with generic auto-generated "idea/N (child of...)" descriptions,
+            // find the first ancestor with a real description
+            const isGenericChildDesc = /^idea\/\d+ \(child of/.test(rawDesc);
+            const getAncestorTitle = (ideaObj: typeof idea, depth = 0): string => {
+              if (!ideaObj || depth > 3) return rawDesc.slice(0, 40) || `idea #${id}`;
+              const desc = ideaObj.description?.split("\n")[0] ?? "";
+              if (!/^idea\/\d+ \(child of/.test(desc) && desc.length > 0) return desc.slice(0, 38);
+              const parentId = ideaObj.parent_ids?.[0];
+              return parentId && ideas[parentId] ? getAncestorTitle(ideas[parentId], depth + 1) : desc.slice(0, 40);
+            };
+            const title = isGenericChildDesc
+              ? `↳ ${getAncestorTitle(idea?.parent_ids?.[0] ? ideas[idea.parent_ids[0]] : undefined)}`
+              : rawDesc.slice(0, 40) || `idea #${id}`;
             const isActive = idea?.status !== "concluded" && idea?.status !== "abandoned";
             const hasRunning = !untested && experiments.some(e => (e._running || e.status === "running") && e.idea_id === Number(id));
             return (
@@ -1303,7 +1316,18 @@ function IdeaMiniLeaderboard({ experiments, ideas, metric, lower }: {
       <div class="emr-rows">
         {ranked.map((r, i) => {
           const idea = ideas[r.ideaId];
-          const title = idea?.description?.split("\n")[0].slice(0, 40) ?? `idea #${r.ideaId}`;
+          const rawDesc2 = idea?.description?.split("\n")[0] ?? "";
+          const isGeneric2 = /^idea\/\d+ \(child of/.test(rawDesc2);
+          const getAncestor2 = (ideaObj: typeof idea, d = 0): string => {
+            if (!ideaObj || d > 3) return rawDesc2.slice(0, 40) || `idea #${r.ideaId}`;
+            const desc = ideaObj.description?.split("\n")[0] ?? "";
+            if (!/^idea\/\d+ \(child of/.test(desc) && desc.length > 0) return desc.slice(0, 38);
+            const pid = ideaObj.parent_ids?.[0];
+            return pid && ideas[pid] ? getAncestor2(ideas[pid], d + 1) : desc.slice(0, 40);
+          };
+          const title = isGeneric2
+            ? `↳ ${getAncestor2(idea?.parent_ids?.[0] ? ideas[idea.parent_ids[0]] : undefined)}`
+            : rawDesc2.slice(0, 40) || `idea #${r.ideaId}`;
           const history = ideaHistory[r.ideaId] ?? [];
           return (
             <div key={r.ideaId} class={`emr-row${i === 0 ? " emr-milestone" : ""}`}
