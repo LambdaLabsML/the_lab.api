@@ -1868,10 +1868,13 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
           <code class="review-status-branch" style={branch === "…" ? { opacity: 0.4 } : undefined}>{branch}</code>
           {cost != null && (
             <span class="review-status-item review-status-item--cost"
-              title={milestonesCount > 0 ? `$${(cost / milestonesCount).toFixed(0)} per new record` : undefined}>
+              title={milestonesCount > 0 ? `$${(cost / milestonesCount).toFixed(0)} per new record · $${campaignAgeDays ? (cost / campaignAgeDays).toFixed(0) : "?"}/day` : undefined}>
               ${cost.toFixed(0)}
               {milestonesCount > 0 && cost > 100 && (
                 <span style={{ color: "var(--text-faint)", fontSize: "var(--text-xs)" }}> / {milestonesCount}★</span>
+              )}
+              {campaignAgeDays != null && campaignAgeDays > 0 && cost > 50 && (
+                <span style={{ color: "var(--text-faint)", fontSize: "var(--text-xs)" }}> · ${Math.round(cost / campaignAgeDays)}/d</span>
               )}
             </span>
           )}
