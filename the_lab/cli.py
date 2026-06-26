@@ -418,6 +418,40 @@ def _start_vite(dashboard_dir: Path, api_port: int) -> subprocess.Popen | None:
     return proc
 
 
+def _start_http_redirect(host: str, http_port: int, https_port: int):
+    """Run a tiny plain-HTTP server (daemon thread) that 308-redirects every
+    request to the HTTPS port. Lets people/agents that hit http:// get bounced
+    to https:// instead of a confusing TLS connection error. Returns the server
+    (kept alive for the process lifetime) or None if the port couldn't bind.
+    """
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    import threading
+
+    class _Redirect(BaseHTTPRequestHandler):
+        def _do(self):
+            # Preserve the requested host (sans port), swap in the HTTPS port.
+            host_hdr = (self.headers.get("Host") or "").split(":")[0] or "localhost"
+            target = f"https://{host_hdr}:{https_port}{self.path}"
+            self.send_response(308)
+            self.send_header("Location", target)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        # All methods redirect; 308 preserves method + body for API clients.
+        do_GET = do_HEAD = do_POST = do_PUT = do_DELETE = do_PATCH = do_OPTIONS = _do
+
+        def log_message(self, *args):  # silence per-request logging
+            pass
+
+    try:
+        srv = ThreadingHTTPServer((host, http_port), _Redirect)
+    except OSError as e:
+        print(f"[https] could not start HTTP→HTTPS redirect on :{http_port}: {e}", file=sys.stderr)
+        return None
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv
+
+
 def _ensure_self_signed_cert(repo_dir: Path) -> tuple[str, str]:
     """Generate a self-signed TLS cert if one doesn't exist. Returns (certfile, keyfile)."""
     cert_dir = repo_dir / ".the_lab" / "tls"
@@ -605,6 +639,14 @@ def main():
     parser.add_argument("--dev", action="store_true", help="Development mode: auto-reload on code changes, hold requests during restart")
     parser.add_argument("--https", action="store_true", help="Enable HTTPS with a self-signed certificate")
     parser.add_argument(
+        "--http-redirect-port",
+        type=int,
+        default=None,
+        metavar="PORT",
+        help="With --https, also listen on this plain-HTTP port and 308-redirect "
+             "to the HTTPS port (default: <port>+1; set 0 to disable).",
+    )
+    parser.add_argument(
         "--perf",
         nargs="?",
         const="",
@@ -637,6 +679,15 @@ def main():
         cert_file, key_file = _ensure_self_signed_cert(repo_path)
         ssl_kwargs = {"ssl_certfile": cert_file, "ssl_keyfile": key_file}
         scheme = "https"
+        # Plain-HTTP → HTTPS redirect on a sibling port (default: <port>+1).
+        redirect_port = args.http_redirect_port if args.http_redirect_port is not None else args.port + 1
+        if redirect_port and redirect_port != args.port:
+            if _start_http_redirect(args.host, redirect_port, args.port):
+                print(
+                    f"[https] HTTP→HTTPS redirect: http://{args.host}:{redirect_port} "
+                    f"→ https://…:{args.port}",
+                    file=sys.stderr,
+                )
     else:
         scheme = "http"
 
