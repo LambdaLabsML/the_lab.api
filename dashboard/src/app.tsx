@@ -2190,6 +2190,23 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
               +{expsSinceBest} since
             </span>
           )}
+          {/* First → best improvement delta */}
+          {typeof bestVal === "number" && done.length > 5 && (() => {
+            const sorted = done.filter(e => typeof e.metrics?.[metric] === "number").sort((a, b) => a.id - b.id);
+            if (sorted.length < 2) return null;
+            const firstVal = sorted[0].metrics![metric] as number;
+            if (firstVal === 0 || firstVal === bestVal) return null;
+            const delta = lower ? firstVal - bestVal : bestVal - firstVal;
+            if (delta <= 0) return null;
+            const pctImprove = Math.round((delta / Math.abs(firstVal)) * 100);
+            if (pctImprove < 5) return null; // skip if < 5% improvement
+            return (
+              <span style={{ fontSize: "var(--text-xs)", color: "var(--green)", fontFamily: "var(--font-mono)", fontWeight: 600, flexShrink: 0 }}
+                title={`Improved from ${firstVal.toFixed(3)} (first run) to ${(bestVal as number).toFixed(3)} — ${pctImprove}% total improvement`}>
+                +{pctImprove}%
+              </span>
+            );
+          })()}
         </div>
       )}
 
