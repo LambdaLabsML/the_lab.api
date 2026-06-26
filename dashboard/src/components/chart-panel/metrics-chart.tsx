@@ -247,15 +247,29 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
     ? (v: string) => { setLocalMetric(v); if (instanceId && updatePanelTitle) updatePanelTitle(instanceId, `Metrics: ${v}`); }
     : (v: string) => { selectedMetric.value = v; };
 
-  if (!metric && allKeys.length > 0) {
+  // Auto-select best metric via useEffect (correct Preact pattern — avoids mutating signals during render)
+  const allKeysStr = allKeys.join(',');
+  useEffect(() => {
+    if (isClone) return; // clones manage their own local metric
+    if (selectedMetric.value) return; // already set
+    if (allKeys.length === 0) return;
     const preferred = [
       "accuracy_per_mtoken", "agent_accuracy", "accuracy",
       "score", "total_score", "progress_score", "final_score",
       "f1", "bleu", "rouge", "pass_at_1", "pass_at_10",
     ];
-    const match = preferred.find((k) => allKeys.includes(k));
-    setMetric(match || allKeys[0]);
-  }
+    // Prefer metrics that have non-zero values
+    const nonZeroKeys = allKeys.filter(k => {
+      const lower = isLowerBetter(k);
+      return experiments.some(e => {
+        const v = e.metrics?.[k];
+        return typeof v === "number" && (lower ? v < Infinity : v > 0);
+      });
+    });
+    const keyPool = nonZeroKeys.length > 0 ? nonZeroKeys : allKeys;
+    const best = preferred.find(k => keyPool.includes(k)) || preferred.find(k => allKeys.includes(k)) || keyPool[0] || allKeys[0];
+    if (best) setMetric(best);
+  }, [allKeysStr, isClone]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
@@ -337,7 +351,13 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
           </div>
         );
       })()}
-      <div id="chart-wrap" style={{ flex: 1, minHeight: 0 }}>
+      {/* Empty state — shown when no metric selected or no data yet */}
+      {(!metric || allKeys.length === 0) && (
+        <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-faint)", fontSize: "var(--text-sm)", fontFamily: "var(--font-mono)" }}>
+          {allKeys.length === 0 ? "loading experiments…" : "select a metric above"}
+        </div>
+      )}
+      <div id="chart-wrap" style={{ flex: 1, minHeight: 0, display: (!metric || allKeys.length === 0) ? "none" : undefined }}>
         {minified ? (
           <div style={{ width: "100%", height: "100%" }}>
             <MiniMetricsChart

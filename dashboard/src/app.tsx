@@ -1607,7 +1607,7 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
     ? ideaListForCount.filter(i => i.status !== "concluded" && i.status !== "abandoned").length
     : (data?.active_ideas.length ?? 0);
   const totalRunning = data?.total_running ?? 0;
-  const branch = data?.current_branch ?? "--";
+  const branch = data?.current_branch ?? "…";
   const done = experiments.filter((e) => !e._running && e.status !== "running");
   const finished = done.length;
   const running = experiments.filter((e) => e._running || e.status === "running").length;
@@ -1914,6 +1914,15 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
         <div class="review-pivot-hint" title="Consider branching a new idea or exploring under-tried directions">
           <span style={{ color: "var(--red)" }}>⚠</span>
           {" "}stuck for {expsSinceBest} experiments
+          {milestonesCount > 1 && finished > 0 && (() => {
+            const avgPer = Math.round(finished / milestonesCount);
+            const overdue = expsSinceBest - avgPer;
+            return overdue > 0 ? (
+              <span style={{ color: "var(--text-faint)", fontSize: "var(--text-xs)" }}>
+                {" "}({overdue} overdue — avg 1 record/{avgPer} exp)
+              </span>
+            ) : null;
+          })()}
           {" · "}
           <a href="#review-ops" class="review-pivot-link"
             onClick={(e) => { e.preventDefault(); document.getElementById("review-ops")?.scrollIntoView({ behavior: "smooth" }); }}>
