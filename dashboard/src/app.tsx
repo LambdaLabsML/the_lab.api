@@ -1769,7 +1769,9 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
               <span class="review-best-age"> · {timeAgo(bestExp.finished_at)}</span>
             )}
             {expsSinceBest != null && expsSinceBest > 5 && (
-              <span class="review-best-since" style={{ color: expsSinceBest > 50 ? "var(--red)" : expsSinceBest > 20 ? "var(--yellow)" : "var(--text-faint)" }}>
+              <span class="review-best-since"
+                title={`${expsSinceBest} experiments run since the last new best — consider a new approach`}
+                style={{ color: expsSinceBest > 50 ? "var(--red)" : expsSinceBest > 20 ? "var(--yellow)" : "var(--text-faint)" }}>
                 {" "}· +{expsSinceBest} since
               </span>
             )}
@@ -1910,6 +1912,8 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
           </div>
         </ReviewDisclosure>
 
+        <div class="review-section-sep">explore</div>
+
         <ReviewDisclosure
           id="review-detail"
           title="Idea detail"
@@ -1917,11 +1921,18 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
           action={selected
             ? `idea #${selected}${selectedIdeaBest != null ? ` · best: ${selectedIdeaBest.toFixed(3)}` : ""}`
             : "none selected"}
+          preview={!selected ? (
+            <span style={{ fontSize: "8px", color: "var(--text-faint)", fontStyle: "italic", fontFamily: "var(--font-mono)" }}>
+              click any idea above ↑
+            </span>
+          ) : undefined}
         >
           <div class="review-panel review-detail-panel">
             <DetailPanel />
           </div>
         </ReviewDisclosure>
+
+        <div class="review-section-sep">operations</div>
 
         <ReviewDisclosure
           id="review-ops"

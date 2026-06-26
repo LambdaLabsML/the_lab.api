@@ -690,6 +690,24 @@ body {
   margin-top: 4px;
 }
 
+.review-section-sep {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin: 2px 0 -4px;
+  &::before, &::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: var(--border-soft);
+  }
+}
+
 .review-disclosure {
   border: 1px solid var(--border);
   background: color-mix(in srgb, var(--bg), var(--bg-elev) 18%);
