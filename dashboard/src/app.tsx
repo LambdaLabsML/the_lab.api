@@ -1801,6 +1801,10 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
               <>
                 <ProgressRing pct={avgProgress} />
                 <strong>{liveCount}</strong> running{avgProgress > 0 ? ` · ${avgProgress}%` : ""}
+                {activeRuns[0]?.started_at && (() => {
+                  const mins = Math.floor((Date.now() - Date.parse(activeRuns[0].started_at!)) / 60000);
+                  return mins > 0 ? <span class="review-idle-hint"> · {mins}m ·</span> : null;
+                })()}
                 {activeRuns.length > 0 && activeRuns.length <= 4 && (
                   <span class="review-running-list">
                     {activeRuns.map((e) => `exp/${e.label ?? e.id}`).join("  ")}
@@ -1889,14 +1893,20 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
             const parts: preact.ComponentChildren[] = [];
             if (stagnantEl) parts.push(stagnantEl);
             if (isLive) {
-              // Show running experiment's idea description if available
+              // Show running experiment with progress, elapsed time, and idea
               const runExp = activeRuns[0];
               const runIdea = runExp ? ideas[runExp.idea_id] : null;
               const runDesc = runIdea?.description?.split("\n")[0].slice(0, 32);
               const pct = runExp ? Math.round(progress[runExp.label || String(runExp.id)] ?? 0) : null;
+              const elapsedMin = runExp?.started_at
+                ? Math.floor((Date.now() - Date.parse(runExp.started_at)) / 60000)
+                : null;
               parts.push(
                 <span title={runIdea?.description?.split("\n")[0] ?? undefined}>
                   {liveCount} running{pct != null && pct > 0 ? ` ${pct}%` : ""}
+                  {elapsedMin != null && elapsedMin > 0 && (
+                    <span style={{ color: "var(--text-faint)", fontSize: "var(--text-xs)" }}> {elapsedMin}m</span>
+                  )}
                   {runDesc ? <span style={{ color: "var(--text-faint)" }}> · {runDesc}…</span> : null}
                 </span>
               );
