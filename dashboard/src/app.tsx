@@ -2357,6 +2357,34 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
                     );
                   })()
                 )}
+                {/* Mini recent-scores sparkline: last 30 experiments as tiny bars */}
+                {(() => {
+                  const recent30 = done.slice(-30).filter(e => typeof e.metrics?.[metric] === "number");
+                  if (recent30.length < 5) return null;
+                  const vals = recent30.map(e => e.metrics![metric] as number);
+                  const maxV = Math.max(...vals, 0.001);
+                  const W = 90, H = 14;
+                  return (
+                    <div title={`Last ${recent30.length} experiments score distribution`}>
+                      <svg width={W} height={H} style={{ display: "block", overflow: "visible" }}>
+                        {vals.map((v, i) => {
+                          const barW = Math.max(1, W / vals.length - 1);
+                          const barH = v > 0 ? Math.max(2, (v / maxV) * (H - 2)) : 2;
+                          const x = i * (W / vals.length);
+                          const isRecent = i >= vals.length - 5;
+                          return (
+                            <rect key={i} x={x} y={H - barH} width={barW} height={barH}
+                              fill={v > 0 ? (isRecent ? "var(--green)" : "var(--accent)") : "var(--border-soft)"}
+                              opacity={v > 0 ? (isRecent ? 0.9 : 0.6) : 0.4}
+                              rx={1}
+                            />
+                          );
+                        })}
+                      </svg>
+                      <span style={{ fontSize: "6px", color: "var(--text-faint)", fontFamily: "var(--font-mono)" }}>last {recent30.length} runs</span>
+                    </div>
+                  );
+                })()}
               </div>
               <ExpMiniResults
                 experiments={experiments}
