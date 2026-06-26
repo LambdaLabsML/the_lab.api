@@ -1179,30 +1179,40 @@ function IdeaMiniLeaderboard({ experiments, ideas, metric, lower }: {
       if (!cur) ideaLastRun[e.idea_id] = { count: 1, lastId: e.id };
       else { cur.count++; if (e.id > cur.lastId) cur.lastId = e.id; }
     }
+    // Find untested ideas (never explored) — show FIRST as highest opportunity
+    const untestedIdeas = experiments.length > 20
+      ? Object.values(ideas).filter(i => i.status !== "concluded" && i.status !== "abandoned" && !ideaLastRun[i.id])
+      : [];
     const top5 = Object.entries(ideaLastRun)
-      .sort((a, b) => b[1].lastId - a[1].lastId).slice(0, 5);  // most recently active first
-    if (top5.length === 0) return null;
+      .sort((a, b) => b[1].lastId - a[1].lastId).slice(0, Math.max(0, 5 - untestedIdeas.slice(0,2).length));
+    const allRows = [...untestedIdeas.slice(0, 2).map(i => ({ id: String(i.id), data: null, untested: true })),
+                     ...top5.map(([id, data]) => ({ id, data, untested: false }))];
+    if (allRows.length === 0) return null;
     return (
       <div class="emr-section">
-        <span class="emr-label">top ideas</span>
+        <span class="emr-label">top ideas{untestedIdeas.length > 0 ? <span style={{ color: "var(--yellow)", marginLeft: 4 }}>◇ {untestedIdeas.length} untried</span> : null}</span>
         <div class="emr-rows">
-          {top5.map(([id, data], i) => {
+          {allRows.map(({ id, data, untested }, i) => {
             const idea = ideas[Number(id)];
             const title = idea?.description?.split("\n")[0].slice(0, 40) ?? `idea #${id}`;
             const isActive = idea?.status !== "concluded" && idea?.status !== "abandoned";
-            // Check if this idea has a currently running experiment
-            const hasRunning = experiments.some(e => (e._running || e.status === "running") && e.idea_id === Number(id));
+            const hasRunning = !untested && experiments.some(e => (e._running || e.status === "running") && e.idea_id === Number(id));
             return (
-              <div key={id} class={`emr-row${i === 0 ? " emr-milestone" : ""}`} style={{ cursor: "pointer" }}
-                onClick={() => navigateToIdea(Number(id))} title={`${title}${hasRunning ? " · running now" : ""}`}>
+              <div key={id} class={`emr-row${i === 0 ? " emr-milestone" : ""}`} style={{ cursor: "pointer", background: untested ? "color-mix(in srgb, var(--yellow) 4%, transparent)" : undefined }}
+                onClick={() => navigateToIdea(Number(id))} title={`${title}${hasRunning ? " · running now" : untested ? " · never tried!" : ""}`}>
                 <span class="emr-rank">{i + 1}</span>
                 <span class="emr-idea">#{id}</span>
-                {hasRunning
-                  ? <span class="sq-running" style={{ width: 6, height: 6, borderRadius: "50%", flexShrink: 0, display: "inline-block" }} title="running now" />
-                  : <span style={{ fontSize: "7px", opacity: 0.7, flexShrink: 0, color: isActive ? "var(--green)" : "var(--accent)" }}>●</span>
+                {untested
+                  ? <span style={{ fontSize: "7px", color: "var(--yellow)", flexShrink: 0 }}>◇</span>
+                  : hasRunning
+                    ? <span class="sq-running" style={{ width: 6, height: 6, borderRadius: "50%", flexShrink: 0, display: "inline-block" }} title="running now" />
+                    : <span style={{ fontSize: "7px", opacity: 0.7, flexShrink: 0, color: isActive ? "var(--green)" : "var(--accent)" }}>●</span>
                 }
-                <span class="emr-exp" style={{ color: hasRunning ? "var(--text)" : "var(--text-muted)", maxWidth: 95, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: hasRunning ? 600 : 400 }}>{title}</span>
-                <span class="emr-count" style={{ color: "var(--text-faint)", fontSize: "7px" }}>{data.count}×</span>
+                <span class="emr-exp" style={{ color: untested ? "var(--yellow)" : hasRunning ? "var(--text)" : "var(--text-muted)", maxWidth: 95, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: (untested || hasRunning) ? 600 : 400 }}>{title}</span>
+                {untested
+                  ? <span style={{ fontSize: "7px", color: "var(--yellow)", flexShrink: 0 }}>new!</span>
+                  : <span class="emr-count" style={{ color: "var(--text-faint)", fontSize: "7px" }}>{(data as any)?.count}×</span>
+                }
               </div>
             );
           })}
