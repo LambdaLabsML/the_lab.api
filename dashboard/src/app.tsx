@@ -1870,13 +1870,9 @@ function BestSparkline({ experiments, metric, lower }: {
   const lo = Math.min(...recent), hi = Math.max(...recent);
   const range = hi - lo;
 
-  // If variance is < 0.1% of the value, show a "plateau" dash instead
+  // Flat best score (variance < 0.1%): render nothing rather than a dash.
   if (range === 0 || (Math.abs(lo) > 0 && range / Math.abs(lo) < 0.001)) {
-    return (
-      <svg width={W} height={H} style={{ display: "block", flexShrink: 0, opacity: 0.5 }}>
-        <line x1={4} y1={H/2} x2={W-4} y2={H/2} stroke="var(--text-faint)" strokeWidth="1.75" strokeDasharray="3 2" strokeLinecap="round" />
-      </svg>
-    );
+    return null;
   }
 
   const px = (i: number) => 2 + (i / (recent.length - 1)) * (W - 4);
