@@ -2301,9 +2301,9 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
             </span>
           )}
           {cost != null && cost > 50 && (
-            <span class="rcs-item" title={`Total API cost · ${milestonesCount > 0 ? `$${(cost/milestonesCount).toFixed(0)}/record` : ""}`}>
-              <span class="rcs-label">cost</span>
-              <span class="rcs-value">${cost.toFixed(0)}</span>
+            <span class="rcs-item" title={`Total: $${cost.toFixed(0)} · ${milestonesCount > 0 ? `$${(cost/milestonesCount).toFixed(0)} per new record` : ""} · $${campaignAgeDays ? (cost/campaignAgeDays).toFixed(0) : "?"}/day`}>
+              <span class="rcs-label">{milestonesCount > 0 ? "$/★" : "cost"}</span>
+              <span class="rcs-value">{milestonesCount > 0 ? `$${(cost/milestonesCount).toFixed(0)}` : `$${cost.toFixed(0)}`}</span>
             </span>
           )}
           {campaignAgeDays != null && campaignAgeDays > 0 && (
