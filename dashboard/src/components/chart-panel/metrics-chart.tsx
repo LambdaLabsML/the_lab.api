@@ -324,7 +324,7 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
             {" "}median {Math.abs(median) >= 1 ? median.toFixed(1) : median.toFixed(2)}
             <span style={{ color: "var(--text-faint)" }}> · </span>
             <span style={{ color: "var(--purple)", fontWeight: 600 }}>·</span>
-            {" "}best {Math.abs(peak) >= 100 ? peak.toFixed(0) : peak.toFixed(2)}
+            {" "}best {Math.abs(peak) >= 100 ? peak.toFixed(0) : Math.abs(peak) >= 1 ? peak.toFixed(2) : peak.toFixed(3)}
           </div>
         );
       })()}

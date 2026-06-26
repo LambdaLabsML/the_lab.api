@@ -360,6 +360,61 @@ body {
   flex-shrink: 0;
 }
 
+/* ── Milestone timeline ─────────────────────────────────────────────── */
+.review-milestone-timeline {
+  padding: 3px 12px 5px;
+}
+.rmt-bar {
+  position: relative;
+  height: 6px;
+  border-radius: 3px;
+  display: flex;
+  background: transparent;
+}
+.rmt-active {
+  height: 100%;
+  background: color-mix(in srgb, var(--purple) 55%, var(--bg-hi));
+  border-radius: 3px 0 0 3px;
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+.rmt-idle {
+  height: 100%;
+  background: color-mix(in srgb, var(--border) 80%, transparent);
+  border-radius: 0 3px 3px 0;
+  flex: 1;
+  flex-shrink: 0;
+  opacity: 0.4;
+}
+.rmt-dot {
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--purple);
+  border: 1.5px solid var(--bg);
+  cursor: default;
+  z-index: 1;
+}
+.rmt-labels {
+  display: flex;
+  align-items: baseline;
+  font-size: 7px;
+  color: var(--text-faint);
+  font-family: var(--font-mono, monospace);
+  margin-top: 3px;
+  position: relative;
+  white-space: nowrap;
+}
+.rmt-last-label {
+  position: absolute;
+  color: var(--purple);
+  opacity: 0.7;
+}
+@media (max-width: 600px) { .review-milestone-timeline { display: none; } }
+
 .review-best-meta {
   color: var(--text-muted);
   font-size: var(--text-xs);

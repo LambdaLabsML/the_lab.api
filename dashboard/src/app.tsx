@@ -1806,14 +1806,53 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
             {bestExp.finished_at && (
               <span class="review-best-age"> · {timeAgo(bestExp.finished_at)}</span>
             )}
-            {expsSinceBest != null && expsSinceBest > 5 && (
-              <span class="review-best-since"
-                title={`${expsSinceBest} experiments run since the last new best — consider a new approach`}
-                style={{ color: expsSinceBest > 50 ? "var(--red)" : expsSinceBest > 20 ? "var(--yellow)" : "var(--text-faint)" }}>
-                {" "}· +{expsSinceBest} since
-              </span>
-            )}
           </span>
+          {expsSinceBest != null && expsSinceBest > 5 && (
+            <span class="review-best-since"
+              title={`${expsSinceBest} experiments run since the last new best — consider a new approach`}
+              style={{ color: expsSinceBest > 50 ? "var(--red)" : expsSinceBest > 20 ? "var(--yellow)" : "var(--text-faint)", fontSize: "var(--text-xs)", fontFamily: "var(--font-mono)" }}>
+              +{expsSinceBest} since
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* ── Milestone timeline — shows when breakthroughs happened ─────── */}
+      {bestExp && milestoneIdsSet.size > 1 && campaignAgeDays && campaignAgeDays > 0 && (
+        <div class="review-milestone-timeline" title="Each ★ marks a new best score — shows when progress was made vs. now">
+          {(() => {
+            const milestones = done
+              .filter(e => milestoneIdsSet.has(e.id) && e.finished_at)
+              .sort((a, b) => a.id - b.id);
+            if (milestones.length < 2) return null;
+            const tStart = Date.parse(milestones[0].finished_at!);
+            const tNow = Date.now();
+            const totalMs = tNow - tStart;
+            const lastMs = Date.parse(milestones[milestones.length - 1].finished_at!) - tStart;
+            const lastPct = (lastMs / totalMs) * 100;
+            return (
+              <>
+                <div class="rmt-bar">
+                  <div class="rmt-active" style={{ width: `${lastPct.toFixed(1)}%` }} />
+                  <div class="rmt-idle"   style={{ width: `${(100 - lastPct).toFixed(1)}%` }} />
+                  {milestones.map((e) => {
+                    const pct = ((Date.parse(e.finished_at!) - tStart) / totalMs) * 100;
+                    const v = typeof e.metrics?.[metric] === "number" ? (e.metrics![metric] as number).toFixed(2) : "";
+                    return (
+                      <span key={e.id} class="rmt-dot" style={{ left: `${pct.toFixed(1)}%` }} title={`${e.label ?? `exp/${e.id}`}: ${v}`} />
+                    );
+                  })}
+                </div>
+                <div class="rmt-labels">
+                  <span>campaign start</span>
+                  <span style={{ marginLeft: `${lastPct.toFixed(1)}%`, transform: "translateX(-50%)" }} class="rmt-last-label">
+                    last record · {timeAgo(milestones[milestones.length - 1].finished_at!)}
+                  </span>
+                  <span style={{ marginLeft: "auto" }}>now</span>
+                </div>
+              </>
+            );
+          })()}
         </div>
       )}
 
