@@ -1895,6 +1895,24 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
               <span class="review-status-idle">
                 idle
                 {lastFinishedAt && <span class="review-idle-hint"> · last {timeAgo(lastFinishedAt)}</span>}
+                {!isLive && expsSinceBest != null && expsSinceBest > 50 && experiments.length > 20 && (() => {
+                  // Suggest the first untested idea when stuck
+                  const ideaExpCountsStatus: Record<number, number> = {};
+                  for (const e of experiments) { if (!e._running) ideaExpCountsStatus[e.idea_id] = (ideaExpCountsStatus[e.idea_id] || 0) + 1; }
+                  const firstUntested = Object.values(ideas)
+                    .filter(i => i.status !== "concluded" && i.status !== "abandoned" && (ideaExpCountsStatus[i.id] ?? 0) === 0)
+                    .slice(0, 1)[0];
+                  if (!firstUntested) return null;
+                  return (
+                    <span class="review-idle-hint"> · →{" "}
+                      <span style={{ color: "var(--yellow)", cursor: "pointer", fontWeight: 600 }}
+                        onClick={() => { navigateToIdea(firstUntested.id); const el = document.getElementById("review-ideas") as HTMLDetailsElement | null; if (el) { el.open = true; el.scrollIntoView({ behavior: "smooth" }); } }}
+                        title={`Try idea #${firstUntested.id}: ${firstUntested.description?.split("\n")[0]}`}>
+                        idea #{firstUntested.id}
+                      </span>
+                    </span>
+                  );
+                })()}
                 {lastFinishedAt && Date.now() - Date.parse(lastFinishedAt) > 3600_000 && (
                   <span class="review-idle-cta"> — run <code>the-lab-agent</code> to continue</span>
                 )}
