@@ -2402,6 +2402,8 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
         <ReviewDisclosure
           id="review-runs"
           title="Experiments"
+          icon="◉"
+          accent={running > 0 ? "live" : isStagnant ? "warn" : undefined}
           action={[
             `${finished} done`,
             running > 0 ? `${running} running` : null,
@@ -2500,6 +2502,7 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
         <ReviewDisclosure
           id="review-ideas"
           title="Ideas"
+          icon="◈"
           action={(() => {
             // Count under-explored and never-tested active ideas
             const ideaExpCountsAll: Record<number, number> = {};
@@ -2591,7 +2594,8 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
 
         <ReviewDisclosure
           id="review-compare"
-          title="Scatter"
+          title="Correlation"
+          icon="⊞"
           action={(() => {
             const xk = scatterXMetric.value || metric;
             const yk = scatterYMetric.value || "elapsed_s";
@@ -2646,14 +2650,15 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
 
         <ReviewDisclosure
           id="review-detail"
-          title="Idea detail"
+          title="Idea Detail"
+          icon="▸"
           autoOpen={!!selected}
           action={selected
             ? `idea #${selected}${selectedIdeaBest != null ? ` · best: ${selectedIdeaBest.toFixed(3)}` : ""}`
-            : "none selected"}
+            : "none selected · click any idea"}
           preview={!selected ? (
             <span style={{ fontSize: "8px", color: "var(--text-faint)", fontStyle: "italic", fontFamily: "var(--font-mono)" }}>
-              click any idea above ↑
+              click any idea to explore
             </span>
           ) : undefined}
         >
@@ -2667,6 +2672,8 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
         <ReviewDisclosure
           id="review-ops"
           title="Queue"
+          icon="≡"
+          accent={liveCount > 0 ? "live" : undefined}
           action={queued + liveCount > 0
             ? `${queued} queued · ${liveCount} running`
             : lastFinishedAt
@@ -2689,6 +2696,7 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
         <ReviewDisclosure
           id="review-log"
           title="Log"
+          icon="≔"
           action={logs.length > 0
             ? `${logs.length} events · last: ${logs[0].title?.slice(0, 40) || logs[0].type}`
             : lastFinishedExp
@@ -2739,17 +2747,21 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
 function ReviewDisclosure({
   id,
   title,
+  icon,
   action,
   preview,
   children,
   autoOpen,
+  accent,
 }: {
   id: string;
   title: string;
+  icon?: string;
   action: string;
   preview?: preact.ComponentChildren;
   children: preact.ComponentChildren;
   autoOpen?: boolean;
+  accent?: "live" | "warn";
 }) {
   // Use a ref so we can imperatively open/close without re-rendering
   const ref = (el: HTMLDetailsElement | null) => {
@@ -2761,9 +2773,10 @@ function ReviewDisclosure({
     }, { once: false });
   };
   return (
-    <details ref={ref} class="review-disclosure review-section" id={id}>
+    <details ref={ref} class={`review-disclosure review-section${accent ? ` review-disclosure--${accent}` : ""}`} id={id}>
       <summary>
-        <div>
+        <div class="review-disclosure-title">
+          {icon && <span class="review-section-icon">{icon}</span>}
           <h2>{title}</h2>
         </div>
         <div class="review-disclosure-summary">

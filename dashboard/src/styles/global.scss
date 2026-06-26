@@ -923,6 +923,30 @@ body {
 .review-disclosure {
   border: 1px solid var(--border);
   background: color-mix(in srgb, var(--bg), var(--bg-elev) 18%);
+  &--live {
+    border-left: 2px solid color-mix(in srgb, var(--green) 60%, transparent);
+    .review-section-icon { color: var(--green); }
+  }
+  &--warn {
+    border-left: 2px solid color-mix(in srgb, var(--yellow) 50%, transparent);
+    .review-section-icon { color: var(--yellow); }
+  }
+}
+
+.review-disclosure-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.review-section-icon {
+  font-size: 11px;
+  color: var(--text-faint);
+  flex-shrink: 0;
+  line-height: 1;
+  width: 14px;
+  text-align: center;
+  font-style: normal;
 }
 
 .review-disclosure summary {
@@ -952,18 +976,26 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
   flex: 0 0 auto;
   color: var(--text-faint);
-  font-size: 9px;
-  transition: transform var(--transition-fast), color var(--transition-fast);
+  font-size: 10px;
+  background: color-mix(in srgb, var(--border) 40%, transparent);
+  border-radius: 4px;
+  transition: transform var(--transition-fast), color var(--transition-fast), background var(--transition-fast);
 }
 
 .review-disclosure[open] summary::after {
   content: "▶";
   transform: rotate(90deg);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.review-disclosure summary:hover::after {
   color: var(--text-muted);
+  background: color-mix(in srgb, var(--border) 70%, transparent);
 }
 
 .review-disclosure summary h2 {
