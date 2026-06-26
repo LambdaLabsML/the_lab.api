@@ -384,12 +384,22 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
             <>
               <span style={{ fontSize: "20px", opacity: 0.3 }}>◈</span>
               <span>loading experiments…</span>
+              <span style={{ fontSize: "10px", opacity: 0.4 }}>waiting for data</span>
             </>
           ) : (
             <>
               <span style={{ fontSize: "24px", opacity: 0.4 }}>◇</span>
               <span style={{ fontWeight: 500 }}>select a metric above ↑</span>
               <span style={{ fontSize: "10px", opacity: 0.5 }}>{allKeys.length} metrics available · click here to select</span>
+              {/* Show preferred metrics as quick-select options */}
+              <div style={{ display: "flex", gap: 6, marginTop: 4, flexWrap: "wrap", justifyContent: "center", maxWidth: 400 }}>
+                {["score","n_levels_completed","accuracy","f1","total_score"].filter(k => allKeys.includes(k)).slice(0, 4).map(k => (
+                  <span key={k} style={{ fontSize: "9px", padding: "2px 8px", border: "1px solid color-mix(in srgb, var(--accent) 40%, transparent)", borderRadius: 4, color: "var(--accent)", cursor: "pointer", background: "color-mix(in srgb, var(--accent) 8%, transparent)" }}
+                    onClick={(ev) => { ev.stopPropagation(); const sel = innerRef.current?.querySelector("select") as HTMLSelectElement | null; if (sel) { sel.value = k; sel.dispatchEvent(new Event("change", {bubbles: true})); } }}>
+                    {k.replace(/_/g, " ")}
+                  </span>
+                ))}
+              </div>
             </>
           )}
         </div>

@@ -1955,6 +1955,10 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
             if (successRate !== null) {
               if (recent20AllZero) {
                 parts.push(<span style={{ color: "var(--yellow)" }}>0% recent</span>);
+              } else if (successRate < 20) {
+                parts.push(<span style={{ color: "var(--yellow)", opacity: 0.85 }}>{successRate}% scored</span>);
+              } else if (successRate > 50) {
+                parts.push(<span style={{ color: "var(--green)", opacity: 0.85 }}>{successRate}% scored</span>);
               } else {
                 parts.push(`${successRate}% scored`);
               }
