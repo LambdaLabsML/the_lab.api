@@ -2062,12 +2062,26 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
                     const v = typeof e.metrics?.[metric] === "number" ? (e.metrics![metric] as number) : null;
                     const vStr = v !== null ? (Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(2) : v.toFixed(3)) : "";
                     const isLast = mi === milestones.length - 1;
+                    // Experiment count between this and previous milestone
+                    const prevM = mi > 0 ? milestones[mi - 1] : null;
+                    const expsBetween = prevM
+                      ? done.filter(x => x.id > prevM.id && x.id <= e.id).length
+                      : null;
+                    const midPct = prevM
+                      ? (((Date.parse(prevM.finished_at!) - tStart) + (Date.parse(e.finished_at!) - tStart)) / 2 / totalMs) * 100
+                      : null;
                     return (
                       <span key={e.id}>
                         <span class={`rmt-dot${isLast ? " rmt-dot--best" : ""}`} style={{ left: `${pct.toFixed(1)}%` }} title={`${e.label ?? `exp/${e.id}`}: ${vStr}`} />
                         {isLast && vStr && (
                           <span style={{ position: "absolute", left: `${pct.toFixed(1)}%`, transform: "translateX(-50%)", top: "-15px", fontSize: "9px", color: "var(--purple)", fontFamily: "var(--font-mono)", fontWeight: 700, whiteSpace: "nowrap", letterSpacing: "-0.02em" }}>
                             {vStr}
+                          </span>
+                        )}
+                        {expsBetween != null && expsBetween > 1 && midPct != null && (
+                          <span style={{ position: "absolute", left: `${midPct.toFixed(1)}%`, transform: "translateX(-50%)", top: "-11px", fontSize: "7px", color: "var(--text-faint)", fontFamily: "var(--font-mono)", whiteSpace: "nowrap" }}
+                            title={`${expsBetween} experiments between milestones`}>
+                            {expsBetween}
                           </span>
                         )}
                       </span>
