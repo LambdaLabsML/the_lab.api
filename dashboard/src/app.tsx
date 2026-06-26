@@ -2312,6 +2312,19 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
               <span class="rcs-value">{campaignAgeDays}d</span>
             </span>
           )}
+          {/* ETA: when can we expect next breakthrough based on pace */}
+          {velocityPerDay && milestonesCount > 0 && finished > 0 && expsSinceBest != null && (() => {
+            const avgPer = Math.round(finished / milestonesCount);
+            const remaining = Math.max(0, avgPer - expsSinceBest);
+            if (remaining === 0) return null; // already overdue, don't show ETA
+            const daysToBreakthrough = (remaining / parseFloat(velocityPerDay!)).toFixed(1);
+            return (
+              <span class="rcs-item" title={`At current pace, next expected record in ~${remaining} more experiments (~${daysToBreakthrough}d)`}>
+                <span class="rcs-label">eta ★</span>
+                <span class="rcs-value" style={{ fontSize: "13px" }}>{daysToBreakthrough}d</span>
+              </span>
+            );
+          })()}
           {!selectedMetric.value && (
             <span class="rcs-hint">↑ select a metric to view chart</span>
           )}
