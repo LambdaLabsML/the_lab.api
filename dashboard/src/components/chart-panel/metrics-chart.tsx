@@ -357,8 +357,19 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
       })()}
       {/* Empty state — shown when no metric selected or no data yet */}
       {(!metric || allKeys.length === 0) && (
-        <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-faint)", fontSize: "var(--text-sm)", fontFamily: "var(--font-mono)" }}>
-          {allKeys.length === 0 ? "loading experiments…" : "select a metric above"}
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, color: "var(--text-faint)", fontSize: "var(--text-sm)", fontFamily: "var(--font-mono)" }}>
+          {allKeys.length === 0 ? (
+            <>
+              <span style={{ fontSize: "20px", opacity: 0.3 }}>◈</span>
+              <span>loading experiments…</span>
+            </>
+          ) : (
+            <>
+              <span style={{ fontSize: "20px", opacity: 0.3 }}>◇</span>
+              <span>select a metric above</span>
+              {allKeys.length > 0 && <span style={{ fontSize: "10px", opacity: 0.5 }}>{allKeys.length} metrics available</span>}
+            </>
+          )}
         </div>
       )}
       <div id="chart-wrap" style={{ flex: 1, minHeight: 0, display: (!metric || allKeys.length === 0) ? "none" : undefined }}>

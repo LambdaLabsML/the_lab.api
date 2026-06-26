@@ -1882,7 +1882,16 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
               );
             } else if (lastFinishedAt) parts.push(`idle ${timeAgo(lastFinishedAt)}`);
             if (finished > 0) parts.push(`${finished} exp`);
-            if (successRate !== null) parts.push(`${successRate}% scored`);
+            // Show recent scoring trend: if last 20 all scored 0, flag it
+            const recent20 = done.slice(-20).filter(e => typeof e.metrics?.[metric] === "number");
+            const recent20AllZero = recent20.length >= 5 && recent20.every(e => (e.metrics![metric] as number) <= 0);
+            if (successRate !== null) {
+              if (recent20AllZero) {
+                parts.push(<span style={{ color: "var(--yellow)" }}>0% recent</span>);
+              } else {
+                parts.push(`${successRate}% scored`);
+              }
+            }
             if (!stagnantEl && bestExp?.finished_at) parts.push(`best set ${timeAgo(bestExp.finished_at)}`);
             return parts.reduce((acc: preact.ComponentChildren[], p, i) => (
               i === 0 ? [p] : [...acc, <span style={{ opacity: 0.4 }}> · </span>, p]

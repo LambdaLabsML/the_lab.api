@@ -105,12 +105,16 @@ export function Topbar(props: LayoutActions) {
   const totalRunning = data?.total_running ?? 0;
   const totalPending = data?.total_pending ?? 0;
 
-  // Compute best score from experiments for topbar display
+  // Compute best score from experiments: always use the most meaningful (preferred) metric
+  // This ensures topbar shows the research score regardless of which chart metric is selected
   const bestScoreLabel = (() => {
-    const metric = selectedMetric.value;
+    const preferred = ["score","total_score","progress_score","final_score","accuracy","f1","bleu","rouge","pass_at_1"];
+    const exps = allExperiments.value;
+    // Try preferred metrics first, fall back to current chart metric
+    const availKeys = [...new Set(exps.flatMap(e => Object.keys(e.metrics || {})))];
+    const metric = preferred.find(k => availKeys.includes(k)) || selectedMetric.value;
     if (!metric) return null;
     const lower = isLowerBetter(metric);
-    const exps = allExperiments.value;
     let best: number | null = null;
     for (const e of exps) {
       if (e._running) continue;
