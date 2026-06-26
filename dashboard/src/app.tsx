@@ -1185,6 +1185,16 @@ function IdeaMiniLeaderboard({ experiments, ideas, metric, lower }: {
     }
   }
 
+  // Compute chronological score history per idea (for sparklines)
+  const ideaHistory: Record<number, number[]> = {};
+  for (const e of experiments.slice().sort((a, b) => a.id - b.id)) {
+    if (e._running) continue;
+    if (typeof e.metrics?.[metric] !== "number") continue;
+    const v = e.metrics![metric] as number;
+    if (!ideaHistory[e.idea_id]) ideaHistory[e.idea_id] = [];
+    ideaHistory[e.idea_id].push(v);
+  }
+
   const ranked = Object.entries(ideaBest)
     .map(([id, d]) => ({ ideaId: Number(id), ...d }))
     .sort((a, b) => lower ? a.best - b.best : b.best - a.best)
@@ -1196,6 +1206,32 @@ function IdeaMiniLeaderboard({ experiments, ideas, metric, lower }: {
     return Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(2) : v.toFixed(3);
   }
 
+  // Tiny sparkline for an idea's score history
+  function IdeaSparkline({ vals, lower: lo }: { vals: number[]; lower: boolean }) {
+    if (vals.length < 2) return null;
+    const W = 28, H = 10;
+    const lo_ = Math.min(...vals), hi_ = Math.max(...vals);
+    const range = hi_ - lo_;
+    if (range < 1e-9) {
+      // flat line
+      return (
+        <svg width={W} height={H} style={{ flexShrink: 0, opacity: 0.5 }}>
+          <line x1={2} y1={H/2} x2={W-2} y2={H/2} stroke="var(--text-faint)" strokeWidth="1" strokeDasharray="2 1.5" />
+        </svg>
+      );
+    }
+    const px = (i: number) => 2 + (i / (vals.length - 1)) * (W - 4);
+    const py = (v: number) => H - 2 - ((v - lo_) / range) * (H - 4);
+    const d = vals.map((v, i) => `${i === 0 ? "M" : "L"}${px(i).toFixed(1)},${py(v).toFixed(1)}`).join(" ");
+    const trend = lo ? vals[0] - vals[vals.length - 1] : vals[vals.length - 1] - vals[0];
+    const color = trend > range * 0.1 ? "var(--green)" : trend < -range * 0.1 ? "var(--red)" : "var(--text-faint)";
+    return (
+      <svg width={W} height={H} style={{ flexShrink: 0, opacity: 0.75 }}>
+        <path d={d} fill="none" stroke={color} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    );
+  }
+
   return (
     <div class="emr-section">
       <span class="emr-label">top ideas</span>
@@ -1203,6 +1239,7 @@ function IdeaMiniLeaderboard({ experiments, ideas, metric, lower }: {
         {ranked.map((r, i) => {
           const idea = ideas[r.ideaId];
           const title = idea?.description?.split("\n")[0].slice(0, 40) ?? `idea #${r.ideaId}`;
+          const history = ideaHistory[r.ideaId] ?? [];
           return (
             <div key={r.ideaId} class={`emr-row${i === 0 ? " emr-milestone" : ""}`}
               style={{ cursor: "pointer" }}
@@ -1214,6 +1251,7 @@ function IdeaMiniLeaderboard({ experiments, ideas, metric, lower }: {
               <span style={{ fontSize: "7px", opacity: 0.7, flexShrink: 0, color: idea?.status === "active" ? "var(--green)" : idea?.status === "concluded" ? "var(--accent)" : "var(--red)" }}>●</span>
               <span class="emr-exp" style={{ color: "var(--text-muted)", maxWidth: 100, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</span>
               <span class="emr-count" style={{ color: r.count < 5 ? "var(--yellow)" : r.count > 30 ? "var(--text-faint)" : "var(--text-muted)" }}>{r.count}</span>
+              <IdeaSparkline vals={history} lower={lower} />
               <span class="emr-val">{fmtV(r.best)}</span>
               {i > 0 && ranked[0].best !== r.best && (
                 <span class="emr-gap">
@@ -1881,8 +1919,7 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
             const num = xs.reduce((s, x, i) => s + (x - mx) * (ys[i] - my), 0);
             const den = Math.sqrt(xs.reduce((s,x) => s + (x-mx)**2, 0) * ys.reduce((s,y) => s + (y-my)**2, 0));
             const r = den === 0 ? 0 : num / den;
-            const corr = Math.abs(r) < 0.15 ? "r≈0" : r > 0 ? `r=${r.toFixed(2)}↑` : `r=${r.toFixed(2)}↓`;
-            return `${fmtMetricName(xk)} × ${fmtMetricName(yk)} · ${pairs.length} pts · ${corr}`;
+            return `${fmtMetricName(xk)} × ${fmtMetricName(yk)} · ${pairs.length} pts`;
           })()}
           preview={(() => {
             const xk = scatterXMetric.value || metric;

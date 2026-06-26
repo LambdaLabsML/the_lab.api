@@ -773,7 +773,7 @@ body {
 
 .review-disclosure summary p {
   margin: 0 0 0 auto;
-  max-width: 220px;
+  max-width: clamp(180px, 35vw, 380px);
   color: var(--text-faint);
   font-size: var(--text-xs);
   text-align: right;
