@@ -1567,6 +1567,16 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
     return `${Math.floor(hr / 24)}d ago`;
   }
 
+  // Campaign age: days since first experiment created
+  const campaignAgeDays = (() => {
+    const earliest = experiments.reduce<string | null>((e, x) => {
+      if (!x.created_at) return e;
+      return !e || x.created_at < e ? x.created_at : e;
+    }, null);
+    if (!earliest) return null;
+    return Math.floor((Date.now() - Date.parse(earliest)) / (24 * 3600 * 1000));
+  })();
+
   // Campaign velocity: experiments finished in last 7 days
   const velocityPerDay = (() => {
     const sevenDaysAgo = Date.now() - 7 * 24 * 3600 * 1000;
@@ -1708,6 +1718,11 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
           <span class="review-status-sep" />
           <code class="review-status-branch">{branch}</code>
           {cost != null && <span class="review-status-item review-status-item--cost">${cost.toFixed(0)}</span>}
+          {campaignAgeDays !== null && campaignAgeDays > 0 && (
+            <span class="review-status-item review-campaign-age" title={`Campaign started ${campaignAgeDays} days ago`}>
+              {campaignAgeDays}d campaign
+            </span>
+          )}
         </div>
         {/* 14-day activity sparkline — hidden on mobile */}
         {activityBars.some(h => h > 0) ? (
@@ -1844,7 +1859,7 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
             const num = xs.reduce((s, x, i) => s + (x - mx) * (ys[i] - my), 0);
             const den = Math.sqrt(xs.reduce((s,x) => s + (x-mx)**2, 0) * ys.reduce((s,y) => s + (y-my)**2, 0));
             const r = den === 0 ? 0 : num / den;
-            const corr = Math.abs(r) < 0.15 ? "no corr" : r > 0 ? `r=${r.toFixed(2)} ↑` : `r=${r.toFixed(2)} ↓`;
+            const corr = Math.abs(r) < 0.15 ? "no r" : r > 0 ? `r=${r.toFixed(2)}↑` : `r=${r.toFixed(2)}↓`;
             return `${fmtMetricName(xk)} × ${fmtMetricName(yk)} · ${pairs.length} pts · ${corr}`;
           })()}
         >

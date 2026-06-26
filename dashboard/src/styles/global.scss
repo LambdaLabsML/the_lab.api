@@ -237,6 +237,11 @@ body {
   strong { color: var(--green); }
 }
 
+.review-campaign-age {
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+}
+
 /* ── 14-day activity sparkline ─────────────────────────────────────── */
 .activity-spark {
   display: flex;
@@ -258,6 +263,7 @@ body {
 @media (max-width: 800px) {
   .activity-spark { display: none; }
   .activity-idle-label { display: none; }
+  .review-campaign-age { display: none; }
 }
 
 .review-status-sep {
