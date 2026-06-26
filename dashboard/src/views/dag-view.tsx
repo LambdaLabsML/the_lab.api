@@ -7,19 +7,20 @@
 // crossing adjustments, and SVG line rendering.
 // ------------------------------------------------------------
 
-import { useRef, useEffect, useState } from "preact/hooks";
+import { useRef, useEffect, useLayoutEffect, useState } from "preact/hooks";
 import { navigateToIdea } from "../lib/navigate";
 import { SearchFilter, type FilterItem } from "../components/search-filter/search-filter";
 import type { IdeaNode, StationPos, SubwayLayout } from "../lib/types";
 import { graphData, currentLayout, highlightedIdea, allIdeas, allExperiments, runningProgress } from "../state/signals";
 import { colorMode, selectedIdea, selectedMetric, activeTagFilters, tagFilterMode, reverseTime, showAbandoned, showConcluded, showRunning, colorTheme, showNodeText } from "../state/settings";
 import { useSetting } from "../state/settings";
-import { _ideaHasGlobalImprovement, resetGlobalBestBeforeCache } from "../lib/colors";
+import { _ideaHasGlobalImprovement, resetGlobalBestBeforeCache, isLowerBetter } from "../lib/colors";
 import { drawSubwayLines } from "../lib/subway-lines";
 // dynamic — driven by lib/colors.ts (IDEA_PALETTE lane colours, _colorForIdea for SVG dots)
 import { IDEA_PALETTE, STATUS_ORDER, _colorForIdea } from "../lib/colors";
 import { filterMetricExperiments } from "../lib/chart-data";
-import { escapeHtml, ideaTitle, badgeHtml } from "../lib/format";
+import { escapeHtml, ideaTitle, badgeHtml, fmtMetricName } from "../lib/format";
+import { ideaTipContent } from "../components/ui";
 
 // ---------------------------------------------------------------------------
 // Module-level station-size cache, keyed by "id:title".
@@ -35,9 +36,58 @@ const COMPACT_W = 42;  // width of compact pill nodes (fits #NNN)
 // Per-column width overrides, persisted to localStorage
 const colWidthOverrides = useSetting<Record<string, number>>("dagColWidths", {});
 
+const TIP_MARGIN = 8; // min gap from viewport edge (matches shared Tooltip / MiniTooltip)
+const TIP_GAP = 8;    // gap between node and card
+
+// ---------------------------------------------------------------------------
+// DagTooltip — the shared `.ui-tip` hover card positioned at a hovered node's
+// screen rect, clamped to the viewport exactly like the chart's MiniTooltip
+// (two-pass measure, prefer-above then flip below, nudge horizontally, hidden
+// until measured). The nodes are built imperatively so they can't be wrapped in
+// <Tooltip>; this single Preact-managed overlay mirrors the chart approach and
+// renders pixel-identical to the timeline/table/chart hovers. pointer-events are
+// none (via .ui-tip), so it never blocks clicks on the map.
+// ---------------------------------------------------------------------------
+function DagTooltip({ anchor, children }: { anchor: DOMRect; children: any }) {
+  const cardRef = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+
+  useLayoutEffect(() => {
+    if (!cardRef.current) return;
+    const card = cardRef.current.getBoundingClientRect();
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const cx = anchor.left + anchor.width / 2;
+    // Prefer above the node; flip below if it would clip the top edge.
+    let top = anchor.top - card.height - TIP_GAP;
+    if (top < TIP_MARGIN) top = anchor.bottom + TIP_GAP;
+    top = Math.max(TIP_MARGIN, Math.min(top, vh - card.height - TIP_MARGIN));
+    let left = cx - card.width / 2;
+    left = Math.max(TIP_MARGIN, Math.min(left, vw - card.width - TIP_MARGIN));
+    setPos({ left, top });
+  }, [anchor]);
+
+  return (
+    <div
+      ref={cardRef}
+      class="ui-tip"
+      role="tooltip"
+      style={{
+        left: `${pos ? pos.left : anchor.left}px`,
+        top: `${pos ? pos.top : anchor.top}px`,
+        visibility: pos ? "visible" : "hidden",
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
 export function DagView() {
   const containerRef = useRef<HTMLDivElement>(null);
   const [visibleKey, setVisibleKey] = useState(0);
+  // Hovered node → its idea id + DOM rect, for the additive `.ui-tip` hover card.
+  const [hoverCard, setHoverCard] = useState<{ id: number; rect: DOMRect } | null>(null);
 
   // Re-render when container transitions from hidden (inside <details>) to visible
   // Also auto-scroll to show recent ideas (rightmost in graph)
@@ -146,6 +196,9 @@ export function DagView() {
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
+    // A rebuild replaces the node DOM; drop any hover card so it can't linger
+    // anchored to a now-removed element (next hover re-captures a fresh rect).
+    setHoverCard(null);
     if (!data || !data.nodes.length || !layout) {
       container.innerHTML =
         '<div style="padding:40px;color:var(--text-faint);text-align:center">No ideas yet</div>';
@@ -719,6 +772,12 @@ export function DagView() {
     }
 
     // --- Attach hover and click handlers to stations AND dots ---
+    // Hover both (a) drives the existing ancestor/edge highlight via
+    // highlightedIdea, and (b) captures the hovered node's idea id + its screen
+    // rect so the additive `.ui-tip` hover card can render over it. Works for
+    // full .subway-station nodes and compact .subway-dot pills alike, so the
+    // mini map is skimmable too. The card is pointer-events:none, so it never
+    // intercepts the click-to-navigate handler below.
     container.querySelectorAll(".subway-station, .subway-dot").forEach((el) => {
       el.addEventListener("click", () => {
         const id = parseInt((el as HTMLElement).dataset.id!);
@@ -727,9 +786,11 @@ export function DagView() {
       el.addEventListener("mouseenter", () => {
         const id = parseInt((el as HTMLElement).dataset.id!);
         highlightedIdea.value = id;
+        setHoverCard({ id, rect: (el as HTMLElement).getBoundingClientRect() });
       });
       el.addEventListener("mouseleave", () => {
         highlightedIdea.value = null;
+        setHoverCard((cur) => (cur && cur.id === parseInt((el as HTMLElement).dataset.id!) ? null : cur));
       });
     });
 
@@ -869,6 +930,42 @@ export function DagView() {
           style={{ position: "relative", minHeight: "100%" }}
         />
       </div>
+      {/* Additive hover card — the shared `.ui-tip` (purple-outlined, fixed,
+          pointer-events:none) rendering ideaTipContent. Idea data is built ONLY
+          for the hovered node, not for every node. Shows: idea #id + status
+          badge, the best value of the selected metric across the idea's runs
+          (omitted when there's no metric/data), the run count, and the title. */}
+      {hoverCard && (() => {
+        const node = data?.nodes.find((n) => n.id === hoverCard.id);
+        if (!node) return null;
+        // runs = experiments tagged to this idea; best = best metric value among them.
+        let runs = 0;
+        let best: { metricName?: string; value: number } | null = null;
+        if (experiments.length) {
+          const lower = metric ? isLowerBetter(metric) : false;
+          let bestVal: number | null = null;
+          for (const exp of experiments) {
+            if (exp.idea_id !== hoverCard.id) continue;
+            runs++;
+            if (!metric) continue;
+            const v = exp.metrics?.[metric];
+            if (typeof v !== "number" || !Number.isFinite(v)) continue;
+            if (bestVal === null || (lower ? v < bestVal : v > bestVal)) bestVal = v;
+          }
+          if (metric && bestVal !== null) best = { metricName: fmtMetricName(metric), value: bestVal };
+        }
+        return (
+          <DagTooltip anchor={hoverCard.rect}>
+            {ideaTipContent({
+              id: hoverCard.id,
+              status: node.has_running ? "running" : node.status,
+              title: ideaTitle(node.description),
+              best,
+              runs,
+            })}
+          </DagTooltip>
+        );
+      })()}
     </div>
   );
 }
