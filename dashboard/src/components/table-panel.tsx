@@ -41,8 +41,10 @@ const STATUS_BADGE_COLORS: Record<string, string> = {
 type SortDir = "asc" | "desc";
 
 export function TablePanel() {
-  const [sortKey, setSortKey] = useState<string>("label");
-  const [sortDir, setSortDir] = useState<SortDir>("asc");
+  // Default: sort by selected metric descending so best experiments are first
+  const defaultMetric = selectedMetric.value;
+  const [sortKey, setSortKey] = useState<string>(defaultMetric || "label");
+  const [sortDir, setSortDir] = useState<SortDir>(defaultMetric ? "desc" : "asc");
   const [hiddenCols, setHiddenCols] = useState<Set<string>>(new Set());
   const [showColMenu, setShowColMenu] = useState(false);
   const [colOrder, setColOrder] = useState<string[] | null>(null);

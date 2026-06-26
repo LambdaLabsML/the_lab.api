@@ -155,7 +155,15 @@ details[open] .detail-desc-toggle::after { content: " ▼"; }
 .meta-pill-note-observation { color: var(--text-muted); border-color: var(--border); }
 .meta-pill-note-debug       { color: var(--red); border-color: #f8514944; background: #f8514911; }
 .meta-pill-note-note        { color: var(--text-muted); border-color: var(--border); }
-.meta-conclusion { color: var(--text-muted); font-style: italic; font-size: var(--text-sm); border-top: 1px solid var(--border-soft); padding-top: 5px; margin-top: 2px; line-height: 1.4; }
+.meta-conclusion {
+  color: var(--text-muted); font-style: italic; font-size: var(--text-sm);
+  border-top: 1px solid var(--border-soft); padding-top: 5px; margin-top: 2px;
+  line-height: 1.4;
+  max-height: 6em; /* ~4 lines visible */
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
 
 /* ── View controls (Timeline + Sort toggles) ─────────────── */
 .detail-view-controls { display: flex; gap: 6px; margin-bottom: 10px; }

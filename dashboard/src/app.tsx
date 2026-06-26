@@ -1209,7 +1209,7 @@ function IdeaMiniLeaderboard({ experiments, ideas, metric, lower }: {
               <span class="emr-exp" style={{ color: "var(--text-muted)", maxWidth: 80, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</span>
               <span class="emr-val">{fmtV(r.best)}</span>
               {i > 0 && ranked[0].best !== r.best && (
-                <span style={{ fontSize: "8px", color: "var(--text-faint)", marginLeft: 2, flexShrink: 0 }}>
+                <span class="emr-gap">
                   {lower
                     ? `+${(r.best - ranked[0].best).toFixed(1)}`
                     : `-${(ranked[0].best - r.best).toFixed(1)}`}
