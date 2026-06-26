@@ -722,6 +722,13 @@ body {
   padding: 10px 12px;
   cursor: pointer;
   list-style: none;
+  transition: background var(--transition-fast);
+}
+.review-disclosure summary:hover {
+  background: color-mix(in srgb, var(--bg-hi) 60%, transparent);
+}
+.review-disclosure[open] summary {
+  border-bottom: 1px solid var(--border-soft);
 }
 
 .review-disclosure summary::-webkit-details-marker {
