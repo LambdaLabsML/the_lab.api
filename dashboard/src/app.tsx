@@ -1404,12 +1404,27 @@ function ExperimentGrid({ experiments, successRate }: { experiments: import("./l
         <span class="sq-legend sq-concluded">concluded</span>
         <span class="sq-legend sq-queued">queued</span>
         <span class="exp-grid-legend-note">← each square = one experiment, grouped by idea →</span>
-        {successRate !== null && (
-          <span style={{ marginLeft: "auto", fontSize: "8px", color: successRate < 20 ? "var(--yellow)" : "var(--text-faint)", fontFamily: "var(--font-mono)", flexShrink: 0 }}
-            title={`${successRate}% of experiments scored above zero`}>
-            {successRate}% scored
-          </span>
-        )}
+        {successRate !== null && (() => {
+          const r = 7, sw = 2.5, size = 18;
+          const c = 2 * Math.PI * r;
+          const fill = (successRate / 100) * c;
+          const arcColor = successRate < 10 ? "var(--red)" : successRate < 20 ? "var(--yellow)" : "var(--green)";
+          return (
+            <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 3, flexShrink: 0 }}
+              title={`${successRate}% of experiments scored above zero`}>
+              <svg width={size} height={size} style={{ display: "block", opacity: 0.8 }}>
+                <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="var(--border-soft)" strokeWidth={sw} />
+                <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={arcColor} strokeWidth={sw}
+                  strokeDasharray={`${fill} ${c - fill}`}
+                  strokeDashoffset={c / 4}
+                  strokeLinecap="round"
+                  transform={`rotate(-90 ${size/2} ${size/2})`}
+                />
+              </svg>
+              <span style={{ fontSize: "8px", color: arcColor, fontFamily: "var(--font-mono)" }}>{successRate}%</span>
+            </span>
+          );
+        })()}
       </div>
     </div>
   );
