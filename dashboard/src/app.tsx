@@ -2056,6 +2056,22 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
             }}>
             explore ideas
           </a>
+          {/* Hint untested ideas if any */}
+          {experiments.length > 20 && (() => {
+            const ideaExpCountsHint: Record<number, number> = {};
+            for (const e of experiments) { if (!e._running) ideaExpCountsHint[e.idea_id] = (ideaExpCountsHint[e.idea_id] || 0) + 1; }
+            const untestedList = Object.values(ideas)
+              .filter(i => i.status !== "concluded" && i.status !== "abandoned" && (ideaExpCountsHint[i.id] ?? 0) === 0)
+              .slice(0, 1);
+            if (untestedList.length === 0) return null;
+            const u = untestedList[0];
+            const title = u.description?.split("\n")[0].slice(0, 28) ?? `idea #${u.id}`;
+            return (
+              <span style={{ fontSize: "var(--text-xs)", color: "var(--text-faint)", marginLeft: 4 }}>
+                · or try <span style={{ color: "var(--yellow)", fontWeight: 600 }}>#{u.id}</span> (never tried)
+              </span>
+            );
+          })()}
         </div>
       )}
 
@@ -2176,6 +2192,26 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
                     </div>
                     <span style={{ fontSize: "7px", color: "var(--text-faint)", fontFamily: "var(--font-mono)" }}>{milestonesCount} records · 1/{Math.round(finished/milestonesCount)}</span>
                   </div>
+                )}
+                {/* Success rate trend: recent vs earlier */}
+                {metric && finished > 40 && successRate !== null && (
+                  (() => {
+                    const withMetric = done.filter(e => typeof e.metrics?.[metric] === "number");
+                    if (withMetric.length < 20) return null;
+                    const half = Math.floor(withMetric.length / 2);
+                    const early = withMetric.slice(0, half);
+                    const recent = withMetric.slice(-half);
+                    const earlyRate = Math.round((early.filter(e => (e.metrics![metric] as number) > 0).length / early.length) * 100);
+                    const recentRate = Math.round((recent.filter(e => (e.metrics![metric] as number) > 0).length / recent.length) * 100);
+                    const delta = recentRate - earlyRate;
+                    if (Math.abs(delta) < 2) return null;
+                    return (
+                      <div style={{ fontSize: "7px", color: delta > 0 ? "var(--green)" : "var(--red)", fontFamily: "var(--font-mono)" }}
+                        title={`Success rate: ${earlyRate}% earlier → ${recentRate}% recent`}>
+                        trend {delta > 0 ? `↑+${delta}%` : `↓${delta}%`}
+                      </div>
+                    );
+                  })()
                 )}
               </div>
               <ExpMiniResults
