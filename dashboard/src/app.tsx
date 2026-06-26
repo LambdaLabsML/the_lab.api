@@ -2227,10 +2227,16 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
                     {ideasConcluded > 0 && <span class="ihb-seg ihb-concluded" style={{ flex: ideasConcluded }} title={`${ideasConcluded} concluded`} />}
                     {ideasAbandoned > 0 && <span class="ihb-seg ihb-abandoned" style={{ flex: ideasAbandoned }} title={`${ideasAbandoned} abandoned`} />}
                   </div>
-                  <div style={{ display: "flex", gap: 6, fontSize: "7px", fontFamily: "var(--font-mono)", color: "var(--text-faint)" }}>
+                  <div style={{ display: "flex", gap: 6, fontSize: "7px", fontFamily: "var(--font-mono)", color: "var(--text-faint)", flexWrap: "wrap" }}>
                     {ideasActive > 0    && <span><span style={{ color: "var(--green)" }}>●</span> {ideasActive} active</span>}
                     {ideasConcluded > 0 && <span><span style={{ color: "var(--accent)" }}>●</span> {ideasConcluded} done</span>}
                     {ideasAbandoned > 0 && <span><span style={{ color: "var(--red)" }}>●</span> {ideasAbandoned} abandoned</span>}
+                    {(() => {
+                      const ideaExpCountsAll: Record<number, number> = {};
+                      for (const e of experiments) { if (!e._running) ideaExpCountsAll[e.idea_id] = (ideaExpCountsAll[e.idea_id] || 0) + 1; }
+                      const nt = Object.values(ideas).filter(i => i.status !== "concluded" && i.status !== "abandoned" && (ideaExpCountsAll[i.id] ?? 0) === 0).length;
+                      return nt > 0 ? <span style={{ color: "var(--yellow)", fontWeight: 600 }}>◇ {nt} untested</span> : null;
+                    })()}
                   </div>
                 </div>
               </div>
