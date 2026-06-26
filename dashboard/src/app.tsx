@@ -1773,6 +1773,20 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
     return recent.length > 0 ? (recent.length / 7).toFixed(1) : null;
   })();
 
+  // Velocity trend: compare last 7 days vs previous 7 days
+  const velocityTrend = (() => {
+    if (!velocityPerDay) return null;
+    const now = Date.now();
+    const sevenAgo = now - 7 * 24 * 3600 * 1000;
+    const fourteenAgo = now - 14 * 24 * 3600 * 1000;
+    const recent7 = done.filter(e => e.finished_at && Date.parse(e.finished_at) > sevenAgo).length;
+    const prev7 = done.filter(e => e.finished_at && Date.parse(e.finished_at) > fourteenAgo && Date.parse(e.finished_at) <= sevenAgo).length;
+    if (prev7 === 0) return null;
+    const diff = recent7 - prev7;
+    if (Math.abs(diff) < 2) return null; // ignore tiny differences
+    return diff > 0 ? "↑" : "↓";
+  })();
+
   // 14-day activity sparkline: count experiments finished each day
   const activityBars = (() => {
     const DAYS = 14;
@@ -1924,8 +1938,10 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
           {failed > 0 && <span class="review-status-item review-status-item--warn"><strong>{failed}</strong> failed</span>}
           {activeIdeas > 0 && <span class="review-status-item"><strong>{activeIdeas}</strong> ideas</span>}
           {velocityPerDay && (
-            <span class="review-status-item review-status-velocity" title={`Avg experiments per day over last 7 days`}>
-              <strong>{velocityPerDay}</strong>/day
+            <span class="review-status-item review-status-velocity" title={`Avg experiments per day over last 7 days${velocityTrend ? ` (${velocityTrend === "↑" ? "accelerating" : "slowing"} vs previous 7d)` : ""}`}>
+              <strong>{velocityPerDay}</strong>/day{velocityTrend && (
+                <span style={{ color: velocityTrend === "↑" ? "var(--green)" : "var(--yellow)", fontSize: "10px", marginLeft: 2 }}>{velocityTrend}</span>
+              )}
             </span>
           )}
           <span class="review-status-sep" />
