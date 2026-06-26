@@ -181,15 +181,17 @@ export function filterVisibleChartExperiments(
 
   const lower = isLowerBetter(metricKey);
   let best = lower ? Infinity : -Infinity;
-  return filtered.filter((e) => {
-    if (e._running) return true;
+  // Running experiments are excluded from the improvements line (they have no score yet)
+  // and are rendered separately to avoid a misleading "drop" at the right edge.
+  const milestones = filtered.filter((e) => {
+    if (e._running) return false;
     const v = resolveNumericValue(e, metricKey) ?? 0;
-    if (lower ? v < best : v > best) {
-      best = v;
-      return true;
-    }
+    if (lower ? v < best : v > best) { best = v; return true; }
     return false;
   });
+  // Re-append running experiments at the end so they're still visible as markers
+  const running = filtered.filter(e => e._running);
+  return [...milestones, ...running];
 }
 
 /**
@@ -345,7 +347,12 @@ export function buildChartData(
     pointStyles: filtered.map((e) => (e._running ? 'triangle' : 'circle')),
     pointRadii: filtered.map((e) => (e._running ? 8 : 6)),
     pointBorderWidths: filtered.map((e) => (e._running ? 2.5 : 1)),
-    values: filtered.map((e) => resolveNumericValue(e, metricKey) ?? 0),
+    // In improvements-only mode, running experiments use null
+    // so Chart.js doesn't draw a misleading drop from the last milestone to 0
+    values: filtered.map((e) => {
+      if (improvementsOnly && e._running) return null as any;
+      return resolveNumericValue(e, metricKey) ?? 0;
+    }),
     expData: filtered,
   };
 }

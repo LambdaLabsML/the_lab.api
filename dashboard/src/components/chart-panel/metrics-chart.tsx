@@ -439,6 +439,7 @@ function createChart(
     {
       label: metricKey,
       data: chartData.values,
+      spanGaps: false,  // break line at null values (e.g. running exps in improvements mode)
       borderColor: `color-mix(in srgb, ${getCssVar("--text-muted")} 27%, transparent)`,
       pointBackgroundColor: chartData.pointBgColors,
       pointBorderColor: borderColors,
