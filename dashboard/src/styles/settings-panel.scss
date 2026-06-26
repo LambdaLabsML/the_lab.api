@@ -63,8 +63,8 @@
   align-items: center;
   gap: 5px;
   padding: 7px 4px;
-  background: transparent;
-  border: 1px solid transparent;
+  background: var(--bg-elev);
+  border: 1px solid var(--border-soft);   /* visible hairline box (was missing) */
   border-radius: var(--radius-sm);
   cursor: pointer;
   text-align: center;
@@ -74,11 +74,11 @@
   transition: background var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
   min-width: 0;
 
-  &:hover { background: var(--bg-hi); color: var(--text); }
+  &:hover { background: var(--bg-hi); color: var(--text); border-color: var(--text-muted); }
 
   &.is-active {
-    border-color: color-mix(in srgb, var(--accent) 45%, transparent);
-    background: var(--accent-dim);
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
     color: var(--accent);
   }
 }

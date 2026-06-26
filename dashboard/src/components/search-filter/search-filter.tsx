@@ -8,13 +8,14 @@
  * This keeps it generic enough to drive both Review content filtering and the
  * idea-graph nav.
  *
- * Category-prefix search: typing a leading `category:` token (e.g. `tag:`,
- * `idea:`, `experiment:`) restricts suggestions to that category. The parsed
- * prefix is passed as the optional second arg to `suggest`, and the remainder
- * (text after the colon) as the first; consumers return ALL matches in that
- * category, including everything when the remainder is empty (so `tag:` alone
- * lists every tag). A small chip in the field signals the active prefix while
- * the input text itself stays clean (the prefix is never double-rendered).
+ * Category-prefix search: typing a leading `category:` or `category/` token
+ * (e.g. `tag:`, `idea/`, `exp/foo`) restricts suggestions to that category. The
+ * parsed prefix is passed as the optional second arg to `suggest`, and the
+ * remainder (text after the separator) as the first; consumers return ALL
+ * matches in that category, including everything when the remainder is empty (so
+ * `tag:` alone lists every tag). A small chip in the field signals the active
+ * prefix while the input text itself stays clean (the prefix is never
+ * double-rendered).
  *
  * Design language (see dashboard/DESIGN.md): hairline field, flat fills, one
  * accent, token type. The dropdown reuses the tooltip's fixed + viewport-clamped
@@ -75,10 +76,12 @@ export interface SearchFilterProps {
 const MARGIN = 8; // min gap from viewport edge
 const GAP = 4; // gap between input and dropdown
 
-/** A leading `category:` token, e.g. "tag:" / "idea:foo" / "experiment: bar". */
-const PREFIX_RE = /^([a-zA-Z][\w-]*):\s?(.*)$/;
+/** A leading `category:` or `category/` token, e.g. "tag:" / "idea/foo" /
+ *  "exp/ bar". Must start with a letter, so numeric initiators (`90/`, `#90/`)
+ *  intentionally don't match — those flow through as full-query text. */
+const PREFIX_RE = /^([a-zA-Z][\w-]*)[:/]\s?(.*)$/;
 
-/** Parse a leading `category:` prefix off the raw input.
+/** Parse a leading `category:` / `category/` prefix off the raw input.
  *  → `{ category, remainder }` when present (category lower-cased), else null. */
 function parsePrefix(raw: string): { category: string; remainder: string } | null {
   const m = PREFIX_RE.exec(raw);

@@ -118,6 +118,50 @@ export function SecondaryPanel({
   label: string;
   children: ComponentChildren;
 }) {
+  // Mobile: a dismissible slide-over overlay (default closed) opened from a thin
+  // left-edge tab. Desktop: the in-flow resizable / collapsible panel.
+  const [isMobile, setIsMobile] = useState(
+    () => typeof window !== "undefined" && window.matchMedia("(max-width: 760px)").matches,
+  );
+  const [mobileOpen, setMobileOpen] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 760px)");
+    const onChange = () => { setIsMobile(mq.matches); if (!mq.matches) setMobileOpen(false); };
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
+
+  if (isMobile) {
+    if (!mobileOpen) {
+      return (
+        <button
+          class="nav-secondary-reopen nav-secondary-reopen--mobile"
+          title="Show panel"
+          aria-label="Show panel"
+          onClick={() => setMobileOpen(true)}
+        >
+          ›
+        </button>
+      );
+    }
+    return (
+      <>
+        <button class="nav-secondary-scrim" aria-label="Close panel" onClick={() => setMobileOpen(false)} />
+        <aside class="nav-secondary nav-secondary--overlay" aria-label={label}>
+          <div class="nav-secondary-inner">{children}</div>
+          <button
+            class="nav-secondary-collapse"
+            title="Close panel"
+            aria-label="Close panel"
+            onClick={() => setMobileOpen(false)}
+          >
+            ✕
+          </button>
+        </aside>
+      </>
+    );
+  }
+
   const collapsed = sidebarCollapsed.value;
   const width = sidebarWidth.value;
 

@@ -162,6 +162,13 @@ export const chartMinified = useSetting("chartMinified", false);
 /** Chart point/dot size: s | m | l. */
 export const chartPointSize = useSetting<"s" | "m" | "l">("chartPointSize", "m");
 
+/** Review metrics-graph height in px (user-adjustable via chevron steppers). */
+export const reviewChartHeight = useSetting("reviewChartHeight", 360);
+
+/** Per-section, per-mode Overview content heights, keyed "<sectionId>:<summary|detail>".
+ *  Summary mode → visible row count; detail mode → panel height (px). Persisted. */
+export const reviewSectionHeights = useSetting<Record<string, number>>("reviewSectionHeights", {});
+
 /** Colorblind-friendly status color overrides. */
 export const colorblindMode = useSetting("colorblindMode", false);
 

@@ -373,11 +373,40 @@
 .agent-bar-badge--user .agent-bar-idea { color: var(--text-muted); }
 .agent-bar-dot--user { background: var(--accent); box-shadow: 0 0 5px var(--accent); }
 
-/* Narrow screens: drop the secondary panel, shrink the rail. */
+/* Narrow screens: shrink the rail; the secondary panel becomes a dismissible
+   slide-over overlay (see SecondaryPanel's mobile branch). */
 @media (max-width: 760px) {
-  .nav-secondary, .nav-secondary-reopen { display: none; }
   .nav-rail { width: 52px; }
   .nav-rail-label { font-size: 8px; }
   .nav-rail-icon { font-size: var(--text-base); }
-  .slim-topbar { padding: 0 10px; }
+
+  /* the panel, opened from the edge tab, slides over the content */
+  .nav-secondary--overlay {
+    position: fixed;
+    left: 52px; top: 0; bottom: 0;
+    width: min(286px, 82vw);
+    z-index: 45;
+    box-shadow: var(--shadow-lg);
+  }
+  /* dim the content (not the rail) and close on tap */
+  .nav-secondary-scrim {
+    position: fixed;
+    left: 52px; top: 0; right: 0; bottom: 0;
+    z-index: 44;
+    border: 0;
+    background: color-mix(in srgb, #000 50%, transparent);
+    cursor: pointer;
+  }
+  /* thin left-edge tab to open the panel */
+  .nav-secondary-reopen--mobile {
+    position: fixed;
+    left: 52px; top: 50%;
+    transform: translateY(-50%);
+    width: 18px; height: 64px;
+    align-self: auto;
+    z-index: 30;
+    border-radius: 0 var(--radius-md) var(--radius-md) 0;
+    box-shadow: var(--shadow-sm);
+    background: var(--bg-elev);
+  }
 }

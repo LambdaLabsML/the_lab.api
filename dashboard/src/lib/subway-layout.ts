@@ -38,7 +38,7 @@ export function buildSubwayLayout(data: GraphResponse): SubwayLayout | null {
   }
   for (const n of data.nodes) getDepth(n.id);
 
-  // Subtree last activity (most-active branch continues parent lane)
+  // Subtree last activity (used as a tie-break when continuing a lane)
   const subAct: Record<number, string> = {};
   function getSubAct(id: number): string {
     if (subAct[id]) return subAct[id];
@@ -52,9 +52,34 @@ export function buildSubwayLayout(data: GraphResponse): SubwayLayout | null {
   }
   for (const n of data.nodes) getSubAct(n.id);
 
-  // Sort children: most-active subtree first (continues parent lane)
+  // Subtree reach = the deepest column reachable from this node (its longest
+  // downstream path, in DAG columns). Continuing a lane along the child with the
+  // greatest reach keeps the single LONGEST end-to-end path as one unbroken lane,
+  // so it can occupy the top row across all its columns instead of being split
+  // (a shorter-but-more-active branch must not steal the backbone, see #90).
+  const subtreeReach: Record<number, number> = {};
+  function getSubtreeReach(id: number): number {
+    if (subtreeReach[id] !== undefined) return subtreeReach[id];
+    let best = depth[id];
+    for (const c of childMap[id]) {
+      const cr = getSubtreeReach(c);
+      if (cr > best) best = cr;
+    }
+    return (subtreeReach[id] = best);
+  }
+  for (const n of data.nodes) getSubtreeReach(n.id);
+
+  // Sort children so the FIRST child (which continues the parent's lane) is the
+  // one leading to the longest remaining path. Tie-break by most-active subtree,
+  // then id for stability. This makes lane continuation follow the longest path
+  // rather than the most-active child.
   for (const id of Object.keys(childMap))
-    childMap[Number(id)].sort((a, b) => (getSubAct(b) || '').localeCompare(getSubAct(a) || ''));
+    childMap[Number(id)].sort((a, b) => {
+      if (subtreeReach[a] !== subtreeReach[b]) return subtreeReach[b] - subtreeReach[a];
+      const aa = getSubAct(a) || '', ba = getSubAct(b) || '';
+      if (aa !== ba) return ba.localeCompare(aa);
+      return a - b;
+    });
 
   // Assign lanes via DFS + build lane tree for packing
   const lanes: Lane[] = [];

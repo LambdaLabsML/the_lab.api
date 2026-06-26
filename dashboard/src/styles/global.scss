@@ -144,6 +144,27 @@ body {
   gap: var(--space-3);
   padding: 2px 2px 0;
 }
+/* (#92/#94) height steppers — compact ghost chevron buttons. Used in the chart
+   head and in the Experiments/Ideas disclosure header rows. */
+.review-steppers {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.review-step {
+  padding: 2px 6px;
+  min-width: 0;
+  line-height: 0;
+  color: var(--text-faint);
+  &:hover:not(:disabled) { color: var(--text); }
+  &:disabled { opacity: 0.3; cursor: default; }
+}
+.review-chev { display: block; }
+/* chart head pushes its steppers to the right corner */
+.review-chart-steppers { margin-left: auto; flex-shrink: 0; }
+/* in the disclosure header row the steppers sit just left of the switch */
+.review-disclosure-bar .review-steppers { align-self: center; }
 .review-metric-select-input {
   /* on-brand select — .ui-toggle language: hairline field, accent on focus */
   appearance: none;
@@ -370,6 +391,14 @@ body {
 }
 /* queued squares read yellow in the timeline (per #54) */
 .tl-sq.sq-queued { background: var(--yellow); opacity: 0.8; animation: none; }
+/* (#97) free queue capacity — outline-only yellow blocks, transparent fill */
+.tl-sq--empty {
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--yellow) 55%, transparent);
+  opacity: 0.7;
+  cursor: default;
+  &:hover { transform: none; }
+}
 .tl-sq.sq-milestone {
   background: var(--purple);
   opacity: 1;
@@ -770,12 +799,14 @@ body {
   font-size: var(--text-sm);
 }
 /* the Tooltip wraps each data row — let the trigger be a full-width block row */
-.review-mst-table > .ui-tip-trigger { display: block; }
+.review-mst-table > .ui-tip-trigger { display: block; width: 100%; box-sizing: border-box; }
 .review-mst-row {
   display: grid;
-  /* (#59) ★ · exp · idea# · what-it-tried · value · Δ · when — fixed tracks so
-     nothing overflows; "what it tried" is the only flexible column. */
-  grid-template-columns: 2.4em minmax(4.5em, auto) 3.2em minmax(0, 1fr) 4.4em 3.6em 2.8em;
+  /* columns: {metric} score · Δ · exp · when. NO content-sized (auto) tracks —
+     each row is its own grid (wrapped in a Tooltip), so content-sized columns
+     would resolve differently per row and stagger. Fixed + a single 1fr (which
+     resolves equally across rows of equal width) keeps every row aligned. */
+  grid-template-columns: 5em 4.4em minmax(0, 1fr) 3em;
   align-items: center;
   gap: 8px;
   padding: 3px 6px;
@@ -830,13 +861,13 @@ body {
 .review-mst-c-val {
   color: var(--purple);
   font-weight: 700;
-  text-align: right;
+  text-align: left;
   font-variant-numeric: tabular-nums;
 }
 .review-mst-head .review-mst-c-val { color: var(--text-faint); font-weight: 600; }
 .review-mst-c-delta {
   color: var(--green);
-  text-align: right;
+  text-align: left;
   font-variant-numeric: tabular-nums;
   font-size: var(--text-xs);
 }
@@ -938,7 +969,7 @@ body {
   margin-top: 2px;
 }
 /* the Tooltip wraps each row — let the trigger be a full-width block row */
-.emr-lb-table > .ui-tip-trigger { display: block; }
+.emr-lb-table > .ui-tip-trigger { display: block; width: 100%; box-sizing: border-box; }
 .emr-lb-row {
   display: grid;
   /* rank · idea · title · runs · trend · best — identical in header + rows */
@@ -1021,14 +1052,11 @@ body {
     flex-wrap: wrap;
     gap: 14px;
   }
-  /* On mobile keep the milestones table — it's the point of the section.
-     Drop "what it tried" + "when"; the remaining 5 cells
-     (★ · exp · idea · value · Δ) re-flow into 5 columns. */
+  /* On mobile keep the milestones table — drop "when"; score · Δ · exp remain. */
   .review-mst-row {
-    grid-template-columns: 2.4em minmax(4.5em, 1fr) 3.2em 4.4em 3.6em;
+    grid-template-columns: 4.6em 4em minmax(0, 1fr);
     gap: 6px;
   }
-  .review-mst-c-exptext,
   .review-mst-c-when { display: none; }
 }
 
@@ -1413,11 +1441,13 @@ button.rds-opt {
   font-size: var(--text-xs);
 }
 
-.review-disclosure > .review-panel {
-  /* indent the revealed body under the heading; whitespace below before the
-     next section's hairline */
-  margin: 2px 0 14px 8px;
-}
+/* revealed detail body — indented under the heading, whitespace below before
+   the next section's hairline. */
+.review-disclosure-body { margin: 2px 0 14px 8px; }
+/* (#94) the stepper-resizable sections set the body height inline; the inner
+   panel fills it. Other sections keep their panel's own fixed height. */
+#review-runs .review-disclosure-body > .review-panel,
+#review-ideas .review-disclosure-body > .review-panel { height: 100%; }
 
 .review-panel #graph-container,
 .review-panel #subway-container,
@@ -1709,7 +1739,7 @@ button.rds-opt {
     font-size: var(--text-sm);
   }
 
-  .review-disclosure > .review-panel {
+  .review-disclosure-body {
     margin: 2px 0 10px;
   }
 

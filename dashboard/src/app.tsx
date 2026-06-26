@@ -65,8 +65,11 @@ import {
   dashboardLayout,
   filterText,
   reviewOpenSections,
+  reviewChartHeight,
+  reviewSectionHeights,
 } from "./state/settings";
 import { startPolling, stopPolling } from "./state/polling";
+import { getQueue } from "./state/api";
 import { startWs, stopWs } from "./state/ws";
 import {
   allExperiments,
@@ -1256,13 +1259,75 @@ export function App() {
   );
 }
 
+// ── Section height controls (#94) ────────────────────────────────────────────
+// Per-section AND per-mode heights, persisted in `reviewSectionHeights`, keyed
+// "<sectionId>:summary" (= # of rows shown) and "<sectionId>:detail" (= panel
+// px height). The steppers adjust the value for the section's CURRENT mode;
+// switching modes restores that mode's saved value.
+
+interface HeightCfg { min: number; max: number; step: number; def: number }
+// summary = rows, detail = px. Defaults mirror the prior fixed sizes.
+const SECTION_HEIGHTS: Record<string, { summary: HeightCfg; detail: HeightCfg }> = {
+  "review-runs":  { summary: { min: 3, max: 24, step: 1, def: 6 }, detail: { min: 240, max: 980, step: 80, def: 620 } },
+  "review-ideas": { summary: { min: 3, max: 20, step: 1, def: 5 }, detail: { min: 220, max: 820, step: 80, def: 420 } },
+};
+
+function sectionHeight(id: string, mode: "summary" | "detail"): number {
+  const cfg = SECTION_HEIGHTS[id]?.[mode];
+  if (!cfg) return mode === "summary" ? 6 : 420;
+  const v = reviewSectionHeights.value[`${id}:${mode}`];
+  return typeof v === "number" ? Math.min(cfg.max, Math.max(cfg.min, v)) : cfg.def;
+}
+
+function setSectionHeight(id: string, mode: "summary" | "detail", v: number) {
+  const cfg = SECTION_HEIGHTS[id]?.[mode];
+  const clamped = cfg ? Math.min(cfg.max, Math.max(cfg.min, v)) : v;
+  reviewSectionHeights.value = { ...reviewSectionHeights.value, [`${id}:${mode}`]: clamped };
+  // detail panels (chart/table/graph canvases) re-layout on resize
+  if (mode === "detail") requestAnimationFrame(() => window.dispatchEvent(new Event("resize")));
+}
+
+/** A clean up/down chevron (10px polyline, currentColor stroke, no fill). */
+function Chevron({ dir }: { dir: "up" | "down" }) {
+  return (
+    <svg class="review-chev" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"
+      fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+      {dir === "up"
+        ? <polyline points="2,6.5 5,3.5 8,6.5" />
+        : <polyline points="2,3.5 5,6.5 8,3.5" />}
+    </svg>
+  );
+}
+
+/** A compact ghost stepper pair — chevron-up = smaller, chevron-down = bigger. */
+function HeightSteppers({ value, min, max, step, onChange, what }: {
+  value: number; min: number; max: number; step: number;
+  onChange: (next: number) => void; what: string;
+}) {
+  return (
+    <span class="review-steppers" role="group" aria-label={`${what} size`}>
+      <button type="button" class="ui-btn review-step"
+        title={`Fewer / shorter (${what})`} aria-label={`Fewer ${what}`} disabled={value <= min}
+        onClick={(e) => { e.preventDefault(); e.stopPropagation(); onChange(Math.max(min, value - step)); }}>
+        <Chevron dir="up" />
+      </button>
+      <button type="button" class="ui-btn review-step"
+        title={`More / taller (${what})`} aria-label={`More ${what}`} disabled={value >= max}
+        onClick={(e) => { e.preventDefault(); e.stopPropagation(); onChange(Math.min(max, value + step)); }}>
+        <Chevron dir="down" />
+      </button>
+    </span>
+  );
+}
+
 // ── Idea mini leaderboard ─────────────────────────────────────────────────────
 
-function IdeaMiniLeaderboard({ experiments, ideas, metric, lower }: {
+function IdeaMiniLeaderboard({ experiments, ideas, metric, lower, maxRows = 5 }: {
   experiments: import("./lib/types").Experiment[];
   ideas: Record<number, import("./lib/types").IdeaNode>;
   metric: string;
   lower: boolean;
+  maxRows?: number;
 }) {
   // When no metric data yet: show most recently active ideas (last experiment ran)
   const hasMetricData = experiments.some(e => !e._running && typeof e.metrics?.[metric] === "number");
@@ -1279,7 +1344,7 @@ function IdeaMiniLeaderboard({ experiments, ideas, metric, lower }: {
       ? Object.values(ideas).filter(i => i.status !== "concluded" && i.status !== "abandoned" && !ideaLastRun[i.id])
       : [];
     const top5 = Object.entries(ideaLastRun)
-      .sort((a, b) => b[1].lastId - a[1].lastId).slice(0, Math.max(0, 5 - untestedIdeas.slice(0,2).length));
+      .sort((a, b) => b[1].lastId - a[1].lastId).slice(0, Math.max(0, maxRows - untestedIdeas.slice(0,2).length));
     const allRows = [...untestedIdeas.slice(0, 2).map(i => ({ id: String(i.id), data: null, untested: true })),
                      ...top5.map(([id, data]) => ({ id, data, untested: false }))];
     if (allRows.length === 0) return null;
@@ -1364,7 +1429,7 @@ function IdeaMiniLeaderboard({ experiments, ideas, metric, lower }: {
       if (Math.abs(scoreDiff) > 1e-9) return scoreDiff; // different scores
       return a.count - b.count; // tied: fewer experiments = more efficient = ranked higher
     })
-    .slice(0, 5);
+    .slice(0, maxRows);
 
   if (ranked.length === 0) return null;
 
@@ -1596,15 +1661,18 @@ function TimelineChip({ exp, ideaCol, ideas, metric, isMilestone, recNo }: {
 //     wrapping, grouped & colored by idea, no heavy boxes.
 //   detail — the curated, more-informative chips (running / records / recent).
 // Hover cards + hover→highlightedIdea cross-highlight in both.
-function ExperimentGrid({ experiments, milestoneIds, ideas, metric }: {
+function ExperimentGrid({ experiments, milestoneIds, ideas, metric, queueCapacity }: {
   experiments: import("./lib/types").Experiment[];
   milestoneIds?: Set<number>;
   ideas: Record<number, import("./lib/types").IdeaNode>;
   metric: string;
+  /** (#97) total queue capacity (sum of resources' max parallel jobs); null when unknown */
+  queueCapacity?: number | null;
 }) {
   const [view, setView] = useState<"summary" | "detail">("summary");
   if (experiments.length === 0) return null;
 
+  const lower = isLowerBetter(metric);
   const chrono = experiments.slice().sort((a, b) => a.id - b.id);
   const total = experiments.length;
 
@@ -1619,18 +1687,17 @@ function ExperimentGrid({ experiments, milestoneIds, ideas, metric }: {
   const msRecNo = new Map<number, number>();
   ms.forEach((e, i) => msRecNo.set(e.id, i + 1));
 
-  // shared curation: running, records, the recent done experiments
+  // shared curation
   const running = chrono.filter(e => e._running || e.status === "running");
-  const recent5 = chrono
+  // "recent experiments" (#91): recent runs regardless of outcome (not running,
+  // not still-queued, not already a record).
+  const recentExps = chrono
     .filter(e => !e._running && e.status !== "running" && e.status !== "queued" && e.status !== "pending" && !msIds.has(e.id))
-    .slice(-5);
-  const recent6 = chrono
-    .filter(e => !e._running && e.status !== "running" && !msIds.has(e.id))
     .slice(-6);
 
-  // Queued (#65): queued experiments aren't in allExperiments — surface them
-  // from ideas flagged `has_queued` (one yellow square per pending idea). Also
-  // fold in any pending/queued experiment rows if the backend ever sends them.
+  // Queued (#91): queued experiments aren't in allExperiments — surface them
+  // from ideas flagged `has_queued` (one yellow square per pending idea), plus
+  // any pending/queued experiment rows if the backend sends them.
   const queuedExpIdeaIds = new Set(
     chrono.filter(e => e.status === "queued" || e.status === "pending").map(e => e.idea_id),
   );
@@ -1638,36 +1705,87 @@ function ExperimentGrid({ experiments, milestoneIds, ideas, metric }: {
     i => (i.has_queued || queuedExpIdeaIds.has(i.id)) && i.status !== "concluded" && i.status !== "abandoned",
   );
 
+  // "recent concluded" (#91): recently concluded ideas, newest finish first.
+  const concludedIdeas = Object.values(ideas)
+    .filter(i => i.status === "concluded")
+    .sort((a, b) => (b.last_finish ?? "").localeCompare(a.last_finish ?? ""))
+    .slice(0, 8);
+
   const hasMilestones = ms.length > 0;
   const hasRunning = running.length > 0;
-  const hasQueued = queuedIdeas.length > 0;
-  const summaryCount = ms.length + recent5.length + queuedIdeas.length;
-  const shownDetail = running.length + ms.length + recent6.length;
+  const hasConcluded = concludedIdeas.length > 0;
+  const summaryCount = queuedIdeas.length + recentExps.length + concludedIdeas.length + ms.length;
+  const shownDetail = running.length + ms.length + recentExps.length;
 
-  // a column-header group: a tidy eyebrow ABOVE the group of squares/chips
-  const SqGroup = ({ label, kind, items, queuedNodes }: {
+  // (#97) queue capacity: filled = the queued squares shown; empty = the rest of
+  // total capacity (cap the strip to a sane width). Show the group when there's
+  // anything filled OR a known capacity to visualize.
+  const QUEUE_MAX = 32;
+  const filledQueue = queuedIdeas.length;
+  const cap = queueCapacity != null && queueCapacity > 0 ? queueCapacity : null;
+  const emptyQueue = cap != null ? Math.max(0, Math.min(QUEUE_MAX, cap) - filledQueue) : 0;
+  const hasQueued = filledQueue > 0 || emptyQueue > 0;
+
+  // an idea-node square (queued / concluded) — colored by an explicit status class
+  const IdeaSquare = ({ node, status, sqCls }: {
+    node: import("./lib/types").IdeaNode; status: string; sqCls: string;
+  }) => {
+    const highlighted = highlightedIdea.value;
+    const on = highlighted === node.id;
+    const dim = highlighted != null && highlighted !== node.id;
+    const ideaBest = (() => {
+      let b: number | null = null;
+      for (const e of chrono) {
+        if (e.idea_id !== node.id) continue;
+        const v = e.metrics?.[metric];
+        if (typeof v === "number" && isFinite(v)) b = b == null ? v : (lower ? Math.min(b, v) : Math.max(b, v));
+      }
+      return b;
+    })();
+    return (
+      <Tooltip content={ideaTipContent({
+        id: node.id,
+        status,
+        title: node.description?.split("\n")[0] ?? undefined,
+        best: ideaBest != null ? { metricName: fmtMetricName(metric), value: ideaBest } : null,
+      })}>
+        <span class={`tl-sq ${sqCls}${on ? " is-highlighted" : ""}${dim ? " is-dimmed" : ""}`}
+          onMouseEnter={() => { highlightedIdea.value = node.id; }}
+          onMouseLeave={() => { if (highlightedIdea.value === node.id) highlightedIdea.value = null; }}
+          onClick={() => navigateToIdea(node.id)} />
+      </Tooltip>
+    );
+  };
+
+  // a column-header group: a tidy neutral eyebrow ABOVE the group of squares.
+  // `emptySlots` (#97) appends outline-only blocks for unfilled capacity.
+  // `labelOverride` lets a group show e.g. "queued · M/C" in the eyebrow.
+  const SqGroup = ({ label, kind, items, ideaNodes, ideaStatus, ideaSqCls, emptySlots, labelOverride }: {
     label: string; kind: string;
     items?: typeof chrono;
-    queuedNodes?: import("./lib/types").IdeaNode[];
+    ideaNodes?: import("./lib/types").IdeaNode[];
+    ideaStatus?: string; ideaSqCls?: string;
+    emptySlots?: number;
+    labelOverride?: preact.ComponentChildren;
   }) => {
-    const count = (items?.length ?? 0) + (queuedNodes?.length ?? 0);
-    if (count === 0) return null;
+    const filled = (items?.length ?? 0) + (ideaNodes?.length ?? 0);
+    const empties = Math.max(0, emptySlots ?? 0);
+    if (filled === 0 && empties === 0) return null;
     return (
       <div class={`tl-group tl-group--${kind}`}>
-        <span class="tl-group-label">{label} <b>{count}</b></span>
+        <span class="tl-group-label">{labelOverride ?? <>{label} <b>{filled}</b></>}</span>
         <div class="tl-squares">
           {items?.map(e => (
             <TimelineSquare key={e.id} exp={e} ideas={ideas} metric={metric}
               isMilestone={kind === "records"} recNo={msRecNo.get(e.id)} />
           ))}
-          {queuedNodes?.map(n => (
-            <Tooltip key={`q${n.id}`} content={ideaTipContent({
-              id: n.id,
-              status: "queued",
-              title: n.description?.split("\n")[0] ?? undefined,
-            })}>
-              <span class="tl-sq sq-queued" onClick={() => navigateToIdea(n.id)} />
-            </Tooltip>
+          {ideaNodes?.map(n => (
+            <IdeaSquare key={`i${n.id}`} node={n} status={ideaStatus ?? "idea"} sqCls={ideaSqCls ?? "sq-cancelled"} />
+          ))}
+          {/* (#97) free queue capacity — outline-only yellow slots */}
+          {Array.from({ length: empties }, (_, i) => (
+            <span key={`empty${i}`} class="tl-sq tl-sq--empty" aria-hidden="true"
+              title="free queue slot" />
           ))}
         </div>
       </div>
@@ -1693,7 +1811,7 @@ function ExperimentGrid({ experiments, milestoneIds, ideas, metric }: {
         <span class="emr-label">experiment timeline</span>
         <span class="exp-grid-caption-sub">
           {view === "summary"
-            ? <>records, recent &amp; queued — {summaryCount} of {total}</>
+            ? <>queued, recent, concluded &amp; records — {summaryCount} of {total}</>
             : <>showing {shownDetail} of {total} — records, running &amp; recent</>}
         </span>
         {/* summary ⇄ detail switch — same .ui-toggle language as the disclosures */}
@@ -1703,19 +1821,26 @@ function ExperimentGrid({ experiments, milestoneIds, ideas, metric }: {
         </span>
       </div>
 
-      {/* (#65) grouped into records / recent / queued, each with a column-header
-          eyebrow above its squares — no inline per-square labels. */}
+      {/* (#91) group order: queued → recent experiments → recent concluded →
+          records. Each group has a neutral column-header eyebrow; empty groups
+          are omitted. */}
       {view === "summary" ? (
         <div class="tl-groups">
+          {hasQueued && <SqGroup label="queued" kind="queued" ideaNodes={queuedIdeas} ideaStatus="queued" ideaSqCls="sq-queued"
+            emptySlots={emptyQueue}
+            labelOverride={cap != null
+              ? <>queued <b>{filledQueue}/{Math.min(QUEUE_MAX, cap)}</b></>
+              : undefined} />}
+          {recentExps.length > 0 && <SqGroup label="recent" kind="recent" items={recentExps} />}
+          {hasConcluded && <SqGroup label="concluded" kind="concluded" ideaNodes={concludedIdeas} ideaStatus="concluded" ideaSqCls="sq-concluded" />}
           {hasMilestones && <SqGroup label="records" kind="records" items={ms} />}
-          {recent5.length > 0 && <SqGroup label="recent" kind="recent" items={recent5} />}
-          {hasQueued && <SqGroup label="queued" kind="queued" queuedNodes={queuedIdeas} />}
         </div>
       ) : (
+        // detail chips echo the summary order: running → recent → records
         <div class="tl-groups">
           {hasRunning && <ChipGroup label="running" kind="running" items={running} />}
+          <ChipGroup label="recent" kind="recent" items={recentExps} />
           {hasMilestones && <ChipGroup label="records" kind="records" items={ms} />}
-          <ChipGroup label="recent" kind="recent" items={recent6} />
         </div>
       )}
 
@@ -1748,7 +1873,7 @@ function BestSparkline({ experiments, metric, lower }: {
   // If variance is < 0.1% of the value, show a "plateau" dash instead
   if (range === 0 || (Math.abs(lo) > 0 && range / Math.abs(lo) < 0.001)) {
     return (
-      <svg width={W} height={H} style={{ display: "block", flexShrink: 0, opacity: 0.5 }} title="Plateau — best score is flat">
+      <svg width={W} height={H} style={{ display: "block", flexShrink: 0, opacity: 0.5 }}>
         <line x1={4} y1={H/2} x2={W-4} y2={H/2} stroke="var(--text-faint)" strokeWidth="1.75" strokeDasharray="3 2" strokeLinecap="round" />
       </svg>
     );
@@ -1856,11 +1981,12 @@ function ScoreDistBar({ experiments, metric, lower }: {
 // experiment / idea, the metric value, when it landed, and the Δ improvement
 // over the prior record. Column headers, hairline rows, tabular-nums, ★.
 
-function MilestonesTable({ experiments, metric, lower, ideas }: {
+function MilestonesTable({ experiments, metric, lower, ideas, maxRows = 6 }: {
   experiments: import("./lib/types").Experiment[];
   metric: string;
   lower: boolean;
   ideas: Record<number, import("./lib/types").IdeaNode>;
+  maxRows?: number;
 }) {
   // Walk completed-with-metric chronologically; emit a row each time the
   // running best improves. Each row carries its Δ over the previous record.
@@ -1895,9 +2021,9 @@ function MilestonesTable({ experiments, metric, lower, ideas }: {
     return `${Math.floor(hr / 24)}d`;
   }
 
-  // newest record first — most relevant. Cap the summary at the latest 6 so
-  // it stays breathable; the full record is in the detail TablePanel.
-  const MAX = 6;
+  // newest record first — most relevant. The visible-row count is controlled by
+  // the section's summary stepper (#94); the full record is in the detail panel.
+  const MAX = maxRows;
   const allOrdered = rows.slice().reverse();
   const ordered = allOrdered.slice(0, MAX);
   const hidden = allOrdered.length - ordered.length;
@@ -1915,22 +2041,15 @@ function MilestonesTable({ experiments, metric, lower, ideas }: {
         </span>
       </div>
       <div class="review-mst-table">
-        {/* order (#59): ★ · exp · idea# · what-it-tried · {metric} · Δ · when */}
+        {/* columns: {metric} score · Δ · exp · when (★/idea/what-it-tried removed) */}
         <div class="review-mst-row review-mst-head" role="row">
-          <span class="review-mst-c-rank" role="columnheader">★</span>
-          <span class="review-mst-c-exp" role="columnheader">exp</span>
-          <span class="review-mst-c-idea" role="columnheader">idea</span>
-          <span class="review-mst-c-exptext" role="columnheader">what it tried</span>
           <span class="review-mst-c-val" role="columnheader">{fmtMetricName(metric)}</span>
           <span class="review-mst-c-delta" role="columnheader">Δ</span>
+          <span class="review-mst-c-exp" role="columnheader">exp</span>
           <span class="review-mst-c-when" role="columnheader">when</span>
         </div>
         {ordered.map((r, i) => {
-          const recNo = rows.length - i; // 1 = first record, N = latest
           const isLatest = i === 0;
-          const idea = ideas[r.exp.idea_id];
-          const ideaText = idea?.description?.split("\n")[0] ?? "";
-          const expText = (r.exp.description ?? "").split("\n")[0] || ideaText;
           return (
             <Tooltip key={r.exp.id} content={expTip(r.exp, ideas, metric, true)}>
               <div
@@ -1941,18 +2060,13 @@ function MilestonesTable({ experiments, metric, lower, ideas }: {
                 onMouseLeave={() => { if (highlightedIdea.value === r.exp.idea_id) highlightedIdea.value = null; }}
                 onClick={() => navigateToIdea(r.exp.idea_id, r.exp.label ?? String(r.exp.id))}
               >
-                <span class="review-mst-c-rank" role="cell">
-                  <span class="review-mst-star">★</span>{recNo}
-                </span>
-                <code class="review-mst-c-exp" role="cell">exp/{r.exp.label ?? r.exp.id}</code>
-                <span class="review-mst-c-idea" role="cell">#{r.exp.idea_id}</span>
-                <span class="review-mst-c-exptext" role="cell">{expText || "—"}</span>
                 <span class="review-mst-c-val" role="cell">{fmtV(r.val)}</span>
                 <span class="review-mst-c-delta" role="cell">
                   {r.delta == null
                     ? <span class="review-mst-first">first</span>
                     : <>{lower ? "−" : "+"}{fmtV(r.delta)}</>}
                 </span>
+                <code class="review-mst-c-exp" role="cell">exp/{r.exp.label ?? r.exp.id}</code>
                 <span class="review-mst-c-when" role="cell">{whenAgo(r.exp.finished_at || r.exp.created_at)}</span>
               </div>
             </Tooltip>
@@ -2033,6 +2147,9 @@ function IdeaPortfolio({ active, concluded, abandoned, untested }: {
 const REVIEW_FILTER_COLORS: Record<string, string> = {
   idea: "var(--accent)",
   tag: "var(--purple)",
+  // both spellings map to the experiment color (green): "exp/" prefix chips
+  // use "exp", applied pills + "90/" numeric results use "experiment".
+  exp: "var(--green)",
   experiment: "var(--green)",
   text: "var(--text-muted)",
 };
@@ -2111,10 +2228,13 @@ function ReviewSearchFilter({ experiments, ideas }: {
       return out;
     }
 
+    // Accept both "exp" (slash prefix) and "experiment" spellings.
     const wantIdeas = !category || category === "idea";
     const wantTags = !category || category === "tag";
-    const wantExps = !category || category === "experiment";
-    const cap = category ? Infinity : 8; // no per-category cap when scoped
+    const wantExps = !category || category === "exp" || category === "experiment";
+    // category-scoped: return ALL matches (everything when query empty), with a
+    // sane upper bound; mixed (no category): the small 8-per-category preview.
+    const cap = category ? 50 : 8;
 
     // ideas — by #id and description
     if (wantIdeas) {
@@ -2216,6 +2336,48 @@ function ReviewMetricSelect({ experiments }: { experiments: import("./lib/types"
 }
 
 function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
+  // Balanced columns for the KPI cluster: one row when wide; when it must wrap,
+  // split into balanced rows (6 → 3+3, not the greedy 5+1 that auto-fit gives).
+  // Computed from the live width + rendered cell count — reads the DOM (not
+  // component vars), so it sits safely above the early-returns below.
+  const kpiRef = useRef<HTMLDivElement>(null);
+  const [kpiCols, setKpiCols] = useState(0);
+  useEffect(() => {
+    const el = kpiRef.current;
+    if (!el) return;
+    const compute = () => {
+      const w = el.clientWidth;
+      const n = el.children.length;
+      if (!w || !n) return;
+      const maxFit = Math.max(1, Math.floor(w / 150));    // ~150px min per KPI (incl. gap)
+      const cols = Math.ceil(n / Math.ceil(n / maxFit));  // fewest columns that keep the row count → balanced
+      setKpiCols((c) => (c === cols ? c : cols));
+    };
+    compute();
+    const ro = new ResizeObserver(compute);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }); // no deps: re-runs each render (catches cell-count changes); RO catches width
+
+  // (#97) Total queue capacity = Σ resources' max parallel jobs (from GET /queue,
+  // the same source QueueView uses). Polled here so the timeline's queued group
+  // can show free-slot outlines. null until loaded / when no resources exist.
+  const [queueCapacity, setQueueCapacity] = useState<number | null>(null);
+  useEffect(() => {
+    let dead = false;
+    const load = () => getQueue()
+      .then((snap) => {
+        if (dead) return;
+        const cap = (snap.resources ?? []).reduce(
+          (sum, r) => sum + (r.utilization?.max_parallel_jobs ?? r.max_parallel_jobs ?? 0), 0);
+        setQueueCapacity(cap > 0 ? cap : null);
+      })
+      .catch(() => { /* keep last known */ });
+    load();
+    const t = window.setInterval(load, 15000);
+    return () => { dead = true; window.clearInterval(t); };
+  }, []);
+
   const data = backlogData.value;
   const experiments = allExperiments.value;
   const ideas = allIdeas.value;
@@ -2348,6 +2510,42 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
   const ideasAbandoned = ideaList.filter((i) => i.status === "abandoned").length;
   const ideasActive    = ideaList.length - ideasConcluded - ideasAbandoned;
 
+  // (#94) per-section AND per-mode heights. Mode = open(detail) / closed(summary),
+  // tracked by reviewOpenSections. Summary = # rows; detail = panel px.
+  const openSecs = reviewOpenSections.value;
+  const runsOpen = openSecs["review-runs"] ?? false;
+  const ideasOpen = openSecs["review-ideas"] ?? false;
+  const runsRows = sectionHeight("review-runs", "summary");
+  const runsPx = sectionHeight("review-runs", "detail");
+  const ideasRows = sectionHeight("review-ideas", "summary");
+  const ideasPx = sectionHeight("review-ideas", "detail");
+  // Summary-mode row caps shouldn't exceed the data that actually exists — else
+  // the "taller" button keeps growing past the last row with no visible effect.
+  const summaryDataMax: Record<string, number> = {
+    "review-runs": milestoneIdsSet.size,
+    "review-ideas": new Set(
+      experiments.filter((e) => typeof e.metrics?.[metric] === "number").map((e) => e.idea_id),
+    ).size,
+  };
+  // a steppers element for a section, bound to its CURRENT mode's value
+  const sectionSteppers = (id: string, open: boolean, what: string) => {
+    const mode = open ? "detail" : "summary";
+    const cfg = SECTION_HEIGHTS[id][mode];
+    // in summary mode, clamp the upper bound to the available rows
+    const dataMax = summaryDataMax[id];
+    const max = mode === "summary" && dataMax != null
+      ? Math.max(cfg.min, Math.min(cfg.max, dataMax))
+      : cfg.max;
+    const value = Math.min(sectionHeight(id, mode), max);
+    return (
+      <HeightSteppers
+        value={value} min={cfg.min} max={max} step={cfg.step}
+        what={open ? "panel height" : `${what} rows`}
+        onChange={(v) => setSectionHeight(id, mode, v)}
+      />
+    );
+  };
+
   return (
     <div class="review-page">
       {/* ── Top row (#45): metric selector (left) + search/filter (right),
@@ -2371,7 +2569,11 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
           state. Color is reserved for status + the single purple "best". */}
 
       {/* ── KPI cluster — confident mono Stats on a hairline grid ──────── */}
-      <div class="review-kpis ui-hairline-grid">
+      <div
+        class="review-kpis ui-hairline-grid"
+        ref={kpiRef}
+        style={kpiCols > 0 ? { gridTemplateColumns: `repeat(${kpiCols}, minmax(0, 1fr))` } : undefined}
+      >
         <div class="review-kpi">
           <span class="ui-stat-label">best {fmtMetricName(metric)}</span>
           <span class="review-kpi-row">
@@ -2450,11 +2652,17 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
       </div>
 
       {/* ── Experiment grid — glanceable per-experiment status tiles ───── */}
-      <ExperimentGrid experiments={experiments} milestoneIds={milestoneIdsSet} ideas={ideas} metric={metric} />
+      <ExperimentGrid experiments={experiments} milestoneIds={milestoneIdsSet} ideas={ideas} metric={metric} queueCapacity={queueCapacity} />
 
-      {/* ── Chart caption (metric selector moved up to the top row, #45) ── */}
+      {/* ── Chart caption + height steppers (#92/#94, metric selector lives up top) ── */}
       <div class="review-chart-head">
         <span class="ui-eyebrow">progress over experiments · {fmtMetricName(metric)}</span>
+        <span class="review-chart-steppers">
+          <HeightSteppers
+            value={reviewChartHeight.value} min={220} max={760} step={60} what="chart height"
+            onChange={(v) => { reviewChartHeight.value = v; requestAnimationFrame(() => window.dispatchEvent(new Event("resize"))); }}
+          />
+        </span>
       </div>
 
       {/* ── Chart — collapses to compact empty state when no metric selected ── */}
@@ -2463,7 +2671,9 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
           done.some(e => typeof e.metrics?.[selectedMetric.value] === "number");
         return (
           <div class="review-chart-wrap" id="review-progress"
-            style={!hasChartData ? { height: "136px", minHeight: "136px" } : undefined}>
+            style={hasChartData
+              ? { height: `${reviewChartHeight.value}px` }
+              : { height: "136px", minHeight: "136px" }}>
             <MetricsChart hideClone />
             <a class="review-chart-skip" href="#review-runs" onClick={(e) => {
               e.preventDefault();
@@ -2489,10 +2699,12 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
             scoreTrend && velocityPerDay ? `trend ${scoreTrend}` : null,
             isStagnant ? "⚠ stagnant" : null,
           ].filter(Boolean).join(" · ")}
+          headerControls={sectionSteppers("review-runs", runsOpen, "milestone")}
+          panelHeight={runsPx}
           preview={
             <div class="emr-preview emr-preview--runs">
               {/* Centerpiece (#11): the milestones table — every record-setting run. */}
-              <MilestonesTable experiments={experiments} metric={metric} lower={lower} ideas={ideas} />
+              <MilestonesTable experiments={experiments} metric={metric} lower={lower} ideas={ideas} maxRows={runsRows} />
 
               {/* Supporting minis: each self-explanatory with caption + axis labels. */}
               <div class="review-mini-col">
@@ -2609,6 +2821,8 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
             else if (underExplored > 0 && hasLoadedExps) parts.push(`${underExplored} under-explored`);
             return parts.join(" · ");
           })()}
+          headerControls={sectionSteppers("review-ideas", ideasOpen, "idea")}
+          panelHeight={ideasPx}
           preview={
             <div class="emr-preview emr-preview--ideas">
               {/* Unified layout (#47): primary table on the left, a fixed
@@ -2619,6 +2833,7 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
                 ideas={ideas}
                 metric={metric}
                 lower={lower}
+                maxRows={ideasRows}
               />
               <div class="review-mini-col">
                 {/* Redesigned (#7): labeled segmented portfolio bar + legend. */}
@@ -2754,6 +2969,8 @@ function ReviewDisclosure({
   children,
   autoOpen,
   accent,
+  headerControls,
+  panelHeight,
 }: {
   id: string;
   title: string;
@@ -2763,13 +2980,24 @@ function ReviewDisclosure({
   children: preact.ComponentChildren;
   autoOpen?: boolean;
   accent?: "live" | "warn";
+  /** controls placed left of the summary/detail switch (e.g. height steppers) */
+  headerControls?: preact.ComponentChildren;
+  /** detail-mode panel pixel height (#94) */
+  panelHeight?: number;
 }) {
   // Use a ref so we can imperatively open/close without re-rendering.
   // Persist (#49): initial open state comes from reviewOpenSections[id]
   // (falling back to autoOpen), and toggles are written back so summary/detail
   // choices survive reloads.
   const ref = (el: HTMLDetailsElement | null) => {
-    if (!el) return;
+    // Bind EXACTLY ONCE per element. This callback's identity changes every
+    // render, so Preact re-invokes it on every render; without this guard we'd
+    // attach a new `toggle` listener each time. After a few stepper clicks
+    // (which re-render via reviewSectionHeights) that's N listeners, and one
+    // mode switch then fires all N — each writes reviewOpenSections → re-render
+    // → more listeners → a write storm that freezes the UI.
+    if (!el || (el as any)._rdToggleBound) return;
+    (el as any)._rdToggleBound = true;
     const persisted = reviewOpenSections.value[id];
     if (persisted !== undefined) el.open = persisted;
     else if (autoOpen !== undefined) el.open = autoOpen;
@@ -2777,7 +3005,7 @@ function ReviewDisclosure({
       // Dispatch resize when details opens so inner canvas-based components re-render
       if (el.open) window.dispatchEvent(new Event("resize"));
       reviewOpenSections.value = { ...reviewOpenSections.value, [id]: el.open };
-    }, { once: false });
+    });
   };
   return (
     <details ref={ref} class={`review-disclosure review-section${accent ? ` review-disclosure--${accent}` : ""}`} id={id}>
@@ -2792,6 +3020,9 @@ function ReviewDisclosure({
             <h2>{title}</h2>
           </div>
           <p class="review-disclosure-counts">{action}</p>
+          {/* height steppers (#94) sit left of the switch; their clicks don't
+              toggle the disclosure (handlers stopPropagation) */}
+          {headerControls}
           {/* summary ⇄ detail switch — .ui-toggle language, the disclosure control */}
           <span class="review-disclosure-switch" role="presentation">
             <span class="rds-opt rds-opt--summary">summary</span>
@@ -2808,7 +3039,9 @@ function ReviewDisclosure({
           </div>
         )}
       </summary>
-      {children}
+      <div class="review-disclosure-body" style={panelHeight != null ? { height: `${panelHeight}px` } : undefined}>
+        {children}
+      </div>
     </details>
   );
 }
