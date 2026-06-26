@@ -2017,10 +2017,10 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
                       {" "}→ {scoreStr}
                     </span>
                   )}
-                  {lastIdeaDesc && (
+                  {(lastIdeaDesc || lastFinishedExp?.idea_id) && (
                     <span style={{ color: "var(--text-faint)", fontSize: "var(--text-xs)" }}
-                      title={lastIdea?.description?.split("\n")[0]}>
-                      {" · "}{lastIdeaDesc}…
+                      title={lastIdea?.description?.split("\n")[0] ?? `idea #${lastFinishedExp?.idea_id}`}>
+                      {" · "}{lastIdeaDesc ? `${lastIdeaDesc}…` : `idea #${lastFinishedExp!.idea_id}`}
                     </span>
                   )}
                 </span>
@@ -2215,8 +2215,58 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
         </div>
       )}
 
+      {/* ── Campaign stats strip — always visible compact summary ─────────── */}
+      {finished > 5 && (
+        <div class="review-campaign-snapshot">
+          {bestVal != null && typeof bestVal === "number" && (
+            <span class="rcs-item rcs-item--best" title={`Best ${fmtMetricName(metric)} achieved`}>
+              <span class="rcs-label">best</span>
+              <span class="rcs-value">{bestVal.toFixed(bestVal >= 100 ? 0 : bestVal >= 1 ? 2 : 3)}</span>
+            </span>
+          )}
+          {successRate !== null && (
+            <span class="rcs-item" title="% experiments that scored above zero">
+              <span class="rcs-label">scored</span>
+              <span class="rcs-value" style={{ color: successRate < 15 ? "var(--yellow)" : "var(--text)" }}>{successRate}%</span>
+            </span>
+          )}
+          <span class="rcs-item" title="Total experiments run">
+            <span class="rcs-label">exp</span>
+            <span class="rcs-value">{finished}</span>
+          </span>
+          {milestonesCount > 0 && (
+            <span class="rcs-item" title={`${milestonesCount} new best scores; 1 per ${Math.round(finished/milestonesCount)} exp avg`}>
+              <span class="rcs-label">records</span>
+              <span class="rcs-value">{milestonesCount}★</span>
+            </span>
+          )}
+          {expsSinceBest != null && expsSinceBest > 0 && (
+            <span class="rcs-item" title={`Experiments since last new best`}>
+              <span class="rcs-label">since ★</span>
+              <span class="rcs-value" style={{ color: expsSinceBest > 80 ? "var(--red)" : expsSinceBest > 30 ? "var(--yellow)" : "var(--text)" }}>
+                {expsSinceBest}
+              </span>
+            </span>
+          )}
+          {cost != null && cost > 50 && (
+            <span class="rcs-item" title={`Total API cost · ${milestonesCount > 0 ? `$${(cost/milestonesCount).toFixed(0)}/record` : ""}`}>
+              <span class="rcs-label">cost</span>
+              <span class="rcs-value">${cost.toFixed(0)}</span>
+            </span>
+          )}
+          {campaignAgeDays != null && campaignAgeDays > 0 && (
+            <span class="rcs-item" title={`Campaign started ${campaignAgeDays} days ago`}>
+              <span class="rcs-label">age</span>
+              <span class="rcs-value">{campaignAgeDays}d</span>
+            </span>
+          )}
+          {!selectedMetric.value && (
+            <span class="rcs-hint">↑ select a metric to view chart</span>
+          )}
+        </div>
+      )}
+
       {/* ── Chart — collapses to compact empty state when no metric selected ── */}
-      {/* Chart: compact when no metric has real data to show */}
       {(() => {
         const hasChartData = selectedMetric.value !== "" &&
           done.some(e => typeof e.metrics?.[selectedMetric.value] === "number");
