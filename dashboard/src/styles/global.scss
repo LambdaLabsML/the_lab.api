@@ -315,6 +315,23 @@ body {
   text-overflow: ellipsis;
 }
 
+.review-pivot-hint {
+  font-size: 9px;
+  color: var(--text-faint);
+  font-family: var(--font-mono, monospace);
+  padding: 3px 12px;
+  background: color-mix(in srgb, var(--red) 5%, transparent);
+  border-left: 2px solid var(--red);
+  margin: 0 0 2px;
+}
+
+.review-pivot-link {
+  color: var(--accent);
+  text-decoration: underline;
+  cursor: pointer;
+  &:hover { color: var(--text); }
+}
+
 .review-best-bar {
   display: flex;
   align-items: center;

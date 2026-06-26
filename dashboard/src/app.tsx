@@ -1849,6 +1849,24 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
         </div>
       )}
 
+      {/* ── Pivot hint — when deeply stagnant ────────────────────────── */}
+      {expsSinceBest != null && expsSinceBest > 80 && (
+        <div class="review-pivot-hint" title="Consider branching a new idea or exploring under-tried directions">
+          <span style={{ color: "var(--red)" }}>⚠</span>
+          {" "}stuck for {expsSinceBest} experiments
+          {" · "}
+          <a href="#review-ops" class="review-pivot-link"
+            onClick={(e) => { e.preventDefault(); document.getElementById("review-ops")?.scrollIntoView({ behavior: "smooth" }); }}>
+            open queue
+          </a>
+          {" · "}
+          <a href="#review-ideas" class="review-pivot-link"
+            onClick={(e) => { e.preventDefault(); document.getElementById("review-ideas")?.scrollIntoView({ behavior: "smooth" }); }}>
+            explore ideas
+          </a>
+        </div>
+      )}
+
       {/* ── Milestone timeline — shows when breakthroughs happened ─────── */}
       {bestExp && milestoneIdsSet.size > 1 && campaignAgeDays && campaignAgeDays > 0 && (
         <div class="review-milestone-timeline" title="Each ★ marks a new best score — shows when progress was made vs. now">
