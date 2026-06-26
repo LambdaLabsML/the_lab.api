@@ -1760,7 +1760,10 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
             {lower ? "↓ lower better" : "↑ higher better"}
           </span>
           <span class="review-best-meta">
-            {bestIdea ? bestIdea.description?.split("\n")[0].slice(0, 50) : `idea #${bestExp.idea_id}`}
+            {(() => {
+              const d = bestIdea ? (bestIdea.description?.split("\n")[0] ?? `idea #${bestExp.idea_id}`) : `idea #${bestExp.idea_id}`;
+              return d.length > 52 ? d.slice(0, 52).replace(/\s+\S*$/, "") + "…" : d;
+            })()}
             {" · "}<code>{bestExp.label ?? `exp/${bestExp.id}`}</code>
             {bestExp.finished_at && (
               <span class="review-best-age"> · {timeAgo(bestExp.finished_at)}</span>
@@ -1819,7 +1822,10 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
         <ReviewDisclosure
           id="review-ideas"
           title="Ideas"
-          action={`${activeIdeas} active · ${ideasConcluded} concluded${ideasAbandoned > 0 ? ` · ${ideasAbandoned} abandoned` : ""}`}
+          action={(() => {
+            const avgDepth = activeIdeas > 0 ? (finished / activeIdeas).toFixed(1) : null;
+            return `${activeIdeas} active · ${ideasConcluded} concluded${ideasAbandoned > 0 ? ` · ${ideasAbandoned} abandoned` : ""}`;
+          })()}
           preview={
             <div class="emr-preview">
               {/* Exploration ring + health bar row */}
@@ -1827,8 +1833,12 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
                 <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
                   <IdeaRing active={ideasActive} concluded={ideasConcluded} abandoned={ideasAbandoned} />
                   {ideasConcluded + ideasActive + ideasAbandoned > 0 && (
-                    <span style={{ fontSize: "8px", color: "var(--text-faint)", fontFamily: "var(--font-mono, monospace)", whiteSpace: "nowrap" }}>
+                    <span style={{ fontSize: "8px", color: "var(--text-faint)", fontFamily: "var(--font-mono, monospace)", whiteSpace: "nowrap", textAlign: "center" }}>
                       {Math.round((ideasConcluded / (ideasConcluded + ideasActive + ideasAbandoned)) * 100)}% done
+                      {(() => {
+                        const avgDepth = activeIdeas > 0 ? (finished / activeIdeas).toFixed(1) : null;
+                        return avgDepth ? <> · ~{avgDepth}/idea</> : null;
+                      })()}
                     </span>
                   )}
                 </div>
@@ -1918,6 +1928,17 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
           action={logs.length > 0
             ? `${logs.length} events · last: ${logs[0].title?.slice(0, 40) || logs[0].type}`
             : "no events yet"}
+          preview={logs.length > 0 ? (
+            <div style={{ display: "flex", gap: 3, alignItems: "center" }}>
+              {logs.slice(0, 6).map((e, i) => {
+                const c = e.type === "experiment_completed" ? "var(--green)"
+                  : e.type === "experiment_failed" ? "var(--red)"
+                  : e.type === "idea_created" ? "var(--accent)"
+                  : "var(--text-faint)";
+                return <span key={i} style={{ width: 6, height: 6, borderRadius: "50%", background: c, flexShrink: 0, opacity: 1 - i * 0.12 }} title={e.title || e.type} />;
+              })}
+            </div>
+          ) : undefined}
         >
           <div class="review-panel review-log-panel">
             <LogView />
