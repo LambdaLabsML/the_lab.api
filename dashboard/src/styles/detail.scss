@@ -69,7 +69,7 @@
 
 /* --- JSON viewer --- */
 .json-view { margin: var(--space-1) 0; font-size: var(--text-sm); line-height: 1.5; }
-.json-label { color: var(--text-muted); font-weight: 600; font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0; margin-right: var(--space-1); }
+.json-label { color: var(--text-muted); font-weight: 600; font-size: var(--text-xs); margin-right: var(--space-1); }
 .json-tree { font-family: var(--font-mono); }
 .json-key { color: var(--purple); }
 .json-colon { color: var(--text-faint); }
