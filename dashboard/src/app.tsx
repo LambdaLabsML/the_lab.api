@@ -1297,8 +1297,16 @@ function IdeaMiniLeaderboard({ experiments, ideas, metric, lower }: {
               <IdeaSparkline vals={history} lower={lower} />
               <span class="emr-val">{fmtV(r.best)}</span>
               {r.lastFinished && (() => {
-                const daysAgo = Math.floor((Date.now() - Date.parse(r.lastFinished)) / 86400000);
+                const hoursAgo = Math.floor((Date.now() - Date.parse(r.lastFinished)) / 3600000);
+                const daysAgo = Math.floor(hoursAgo / 24);
+                const isHot = hoursAgo < 24;  // ran in last 24h
                 const isStale = daysAgo > 7;
+                if (isHot) {
+                  return (
+                    <span class="sq-running" style={{ width: 5, height: 5, borderRadius: "50%", flexShrink: 0, display: "inline-block" }}
+                      title={`Last experiment: ${hoursAgo}h ago (active!)`} />
+                  );
+                }
                 return (
                   <span style={{ fontSize: "7px", color: isStale ? "var(--yellow)" : "var(--text-faint)", flexShrink: 0, fontFamily: "var(--font-mono)" }}
                     title={`Last experiment: ${daysAgo}d ago`}>
@@ -1819,7 +1827,7 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
             </span>
           )}
           <span class="review-status-sep" />
-          <code class="review-status-branch">{branch}</code>
+          <code class="review-status-branch" style={branch === "…" ? { opacity: 0.4 } : undefined}>{branch}</code>
           {cost != null && (
             <span class="review-status-item review-status-item--cost"
               title={milestonesCount > 0 ? `$${(cost / milestonesCount).toFixed(0)} per new record` : undefined}>
@@ -1853,6 +1861,17 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
       </div>
 
       {/* ── Experiment grid — glanceable status tiles ────────────────── */}
+      {/* ── Experiment quality bar — micro indicator above the grid ────── */}
+      {successRate !== null && finished > 10 && (
+        <div style={{ height: 2, background: "var(--border-soft)", borderRadius: 1, overflow: "hidden", marginBottom: -2 }}>
+          <div style={{
+            height: "100%",
+            width: `${successRate}%`,
+            background: successRate > 30 ? "var(--green)" : successRate > 10 ? "var(--yellow)" : "var(--red)",
+            opacity: 0.5,
+          }} title={`${successRate}% of experiments scored above zero`} />
+        </div>
+      )}
       <ExperimentGrid experiments={experiments} />
 
       {/* ── Campaign narrative — one-sentence plain-English state ──────── */}
