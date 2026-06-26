@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "preact/hooks";
-import { backlogData, totalAgentCost, totalAgentInputTokens, totalAgentOutputTokens, allIdeas } from "../state/signals";
-import { reverseTime, colorMode, colorTheme, fontFamily, fontSize, colorblindMode } from "../state/settings";
+import { backlogData, totalAgentCost, totalAgentInputTokens, totalAgentOutputTokens, allIdeas, allExperiments } from "../state/signals";
+import { reverseTime, colorMode, colorTheme, fontFamily, fontSize, colorblindMode, selectedMetric } from "../state/settings";
+import { isLowerBetter } from "../lib/colors";
 import { wsConnected, wsAuthFailed } from "../state/ws";
 // Font display data lives here — NOT imported from fonts.ts.
 // Importing fonts.ts created a topbar → fonts → lazy-chunk TDZ in Vite's
@@ -104,6 +105,23 @@ export function Topbar(props: LayoutActions) {
   const totalRunning = data?.total_running ?? 0;
   const totalPending = data?.total_pending ?? 0;
 
+  // Compute best score from experiments for topbar display
+  const bestScoreLabel = (() => {
+    const metric = selectedMetric.value;
+    if (!metric) return null;
+    const lower = isLowerBetter(metric);
+    const exps = allExperiments.value;
+    let best: number | null = null;
+    for (const e of exps) {
+      if (e._running) continue;
+      const v = e.metrics?.[metric];
+      if (typeof v !== "number") continue;
+      if (best === null || (lower ? v < best : v > best)) best = v;
+    }
+    if (best === null) return null;
+    return Math.abs(best) >= 100 ? best.toFixed(0) : Math.abs(best) >= 1 ? best.toFixed(2) : best.toFixed(3);
+  })();
+
   // Build the stats array once so it's shared between compact and full renders
   // Hide Pending when 0 — it's almost always 0 and wastes topbar space
   const stats = [
@@ -111,6 +129,7 @@ export function Topbar(props: LayoutActions) {
     { key: "running", label: "Running", value: data ? String(totalRunning) : "--" },
     ...(totalPending > 0 ? [{ key: "pending", label: "Pending", value: String(totalPending) }] : []),
     { key: "branch",  label: "Branch",  value: data ? data.current_branch : "--", title: branchTitle ?? undefined },
+    ...(bestScoreLabel ? [{ key: "best", label: "Best", value: `★ ${bestScoreLabel}` }] : []),
     { key: "cost",    label: "Cost",    value: cost != null ? `$${cost.toFixed(2)}` : "--" },
     { key: "tokens",  label: "Tokens",  value: tokLabel, title: tokTitle },
   ];
