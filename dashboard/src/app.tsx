@@ -2181,12 +2181,19 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
           id="review-ideas"
           title="Ideas"
           action={(() => {
-            // Count under-explored active ideas (< 5 experiments with metric data)
+            // Count under-explored and never-tested active ideas
+            const ideaExpCountsAll: Record<number, number> = {};
+            for (const e of experiments) { if (!e._running) ideaExpCountsAll[e.idea_id] = (ideaExpCountsAll[e.idea_id] || 0) + 1; }
             const ideaExpCounts: Record<number, number> = {};
             for (const e of done) { if (typeof e.metrics?.[metric] === "number") ideaExpCounts[e.idea_id] = (ideaExpCounts[e.idea_id] || 0) + 1; }
-            const underExplored = Object.values(ideas).filter(i => i.status !== "concluded" && i.status !== "abandoned" && (ideaExpCounts[i.id] ?? 0) < 5).length;
+            const activeList = Object.values(ideas).filter(i => i.status !== "concluded" && i.status !== "abandoned");
+            const neverTested = activeList.filter(i => (ideaExpCountsAll[i.id] ?? 0) === 0).length;
+            const underExplored = activeList.filter(i => (ideaExpCounts[i.id] ?? 0) < 5).length;
             const base = `${activeIdeas} active · ${ideasConcluded} concluded${ideasAbandoned > 0 ? ` · ${ideasAbandoned} abandoned` : ""}`;
-            return underExplored > 0 ? `${base} · ${underExplored} under-explored` : base;
+            const parts = [base];
+            if (neverTested > 0) parts.push(`${neverTested} untested`);
+            else if (underExplored > 0) parts.push(`${underExplored} under-explored`);
+            return parts.join(" · ");
           })()}
           preview={
             <div class="emr-preview">
