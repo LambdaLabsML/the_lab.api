@@ -1921,7 +1921,11 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
           </a>
           {" · "}
           <a href="#review-ideas" class="review-pivot-link"
-            onClick={(e) => { e.preventDefault(); document.getElementById("review-ideas")?.scrollIntoView({ behavior: "smooth" }); }}>
+            onClick={(e) => {
+              e.preventDefault();
+              const el = document.getElementById("review-ideas") as HTMLDetailsElement | null;
+              if (el) { el.open = true; el.scrollIntoView({ behavior: "smooth" }); }
+            }}>
             explore ideas
           </a>
         </div>
@@ -1991,8 +1995,18 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
           ].filter(Boolean).join(" · ")}
           preview={
             <div class="emr-preview">
-              {/* Score distribution histogram — how are scores spread? */}
-              <ScoreDistBar experiments={experiments} metric={metric} lower={lower} />
+              {/* Score distribution + success rate */}
+              <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                <ScoreDistBar experiments={experiments} metric={metric} lower={lower} />
+                {successRate !== null && (
+                  <div style={{ width: "90px", display: "flex", flexDirection: "column", gap: 1 }}>
+                    <div style={{ height: 3, background: "var(--border-soft)", borderRadius: 2, overflow: "hidden" }} title={`${successRate}% of experiments scored above zero`}>
+                      <div style={{ height: "100%", width: `${successRate}%`, background: successRate > 30 ? "var(--green)" : successRate > 10 ? "var(--yellow)" : "var(--red)", borderRadius: 2 }} />
+                    </div>
+                    <span style={{ fontSize: "7px", color: "var(--text-faint)", fontFamily: "var(--font-mono)" }}>{successRate}% scored</span>
+                  </div>
+                )}
+              </div>
               <ExpMiniResults
                 experiments={experiments}
                 metric={metric}
