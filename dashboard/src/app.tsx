@@ -2260,11 +2260,24 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
             </span>
           )}
           {expsSinceBest != null && expsSinceBest > 0 && (
-            <span class="rcs-item" title={`Experiments since last new best`}>
+            <span class="rcs-item" style={{ position: "relative" }}
+              title={expsSinceBest > 0 && milestonesCount > 0 ? `${expsSinceBest} experiments since last record · avg was ${Math.round(finished/milestonesCount)} per record` : `${expsSinceBest} experiments since last new best`}>
               <span class="rcs-label">since ★</span>
               <span class="rcs-value" style={{ color: expsSinceBest > 80 ? "var(--red)" : expsSinceBest > 30 ? "var(--yellow)" : "var(--text)" }}>
                 {expsSinceBest}
               </span>
+              {/* Mini bar showing how far past the avg we are */}
+              {milestonesCount > 0 && finished > 0 && (() => {
+                const avgPer = Math.round(finished / milestonesCount);
+                const overdueRatio = Math.min(expsSinceBest / avgPer, 3); // cap at 3× overdue
+                const barPct = Math.min(100, (expsSinceBest / (avgPer * 2)) * 100);
+                return (
+                  <div style={{ position: "absolute", bottom: 2, left: 6, right: 6, height: 2, background: "var(--border-soft)", borderRadius: 1 }}>
+                    <div style={{ width: `${Math.min(100, (avgPer / (avgPer * 2)) * 100)}%`, height: "100%", background: "var(--text-faint)", borderRadius: 1, opacity: 0.4 }} />
+                    <div style={{ position: "absolute", top: 0, left: 0, width: `${barPct}%`, height: "100%", background: overdueRatio > 1 ? "var(--red)" : overdueRatio > 0.5 ? "var(--yellow)" : "var(--green)", borderRadius: 1, opacity: 0.8 }} />
+                  </div>
+                );
+              })()}
             </span>
           )}
           {cost != null && cost > 50 && (
