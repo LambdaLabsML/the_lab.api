@@ -572,6 +572,15 @@ body {
   white-space: nowrap;
 }
 
+.emr-count {
+  font-size: 8px;
+  color: var(--text-faint);
+  font-family: var(--font-mono, monospace);
+  flex-shrink: 0;
+  white-space: nowrap;
+  &::after { content: "×"; opacity: 0.6; }
+}
+
 .emr-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
 
 @media (max-width: 800px) {

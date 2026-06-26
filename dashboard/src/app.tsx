@@ -1213,7 +1213,7 @@ function IdeaMiniLeaderboard({ experiments, ideas, metric, lower }: {
               <span class="emr-idea">#{r.ideaId}</span>
               <span style={{ fontSize: "7px", opacity: 0.7, flexShrink: 0, color: idea?.status === "active" ? "var(--green)" : idea?.status === "concluded" ? "var(--accent)" : "var(--red)" }}>●</span>
               <span class="emr-exp" style={{ color: "var(--text-muted)", maxWidth: 72, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</span>
-              <span style={{ fontSize: "8px", color: "var(--text-faint)", flexShrink: 0 }}>{r.count}×</span>
+              <span class="emr-count">{r.count}</span>
               <span class="emr-val">{fmtV(r.best)}</span>
               {i > 0 && ranked[0].best !== r.best && (
                 <span class="emr-gap">
