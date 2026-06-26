@@ -2370,7 +2370,12 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
             // Fall back to ring data when backlogData not loaded yet (shows 0 active from backlog)
             const displayActive = activeIdeas > 0 ? activeIdeas : ideasActive;
             const displayConcluded = ideasConcluded;
-            const base = `${displayActive} active · ${displayConcluded} concluded${ideasAbandoned > 0 ? ` · ${ideasAbandoned} abandoned` : ""}`;
+            // If both still 0 but we have experiment data, show loading indicator
+            const uniqueIdeaCount = displayActive === 0 && displayConcluded === 0 && experiments.length > 20
+              ? new Set(experiments.map(e => e.idea_id)).size : 0;
+            const base = uniqueIdeaCount > 0
+              ? `${uniqueIdeaCount} ideas (loading…)`
+              : `${displayActive} active · ${displayConcluded} concluded${ideasAbandoned > 0 ? ` · ${ideasAbandoned} abandoned` : ""}`;
             const parts = [base];
             if (neverTested > 0) parts.push(`${neverTested} untested`);
             else if (underExplored > 0 && hasLoadedExps) parts.push(`${underExplored} under-explored`);
@@ -2396,8 +2401,14 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
                     <span style={{ fontSize: "8px", color: "var(--text-faint)", fontFamily: "var(--font-mono, monospace)", whiteSpace: "nowrap", textAlign: "center" }}>
                       {Math.round((ideasConcluded / (ideasConcluded + ideasActive + ideasAbandoned)) * 100)}% done
                       {(() => {
-                        const avgDepth = activeIdeas > 0 ? (finished / activeIdeas).toFixed(1) : null;
-                        return avgDepth ? <> · ~{avgDepth}/idea</> : null;
+                        // Coverage: % of active ideas that have been tried at least once
+                        if (!hasLoadedExps || activeIdeas === 0) return null;
+                        const ideaExpCountsRing: Record<number, number> = {};
+                        for (const e of experiments) { if (!e._running) ideaExpCountsRing[e.idea_id] = (ideaExpCountsRing[e.idea_id] || 0) + 1; }
+                        const activeList2 = Object.values(ideas).filter(i => i.status !== "concluded" && i.status !== "abandoned");
+                        const triedCount = activeList2.filter(i => (ideaExpCountsRing[i.id] ?? 0) > 0).length;
+                        const coveragePct = Math.round((triedCount / activeList2.length) * 100);
+                        return coveragePct < 100 ? <> · {coveragePct}% tried</> : null;
                       })()}
                     </span>
                   )}
