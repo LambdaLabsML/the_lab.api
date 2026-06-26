@@ -63,8 +63,8 @@ export const selectedMetric = useSetting("selectedMetric", "");
 export const colorMode = useSetting("colorMode", "status+improve");
 
 /** When true, the chart shows only experiments that improved on the
- *  previous global best. */
-export const improvementsOnly = useSetting("improvementsOnly", false);
+ *  previous global best. Defaults to true for cleaner step-function view. */
+export const improvementsOnly = useSetting("improvementsOnly", true);
 
 /** Active tag filter chips (empty = no filtering). */
 export const activeTagFilters = useSetting<string[]>("tagFilters", []);

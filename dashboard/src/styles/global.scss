@@ -1178,7 +1178,9 @@ body {
     display: none; /* hide description on mobile, keep label+value */
   }
   .review-narrative {
-    display: none; /* narrative is in the best-bar area on mobile */
+    padding: 2px 10px;
+    font-size: 8px;
+    white-space: nowrap;
   }
 
   /* Chart wrap — shorter on mobile to show disclosures above fold */
