@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { getSandboxState, updateSandboxState } from "../state/api";
 import type { SandboxCapabilities, SandboxFileBind, SandboxObservedEntry, SandboxState } from "../lib/types";
 import { formatTime } from "../lib/format";
+import { EmptyState } from "../components/ui";
 
 
 function joinRules(lines: string[]): string {
@@ -184,8 +185,8 @@ export function SandboxView() {
   return (
     <div id="sandbox-container">
       <div class="sandbox-header">
-        <div>
-          <h2>Sandbox</h2>
+        <div class="sandbox-header-title">
+          <span class="ui-eyebrow">Sandbox</span>
           <p>
             Default-deny outbound network policy plus explicit file
             bind-mounts for experiment runs and `the-lab-agent` launches.
@@ -194,7 +195,7 @@ export function SandboxView() {
         </div>
         <div class="sandbox-status-wrap">
           <form class="sandbox-toggle-form" onSubmit={handleToggle}>
-            <span class={`sandbox-status-badge ${enabled ? "sandbox-status-on" : "sandbox-status-off"}`}>
+            <span class={`ui-badge ${enabled ? "ui-badge--good" : "ui-badge--neutral"} sandbox-status-badge`}>
               {enabled ? "On" : "Off"}
             </span>
             <input
@@ -208,7 +209,7 @@ export function SandboxView() {
             />
             <button
               type="submit"
-              class={`sandbox-toggle-btn ${enabled ? "sandbox-toggle-btn-off" : "sandbox-toggle-btn-on"}`}
+              class={`ui-btn ui-btn--outlined sandbox-toggle-btn ${enabled ? "sandbox-toggle-btn-off" : "sandbox-toggle-btn-on"}`}
               disabled={toggleBusy || (!enabled && !togglePw)}
             >
               {toggleBusy ? "…" : enabled ? "Disable" : "Enable"}
@@ -227,10 +228,10 @@ export function SandboxView() {
       )}
       {error && <div class="sandbox-error">{error}</div>}
 
-      <h3 class="sandbox-section-title">Network Access</h3>
+      <h3 class="sandbox-section-title ui-eyebrow">Network Access</h3>
       <div class="sandbox-grid">
         <section class="sandbox-panel">
-          <div class="sandbox-panel-title">Allowlist</div>
+          <div class="sandbox-panel-title ui-eyebrow">Allowlist</div>
           <div class="sandbox-panel-subtitle">One host or glob per line. Example: `*.example.com`</div>
           <textarea
             value={allowText}
@@ -240,7 +241,7 @@ export function SandboxView() {
         </section>
 
         <section class="sandbox-panel">
-          <div class="sandbox-panel-title">Denylist</div>
+          <div class="sandbox-panel-title ui-eyebrow">Denylist</div>
           <div class="sandbox-panel-subtitle">Deny rules win over built-in and user allow rules.</div>
           <textarea
             value={denyText}
@@ -251,17 +252,17 @@ export function SandboxView() {
       </div>
 
       <section class="sandbox-panel builtin-panel">
-        <div class="sandbox-panel-title">Built-in Installer Allowlist</div>
+        <div class="sandbox-panel-title ui-eyebrow">Built-in Installer Allowlist</div>
         <div class="sandbox-panel-subtitle">Derived from pip/uv configuration and apt sources.</div>
         <div class="sandbox-chip-list">
           {builtinAllow.map((rule) => (
-            <span class="sandbox-chip" key={rule}>{rule}</span>
+            <span class="ui-badge ui-badge--concluded sandbox-chip" key={rule}>{rule}</span>
           ))}
           {builtinAllow.length === 0 && <span class="sandbox-empty">No installer hosts detected.</span>}
         </div>
       </section>
 
-      <h3 class="sandbox-section-title">File Access</h3>
+      <h3 class="sandbox-section-title ui-eyebrow">File Access</h3>
       <p class="sandbox-section-note">
         Absolute paths, one per line. Anything not listed (and not in the
         built-in system set) is <em>invisible</em> to the sandboxed process.
@@ -271,7 +272,7 @@ export function SandboxView() {
       </p>
       <div class="sandbox-grid">
         <section class="sandbox-panel">
-          <div class="sandbox-panel-title">Read-Write Paths</div>
+          <div class="sandbox-panel-title ui-eyebrow">Read-Write Paths</div>
           <div class="sandbox-panel-subtitle">Bind-mounted read-write.</div>
           <textarea
             value={rwText}
@@ -281,7 +282,7 @@ export function SandboxView() {
         </section>
 
         <section class="sandbox-panel">
-          <div class="sandbox-panel-title">Read-Only Paths</div>
+          <div class="sandbox-panel-title ui-eyebrow">Read-Only Paths</div>
           <div class="sandbox-panel-subtitle">Bind-mounted read-only.</div>
           <textarea
             value={roText}
@@ -292,20 +293,20 @@ export function SandboxView() {
       </div>
 
       <section class="sandbox-panel builtin-panel">
-        <div class="sandbox-panel-title">Built-in File Binds</div>
+        <div class="sandbox-panel-title ui-eyebrow">Built-in File Binds</div>
         <div class="sandbox-panel-subtitle">
           Always applied: system libraries (read-only), repo &amp; agent credentials (read-write).
         </div>
         <div class="sandbox-chip-list">
           {builtinRw.map((path) => (
-            <span class="sandbox-chip sandbox-chip-rw" key={`rw-${path}`} title="read-write">{path}</span>
+            <span class="ui-badge ui-badge--good sandbox-chip sandbox-chip-rw" key={`rw-${path}`} title="read-write">{path}</span>
           ))}
           {builtinRo.map((path) => (
-            <span class="sandbox-chip sandbox-chip-ro" key={`ro-${path}`} title="read-only">{path}</span>
+            <span class="ui-badge ui-badge--neutral sandbox-chip sandbox-chip-ro" key={`ro-${path}`} title="read-only">{path}</span>
           ))}
           {builtinFileBinds.map((bind) => (
             <span
-              class={`sandbox-chip sandbox-chip-${bind.mode}`}
+              class={`ui-badge ${bind.mode === "ro" ? "ui-badge--neutral" : "ui-badge--good"} sandbox-chip sandbox-chip-${bind.mode}`}
               key={`sys-${bind.path}`}
               title={bind.mode === "ro" ? "system (read-only)" : "system (read-write)"}
             >
@@ -319,7 +320,7 @@ export function SandboxView() {
       </section>
 
       <section class="sandbox-panel observed-panel">
-        <div class="sandbox-panel-title">Observed Network Accesses</div>
+        <div class="sandbox-panel-title ui-eyebrow">Observed Network Accesses</div>
         <div class="sandbox-panel-subtitle">Gray list of requested destinations, aggregated from the live access log.</div>
         <div class="sandbox-table-wrap">
           <table class="sandbox-table">
@@ -357,7 +358,9 @@ export function SandboxView() {
               ))}
               {observed.length === 0 && (
                 <tr>
-                  <td colSpan={7} class="sandbox-empty-cell">No accesses logged yet.</td>
+                  <td colSpan={7} class="sandbox-empty-cell">
+                    <EmptyState icon="⌗" title="No accesses logged yet" />
+                  </td>
                 </tr>
               )}
             </tbody>

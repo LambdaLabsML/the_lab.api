@@ -23,8 +23,9 @@ import { buildChartData, collectChartKeys } from "../../lib/chart-data";
 import { isLowerBetter } from "../../lib/colors";
 import { fmtMetricName } from "../../lib/format";
 import { MiniMetricsChart } from "./mini-metrics-chart";
-import { navigateToIdea } from "../../lib/navigate";
+import { chartNavClick } from "../../lib/hooks";
 import { getCssVar, getCssVarPx } from "../../lib/css-vars";
+import { Toggle, IconButton } from "../ui";
 import type { ChartDataResult } from "../../lib/chart-data";
 
 export function MetricsChart({ instanceId, initialMetric }: { instanceId?: string; initialMetric?: string } = {}) {
@@ -193,8 +194,9 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
           chartRef.current.data.datasets.splice(1);
         }
         const yBounds = clip ? computeYBounds(chartData.values) : {};
+        const fontXs  = getCssVarPx("--text-xs");
         const yScale  = chartRef.current.options.scales!.y!;
-        yScale.title  = { display: !minified, text: fmtMetricName(metric), color: getCssVar("--text-faint"), font: { size: 8 } };
+        yScale.title  = { display: !minified, text: fmtMetricName(metric), color: getCssVar("--text-faint"), font: { size: fontXs } };
         yScale.min    = yBounds.min ?? (isLowerBetter(metric) ? undefined : 0);
         yScale.max    = yBounds.max;
         (yScale as any).type = logScale ? "logarithmic" : "linear";
@@ -303,29 +305,29 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
             if (best === null || (lower ? v < best : v > best)) { best = v; mCount++; }
           }
           return (
-            <button type="button" class={`chart-toggle-btn${impOnly ? " active" : ""}`} onClick={() => { improvementsOnly.value = !impOnly; }} title={impOnly ? `Step-function: ${mCount} new bests (click for all experiments)` : "Show step-function — only new bests"}>
+            <Toggle active={impOnly} onClick={() => { improvementsOnly.value = !impOnly; }} title={impOnly ? `Step-function: ${mCount} new bests (click for all experiments)` : "Show step-function — only new bests"}>
               ▲ {impOnly ? `Step${mCount > 0 ? ` (${mCount})` : ""}` : "All"}
-            </button>
+            </Toggle>
           );
         })()}
-        <button type="button" class={`chart-toggle-btn${mean ? " active" : ""}`} onClick={() => { ideaMean.value = !mean; }} title="One point per idea (mean)">
+        <Toggle active={mean} onClick={() => { ideaMean.value = !mean; }} title="One point per idea (mean)">
           μ Idea Mean
-        </button>
-        <button type="button" class={`chart-toggle-btn${clip ? " active" : ""}`} onClick={() => { clipOutliers.value = !clip; }} title="Hide outliers">
+        </Toggle>
+        <Toggle active={clip} onClick={() => { clipOutliers.value = !clip; }} title="Hide outliers">
           ⤢ Outliers
-        </button>
-        <button type="button" class={`chart-toggle-btn${logScale ? " active" : ""}`} onClick={() => { setLogScale(!logScale); }} title="Logarithmic Y axis">
+        </Toggle>
+        <Toggle active={logScale} onClick={() => { setLogScale(!logScale); }} title="Logarithmic Y axis">
           Log Y
-        </button>
-        <button type="button" class={`chart-toggle-btn${bestLine ? " active" : ""}`} onClick={() => { showBestLine.value = !bestLine; }} title="Show current-best step line">
+        </Toggle>
+        <Toggle active={bestLine} onClick={() => { showBestLine.value = !bestLine; }} title="Show current-best step line">
           ⌇ Current Best
-        </button>
-        <button type="button" class={`chart-toggle-btn${minified ? " active" : ""}`} onClick={() => { chartMinified.value = !minified; }} title="Minified: small dots, global overview">
+        </Toggle>
+        <Toggle active={minified} onClick={() => { chartMinified.value = !minified; }} title="Minified: small dots, global overview">
           ⊡ Mini
-        </button>
-        <button type="button" class="chart-toggle-btn" onClick={() => { if (cloneChartPanel) cloneChartPanel("metrics", metric); }} title="Clone this chart as a new tab">
+        </Toggle>
+        <IconButton onClick={() => { if (cloneChartPanel) cloneChartPanel("metrics", metric); }} title="Clone this chart as a new tab">
           + Clone
-        </button>
+        </IconButton>
         {/* Current best badge — quickly visible without needing to hover the chart */}
         {bestLine && (() => {
           const vals = allExperiments.value.filter(e => !e._running && typeof e.metrics?.[metric] === "number").map(e => e.metrics![metric] as number);
@@ -354,7 +356,7 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
           <div class="chart-dist-hint">
             {vals.length} exp
             {impOnly && (
-              <span style={{ color: "var(--text-faint)", fontSize: "8px" }}>
+              <span style={{ color: "var(--text-faint)", fontSize: "var(--text-xs)" }}>
                 {" "}({pctAtPeak} milestones)
               </span>
             )}
@@ -367,7 +369,7 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
             {impOnly && allExperiments.value.some(e => e._running) && (
               <>
                 <span style={{ color: "var(--text-faint)" }}> · </span>
-                <span style={{ color: "var(--yellow)", fontSize: "8px" }}>△ running</span>
+                <span style={{ color: "var(--yellow)", fontSize: "var(--text-xs)" }}>△ running</span>
               </>
             )}
           </div>
@@ -378,9 +380,9 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
         <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 10, padding: "8px 16px" }}>
           {allKeys.length === 0 ? (
             <>
-              <span style={{ fontSize: "20px", opacity: 0.3, fontFamily: "var(--font-mono)" }}>◈</span>
+              <span style={{ fontSize: "var(--text-xl)", opacity: 0.3, fontFamily: "var(--font-mono)" }}>◈</span>
               <span style={{ fontSize: "var(--text-sm)", color: "var(--text-faint)", fontFamily: "var(--font-mono)" }}>loading experiments…</span>
-              <span style={{ fontSize: "10px", opacity: 0.4, fontFamily: "var(--font-mono)", color: "var(--text-faint)" }}>waiting for data</span>
+              <span style={{ fontSize: "var(--text-xs)", opacity: 0.4, fontFamily: "var(--font-mono)", color: "var(--text-faint)" }}>waiting for data</span>
             </>
           ) : (
             <>
@@ -396,19 +398,19 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
                     const fmt = best === null ? "--" : Math.abs(best) >= 100 ? best.toFixed(0) : Math.abs(best) >= 1 ? best.toFixed(2) : best.toFixed(3);
                     return (
                       <div key={k}
-                        style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 3, padding: "8px 14px", border: "1px solid var(--border-soft)", borderRadius: "var(--radius-md)", background: "var(--bg-elev)", cursor: "pointer", minWidth: 80 }}
+                        class="chart-metric-card"
                         onClick={(ev) => { ev.stopPropagation(); const sel = innerRef.current?.querySelector("select") as HTMLSelectElement | null; if (sel) { sel.value = k; sel.dispatchEvent(new Event("change", {bubbles: true})); } }}
                         title={`Click to chart ${k.replace(/_/g, " ")}`}
                       >
-                        <span style={{ fontSize: "9px", color: "var(--text-faint)", fontFamily: "var(--font-mono)", textTransform: "uppercase", letterSpacing: "0.05em" }}>{k.replace(/_/g, " ")}</span>
-                        <span style={{ fontSize: "18px", fontWeight: 700, fontFamily: "var(--font-mono)", color: best !== null ? "var(--purple)" : "var(--text-faint)", lineHeight: 1 }}>{fmt}</span>
-                        {best !== null && <span style={{ fontSize: "8px", color: "var(--text-faint)" }}>★ best · {vals.length} exp</span>}
+                        <span style={{ fontSize: "var(--text-xs)", color: "var(--text-faint)", fontFamily: "var(--font-mono)", textTransform: "uppercase", letterSpacing: "0.05em" }}>{k.replace(/_/g, " ")}</span>
+                        <span style={{ fontSize: "calc(var(--text-xl) * 1.4)", fontWeight: 700, fontFamily: "var(--font-mono)", color: best !== null ? "var(--purple)" : "var(--text-faint)", lineHeight: 1 }}>{fmt}</span>
+                        {best !== null && <span style={{ fontSize: "var(--text-xs)", color: "var(--text-faint)" }}>★ best · {vals.length} exp</span>}
                       </div>
                     );
                   })
                 }
               </div>
-              <span style={{ fontSize: "9px", opacity: 0.45, fontFamily: "var(--font-mono)", color: "var(--text-faint)" }}>click any card or use the metric selector above ↑</span>
+              <span style={{ fontSize: "var(--text-sm)", opacity: 0.45, fontFamily: "var(--font-mono)", color: "var(--text-faint)" }}>click any card or use the metric selector above ↑</span>
             </>
           )}
         </div>
@@ -499,6 +501,11 @@ function createChart(
 ): Chart {
   const { minified = false, bestLineData = null } = opts;
 
+  // Font sizes read from the --text-* tokens so charts honour the font-size
+  // setting (no hardcoded px). See dashboard/DESIGN.md.
+  const fontXs = getCssVarPx("--text-xs");
+  const fontSm = getCssVarPx("--text-sm");
+
   // Mark experiments that set a new global best — shown with a gold ring
   const lower = isLowerBetter(metricKey);
   const milestoneSet = new Set<number>();
@@ -577,14 +584,13 @@ function createChart(
       maintainAspectRatio: false,
       animation: { duration: 400 },
       onClick(_evt, elements) {
-        if (elements.length > 0) {
-          const idx = elements[0].index;
-          const ds = this.data.datasets[0] as any;
-          if (ds?._expData?.[idx]) {
-            const d = ds._expData[idx];
-            navigateToIdea(d.idea_id, d.label || d.id);
-          }
-        }
+        // Route through the shared chart-nav helper. The points dataset stores
+        // raw experiments in _expData (best-line/median datasets don't), so map
+        // each clicked element back to its experiment and drop the line datasets.
+        const mapped = elements
+          .map((el) => ({ raw: (this.data.datasets[el.datasetIndex] as any)?._expData?.[el.index], index: el.index }))
+          .filter((m) => m.raw?.idea_id != null);
+        chartNavClick(mapped);
       },
       scales: {
         x: {
@@ -592,12 +598,13 @@ function createChart(
           ticks: {
             display: !minified,
             color: getCssVar("--text-faint"),
-            font: { size: 8, family: "var(--font-mono, SF Mono, monospace)" },
+            font: { size: fontXs, family: getCssVar("--font-mono") || "monospace" },
             autoSkip: true,
             autoSkipPadding: 6,
             maxRotation: 45,
           },
           grid: { display: !minified, color: getCssVar("--border-soft") },
+          border: { color: getCssVar("--border-soft") },
         },
         y: {
           ...(clipOutliers.value ? computeYBounds(chartData.values) : {}),
@@ -605,10 +612,11 @@ function createChart(
             display: !minified,
             text: fmtMetricName(metricKey),
             color: getCssVar("--text-faint"),
-            font: { size: 8 },
+            font: { size: fontXs },
           },
-          ticks: { color: getCssVar("--text-faint"), font: { size: 8 } },
+          ticks: { color: getCssVar("--text-faint"), font: { size: fontXs } },
           grid: { color: getCssVar("--border-soft") },
+          border: { color: getCssVar("--border-soft") },
           // Ensure chart uses at least 70% of the y range so dots aren't all crammed at bottom
           suggestedMin: isLowerBetter(metricKey) ? undefined : 0,
         },
@@ -633,12 +641,12 @@ function createChart(
           borderWidth: 1,
           maxWidth: 350,
           titleFont: {
-            family: "SF Mono, Fira Code, Consolas, monospace",
-            size: 11,
+            family: getCssVar("--font-mono") || "monospace",
+            size: fontSm,
           },
           bodyFont: {
-            family: "SF Mono, Fira Code, Consolas, monospace",
-            size: 11,
+            family: getCssVar("--font-mono") || "monospace",
+            size: fontSm,
           },
           callbacks: {
             title(items) {

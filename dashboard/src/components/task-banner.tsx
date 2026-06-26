@@ -60,16 +60,22 @@ export function TaskBanner() {
   if (editing) {
     return (
       <div id="task-banner" class="editing">
-        <span class="task-label">Task:</span>
-        <input
-          class="task-input"
-          value={draft}
-          onInput={(e) => setDraft((e.target as HTMLInputElement).value)}
-          onBlur={save}
-          onKeyDown={handleKeyDown}
-          placeholder="Set a task for agents (e.g. 'Focus on improving 066 with cascade')"
-          autoFocus
-        />
+        <div class="pane-bar">
+          <span class="ui-eyebrow pane-bar-title">Task</span>
+          <span class="pane-bar-count">editing</span>
+        </div>
+        <div class="task-edit-row">
+          <span class="task-label">Task</span>
+          <input
+            class="task-input"
+            value={draft}
+            onInput={(e) => setDraft((e.target as HTMLInputElement).value)}
+            onBlur={save}
+            onKeyDown={handleKeyDown}
+            placeholder="Set a task for agents (e.g. 'Focus on improving 066 with cascade')"
+            autoFocus
+          />
+        </div>
       </div>
     );
   }
@@ -77,13 +83,17 @@ export function TaskBanner() {
   return (
     <div id="task-banner">
       <div class="pane-bar">
-        <h2 class="pane-bar-title">Task</h2>
+        <span class="ui-eyebrow pane-bar-title">Task</span>
         <span class="pane-bar-count">{task?.updated_at ? `updated ${new Date(task.updated_at).toLocaleDateString()}` : "not set"}</span>
         <div class="pane-bar-actions">
-          <button class="agents-btn" onClick={startEdit} title="Edit current task">Edit</button>
+          <button class="ui-btn" onClick={startEdit} title="Edit current task">Edit</button>
         </div>
       </div>
-      <div style={{ padding: "10px 14px", fontSize: "var(--text-sm)", color: task?.text ? "var(--text)" : "var(--text-faint)", lineHeight: 1.5, whiteSpace: "pre-wrap", cursor: "pointer" }} onClick={startEdit} title="Click to edit">
+      <div
+        class={`task-body task-body--${task?.text ? "set" : "empty"}`}
+        onClick={startEdit}
+        title="Click to edit"
+      >
         {task?.text || "No task set — click Edit to add one"}
       </div>
     </div>

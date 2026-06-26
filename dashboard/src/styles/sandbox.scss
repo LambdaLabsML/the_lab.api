@@ -10,17 +10,14 @@
 
 .sandbox-header {
   display: flex;
-  align-items: baseline;
+  align-items: flex-start;
   gap: var(--space-3);
-  padding-bottom: var(--space-2);
-  border-bottom: 1px solid var(--border-soft);
+  padding-bottom: 7px;
+  box-shadow: inset 0 -1px var(--border-soft); /* hairline header rule */
 }
 
-.sandbox-header h2 {
-  margin: 0;
-  font-size: var(--text-sm);
-  font-weight: 600;
-  color: var(--text);
+.sandbox-header-title {
+  min-width: 0;
 }
 
 .sandbox-header p {
@@ -32,29 +29,13 @@
   flex-direction: column;
   align-items: flex-end;
   gap: 10px;
-}
-
-.sandbox-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  font-size: var(--text-base);
-  color: var(--text);
-}
-
-.sandbox-status-note {
-  max-width: 300px;
-  font-size: var(--text-sm);
-  line-height: 1.4;
-  color: var(--text-muted);
-  text-align: right;
+  margin-left: auto;
 }
 
 .sandbox-save {
-  font-size: var(--text-sm);
-
-  letter-spacing: 0;
-  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-faint);
 }
 
 .sandbox-save-saving { color: var(--yellow); }
@@ -65,17 +46,17 @@
 .sandbox-error {
   border-radius: var(--radius-sm);
   padding: var(--space-3) 14px;
-  border: 1px solid var(--border);
+  font-size: var(--text-sm);
 }
 
 .sandbox-warning {
   background: var(--badge-yellow-bg);
-  color: var(--yellow);
+  color: var(--badge-yellow-fg);
 }
 
 .sandbox-error {
   background: var(--badge-red-bg);
-  color: var(--red);
+  color: var(--badge-red-fg);
 }
 
 .sandbox-grid {
@@ -84,9 +65,10 @@
   gap: var(--space-4);
 }
 
+/* Panel — quiet --bg surface with a single hairline, not a 1px box */
 .sandbox-panel {
-  border: 1px solid var(--border);
   background: var(--bg);
+  box-shadow: inset 0 0 0 1px var(--border-soft);
   border-radius: var(--radius-sm);
   padding: var(--space-4);
   display: flex;
@@ -94,16 +76,8 @@
   gap: 10px;
 }
 
-.sandbox-panel-title {
-  font-size: var(--text-sm);
-  font-weight: 600;
-
-  letter-spacing: 0;
-  color: var(--text-muted);
-}
-
 .sandbox-panel-subtitle {
-  font-size: var(--text-base);
+  font-size: var(--text-sm);
   color: var(--text-muted);
   line-height: 1.4;
 }
@@ -112,13 +86,19 @@
   width: 100%;
   min-height: 210px;
   resize: vertical;
-  border: 1px solid var(--border);
+  border: none;
   background: var(--bg-elev);
+  box-shadow: inset 0 0 0 1px var(--border-soft);
   color: var(--text);
   border-radius: var(--radius-sm);
   padding: var(--space-3);
-  font: inherit;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
   line-height: 1.45;
+}
+.sandbox-panel textarea:focus {
+  outline: none;
+  box-shadow: inset 0 0 0 1px var(--accent);
 }
 
 .sandbox-chip-list {
@@ -127,44 +107,22 @@
   gap: var(--space-2);
 }
 
-.sandbox-chip {
-  display: inline-block;
-  padding: 6px 10px;
-  border-radius: 999px;
-  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
-  background: var(--badge-blue-bg);
-  color: var(--accent);
-  font-size: var(--text-base);
+/* Chips are .ui-badge (tone classes carry color); keep mono + comfortable pad. */
+.ui-badge.sandbox-chip {
   font-family: var(--font-mono);
-}
-
-.sandbox-chip-rw {
-  border-color: var(--badge-green-bg);
-  background: var(--badge-green-bg);
-  color: var(--green);
-}
-
-.sandbox-chip-ro {
-  border-color: var(--text-faint);
-  background: var(--bg-elev);
-  color: var(--text-muted);
+  padding: 3px 8px;
 }
 
 .sandbox-section-title {
   margin: var(--space-2) 0 -4px;
-  font-size: var(--text-sm);
-  font-weight: 600;
-
-  letter-spacing: 0;
-  color: var(--text-muted);
-  border-bottom: 1px solid var(--border-soft);
   padding-bottom: 6px;
+  box-shadow: inset 0 -1px var(--border-soft);
 }
 
 .sandbox-section-note {
   margin: 0 0 -8px;
   color: var(--text-muted);
-  font-size: var(--text-base);
+  font-size: var(--text-sm);
   line-height: 1.45;
 }
 
@@ -172,109 +130,102 @@
   overflow: auto;
 }
 
+/* Data table — sticky --bg-elev header, eyebrow column labels, hairline rows */
 .sandbox-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: var(--text-base);
-}
-
-.sandbox-table th,
-.sandbox-table td {
-  text-align: left;
-  padding: 10px var(--space-2);
-  border-top: 1px solid var(--border-soft);
-  vertical-align: top;
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
 }
 
 .sandbox-table th {
-  color: var(--text-muted);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-elev);
+  text-align: left;
+  padding: 6px var(--space-2);
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
   font-weight: 600;
-  border-top: none;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  box-shadow: inset 0 -1px var(--border-soft);
 }
+
+.sandbox-table td {
+  text-align: left;
+  padding: 6px var(--space-2);
+  border-bottom: 1px solid var(--border-soft);
+  color: var(--text);
+  vertical-align: top;
+}
+.sandbox-table tr:hover td { background: var(--bg-hi); }
 
 .sandbox-host {
   font-weight: 600;
   color: var(--text);
+  font-family: var(--font-mono);
 }
 
 .sandbox-meta {
-  color: var(--text-muted);
-  font-size: var(--text-sm);
+  color: var(--text-faint);
+  font-size: var(--text-xs);
   margin-top: 3px;
 }
 
-.sandbox-empty,
+.sandbox-empty {
+  color: var(--text-faint);
+  font-size: var(--text-sm);
+}
 .sandbox-empty-cell {
-  color: var(--text-muted);
+  padding: 0 !important;
 }
 
 .sandbox-toggle-form {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
-.sandbox-status-badge {
-  font-size: var(--text-sm);
-  font-weight: 600;
-  letter-spacing: 0;
-  padding: 3px 8px;
-  border-radius: 4px;
-  white-space: nowrap;
-}
-
-.sandbox-status-on {
-  background: var(--badge-green-bg, rgba(74, 222, 128, 0.12));
-  color: var(--green, #4ade80);
-}
-
-.sandbox-status-off {
-  background: var(--badge-muted-bg, rgba(128, 128, 128, 0.12));
-  color: var(--text-muted);
+/* Status pill is a .ui-badge; reserve width so On/Off don't shift layout. */
+.ui-badge.sandbox-status-badge {
+  min-width: 34px;
+  justify-content: center;
 }
 
 .sandbox-toggle-pw {
   width: 160px;
-  padding: 5px 8px;
-  background: var(--bg-input, var(--bg));
-  border: 1px solid var(--border);
-  border-radius: 4px;
+  padding: 4px var(--space-2);
+  background: var(--bg);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
   color: var(--text);
-  font-size: var(--text-sm);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
 
-  &::placeholder { color: var(--text-muted); opacity: 0.7; }
-  &:focus { outline: none; border-color: var(--accent, #4a9eff); }
+  &::placeholder { color: var(--text-faint); }
+  &:focus { outline: none; border-color: var(--accent); }
   &:disabled { opacity: 0.5; }
 }
 
-.sandbox-toggle-btn {
-  padding: 5px 12px;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: var(--text-sm);
-  font-weight: 500;
-  white-space: nowrap;
-
-  &:disabled { opacity: 0.4; cursor: default; }
+/* Toggle button layers a state flavor on top of .ui-btn */
+.ui-btn.sandbox-toggle-btn:disabled { opacity: 0.4; cursor: default; }
+.ui-btn.sandbox-toggle-btn-on {
+  color: var(--green);
+  border-color: color-mix(in srgb, var(--green) 45%, transparent);
+  &:hover:not(:disabled) { color: var(--green); background: var(--badge-green-bg); }
 }
-
-.sandbox-toggle-btn-on {
-  background: var(--green, #4ade80);
-  color: #000;
-  &:hover:not(:disabled) { opacity: 0.85; }
-}
-
-.sandbox-toggle-btn-off {
-  background: var(--badge-muted-bg, rgba(128, 128, 128, 0.15));
+.ui-btn.sandbox-toggle-btn-off {
   color: var(--text-muted);
-  border: 1px solid var(--border);
-  &:hover:not(:disabled) { border-color: var(--text-muted); color: var(--text); }
+  &:hover:not(:disabled) { color: var(--text); }
 }
 
 .sandbox-toggle-error {
-  font-size: var(--text-sm);
-  color: var(--red, #f87171);
+  font-size: var(--text-xs);
+  color: var(--red);
   text-align: right;
 }
 
@@ -286,10 +237,7 @@
 
   .sandbox-status-wrap {
     align-items: flex-start;
-  }
-
-  .sandbox-status-note {
-    text-align: left;
+    margin-left: 0;
   }
 
   .sandbox-grid {

@@ -1,0 +1,260 @@
+@use './tokens' as *;
+
+/* settings-panel.scss — the standalone Settings panel for the left secondary
+   nav. Sized for a ~260px sidebar: eyebrow-headed sections, hairline
+   separators (no boxes), ghost buttons, accent ring for the active thing.
+   Flat fills only — no gradients. See dashboard/DESIGN.md. */
+
+.settings-panel {
+  height: 100%;
+}
+
+/* Scrollable vertical stack of sections, separated by hairlines. */
+.settings-panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-3);
+}
+
+.settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+/* A labelled control group inside a section. */
+.settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.settings-field-label {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  line-height: 1.2;
+}
+
+/* ── Color theme — swatch grid ─────────────────────────────────────────────
+   Each swatch: its 3 colors + name. Active = a soft accent ring (an offset
+   box-shadow), never a heavy border. */
+
+.settings-theme-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+
+.settings-swatch {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+  padding: var(--space-2);
+  background: var(--bg);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  transition: background var(--transition-fast), box-shadow var(--transition-fast);
+  min-width: 0;
+
+  &:hover { background: var(--bg-hi); }
+
+  &.is-active {
+    background: color-mix(in srgb, var(--accent) 8%, transparent);
+    /* accent ring — not a heavy border */
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent);
+  }
+}
+
+.settings-swatch-colors {
+  display: flex;
+  gap: 4px;
+}
+.settings-swatch-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: var(--radius-sm);
+  /* faint outline so a swatch matching the surface (e.g. white on light) stays visible */
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 12%, transparent);
+}
+.settings-swatch-name {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.settings-swatch.is-active .settings-swatch-name { color: var(--accent); }
+
+/* ── Font family — preview buttons in their own face ───────────────────── */
+
+.settings-font-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.settings-font-btn {
+  display: flex;
+  align-items: center;
+  padding: 5px var(--space-2);
+  background: transparent;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: 1.3;
+  cursor: pointer;
+  text-align: left;
+  transition: color var(--transition-fast), background var(--transition-fast),
+    border-color var(--transition-fast);
+
+  &:hover { color: var(--text); border-color: var(--text-muted); }
+
+  &.is-active {
+    color: var(--accent);
+    border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+  }
+}
+
+/* ── Size — xs … xxl segmented row ─────────────────────────────────────── */
+
+.settings-size-row {
+  display: flex;
+  gap: 4px;
+}
+.settings-size-btn {
+  flex: 1 1 0%;
+  padding: 4px 0;
+  background: transparent;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.2;
+  cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  transition: color var(--transition-fast), background var(--transition-fast),
+    border-color var(--transition-fast);
+
+  &:hover { color: var(--text); border-color: var(--text-muted); }
+
+  &.is-active {
+    color: var(--accent);
+    border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+  }
+}
+
+/* ── Display toggles — label left, state chip right ────────────────────── */
+
+.settings-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.settings-toggle-text {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-toggle-row .ui-toggle {
+  flex-shrink: 0;
+}
+
+/* ── Workspace ─────────────────────────────────────────────────────────── */
+
+/* Full-width ghost button (Reset). */
+.settings-block-btn {
+  width: 100%;
+}
+
+.settings-save-row {
+  display: flex;
+  gap: var(--space-2);
+}
+.settings-input {
+  flex: 1 1 0%;
+  min-width: 0;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  padding: 4px var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+
+  &::placeholder { color: var(--text-faint); }
+  &:focus { outline: none; border-color: var(--accent); }
+}
+.settings-save-btn { flex-shrink: 0; }
+
+.settings-saved-list {
+  display: flex;
+  flex-direction: column;
+  /* gap:1px on --border → hairline row separators, no per-row border */
+  gap: 1px;
+  background: var(--border-soft);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.settings-saved-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  background: var(--bg-elev);
+  padding: 0 0 0 var(--space-2);
+  transition: background var(--transition-fast);
+
+  &:hover { background: var(--bg-hi); }
+}
+.settings-saved-name {
+  flex: 1 1 0%;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  padding: 5px 0;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+
+  &:hover { color: var(--accent); }
+}
+.settings-saved-delete {
+  flex-shrink: 0;
+  padding: 4px 7px;
+  font-size: var(--text-sm);
+  line-height: 1;
+  color: var(--text-faint);
+
+  &:hover { color: var(--red); background: var(--bg-hi); }
+}
+
+.settings-empty {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+  line-height: 1.4;
+}

@@ -1,7 +1,8 @@
 import { useRef, useEffect, useMemo, useState } from "preact/hooks";
 import { Chart } from "chart.js/auto";
 import { allExperiments, allIdeas, currentLayout, highlightedIdea, cloneChartPanel, updatePanelTitle } from "../../state/signals";
-import { navigateToIdea } from "../../lib/navigate";
+import { chartNavClick } from "../../lib/hooks";
+import { IconButton } from "../ui";
 import {
   selectedMetric,
   selectedIdea,
@@ -225,8 +226,9 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric }: { i
     }));
     const bgColors = filtered.map((e) => (e._running ? "transparent" : getColor(e)));
     const borderColors = filtered.map((e) => getColor(e));
-    const radii = filtered.map((e) => (e._running ? 8 : 6));
-    const borderWidths = filtered.map((e) => (e._running ? 2.5 : 1));
+    // Small, crisp dots — consistent with the mini exemplar's quiet language.
+    const radii = filtered.map((e) => (e._running ? 4 : 3.2));
+    const borderWidths = filtered.map((e) => (e._running ? 1.5 : 1));
     const styles = filtered.map((e) => (e._running ? "triangle" : "circle") as string);
 
     const xBounds = clip ? computeBounds(scatterData.map((d) => d.x)) : {};
@@ -243,8 +245,8 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric }: { i
       ds._expData = filtered;
       const xScale = chartRef.current.options.scales!.x!;
       const yScale = chartRef.current.options.scales!.y!;
-      xScale.title = { display: true, text: fmtMetricName(xMetric), color: getCssVar("--text-muted"), font: { size: getCssVarPx("--text-xs") } };
-      yScale.title = { display: true, text: fmtMetricName(yMetric), color: getCssVar("--text-muted"), font: { size: getCssVarPx("--text-xs") } };
+      xScale.title = { display: true, text: fmtMetricName(xMetric), color: getCssVar("--text-faint"), font: { size: getCssVarPx("--text-xs") } };
+      yScale.title = { display: true, text: fmtMetricName(yMetric), color: getCssVar("--text-faint"), font: { size: getCssVarPx("--text-xs") } };
       xScale.min = xBounds.min;
       xScale.max = xBounds.max;
       yScale.min = yBounds.min;
@@ -266,7 +268,7 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric }: { i
             pointRadius: radii,
             pointBorderWidth: borderWidths,
             pointStyle: styles,
-            pointHoverRadius: 10,
+            pointHoverRadius: 7,
             _expData: filtered,
           } as any,
         ],
@@ -276,27 +278,28 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric }: { i
         maintainAspectRatio: false,
         animation: { duration: 400 },
         onClick(_evt, elements) {
-          if (elements.length > 0) {
-            const idx = elements[0].index;
-            const ds = this.data.datasets[0] as any;
-            if (ds?._expData?.[idx]) {
-              const d = ds._expData[idx];
-              navigateToIdea(d.idea_id, d.label || d.id);
-            }
-          }
+          // Route through the shared chart-nav helper. Scatter points are
+          // {x,y} objects; the matching experiments live in _expData, so map
+          // each clicked element back to its experiment before delegating.
+          const mapped = elements
+            .map((el) => ({ raw: (this.data.datasets[el.datasetIndex] as any)?._expData?.[el.index], index: el.index }))
+            .filter((m) => m.raw?.idea_id != null);
+          chartNavClick(mapped);
         },
         scales: {
           x: {
             ...xBounds,
-            title: { display: true, text: fmtMetricName(xMetric), color: getCssVar("--text-muted"), font: { size: getCssVarPx("--text-xs") } },
-            ticks: { color: getCssVar("--text-muted"), font: { size: getCssVarPx("--text-xs") } },
+            title: { display: true, text: fmtMetricName(xMetric), color: getCssVar("--text-faint"), font: { size: getCssVarPx("--text-xs") } },
+            ticks: { color: getCssVar("--text-faint"), font: { size: getCssVarPx("--text-xs") } },
             grid: { color: getCssVar("--border-soft") },
+            border: { color: getCssVar("--border-soft") },
           },
           y: {
             ...yBounds,
-            title: { display: true, text: fmtMetricName(yMetric), color: getCssVar("--text-muted"), font: { size: getCssVarPx("--text-xs") } },
-            ticks: { color: getCssVar("--text-muted"), font: { size: getCssVarPx("--text-xs") } },
+            title: { display: true, text: fmtMetricName(yMetric), color: getCssVar("--text-faint"), font: { size: getCssVarPx("--text-xs") } },
+            ticks: { color: getCssVar("--text-faint"), font: { size: getCssVarPx("--text-xs") } },
             grid: { color: getCssVar("--border-soft") },
+            border: { color: getCssVar("--border-soft") },
           },
         },
         onHover(_evt, elements) {
@@ -319,12 +322,12 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric }: { i
             borderWidth: 1,
             maxWidth: 350,
             titleFont: {
-              family: "SF Mono, Fira Code, Consolas, monospace",
-              size: 11,
+              family: getCssVar("--font-mono") || "monospace",
+              size: getCssVarPx("--text-sm"),
             },
             bodyFont: {
-              family: "SF Mono, Fira Code, Consolas, monospace",
-              size: 11,
+              family: getCssVar("--font-mono") || "monospace",
+              size: getCssVarPx("--text-sm"),
             },
             callbacks: {
               title(items) {
@@ -366,11 +369,11 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric }: { i
     if (!expData) return;
 
     if (highlighted !== null) {
-      ds.pointRadius = expData.map((e: any) => (e.idea_id === highlighted ? 12 : 4));
-      ds.pointBorderWidth = expData.map((e: any) => (e.idea_id === highlighted ? 3 : 1));
+      ds.pointRadius = expData.map((e: any) => (e.idea_id === highlighted ? 6 : 2.4));
+      ds.pointBorderWidth = expData.map((e: any) => (e.idea_id === highlighted ? 1.5 : 1));
     } else {
-      ds.pointRadius = expData.map((e: any) => (e._running ? 8 : 6));
-      ds.pointBorderWidth = expData.map((e: any) => (e._running ? 2.5 : 1));
+      ds.pointRadius = expData.map((e: any) => (e._running ? 4 : 3.2));
+      ds.pointBorderWidth = expData.map((e: any) => (e._running ? 1.5 : 1));
     }
     chart.update("none");
   }, [highlighted]);
@@ -393,9 +396,9 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric }: { i
           {grouped.meta.length > 0 && <optgroup label="Meta">{grouped.meta.map((k) => <option key={k} value={k}>{fmtMetricName(k)}</option>)}</optgroup>}
         </select>
         {" "}
-        <button type="button" class="chart-toggle-btn" onClick={() => { if (cloneChartPanel) cloneChartPanel("scatter", undefined, xMetric, yMetric); }} title="Clone this chart as a new tab">
+        <IconButton onClick={() => { if (cloneChartPanel) cloneChartPanel("scatter", undefined, xMetric, yMetric); }} title="Clone this chart as a new tab">
           + Clone
-        </button>
+        </IconButton>
       </div>
       <div class="chart-col-canvas">
         <canvas ref={canvasRef} />

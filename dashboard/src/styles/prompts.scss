@@ -12,96 +12,94 @@
   flex: 0 0 220px;
   display: flex;
   flex-direction: column;
-  border-right: 1px solid var(--border-soft);
+  /* elevation step + single hairline, not a box */
   background: var(--bg);
+  box-shadow: inset -1px 0 var(--border-soft);
   min-height: 0;
 }
 
 .prompts-sidebar-header {
-  padding: 14px var(--space-4) var(--space-2);
-  border-bottom: 1px solid var(--border-soft);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 7px 12px 6px;
+  box-shadow: inset 0 -1px var(--border-soft); /* hairline header rule */
 }
-
-.prompts-sidebar-header h3 {
-  margin: 0;
-  font-size: var(--text-sm);
-  letter-spacing: 0;
-  color: var(--text-muted);
-  font-weight: 600;
+.prompts-sidebar-count {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-faint);
 }
 
 .prompts-role-list {
   flex: 1 1 auto;
   overflow: auto;
-  padding: 6px 0;
+  padding: var(--space-1) 0;
 }
 
+/* Flat selector row: hairline separators, hover → --bg-hi, selected → accent tint */
 .prompts-role-row {
   display: block;
   width: 100%;
   text-align: left;
-  padding: 10px 14px;
+  padding: var(--space-2) 12px;
   background: transparent;
   border: none;
-  border-left: 3px solid transparent;
+  box-shadow: inset 0 -1px var(--border-soft);
   color: var(--text);
   cursor: pointer;
   font: inherit;
+  transition: background var(--transition-fast);
 }
 
 .prompts-role-row:hover {
-  background: var(--bg-elev);
+  background: var(--bg-hi);
 }
 
 .prompts-role-row.selected {
-  background: var(--bg-elev);
-  border-left-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  box-shadow: inset 2px 0 var(--accent), inset 0 -1px var(--border-soft);
 }
 
 .prompts-role-name {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1);
   font-size: var(--text-base);
   font-weight: 600;
   color: var(--text);
   font-family: var(--font-mono);
 }
-
-.prompts-role-badge {
-  font-size: var(--text-xs);
-  letter-spacing: 0;
-  padding: 1px 6px;
-  border-radius: 999px;
-  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
-  background: var(--badge-blue-bg);
+.prompts-role-row.selected .prompts-role-name {
   color: var(--accent);
-  font-family: inherit;
-  font-weight: 500;
 }
 
 .prompts-role-meta {
-  font-size: var(--text-sm);
-  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-faint);
   margin-top: 3px;
 }
 
 .prompts-empty {
   padding: var(--space-4);
-  color: var(--text-muted);
-  font-size: var(--text-base);
+  color: var(--text-faint);
+  font-size: var(--text-sm);
 }
 
 .prompts-add-btn {
   margin: var(--space-2);
   padding: var(--space-2) 10px;
   background: none;
-  border: 1px dashed var(--border);
+  border: 1px dashed var(--border-soft);
   border-radius: var(--radius-sm);
-  color: var(--text-muted);
+  color: var(--text-faint);
   font: inherit;
-  font-size: var(--text-base);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
   cursor: pointer;
+  transition: color var(--transition-fast), border-color var(--transition-fast);
 }
 
 .prompts-add-btn:hover {
@@ -111,10 +109,6 @@
 
 .prompts-add-form {
   margin: var(--space-2);
-  padding: 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-elev);
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
@@ -123,11 +117,11 @@
 .prompts-add-form input {
   padding: 6px var(--space-2);
   background: var(--bg);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-soft);
   border-radius: var(--radius-sm);
   color: var(--text);
   font: inherit;
-  font-size: var(--text-base);
+  font-size: var(--text-sm);
   font-family: var(--font-mono);
 }
 
@@ -138,13 +132,13 @@
 
 .prompts-add-error {
   color: var(--red);
-  font-size: var(--text-sm);
+  font-size: var(--text-xs);
   line-height: 1.35;
 }
 
 .prompts-add-actions {
   display: flex;
-  gap: 6px;
+  gap: var(--space-1);
 }
 
 .prompts-main {
@@ -153,31 +147,18 @@
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  padding: var(--space-4);
-  gap: var(--space-3);
 }
 
 .prompts-placeholder {
   margin: auto;
-  color: var(--text-muted);
-  font-size: var(--text-base);
 }
 
 .prompts-main-header {
   display: flex;
-  align-items: baseline;
-  gap: var(--space-4);
-  padding-bottom: var(--space-2);
-  border-bottom: 1px solid var(--border-soft);
-}
-
-.prompts-main-title h2 {
-  margin: 0;
-  font-size: var(--text-sm);
-  letter-spacing: 0;
-  color: var(--text-muted);
-  font-family: var(--font-mono);
-  font-weight: 600;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 7px 12px 6px;
+  box-shadow: inset 0 -1px var(--border-soft); /* hairline header rule */
 }
 
 .prompts-main-subtitle {
@@ -186,104 +167,33 @@
 
 .prompts-main-actions {
   display: flex;
-  gap: var(--space-2);
+  gap: var(--space-1);
   flex-wrap: wrap;
   justify-content: flex-end;
   margin-left: auto;
 }
 
-.prompts-btn {
-  padding: 2px var(--space-2);
-  background: none;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--text-muted);
-  font: inherit;
-  font-size: var(--text-xs);
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.prompts-btn:hover:not(:disabled) {
-  background: var(--bg-hi);
-  border-color: var(--text-muted);
-}
-
-.prompts-btn:disabled {
-  opacity: 0.55;
-  cursor: default;
-}
-
-.prompts-btn.primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--bg);
-}
-
-.prompts-btn.primary:hover:not(:disabled) {
-  background: var(--accent-dim);
-  border-color: var(--accent-dim);
-}
-
-.prompts-btn.primary:not(.dirty):not(:disabled) {
-  background: none;
-  border-color: var(--border);
-  color: var(--text-muted);
-}
-
-.prompts-btn.danger {
-  color: var(--red);
-  border-color: var(--badge-red-bg);
-}
-
-.prompts-btn.danger:hover {
-  background: var(--badge-red-bg);
-}
-
-.prompts-btn-primary {
-  padding: 2px var(--space-2);
-  background: var(--accent);
-  border: 1px solid var(--accent);
-  border-radius: var(--radius-sm);
-  color: var(--bg);
-  font: inherit;
-  font-size: var(--text-xs);
-  cursor: pointer;
-}
-
-.prompts-btn.copied {
-  background: var(--badge-green-bg);
-  border-color: var(--green);
+/* copy / save / delete state flavors layered on top of .ui-btn */
+.ui-btn.is-copied {
   color: var(--green);
+  border-color: color-mix(in srgb, var(--green) 45%, transparent);
 }
-
-.prompts-save-saving {
-  background: var(--yellow) !important;
-  border-color: var(--yellow) !important;
-  color: var(--bg) !important;
+.ui-btn.prompts-btn-danger {
+  color: var(--red);
+  &:hover { color: var(--red); background: var(--badge-red-bg); }
 }
-
-.prompts-save-saved {
-  background: var(--badge-green-bg) !important;
-  border-color: var(--green) !important;
-  color: var(--green) !important;
-}
-
-.prompts-save-error {
-  background: var(--badge-red-bg) !important;
-  border-color: var(--red) !important;
-  color: var(--red) !important;
-}
+.ui-btn.prompts-save-saving { color: var(--yellow); }
+.ui-btn.prompts-save-saved  { color: var(--green); border-color: color-mix(in srgb, var(--green) 45%, transparent); }
+.ui-btn.prompts-save-error  { color: var(--red); border-color: color-mix(in srgb, var(--red) 45%, transparent); }
 
 .prompts-textarea {
   flex: 1 1 auto;
   min-height: 200px;
   resize: none;
-  border: 1px solid var(--border);
+  border: none;
   background: var(--bg);
   color: var(--text);
-  border-radius: var(--radius-sm);
-  padding: 14px;
+  padding: var(--space-4);
   font-family: var(--font-mono);
   font-size: var(--text-base);
   line-height: 1.5;
@@ -291,31 +201,27 @@
 
 .prompts-textarea:focus {
   outline: none;
-  border-color: var(--accent);
 }
 
 .prompts-footer {
-  font-size: var(--text-sm);
-  color: var(--text-muted);
+  padding: var(--space-2) var(--space-4);
+  box-shadow: inset 0 1px var(--border-soft); /* hairline above footer */
+  font-size: var(--text-xs);
+  color: var(--text-faint);
 }
 
 .prompts-footer code {
   font-family: var(--font-mono);
-  padding: 3px 6px;
-  background: var(--bg-elev);
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-sm);
   color: var(--accent);
 }
 
 .prompts-error {
   margin: var(--space-2) var(--space-3);
-  padding: 10px var(--space-3);
+  padding: var(--space-2) var(--space-3);
   background: var(--badge-red-bg);
-  border: 1px solid var(--red);
   border-radius: var(--radius-sm);
   color: var(--red);
-  font-size: var(--text-base);
+  font-size: var(--text-sm);
 }
 
 @media (max-width: 700px) {
@@ -326,7 +232,6 @@
     width: 100%;
     flex: 0 0 auto;
     max-height: 40%;
-    border-right: none;
-    border-bottom: 1px solid var(--border-soft);
+    box-shadow: inset 0 -1px var(--border-soft);
   }
 }

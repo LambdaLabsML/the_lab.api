@@ -16,6 +16,7 @@ import { allExperiments } from "../../state/signals";
 import { MetricsChart } from "./metrics-chart";
 import { ScatterChart } from "./scatter-chart";
 import { TagFilter } from "./tag-filter";
+import { Toggle } from "../ui";
 import { useMemo } from "preact/hooks";
 import { collectChartKeys } from "../../lib/chart-data";
 
@@ -86,50 +87,34 @@ export function ChartPanel() {
             <option value="improvement">by improvement</option>
             <option value="idea">by idea sequence</option>
           </select>
-          <button
-            type="button"
-            class={`improvements-toggle${improvementsOnly.value ? " active" : ""}`}
-            aria-pressed={improvementsOnly.value}
+          <Toggle
+            active={improvementsOnly.value}
             title="Collapse to metric-setting ideas while keeping live runs visible."
-            onClick={() => {
-              improvementsOnly.value = !improvementsOnly.value;
-            }}
+            onClick={() => { improvementsOnly.value = !improvementsOnly.value; }}
           >
-            <span class="improvements-toggle-icon" aria-hidden="true">
-              ▲
-            </span>
-            <span class="improvements-toggle-label">Improvements Only</span>
-          </button>
-          <button
-            type="button"
-            class={`improvements-toggle${ideaMean.value ? " active" : ""}`}
-            aria-pressed={ideaMean.value}
+            <span aria-hidden="true">▲</span> Improvements Only
+          </Toggle>
+          <Toggle
+            active={ideaMean.value}
             title="Show one point per idea (mean of completed experiments)"
             onClick={() => { ideaMean.value = !ideaMean.value; }}
           >
-            <span class="improvements-toggle-icon" aria-hidden="true">μ</span>
-            <span class="improvements-toggle-label">Idea Mean</span>
-          </button>
-          <button
-            type="button"
-            class={`improvements-toggle${clipOutliers.value ? " active" : ""}`}
-            aria-pressed={clipOutliers.value}
+            <span aria-hidden="true">μ</span> Idea Mean
+          </Toggle>
+          <Toggle
+            active={clipOutliers.value}
             title="Hide outliers via IQR-based y-axis clipping"
             onClick={() => { clipOutliers.value = !clipOutliers.value; }}
           >
-            <span class="improvements-toggle-icon" aria-hidden="true">⤢</span>
-            <span class="improvements-toggle-label">Hide Outliers</span>
-          </button>
-          <button
-            type="button"
-            class={`improvements-toggle${scatter ? " active" : ""}`}
-            aria-pressed={scatter}
+            <span aria-hidden="true">⤢</span> Hide Outliers
+          </Toggle>
+          <Toggle
+            active={scatter}
             title="Toggle 2D scatter chart"
             onClick={() => { scatterOpen.value = !scatter; }}
           >
-            <span class="improvements-toggle-icon" aria-hidden="true">⊞</span>
-            <span class="improvements-toggle-label">Scatter</span>
-          </button>
+            <span aria-hidden="true">⊞</span> Scatter
+          </Toggle>
         </div>
 
         {/* ---- Collapsible filter bar (tags + status) ---- */}
@@ -160,14 +145,17 @@ export function ChartPanel() {
 
 function StatusToggle({ label, signal: s, color }: { label: string; signal: Signal<boolean>; color: string }) {
   const active = s.value;
+  // Shared .ui-toggle language; status toggles carry their own status color
+  // (color means status) so the active tint overrides the generic accent.
   return (
-    <span
-      class={`tag-toggle${active ? " active" : ""}`}
-      style={active ? { borderColor: color, color } : undefined}
+    <button
+      type="button"
+      class={`ui-toggle${active ? " is-active" : ""}`}
+      style={active ? { borderColor: `color-mix(in srgb, ${color} 45%, transparent)`, color, background: `color-mix(in srgb, ${color} 10%, transparent)` } : undefined}
       onClick={() => { s.value = !active; }}
       title={active ? `Hide ${label} ideas` : `Show ${label} ideas`}
     >
       {label}
-    </span>
+    </button>
   );
 }

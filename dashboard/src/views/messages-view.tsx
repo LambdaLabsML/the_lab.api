@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { listAgents, listMessages } from "../state/api";
 import type { AgentEntry, MessageEntry } from "../lib/types";
+import { Badge, EmptyState, IconButton, Toggle } from "../components/ui";
 
 /** Format a created_at ISO timestamp as "Xs ago" / "Xm ago" / "Xh ago" / "Xd ago". */
 function relativeTime(iso: string): string {
@@ -98,10 +99,10 @@ export function MessagesView() {
         <h2 class="pane-bar-title">Messages</h2>
         <span class="pane-bar-count">{loaded ? countLabel : "…"}</span>
         <div class="pane-bar-actions">
-          <button class="agents-btn" onClick={() => setShowAll((v) => !v)}>
+          <Toggle active={showAll} onClick={() => setShowAll((v) => !v)}>
             {showAll ? `Unread only${unreadCount ? ` (${unreadCount})` : ""}` : "Show all"}
-          </button>
-          <button class="agents-btn" onClick={() => refresh()}>↺</button>
+          </Toggle>
+          <IconButton onClick={() => refresh()} title="Refresh">↺</IconButton>
         </div>
       </div>
 
@@ -109,14 +110,16 @@ export function MessagesView() {
 
       <section class="agents-messages">
         {messageCount === 0 ? (
-          <div class="pane-empty-state">
-            <div class="pane-empty-icon">✉</div>
-            <div class="pane-empty-title">{showAll ? "No messages yet" : "No unread messages"}</div>
-            <div class="pane-empty-body">
-              Messages sent here arrive in agents' <code>_notifications</code> on their next API call.
-              Use the ✉ button below or <code>POST /api/v1/messages</code>.
-            </div>
-          </div>
+          <EmptyState
+            icon="✉"
+            title={showAll ? "No messages yet" : "No unread messages"}
+            body={
+              <>
+                Messages sent here arrive in agents' <code>_notifications</code> on their next API call.
+                Use the ✉ button below or <code>POST /api/v1/messages</code>.
+              </>
+            }
+          />
         ) : (
           <ol class="agents-messages-list">
             {displayed.map((m) => (
@@ -131,11 +134,14 @@ export function MessagesView() {
                     {relativeTime(m.created_at)}
                   </span>
                   {m.read_by && m.read_by.length > 0 ? (
-                    <span class="agents-message-read" title={`read by: ${m.read_by.join(", ")}`}>
+                    <span
+                      class="ui-badge ui-badge--good agents-message-read"
+                      title={`read by: ${m.read_by.join(", ")}`}
+                    >
                       ✓ read by {m.read_by.length}
                     </span>
                   ) : (
-                    <span class="agents-message-unread">unread</span>
+                    <Badge tone="warn" class="agents-message-unread">unread</Badge>
                   )}
                 </div>
                 <div class="agents-message-body">{m.text}</div>

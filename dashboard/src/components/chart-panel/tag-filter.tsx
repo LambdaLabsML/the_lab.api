@@ -43,17 +43,17 @@ export function TagFilter() {
     >
       Tags:
       {tags.length > 0 && active.length > 1 && (
-        <span
-          class="tag-toggle active"
-          style={{ fontSize: "9px", padding: "1px 6px", cursor: "pointer" }}
+        <button
+          type="button"
+          class="ui-toggle is-active"
           onClick={() => { tagFilterMode.value = mode === "and" ? "or" : "and"; }}
           title={mode === "and" ? "AND: experiments must have all selected tags" : "OR: experiments must have any selected tag"}
         >
           {mode.toUpperCase()}
-        </span>
+        </button>
       )}
       {tags.length === 0 && (
-        <span style={{ color: "var(--text-faint)", fontSize: "11px" }}>none</span>
+        <span style={{ color: "var(--text-faint)", fontSize: "var(--text-sm)" }}>none</span>
       )}
       {tags.map((tag) => (
         <TagPill
@@ -124,12 +124,14 @@ function TagPill({
   }
 
   return (
-    <span
-      class={`tag-toggle${isActive ? " active" : ""}`}
+    <button
+      type="button"
+      class={`ui-toggle${isActive ? " is-active" : ""}`}
       onClick={onToggle}
       onContextMenu={handleContextMenu}
+      title="Click to filter · right-click to rename"
     >
       {tag}
-    </span>
+    </button>
   );
 }

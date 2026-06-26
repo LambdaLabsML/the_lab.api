@@ -8,8 +8,13 @@
  * - highlightKeys: when provided, the top-level object starts collapsed
  *   but matching keys are shown inline. Remaining keys show as "{N more...}".
  * - startCollapsed: when true, top-level object starts collapsed with no highlights.
+ *
+ * Collapse/expand state is driven by the shared `useDisclosure` hook so node
+ * toggles behave consistently with the rest of the dashboard. Syntax colors are
+ * token-driven (see dashboard/DESIGN.md): keys → --purple, numbers → --accent,
+ * strings → --green, structural chrome → --text-muted/--text-faint.
  */
-import { useState } from "preact/hooks";
+import { useDisclosure } from "../lib/hooks";
 
 const MAX_STRING_LEN = 60;
 
@@ -69,18 +74,19 @@ function JsonNode({ value, depth, highlightKeys, startCollapsed }: {
 }
 
 function JsonString({ value }: { value: string }) {
-  const [expanded, setExpanded] = useState(false);
+  // Disclosure here = "is the full string shown" (open) vs truncated (closed).
+  const { open, onOpen, onClose } = useDisclosure(false);
 
-  if (value.length <= MAX_STRING_LEN || expanded) {
+  if (value.length <= MAX_STRING_LEN || open) {
     return (
-      <span class="json-str" onClick={() => expanded && setExpanded(false)} style={expanded ? { cursor: "pointer" } : undefined}>
+      <span class="json-str" onClick={() => open && onClose()} style={open ? { cursor: "pointer" } : undefined}>
         "{value}"
       </span>
     );
   }
 
   return (
-    <span class="json-str json-truncated" onClick={() => setExpanded(true)} title={value}>
+    <span class="json-str json-truncated" onClick={onOpen} title={value}>
       "{value.slice(0, MAX_STRING_LEN)}…"
     </span>
   );
@@ -95,9 +101,9 @@ function JsonObject({ obj, depth, highlightKeys, startCollapsed }: {
   // Determine initial open state:
   // - highlightKeys provided (even empty) → start collapsed
   // - startCollapsed → start collapsed
-  // - otherwise → open if depth < 1
+  // - otherwise → depth-based auto-collapse: open if depth < 1
   const forceCollapsed = highlightKeys !== undefined || startCollapsed === true;
-  const [open, setOpen] = useState(forceCollapsed ? false : depth < 1);
+  const { open, onOpen, onClose } = useDisclosure(forceCollapsed ? false : depth < 1);
 
   if (keys.length === 0) return <span class="json-brace">{"{}"}</span>;
 
@@ -106,7 +112,7 @@ function JsonObject({ obj, depth, highlightKeys, startCollapsed }: {
     const shown = keys.filter(k => highlightKeys!.includes(k));
     const hidden = keys.length - shown.length;
     return (
-      <span class="json-collapsed" onClick={() => setOpen(true)}>
+      <span class="json-collapsed" onClick={onOpen}>
         <span class="json-brace">{"{"}</span>
         {shown.map((k, i) => (
           <span key={k} class="json-entry json-inline">
@@ -130,7 +136,7 @@ function JsonObject({ obj, depth, highlightKeys, startCollapsed }: {
   // Collapsed (no highlights)
   if (!open) {
     return (
-      <span class="json-collapsed" onClick={() => setOpen(true)}>
+      <span class="json-collapsed" onClick={onOpen}>
         <span class="json-brace">{"{"}</span>
         <span class="json-ellipsis">{keys.length} keys…</span>
         <span class="json-brace">{"}"}</span>
@@ -140,7 +146,7 @@ function JsonObject({ obj, depth, highlightKeys, startCollapsed }: {
 
   return (
     <span class="json-block">
-      <span class="json-brace json-toggle" onClick={() => setOpen(false)}>{"{"}</span>
+      <span class="json-brace json-toggle" onClick={onClose}>{"{"}</span>
       <div class="json-indent">
         {keys.map((k, i) => (
           <div key={k} class="json-entry">
@@ -157,7 +163,7 @@ function JsonObject({ obj, depth, highlightKeys, startCollapsed }: {
 }
 
 function JsonArray({ items, depth }: { items: any[]; depth: number }) {
-  const [open, setOpen] = useState(depth < 1);
+  const { open, onOpen, onClose } = useDisclosure(depth < 1);
 
   if (items.length === 0) return <span class="json-brace">[]</span>;
 
@@ -179,7 +185,7 @@ function JsonArray({ items, depth }: { items: any[]; depth: number }) {
 
   if (!open) {
     return (
-      <span class="json-collapsed" onClick={() => setOpen(true)}>
+      <span class="json-collapsed" onClick={onOpen}>
         <span class="json-brace">[</span>
         <span class="json-ellipsis">{items.length} items…</span>
         <span class="json-brace">]</span>
@@ -189,7 +195,7 @@ function JsonArray({ items, depth }: { items: any[]; depth: number }) {
 
   return (
     <span class="json-block">
-      <span class="json-brace json-toggle" onClick={() => setOpen(false)}>[</span>
+      <span class="json-brace json-toggle" onClick={onClose}>[</span>
       <div class="json-indent">
         {items.map((v, i) => (
           <div key={i} class="json-entry">

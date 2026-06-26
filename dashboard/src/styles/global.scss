@@ -21,8 +21,8 @@ body {
   overflow: visible;
 }
 
-/* Badges */
-.badge { display: inline-flex; align-items: center; gap: 3px; padding: 2px 8px; border-radius: var(--radius-lg); font-size: var(--text-sm); font-weight: 600; white-space: nowrap; }
+/* Badges — status pills (shared with wave-2 data views; restyled, names kept) */
+.badge { display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px; border-radius: var(--radius-sm); font-family: var(--font-mono); font-size: var(--text-xs); font-weight: 600; letter-spacing: 0.02em; line-height: 1.5; white-space: nowrap; }
 .badge-active { background: var(--badge-green-bg); color: var(--badge-green-fg); }
 .badge-concluded { background: var(--badge-blue-bg); color: var(--badge-blue-fg); }
 .badge-abandoned { background: var(--badge-red-bg); color: var(--badge-red-fg); }
@@ -49,10 +49,10 @@ body {
   display: flex;
   align-items: stretch;
   gap: 0;
-  margin: 0 0 10px;
+  margin: 0 0 var(--space-3);
   padding: 0;
   background: var(--bg);
-  border-bottom: 1px solid var(--border-soft);
+  box-shadow: inset 0 -1px var(--border-soft); /* hairline, not a border box */
   overflow-x: auto;
   scrollbar-width: none;
 }
@@ -61,21 +61,24 @@ body {
 .dashboard-modebar button {
   flex: 0 0 auto;
   border: none;
-  border-bottom: 2px solid transparent;
+  border-bottom: 1px solid transparent;
   background: transparent;
-  color: var(--text-muted);
-  padding: 8px 16px;
+  color: var(--text-faint);
+  padding: 8px 14px 7px;
   font: inherit;
-  font-size: var(--text-sm);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
   cursor: pointer;
   transition: color var(--transition-fast), border-color var(--transition-fast);
-  margin-bottom: -1px; /* sit on top of the border-bottom */
+  margin-bottom: -1px; /* sit on top of the hairline */
 }
 .dashboard-modebar button:hover { color: var(--text); }
 .dashboard-modebar button.active {
-  color: var(--text);
+  color: var(--accent);
   border-bottom-color: var(--accent);
-  font-weight: 600;
 }
 
 .review-page {
@@ -91,18 +94,23 @@ body {
 .pane-bar {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 14px 6px;
-  border-bottom: 1px solid var(--border-soft);
+  gap: var(--space-2);
+  padding: 7px 12px 6px;
+  box-shadow: inset 0 -1px var(--border-soft); /* hairline header rule */
   flex-shrink: 0;
 }
 .pane-bar-title {
-  font-size: var(--text-sm);
+  /* eyebrow micro-label — section heads are uppercase letter-spaced mono */
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
   font-weight: 600;
-  color: var(--text);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-faint);
   margin: 0;
 }
 .pane-bar-count {
+  font-family: var(--font-mono);
   font-size: var(--text-xs);
   color: var(--text-faint);
   flex-shrink: 0;
@@ -110,7 +118,7 @@ body {
 .pane-bar-actions {
   margin-left: auto;
   display: flex;
-  gap: 4px;
+  gap: 2px;
   align-items: center;
 }
 
@@ -119,12 +127,12 @@ body {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: var(--space-2);
   padding: 40px 24px;
   text-align: center;
   color: var(--text-faint);
 }
-.pane-empty-icon { font-size: 24px; opacity: 0.3; }
+.pane-empty-icon { font-size: 22px; opacity: 0.3; line-height: 1; }
 .pane-empty-title {
   font-size: var(--text-sm);
   font-weight: 600;
@@ -137,25 +145,57 @@ body {
   code { color: var(--text-muted); font-family: var(--font-mono, monospace); }
 }
 
-/* ── Status strip ──────────────────────────────────────────────────── */
+/* ── Header: status line ────────────────────────────────────────────
+   One quiet line — status dot + the live/idle sentence + branch + action.
+   Sits on canvas; no box. */
 
-.review-status-strip {
+.review-statusline {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 10px 0 10px;
-  border-bottom: 1px solid var(--border-soft);
-}
-
-.review-status-left {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: 2px 0 9px;
   min-width: 0;
   font-size: var(--text-sm);
   color: var(--text-muted);
+  font-family: var(--font-mono, monospace);
+}
+
+.review-statusline-text {
+  min-width: 0;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  strong { color: var(--text); font-weight: 700; }
+}
+
+.review-statusline-dim { color: var(--text-faint); }
+.review-statusline-warn { color: var(--yellow); font-weight: 600; }
+
+.review-statusline-branch {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: var(--text-xs);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+}
+
+.review-statusline-action {
+  flex: 0 0 auto;
+  border: 1px solid var(--border-soft);
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: var(--radius-sm);
+  padding: 4px 9px;
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color var(--transition-fast), border-color var(--transition-fast), background var(--transition-fast);
+  &:hover { color: var(--text); border-color: var(--text-muted); background: var(--bg-hi); }
 }
 
 @keyframes dot-pulse {
@@ -185,40 +225,12 @@ body {
   &.idle.stagnant { background: var(--yellow); opacity: 0.6; animation: dot-pulse-amber 3s ease-in-out infinite; }
 }
 
-.review-status-primary {
-  color: var(--text);
-  font-size: var(--text-base);
-  strong { font-weight: 700; }
-}
-
-.review-status-idle { color: var(--text-muted); }
-
-.review-idle-hint {
-  font-size: var(--text-xs);
-  color: var(--text-faint);
-  font-weight: 400;
-}
-
-.review-running-list {
-  font-size: var(--text-xs);
-  color: var(--yellow);
-  opacity: 0.8;
-  font-family: var(--font-mono, monospace);
-  margin-left: 6px;
-}
-
-.review-idle-cta {
-  font-size: var(--text-xs);
-  color: var(--text-faint);
-  code { color: var(--accent); font-family: var(--font-mono, monospace); font-size: var(--text-xs); }
-}
-
 /* ── Idea health bar ───────────────────────────────────────────────── */
 
 .idea-health-bar {
   display: flex;
-  height: 7px;
-  width: 90px;
+  height: 10px;
+  width: 120px;
   border-radius: 3px;
   overflow: hidden;
   gap: 1px;
@@ -227,7 +239,7 @@ body {
 
 .ihb-seg {
   border-radius: 2px;
-  min-width: 4px;
+  min-width: 5px;
 }
 .ihb-done      { background: var(--green);      opacity: 0.65; }
 .ihb-active    { background: var(--green);      opacity: 0.8; }  /* active ideas = green */
@@ -236,403 +248,42 @@ body {
 .ihb-abandoned { background: var(--red);        opacity: 0.7; }
 .ihb-queued    { background: var(--text-faint); opacity: 0.5; }
 
-.review-status-item {
-  strong { color: var(--text); font-weight: 600; }
-  &--warn strong { color: var(--red); }
-  &--cost { color: var(--text-muted); }
+/* ── Header: KPI cluster ────────────────────────────────────────────
+   A row of confident mono Stats on the landingpage hairline-grid trick
+   (gap:1px on a --border bg). Calm, flat, one purple accent for "best". */
+
+.review-kpis {
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
 }
 
-.review-status-velocity {
-  color: var(--text-faint);
-  strong { color: var(--green); }
-}
-
-/* Queue depth mini-visualization */
-.review-status-queue {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-.queue-depth-dots {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-}
-.queue-dot {
-  display: inline-block;
-  width: 4px;
-  height: 4px;
-  border-radius: 1px;
-  background: var(--accent);
-  opacity: 0.6;
-  flex-shrink: 0;
-}
-.queue-dot-overflow {
-  font-size: 8px;
-  color: var(--text-faint);
-  font-family: var(--font-mono, monospace);
-  margin-left: 1px;
-}
-
-.review-campaign-age {
-  color: var(--text-faint);
-  font-size: var(--text-xs);
-}
-
-/* ── 14-day activity sparkline ─────────────────────────────────────── */
-.activity-spark {
-  display: flex;
-  align-items: flex-end;
-  gap: 2px;
-  height: 18px;
-  flex-shrink: 0;
-  border-bottom: 1px solid var(--border-soft);  /* baseline track */
-  padding-bottom: 1px;
-}
-.activity-bar {
-  width: 4px;
-  border-radius: 1px 1px 0 0;
-  background: var(--accent);
-  flex-shrink: 0;
-  min-height: 1px;
-}
-
-@media (max-width: 800px) {
-  .activity-spark { display: none; }
-  .activity-idle-label { display: none; }
-  .review-campaign-age { display: none; }
-}
-
-.review-status-sep {
-  width: 1px;
-  height: 12px;
-  background: var(--border);
-  flex-shrink: 0;
-}
-
-.review-status-branch {
-  font-family: var(--font-mono, monospace);
-  font-size: var(--text-xs);
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
-  padding: 1px 6px;
-  border-radius: var(--radius-sm);
-}
-
-.review-primary-action {
-  flex: 0 0 auto;
-  border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--text-muted);
-  border-radius: var(--radius-sm);
-  padding: 5px 10px;
-  font: inherit;
-  font-size: var(--text-sm);
-  font-weight: 600;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: color var(--transition-fast), border-color var(--transition-fast), background var(--transition-fast);
-}
-.review-primary-action:hover {
-  color: var(--text);
-  border-color: var(--text-muted);
-  background: var(--bg-elev);
-}
-
-/* ── Best score bar ────────────────────────────────────────────────── */
-
-.review-narrative {
-  font-size: 9px;
-  color: var(--text-faint);
-  font-family: var(--font-mono, monospace);
-  padding: 3px 12px;
-  letter-spacing: 0.02em;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.review-pivot-hint {
-  font-size: 9px;
-  color: var(--text-faint);
-  font-family: var(--font-mono, monospace);
-  padding: 3px 12px;
-  background: color-mix(in srgb, var(--red) 5%, transparent);
-  border-left: 2px solid var(--red);
-  margin: 0 0 2px;
-}
-
-.review-pivot-link {
-  color: var(--accent);
-  text-decoration: none;
-  cursor: pointer;
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
-  border-radius: var(--radius-sm);
-  padding: 1px 6px;
-  font-size: 8px;
-  &:hover { background: color-mix(in srgb, var(--accent) 20%, transparent); color: var(--text); }
-}
-
-/* ── Campaign Snapshot Bar ──────────────────────────────────────────── */
-.review-campaign-snapshot {
-  display: flex;
-  align-items: center;
-  gap: 0;
-  padding: 8px 12px;
-  background: var(--bg-elev);
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-md);
-  overflow: hidden;
-  flex-wrap: nowrap;
-}
-
-.rcs-item {
+.review-kpi {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  padding: 4px 12px;
-  border-right: 1px solid var(--border-soft);
-  flex-shrink: 0;
-  &:last-of-type { border-right: none; }
+  gap: 5px;
+  padding: var(--space-2) var(--space-3);
 }
 
-.rcs-label {
-  font-size: 8px;
-  color: var(--text-faint);
-  font-family: var(--font-mono, monospace);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
+.review-kpi-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
 }
 
-.rcs-value {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--text);
-  font-family: var(--font-mono, monospace);
-  line-height: 1;
-}
+/* Bump the KPI numbers up — the header's headline figures. */
+.review-kpi .ui-stat-value { font-size: calc(var(--text-xl) * 1.15); }
 
-.rcs-item--best .rcs-value { color: var(--purple); }
-
-.rcs-hint {
-  margin-left: auto;
-  font-size: 9px;
-  color: var(--text-faint);
-  font-family: var(--font-mono, monospace);
-  font-style: italic;
-  white-space: nowrap;
-  padding-left: 12px;
+.review-kpi .ui-stat-sub {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  flex-wrap: wrap;
+  line-height: 1.3;
 }
 
 @media (max-width: 600px) {
-  .review-campaign-snapshot {
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
-    padding: 4px 8px;
-    /* hide scrollbar but keep scroll */
-    &::-webkit-scrollbar { display: none; }
-    /* Compact sizing on mobile */
-    .rcs-item { padding: 3px 8px; }
-    .rcs-value { font-size: 13px; }
-    .rcs-label { font-size: 7px; }
-  }
-}
-
-/* ── Section jump nav ────────────────────────────────────────────────── */
-.review-jump-nav {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 0 4px;
-  overflow-x: auto;
-  scrollbar-width: none;
-  flex-shrink: 0;
-  &::-webkit-scrollbar { display: none; }
-}
-
-.review-jump-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 3px 9px 3px 7px;
-  border: 1px solid var(--border-soft);
-  border-radius: 12px;
-  font-size: var(--text-xs);
-  color: var(--text-faint);
-  text-decoration: none;
-  white-space: nowrap;
-  flex-shrink: 0;
-  background: color-mix(in srgb, var(--bg-elev) 60%, transparent);
-  transition: color var(--transition-fast), border-color var(--transition-fast), background var(--transition-fast);
-  &:hover {
-    color: var(--text);
-    border-color: var(--text-muted);
-    background: var(--bg-hi);
-  }
-  &--live {
-    border-color: color-mix(in srgb, var(--green) 40%, transparent);
-    color: var(--green);
-    background: color-mix(in srgb, var(--green) 6%, transparent);
-  }
-}
-
-.rjp-icon {
-  font-size: 9px;
-  opacity: 0.7;
-  line-height: 1;
-}
-
-.rjp-label {
-  font-family: var(--font-mono, monospace);
-  letter-spacing: 0;
-}
-
-.rjp-badge {
-  font-size: 8px;
-  font-weight: 700;
-  font-family: var(--font-mono, monospace);
-  color: var(--text-muted);
-  background: var(--border-soft);
-  padding: 0 4px;
-  border-radius: 6px;
-  line-height: 1.5;
-}
-
-.review-jump-pill--live .rjp-badge {
-  color: var(--green);
-  background: color-mix(in srgb, var(--green) 12%, transparent);
-}
-
-/* ── Best score bar ──────────────────────────────────────────────────── */
-.review-best-bar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 6px 12px;
-  background: var(--bg-elev);
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-md);
-  font-size: var(--text-sm);
-  overflow: hidden;
-}
-
-.review-best-label {
-  color: var(--text-faint);
-  font-size: var(--text-xs);
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-.review-best-value {
-  color: var(--purple);
-  font-size: var(--text-lg);
-  font-weight: 700;
-  line-height: 1;
-  flex-shrink: 0;
-}
-
-.review-best-age {
-  color: var(--text-faint);
-  font-size: 9px;
-}
-
-.review-best-trend {
-  font-size: var(--text-sm);
-  font-weight: 700;
-  flex-shrink: 0;
-  &--up   { color: var(--green); }
-  &--down { color: var(--red); }
-  &--flat { color: var(--text-faint); }
-}
-
-.activity-idle-label {
-  font-size: 9px;
-  color: var(--text-faint);
-  white-space: nowrap;
-  flex-shrink: 0;
-  font-style: italic;
-}
-
-.review-best-direction {
-  font-size: var(--text-xs);
-  color: var(--text-faint);
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-/* ── Milestone timeline ─────────────────────────────────────────────── */
-.review-milestone-timeline {
-  padding: 3px 12px 5px;
-}
-.rmt-bar {
-  position: relative;
-  height: 6px;
-  border-radius: 3px;
-  display: flex;
-  background: transparent;
-}
-.rmt-active {
-  height: 100%;
-  background: var(--accent);
-  border-radius: 3px 0 0 3px;
-  flex-shrink: 0;
-  opacity: 0.45;
-}
-.rmt-idle {
-  height: 100%;
-  background: color-mix(in srgb, var(--yellow) 35%, var(--bg-hi));
-  border-radius: 0 3px 3px 0;
-  flex: 1;
-  flex-shrink: 0;
-  opacity: 0.35;
-}
-.rmt-dot {
-  position: absolute;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: var(--purple);
-  border: 2px solid var(--bg);
-  cursor: default;
-  z-index: 1;
-  transition: transform 0.15s;
-  &:hover { transform: translate(-50%, -50%) scale(1.4); }
-  &.rmt-dot--best {
-    width: 12px;
-    height: 12px;
-    background: var(--purple);
-    box-shadow: 0 0 0 2px color-mix(in srgb, var(--purple) 30%, transparent);
-  }
-}
-.rmt-labels {
-  display: flex;
-  align-items: baseline;
-  font-size: 8px;
-  color: var(--text-faint);
-  font-family: var(--font-mono, monospace);
-  margin-top: 3px;
-  position: relative;
-  white-space: nowrap;
-}
-.rmt-last-label {
-  position: absolute;
-  color: var(--purple);
-  opacity: 0.7;
-}
-@media (max-width: 600px) { .review-milestone-timeline { display: none; } }
-
-.review-best-meta {
-  color: var(--text-muted);
-  font-size: var(--text-xs);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  code { color: var(--text-faint); font-family: var(--font-mono, monospace); }
+  .review-kpis { grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); }
+  .review-kpi { padding: 8px 10px; }
 }
 
 /* ── Experiment grid ───────────────────────────────────────────────── */
@@ -642,7 +293,26 @@ body {
   50%       { opacity: 0.4; }
 }
 
-.exp-grid-wrap { display: flex; flex-direction: column; gap: 3px; }
+.exp-grid-wrap { display: flex; flex-direction: column; gap: 5px; }
+
+/* caption — names the strip + decodes the encoding before you have to guess */
+.exp-grid-caption {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.exp-grid-caption .emr-label {
+  box-shadow: none; margin-bottom: 0; padding-bottom: 0;
+}
+.exp-grid-caption-sub {
+  font-family: var(--font-mono, monospace);
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .exp-grid {
   display: flex;
@@ -664,11 +334,14 @@ body {
   border-left: 2px solid var(--idea-color, var(--border));
   padding-left: 3px;
   border-radius: 0 2px 2px 0;
-  transition: background var(--transition-fast);
-  &:hover {
-    background: color-mix(in srgb, var(--idea-color, var(--border)) 12%, transparent);
-    .exp-grid-sq { transform: scale(1.2); }
+  transition: background var(--transition-fast), opacity var(--transition-fast);
+  &:hover,
+  &.is-highlighted {
+    background: color-mix(in srgb, var(--idea-color, var(--border)) 14%, transparent);
+    .exp-grid-sq { transform: scale(1.25); }
   }
+  /* when another idea is highlighted (here or on the chart/scatter), dim the rest */
+  &.is-dimmed { opacity: 0.32; }
 }
 
 .exp-grid-sq {
@@ -681,6 +354,8 @@ body {
   transition: transform var(--transition-fast);
   &:hover { transform: scale(1.5); }
 }
+/* the Tooltip wraps each square in an inline-flex trigger — keep it tight */
+.exp-idea-group .ui-tip-trigger { line-height: 0; }
 
 /* Status colors */
 .sq-done      { background: var(--green);       opacity: 0.75; }
@@ -729,13 +404,17 @@ body {
 .sq-legend.sq-concluded::before { background: var(--accent);     opacity: 0.7; }
 .sq-legend.sq-queued::before    { background: var(--text-faint); opacity: 0.5; }
 .sq-legend.sq-milestone::before { background: var(--purple); box-shadow: 0 0 3px var(--purple); }
+.sq-legend.sq-recent::before    { background: var(--text-muted); outline: 1px solid rgba(255,255,255,0.25); outline-offset: 1px; }
 
-.exp-grid-legend-note {
+/* success-rate dial, pushed to the right of the legend */
+.exp-grid-success {
   margin-left: auto;
-  font-size: var(--text-xs);
-  color: var(--text-faint);
-  opacity: 0.6;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
 }
+
 
 /* ── Workspace all-open label ──────────────────────────────────────── */
 
@@ -751,19 +430,34 @@ body {
   display: flex;
   align-items: flex-end;
   gap: 2px;
-  height: 26px;
-  width: 90px;
+  height: 40px;
+  width: 140px;
   flex-shrink: 0;
-  align-self: flex-end;
 }
 
 .score-dist-tick {
   flex: 1;
   border-radius: 1px 1px 0 0;
-  min-width: 4px;
+  min-width: 5px;
   transition: opacity var(--transition-fast);
   cursor: default;
   &:hover { opacity: 1 !important; }
+}
+
+.score-dist-range {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  width: 140px;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  font-family: var(--font-mono, monospace);
+  font-variant-numeric: tabular-nums;
+}
+.score-dist-range-cap {
+  color: var(--text-faint);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
 }
 
 /* ── Experiment mini results (collapsed disclosure preview) ────────── */
@@ -771,27 +465,30 @@ body {
 .emr-preview {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  align-items: flex-end;
+  align-items: flex-start;
+  gap: 8px;
 }
 
 .exp-mini-results {
   display: flex;
-  gap: 16px;
-  font-size: var(--text-xs);
-  line-height: 1.35;
+  gap: var(--space-4);
+  font-size: var(--text-sm);
+  line-height: 1.4;
 }
 
-.emr-section { display: flex; flex-direction: column; gap: 1px; min-width: 100px; }
+.emr-section { display: flex; flex-direction: column; gap: 1px; min-width: 128px; }
 
 .emr-label {
-  font-size: 8px;
+  /* eyebrow caption for the mini-results column */
+  font-family: var(--font-mono, monospace);
+  font-size: var(--text-xs);
+  font-weight: 600;
   color: var(--text-faint);
-  letter-spacing: 0.03em;
-  margin-bottom: 3px;
+  letter-spacing: 0.09em;
+  margin-bottom: 4px;
   text-transform: uppercase;
-  border-bottom: 1px solid var(--border-soft);
-  padding-bottom: 2px;
+  box-shadow: inset 0 -1px var(--border-soft); /* hairline rule under caption */
+  padding-bottom: 3px;
 }
 
 .emr-rows { display: flex; flex-direction: column; gap: 2px; }
@@ -799,9 +496,9 @@ body {
 .emr-row {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
   white-space: nowrap;
-  padding: 1px 3px;
+  padding: 2px 4px;
   border-radius: 2px;
   color: var(--text-muted);
   transition: background var(--transition-fast);
@@ -812,39 +509,40 @@ body {
 }
 
 .emr-rank {
-  font-size: 8px;
+  font-size: var(--text-sm);
   color: var(--text-faint);
-  width: 9px;
+  width: 11px;
   text-align: right;
   flex-shrink: 0;
   font-family: var(--font-mono, monospace);
 }
 .emr-row:first-child .emr-rank { color: var(--accent); font-weight: 700; }
 
-.emr-star { color: var(--yellow); font-size: 9px; flex-shrink: 0; line-height: 1; }
+.emr-star { color: var(--yellow); font-size: var(--text-sm); flex-shrink: 0; line-height: 1; }
 
 .emr-exp {
   font-family: var(--font-mono, monospace);
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   color: var(--accent);
   flex-shrink: 0;
 }
 .emr-row:first-child .emr-exp { color: var(--accent); font-weight: 600; }
 
-.emr-idea { font-size: 8px; color: var(--text-faint); flex-shrink: 0; }
+.emr-idea { font-size: var(--text-xs); color: var(--text-faint); flex-shrink: 0; }
 
 .emr-val {
   font-family: var(--font-mono, monospace);
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   color: var(--text-muted);
   margin-left: auto;
-  padding-left: 6px;
+  padding-left: 8px;
   flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
 }
 .emr-row:first-child .emr-val { color: var(--purple); font-weight: 700; }
 
 .emr-gap {
-  font-size: 8px;
+  font-size: var(--text-xs);
   color: var(--text-faint);
   flex-shrink: 0;
   font-family: var(--font-mono, monospace);
@@ -852,7 +550,7 @@ body {
 }
 
 .emr-count {
-  font-size: 8px;
+  font-size: var(--text-xs);
   color: var(--text-faint);
   font-family: var(--font-mono, monospace);
   flex-shrink: 0;
@@ -860,12 +558,345 @@ body {
   &::after { content: "×"; opacity: 0.6; }
 }
 
-.emr-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.emr-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
 
 @media (max-width: 800px) {
   .exp-mini-results { gap: 0; }
   /* On mobile: only hide RECENT section (the 2nd child) — keep TOP IDEAS/TOP 5 */
   .exp-mini-results .emr-section:nth-child(2) { display: none; }
+}
+
+/* ── Summary preview layouts (summary = minis, hairline-separated) ───── */
+
+/* Experiments summary: milestones table is the centerpiece, supporting
+   minis sit in a slim column on the right — separated by a vertical hairline,
+   not boxed. Both columns breathe. */
+.emr-preview--runs {
+  flex-direction: row;
+  align-items: stretch;
+  gap: var(--space-4);
+  width: 100%;
+}
+.emr-preview--runs .review-milestones { flex: 1 1 auto; min-width: 0; }
+.emr-preview--runs .review-mini-col {
+  flex: 0 0 auto;
+  width: 168px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-left: var(--space-4);
+  box-shadow: inset 1px 0 var(--border-soft); /* vertical hairline between */
+}
+
+.emr-preview--ideas {
+  flex-direction: row;
+  align-items: flex-start;
+  gap: var(--space-4);
+  width: 100%;
+}
+.emr-preview--ideas .idea-portfolio { flex: 0 0 auto; width: 196px; }
+.emr-preview--ideas .emr-section {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding-left: var(--space-4);
+  box-shadow: inset 1px 0 var(--border-soft);
+}
+
+/* ── A captioned mini chart wrapper — axis labels + caption, reads alone ── */
+.review-mini {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.review-mini-cap {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+  font-family: var(--font-mono, monospace);
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+  line-height: 1.3;
+}
+.review-mini-cap-end { color: var(--text-muted); white-space: nowrap; }
+.review-mini-ymax {
+  font-family: var(--font-mono, monospace);
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+/* slim labeled meter (e.g. success rate) */
+.review-mini-meter {
+  height: 5px;
+  border-radius: 3px;
+  background: var(--border-soft);
+  overflow: hidden;
+  > span { display: block; height: 100%; border-radius: 3px; transition: width 0.5s ease; }
+}
+
+/* ── Score distribution: caption header + x-axis (already present) ───── */
+.score-dist { width: 100%; }
+.score-dist-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+}
+.score-dist .emr-label {
+  box-shadow: none;
+  margin-bottom: 0;
+  padding-bottom: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.score-dist .score-dist-bar { width: 100%; }
+.score-dist .score-dist-range { width: 100%; }
+.score-dist-head-n {
+  font-family: var(--font-mono, monospace);
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+/* ── Milestones table (Experiments summary, #11) ─────────────────────── */
+.review-milestones { display: flex; flex-direction: column; gap: 5px; }
+.review-mst-caption {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.review-mst-caption .emr-label {
+  box-shadow: none; margin-bottom: 0; padding-bottom: 0;
+  min-width: 0; overflow: hidden; text-overflow: ellipsis;
+}
+.review-mst-caption-sub {
+  font-family: var(--font-mono, monospace);
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.review-mst-table {
+  display: flex;
+  flex-direction: column;
+  font-family: var(--font-mono, monospace);
+  font-size: var(--text-sm);
+}
+.review-mst-row {
+  display: grid;
+  /* rank · exp · exp-text · idea · idea-text · value · Δ · when */
+  grid-template-columns: 2.6em auto minmax(0, 1.1fr) 3.2em minmax(0, 1.4fr) 4.4em 3.4em 3.4em;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 6px;
+  border-radius: 2px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  box-shadow: inset 0 -1px var(--border-soft); /* hairline row separator */
+  transition: background var(--transition-fast), color var(--transition-fast);
+  &:hover { background: var(--bg-hi); color: var(--text); }
+}
+/* sticky-feeling header eyebrow row */
+.review-mst-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-elev);
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  box-shadow: inset 0 -1px var(--border);
+  &:hover { background: var(--bg-elev); color: var(--text-faint); }
+}
+.review-mst-row--latest {
+  background: color-mix(in srgb, var(--purple) 6%, transparent);
+  color: var(--text);
+}
+.review-mst-c-rank {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+.review-mst-star { color: var(--purple); line-height: 1; }
+.review-mst-head .review-mst-c-rank { color: var(--text-faint); }
+.review-mst-c-exp {
+  color: var(--accent);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* text columns (#12): dimmed + ellipsized so the table stays clean */
+.review-mst-c-exptext,
+.review-mst-c-ideatext {
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.review-mst-c-idea { color: var(--text-faint); font-size: var(--text-xs); }
+.review-mst-c-val {
+  color: var(--purple);
+  font-weight: 700;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.review-mst-head .review-mst-c-val { color: var(--text-faint); font-weight: 600; }
+.review-mst-c-delta {
+  color: var(--green);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-xs);
+}
+.review-mst-head .review-mst-c-delta { color: var(--text-faint); }
+.review-mst-first { color: var(--text-faint); font-style: italic; }
+.review-mst-c-when {
+  color: var(--text-faint);
+  text-align: right;
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+.review-mst-more {
+  padding: 4px 6px 0;
+  font-family: var(--font-mono, monospace);
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+}
+/* At medium widths drop the experiment-text column first (idea text is the
+   more meaningful one) — 7 columns: rank·exp·idea·idea-text·value·Δ·when. */
+@media (max-width: 1100px) {
+  .review-mst-row {
+    grid-template-columns: 2.6em auto 3.2em minmax(0, 1.4fr) 4.4em 3.4em 3.4em;
+  }
+  .review-mst-c-exptext { display: none; }
+}
+
+/* ── Idea portfolio — labeled segmented bar + legend (#7) ─────────────── */
+.idea-portfolio { display: flex; flex-direction: column; gap: 6px; }
+.ipf-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.ipf-head .emr-label {
+  box-shadow: none; margin-bottom: 0; padding-bottom: 0;
+  min-width: 0; overflow: hidden; text-overflow: ellipsis;
+}
+.ipf-head-sub {
+  font-family: var(--font-mono, monospace);
+  font-size: var(--text-xs);
+  color: var(--accent);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.ipf-bar {
+  display: flex;
+  height: 14px;
+  width: 100%;
+  border-radius: 3px;
+  overflow: hidden;
+  gap: 1px;
+  background: var(--border);
+}
+.ipf-seg { min-width: 4px; }
+.ipf-active    { background: var(--green);      opacity: 0.85; }
+.ipf-concluded { background: var(--accent);     opacity: 0.75; }
+.ipf-abandoned { background: var(--red);        opacity: 0.7; }
+/* untested: active-but-untried — green base with a hatch so it reads as "open" */
+.ipf-untested {
+  background:
+    repeating-linear-gradient(45deg,
+      color-mix(in srgb, var(--yellow) 85%, transparent) 0 2px,
+      transparent 2px 5px),
+    color-mix(in srgb, var(--green) 30%, var(--bg-elev));
+}
+.ipf-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  font-family: var(--font-mono, monospace);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+.ipf-leg { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.ipf-leg b { color: var(--text); font-weight: 700; font-variant-numeric: tabular-nums; }
+.ipf-swatch {
+  width: 9px; height: 9px; border-radius: 2px; flex-shrink: 0;
+  &.ipf-active    { background: var(--green);  opacity: 0.85; }
+  &.ipf-concluded { background: var(--accent); opacity: 0.75; }
+  &.ipf-abandoned { background: var(--red);    opacity: 0.7; }
+}
+
+/* ── Leaderboard column headers ──────────────────────────────────────── */
+.emr-colhead {
+  color: var(--text-faint) !important;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: var(--text-xs);
+  background: transparent !important;
+  box-shadow: inset 0 -1px var(--border-soft);
+  border-radius: 0;
+  cursor: default;
+  &:hover { background: transparent !important; color: var(--text-faint) !important; }
+  .emr-exp, .emr-idea, .emr-val { color: var(--text-faint); font-weight: 600; }
+}
+.emr-colhead-runs { margin-left: auto; }
+.emr-colhead-trend {
+  width: 46px;
+  text-align: center;
+  flex-shrink: 0;
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+}
+
+/* ── Correlation mini-scatter ────────────────────────────────────────── */
+.review-scatter-mini { width: 148px; }
+.review-scatter-svg {
+  display: block;
+  width: 100%;
+  background: var(--bg-hi);
+  border-radius: var(--radius-sm);
+}
+.review-scatter-r { font-weight: 700; flex-shrink: 0; }
+.review-scatter-xlab, .review-scatter-ylab {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis;
+}
+
+@media (max-width: 800px) {
+  .emr-preview--runs,
+  .emr-preview--ideas { flex-direction: column; }
+  .emr-preview--runs .review-mini-col {
+    width: 100%;
+    padding-left: 0;
+    box-shadow: inset 0 1px var(--border-soft);
+    padding-top: 10px;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 14px;
+  }
+  .emr-preview--ideas .emr-section {
+    padding-left: 0;
+    box-shadow: inset 0 1px var(--border-soft);
+    padding-top: 8px;
+  }
+  /* On mobile keep the milestones table — it's the point of the section.
+     Drop the "what it tried" + "when" columns; the remaining 6 cells
+     (rank · exp · idea · idea-text · value · Δ) re-flow into 6 columns. */
+  .review-mst-row {
+    grid-template-columns: 2.4em auto 2.6em minmax(0, 1fr) 3.6em 3em;
+    gap: 6px;
+  }
+  .review-mst-c-exptext,
+  .review-mst-c-when { display: none; }
 }
 
 /* ── Chart skip link ───────────────────────────────────────────────── */
@@ -889,10 +920,8 @@ body {
   position: relative;
   height: clamp(320px, 42vh, 520px);
   min-height: 0;
-  border: 1px solid var(--border-soft);
-  border-radius: var(--radius-md);
   overflow: hidden;
-  background: var(--bg);
+  background: var(--bg-elev);
 }
 
 /* Legacy — keep for now in case referenced elsewhere */
@@ -934,9 +963,10 @@ body {
 .review-panel {
   position: relative;
   min-width: 0;
-  border: 1px solid var(--border);
-  background: var(--bg);
+  background: var(--bg-elev);
   overflow: hidden;
+  /* the revealed detail body sits one elevation step above the canvas
+     section — separated by elevation, not a border box */
 }
 
 .review-chart-panel {
@@ -960,10 +990,43 @@ body {
   height: 620px;
 }
 
-.review-ops-panel,
-.review-log-panel {
-  height: 520px;
-  overflow: auto;
+/* ── Permanent (always-open) section — Idea Detail (#10) ──────────────
+   Not a disclosure: a flat section with a hairline-separated heading and
+   the full panel always visible. Parted from the section above by the same
+   top hairline the disclosures use, so it reads as one of the stack. */
+.review-permanent {
+  box-shadow: inset 0 1px var(--border-soft); /* top hairline like a disclosure */
+  display: flex;
+  flex-direction: column;
+}
+.review-permanent-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-4);
+  padding: 11px 2px 11px 8px;
+  border-left: 2px solid transparent;
+}
+.review-permanent-head h2 {
+  margin: 0;
+  color: var(--accent); /* always-open → accent title, matching open disclosures */
+  font-family: var(--font-mono);
+  font-size: var(--text-base);
+  font-weight: 650;
+  letter-spacing: 0.01em;
+}
+.review-permanent-head .review-section-icon { color: var(--accent); }
+.review-permanent-sub {
+  font-family: var(--font-mono, monospace);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  b { color: var(--text); font-weight: 700; }
+}
+.review-permanent > .review-panel {
+  margin: 2px 0 4px 8px;
 }
 
 .review-stack {
@@ -976,10 +1039,11 @@ body {
 .review-section-sep {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 9px;
+  gap: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
   font-weight: 600;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--text-faint);
   margin: 2px 0 -4px;
@@ -991,27 +1055,37 @@ body {
   }
 }
 
+/* ── Disclosure → flat section ──────────────────────────────────────
+   Not a boxed accordion: a heading + always-visible summary, with a
+   summary⇄detail switch that reveals the full panel inline. Sections are
+   parted by a top hairline + whitespace (see .review-stack gap), never a
+   wrapping border. Status (live/warn) is a thin accent rule on the left
+   edge of the heading only. */
 .review-disclosure {
-  border: 1px solid var(--border);
-  background: color-mix(in srgb, var(--bg), var(--bg-elev) 18%);
-  &--live {
-    border-left: 2px solid color-mix(in srgb, var(--green) 60%, transparent);
-    .review-section-icon { color: var(--green); }
-  }
-  &--warn {
-    border-left: 2px solid color-mix(in srgb, var(--yellow) 50%, transparent);
-    .review-section-icon { color: var(--yellow); }
-  }
+  background: transparent;
+  box-shadow: inset 0 1px var(--border-soft); /* hairline ABOVE the heading */
+}
+/* first section needs no top rule — the KPI grid above already provides one */
+.review-stack > .review-disclosure:first-child { box-shadow: none; }
+
+.review-disclosure-head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-4);
+  min-width: 0;
+  flex: 1;
 }
 
 .review-disclosure-title {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   gap: 7px;
+  padding-top: 1px;
+  flex-shrink: 0;
 }
 
 .review-section-icon {
-  font-size: 11px;
+  font-size: var(--text-base);
   color: var(--text-faint);
   flex-shrink: 0;
   line-height: 1;
@@ -1020,91 +1094,88 @@ body {
   font-style: normal;
   transition: color var(--transition-fast);
 }
-
-.review-disclosure[open] .review-section-icon {
-  color: var(--accent);
-}
+.review-disclosure--live .review-section-icon { color: var(--green); }
+.review-disclosure--warn .review-section-icon { color: var(--yellow); }
+.review-disclosure[open] .review-section-icon { color: var(--accent); }
 
 .review-disclosure summary {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 18px;
-  min-height: 64px;
-  padding: 10px 12px;
+  gap: var(--space-3);
+  padding: 11px 2px;
   cursor: pointer;
   list-style: none;
+  /* thin accent status rule on the left edge for live/warn — not a box */
+  border-left: 2px solid transparent;
+  padding-left: 8px;
   transition: background var(--transition-fast);
 }
-.review-disclosure summary:hover {
-  background: color-mix(in srgb, var(--bg-hi) 60%, transparent);
-}
-.review-disclosure[open] summary {
-  border-bottom: 1px solid var(--border-soft);
-}
-
-.review-disclosure summary::-webkit-details-marker {
-  display: none;
-}
-
-.review-disclosure summary::after {
-  content: "▶";
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  flex: 0 0 auto;
-  color: var(--text-faint);
-  font-size: 10px;
-  background: color-mix(in srgb, var(--border) 40%, transparent);
-  border-radius: 4px;
-  transition: transform var(--transition-fast), color var(--transition-fast), background var(--transition-fast);
-}
-
-.review-disclosure[open] summary::after {
-  content: "▶";
-  transform: rotate(90deg);
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-}
-
-.review-disclosure summary:hover::after {
-  color: var(--text-muted);
-  background: color-mix(in srgb, var(--border) 70%, transparent);
-}
+.review-disclosure--live summary { border-left-color: color-mix(in srgb, var(--green) 60%, transparent); }
+.review-disclosure--warn summary { border-left-color: color-mix(in srgb, var(--yellow) 55%, transparent); }
+.review-disclosure summary:hover { background: var(--bg-hi); }
+.review-disclosure summary::-webkit-details-marker { display: none; }
 
 .review-disclosure summary h2 {
+  /* the section heading — a confident title, not an eyebrow */
   margin: 0;
   color: var(--text);
+  font-family: var(--font-mono);
   font-size: var(--text-base);
-  font-weight: 600;
-  letter-spacing: -0.01em;
+  font-weight: 650;
+  letter-spacing: 0.01em;
 }
+.review-disclosure[open] .review-disclosure-title h2 { color: var(--accent); }
 
-.review-disclosure[open] .review-disclosure-title h2 {
-  color: var(--accent);
-}
-
+/* always-visible compact summary: action text + preview mini-graphs */
 .review-disclosure-summary {
   display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 10px;
-  margin-left: auto;
+  align-items: flex-start;
+  gap: var(--space-4);
   min-width: 0;
   flex: 1;
+  padding-top: 1px;
 }
 
 .review-disclosure summary p {
-  margin: 0 0 0 auto;
-  max-width: clamp(180px, 35vw, 380px);
-  color: var(--text-faint);
+  margin: 0;
+  max-width: clamp(180px, 32vw, 420px);
+  color: var(--text-muted);
   font-size: var(--text-xs);
-  text-align: right;
+  font-family: var(--font-mono, monospace);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  flex-shrink: 0;
+}
+
+/* summary ⇄ detail switch — the disclosure control, in .ui-toggle language */
+.review-disclosure-switch {
+  display: inline-flex;
+  align-items: stretch;
+  flex-shrink: 0;
+  margin-left: auto;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  font-family: var(--font-mono, monospace);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  user-select: none;
+  transition: border-color var(--transition-fast);
+}
+.review-disclosure summary:hover .review-disclosure-switch { border-color: var(--text-muted); }
+
+.rds-opt {
+  padding: 3px 9px;
+  color: var(--text-faint);
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+/* Closed → "summary" is the active view; open → "detail" is active. */
+.review-disclosure:not([open]) .rds-opt--summary,
+.review-disclosure[open] .rds-opt--detail {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
 .review-summary-pills {
@@ -1121,17 +1192,19 @@ body {
   align-items: baseline;
   gap: 5px;
   max-width: 190px;
-  padding: 4px 7px;
-  border: 1px solid var(--border-soft);
+  padding: 3px 8px;
   border-radius: var(--radius-sm);
-  background: var(--bg);
+  background: var(--bg-hi);
   color: var(--text-muted);
+  font-family: var(--font-mono, monospace);
   font-size: var(--text-xs);
   white-space: nowrap;
 }
 
 .review-summary-pill span {
   color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 
 .review-summary-pill b {
@@ -1179,7 +1252,9 @@ body {
 }
 
 .review-disclosure > .review-panel {
-  margin: 0 16px 16px;
+  /* indent the revealed body under the heading; whitespace below before the
+     next section's hairline */
+  margin: 2px 0 14px 8px;
 }
 
 .review-panel #graph-container,
@@ -1206,18 +1281,17 @@ body {
 .workspace-shell {
   position: relative;
   min-width: 0;
-  border: 1px solid var(--border);
-  background: var(--border);
+  background: var(--bg-elev);
 }
 
 .workspace-toolbar {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: var(--space-4);
   min-height: 42px;
-  padding: 8px 10px;
-  background: var(--bg);
-  border-bottom: 1px solid var(--border);
+  padding: 8px 12px;
+  background: var(--bg-elev);
+  box-shadow: inset 0 -1px var(--border-soft); /* hairline, not a border box */
 }
 
 .workspace-toolbar-main {
@@ -1231,9 +1305,11 @@ body {
 .workspace-eyebrow,
 .focus-strip-label {
   color: var(--text-faint);
+  font-family: var(--font-mono);
   font-size: var(--text-xs);
+  font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0;
+  letter-spacing: 0.09em;
 }
 
 .workspace-title {
@@ -1260,8 +1336,8 @@ body {
 
 .workspace-review-btn {
   flex: 0 0 auto;
-  border: 1px solid var(--border);
-  background: var(--bg);
+  border: 1px solid transparent;
+  background: transparent;
   color: var(--text-muted);
   border-radius: var(--radius-sm);
   padding: 4px 8px;
@@ -1273,8 +1349,7 @@ body {
 
 .workspace-review-btn:hover {
   color: var(--text);
-  border-color: var(--text-muted);
-  background: var(--bg-elev);
+  background: var(--bg-hi);
 }
 
 
@@ -1283,7 +1358,7 @@ body {
 .workspace-panel-chip,
 .focus-strip-btn {
   flex: 0 0 auto;
-  border: 1px solid var(--border-soft);
+  border: 1px solid transparent;
   background: transparent;
   color: var(--text-muted);
   border-radius: var(--radius-sm);
@@ -1297,30 +1372,31 @@ body {
 .workspace-panel-chip:hover,
 .focus-strip-btn:hover {
   color: var(--text);
-  border-color: var(--text-muted);
-  background: var(--bg-elev);
+  background: var(--bg-hi);
 }
 
 .workspace-panel-chip.is-open {
   color: var(--text-faint);
-  border-style: dashed;
 }
 
 .focus-strip {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 7px 10px;
+  padding: 7px 12px;
   background: var(--bg-elev);
-  border-bottom: 1px solid var(--border);
+  box-shadow: inset 0 -1px var(--border-soft); /* hairline */
   overflow-x: auto;
   scrollbar-width: thin;
 }
 
 .focus-strip-btn {
   color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent), transparent 65%);
   background: var(--accent-dim);
+}
+.focus-strip-btn:hover {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
 /* Dockview container — fixed workspace area inside the scrollable page */
@@ -1336,18 +1412,23 @@ body {
 /* View tabs */
 #view-tabs {
   background: var(--bg-elev);
-  border-bottom: 1px solid var(--border);
+  box-shadow: inset 0 -1px var(--border-soft); /* hairline, not a border box */
   padding: 0 20px;
   display: flex;
   gap: 0;
   flex-shrink: 0;
 }
 .view-tab {
-  padding: 8px 16px;
-  font-size: var(--text-base);
-  color: var(--text-muted);
+  padding: 8px 14px 7px;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-faint);
   cursor: pointer;
-  border-bottom: 2px solid transparent;
+  border-bottom: 1px solid transparent;
+  margin-bottom: -1px;
   user-select: none;
 }
 .view-tab:hover { color: var(--text); }
@@ -1375,8 +1456,8 @@ body {
 .panel-tray::-webkit-scrollbar { height: 3px; }
 .panel-tray::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 .panel-tray button {
-  background: var(--bg);
-  border: 1px solid var(--border);
+  background: transparent;
+  border: 1px solid var(--border-soft);
   color: var(--text-faint);
   font-size: var(--text-xs);
   padding: 4px 9px;
@@ -1385,8 +1466,8 @@ body {
   font-family: inherit;
   transition: color var(--transition-base), border-color var(--transition-base), background var(--transition-base);
 }
-.panel-tray button:hover { color: var(--text); border-color: var(--text-muted); }
-.panel-tray button.active { color: var(--accent); border-color: var(--accent); background: var(--accent-dim); }
+.panel-tray button:hover { color: var(--text); background: var(--bg-hi); border-color: var(--text-muted); }
+.panel-tray button.active { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); background: var(--accent-dim); }
 .panel-tray button.docked { color: var(--text-muted); border-color: var(--border-soft); border-style: dashed; }
 .panel-tray.drag-over { opacity: 1; }
 
@@ -1401,42 +1482,16 @@ body {
     margin-bottom: 8px;
   }
 
-  /* Status strip — stack cost below on very narrow screens */
-  .review-status-strip {
-    flex-wrap: wrap;
-    gap: 8px;
-  }
+  /* Experiment grid — hide the verbose caption sub on mobile (legend covers it) */
+  .exp-grid-caption-sub { display: none; }
 
-  /* Experiment grid — one scrollable row on mobile too */
-  .exp-grid-legend-note { display: none; }
-  /* Hide direction indicator and CTA on mobile (save space / prevent wrap) */
-  .review-best-direction { display: none; }
-  .review-idle-cta { display: none; }
-  .review-status-velocity { display: none; }
-  /* Hide running list on mobile (not enough space) */
-  .review-running-list { display: none; }
-  /* Hide redundant Workbench button on mobile (tab bar covers this) */
-  .review-status-strip .review-primary-action { display: none; }
-  .review-status-left {
-    gap: 8px;
+  /* Status line — let it wrap, hide the redundant Workbench button (tab bar covers it) */
+  .review-statusline {
+    flex-wrap: wrap;
+    gap: 6px;
     font-size: var(--text-xs);
   }
-  .review-status-primary {
-    font-size: var(--text-sm);
-  }
-
-  /* Best bar — truncate description more aggressively */
-  .review-best-bar {
-    padding: 6px 10px;
-  }
-  .review-best-meta {
-    display: none; /* hide description on mobile, keep label+value */
-  }
-  .review-narrative {
-    padding: 2px 10px 3px;
-    font-size: 9px;
-    white-space: nowrap;
-  }
+  .review-statusline-action { display: none; }
 
   /* Chart wrap — shorter on mobile to show disclosures above fold */
   .review-chart-wrap {
@@ -1451,9 +1506,7 @@ body {
 
   /* Table — allow horizontal scroll */
   .review-table-panel,
-  .review-detail-panel,
-  .review-ops-panel,
-  .review-log-panel {
+  .review-detail-panel {
     height: 480px;
   }
 
@@ -1475,9 +1528,7 @@ body {
   }
 
   .review-table-panel,
-  .review-detail-panel,
-  .review-ops-panel,
-  .review-log-panel {
+  .review-detail-panel {
     height: 520px;
   }
 
@@ -1486,58 +1537,38 @@ body {
   }
 
   .review-disclosure summary {
-    align-items: center;
-    flex-wrap: wrap;
-    min-height: 0;
+    align-items: flex-start;
     gap: 8px 12px;
-    padding: 10px;
+    padding: 10px 8px;
   }
+
+  /* heading row wraps: title (+ switch beside it via summary's flex), summary below */
+  .review-disclosure-head {
+    flex-wrap: wrap;
+    flex: 1;
+  }
+
+  .review-disclosure-switch { flex-shrink: 0; align-self: flex-start; }
 
   .review-disclosure-summary {
     flex-basis: 100%;
     flex-direction: column;
     align-items: flex-start;
-    justify-content: flex-start;
-    margin-left: 0;
-    order: 2;
     gap: 6px;
   }
 
   .review-disclosure summary p {
     max-width: none;
-    text-align: left;
-    font-size: 9px;
+    font-size: var(--text-sm);
     color: var(--text-muted);
     white-space: normal;
     overflow: visible;
     text-overflow: clip;
     line-height: 1.3;
-    order: 1;
-  }
-
-  /* Preview elements come after action text on mobile */
-  .review-disclosure-summary > *:not(p) {
-    order: 2;
-  }
-
-  .review-summary-pills {
-    justify-content: flex-start;
-    overflow-x: auto;
-    scrollbar-width: none;
-  }
-
-  .review-summary-pills::-webkit-scrollbar {
-    display: none;
-  }
-
-  .review-branch-preview {
-    width: 100%;
-    height: 48px;
-    flex-basis: 100%;
   }
 
   .review-disclosure > .review-panel {
-    margin: 0 10px 10px;
+    margin: 2px 0 10px;
   }
 
   .workspace-shell {

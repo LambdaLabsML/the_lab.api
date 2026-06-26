@@ -2,6 +2,17 @@ import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { listAgents, unregisterAgent } from "../state/api";
 import type { AgentEntry } from "../lib/types";
 import { agentCostMap } from "../state/signals";
+import { useCopyToClipboard, useDisclosure, useEscape } from "../lib/hooks";
+import { Badge, Stat, EmptyState, type BadgeTone } from "../components/ui";
+
+// Idea status → design-language Badge tone.
+const IDEA_STATUS_TONE: Record<string, BadgeTone> = {
+  active: "active",
+  running: "running",
+  concluded: "concluded",
+  abandoned: "abandoned",
+  suggested: "warn",
+};
 
 // ── History / cost lightbox ───────────────────────────────────────────────────
 
@@ -35,17 +46,13 @@ function fmtK(n: number): string {
 }
 
 function CopyButton({ text, label = "copy" }: { text: string; label?: string }) {
-  const [copied, setCopied] = useState(false);
+  const { copied, copy } = useCopyToClipboard();
   return (
     <button
-      class="agents-btn"
-      style={{ padding: "1px 6px", fontSize: "var(--text-xs)", opacity: copied ? 0.6 : 1 }}
+      class="agents-btn agents-btn-copy"
+      style={{ opacity: copied ? 0.7 : 1 }}
       title={`Copy: ${text}`}
-      onClick={() => {
-        navigator.clipboard.writeText(text).catch(() => {});
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1500);
-      }}
+      onClick={() => copy(text)}
     >
       {copied ? "✓" : label}
     </button>
@@ -55,6 +62,7 @@ function CopyButton({ text, label = "copy" }: { text: string; label?: string }) 
 function AgentHistoryLightbox({ agentId, onClose }: { agentId: string; onClose: () => void }) {
   const [data, setData] = useState<HistoryData | null>(null);
   const [error, setError] = useState<string | null>(null);
+  useEscape(onClose);
 
   useEffect(() => {
     fetch(`/api/v1/agents/${agentId}/history`)
@@ -74,69 +82,65 @@ function AgentHistoryLightbox({ agentId, onClose }: { agentId: string; onClose: 
           <span class="lightbox-close" onClick={onClose}>×</span>
         </div>
         <div class="lightbox-body" style={{ overflowY: "auto", maxHeight: "75vh" }}>
-          {error && <div style={{ color: "var(--red)", padding: "12px 16px" }}>{error}</div>}
-          {!data && !error && <div style={{ padding: "12px 16px", color: "var(--text-muted)" }}>Loading…</div>}
+          {error && <div class="agents-lb-error">{error}</div>}
+          {!data && !error && <div class="agents-lb-loading">Loading…</div>}
           {data && (
             <>
               {/* Totals bar */}
-              <div style={{
-                display: "flex", gap: 20, flexWrap: "wrap",
-                padding: "10px 16px", borderBottom: "1px solid var(--border)",
-                background: "var(--bg-elev)",
-              }}>
+              <div class="agents-history-totals">
                 {[
-                  ["SESSIONS",   data.totals.sessions],
-                  ["MESSAGES",   data.totals.message_count],
-                  ["INPUT",      fmtK(data.totals.input_tokens)],
-                  ["OUTPUT",     fmtK(data.totals.output_tokens)],
-                  ["CACHE READ", fmtK(data.totals.cache_read_tokens)],
-                  ["CACHE WRITE",fmtK(data.totals.cache_creation_tokens)],
+                  ["SESSIONS",    String(data.totals.sessions)],
+                  ["MESSAGES",    String(data.totals.message_count)],
+                  ["INPUT",       fmtK(data.totals.input_tokens)],
+                  ["OUTPUT",      fmtK(data.totals.output_tokens)],
+                  ["CACHE READ",  fmtK(data.totals.cache_read_tokens)],
+                  ["CACHE WRITE", fmtK(data.totals.cache_creation_tokens)],
                 ].map(([label, val]) => (
-                  <div key={String(label)}>
-                    <div style={{ color: "var(--text-muted)", fontSize: "var(--text-xs)" }}>{label}</div>
-                    <strong>{val}</strong>
-                  </div>
+                  <Stat key={label} size="sm" label={label} value={val} />
                 ))}
-                <div style={{ marginLeft: "auto" }}>
-                  <div style={{ color: "var(--text-muted)", fontSize: "var(--text-xs)" }}>EST. COST</div>
-                  <strong style={{ color: "var(--accent)", fontSize: "var(--text-lg)" }}>${data.totals.cost_usd.toFixed(3)}</strong>
-                </div>
+                <Stat
+                  class="agents-history-cost"
+                  size="sm"
+                  tone="accent"
+                  label="EST. COST"
+                  value={`$${data.totals.cost_usd.toFixed(3)}`}
+                />
               </div>
               {/* Per-session table */}
               {data.sessions.length === 0 ? (
-                <div style={{ padding: "12px 16px", color: "var(--text-muted)" }}>No session files found yet.</div>
+                <div class="agents-lb-empty">No session files found yet.</div>
               ) : (
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "var(--text-sm)" }}>
+                <table class="agents-history-table">
                   <thead>
-                    <tr style={{ borderBottom: "1px solid var(--border)", color: "var(--text-muted)", textAlign: "left" }}>
-                      <th style={{ padding: "6px 16px" }}>Session</th>
-                      <th style={{ padding: "6px 8px" }}>Started</th>
-                      <th style={{ padding: "6px 8px", textAlign: "right" }}>Msgs</th>
-                      <th style={{ padding: "6px 8px", textAlign: "right" }}>In</th>
-                      <th style={{ padding: "6px 8px", textAlign: "right" }}>Out</th>
-                      <th style={{ padding: "6px 8px", textAlign: "right" }}>↓Cache</th>
-                      <th style={{ padding: "6px 8px", textAlign: "right" }}>↑Cache</th>
-                      <th style={{ padding: "6px 16px", textAlign: "right" }}>Cost</th>
+                    <tr>
+                      <th>Session</th>
+                      <th>Started</th>
+                      <th class="num">Msgs</th>
+                      <th class="num">In</th>
+                      <th class="num">Out</th>
+                      <th class="num">↓Cache</th>
+                      <th class="num">↑Cache</th>
+                      <th class="num">Cost</th>
                     </tr>
                   </thead>
                   <tbody>
                     {data.sessions.map((s, i) => (
-                      <tr key={s.session_id} style={{ borderBottom: "1px solid var(--border-faint, var(--border))" }}>
-                        <td style={{ padding: "6px 8px 6px 16px" }}>
-                          <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                            <code style={{ fontFamily: "var(--font-mono)", fontSize: "var(--text-xs)", color: i === 0 ? "var(--text)" : "var(--text-muted)" }} title={s.session_id}>
+                      <tr key={s.session_id}>
+                        <td>
+                          <div class="agents-history-session">
+                            <code class={i === 0 ? "is-latest" : undefined} title={s.session_id}>
                               {s.session_id.slice(0, 8)}…
                             </code>
                             <CopyButton text={s.session_id} />
                           </div>
                         </td>
-                        <td style={{ padding: "6px 8px", color: "var(--text-muted)", fontSize: "var(--text-xs)", whiteSpace: "nowrap" }}>{s.started_at ? s.started_at.slice(0, 16).replace("T", " ") : "—"}</td>
-                        <td style={{ padding: "6px 8px", textAlign: "right" }}>{s.message_count}</td>
-                        <td style={{ padding: "6px 8px", textAlign: "right", color: "var(--text-muted)" }}>{fmtK(s.input_tokens)}</td>
-                        <td style={{ padding: "6px 8px", textAlign: "right", color: "var(--text-muted)" }}>{fmtK(s.output_tokens)}</td>
-                        <td style={{ padding: "6px 8px", textAlign: "right", color: "var(--text-muted)" }}>{fmtK(s.cache_read_tokens)}</td>
-                        <td style={{ padding: "6px 8px", textAlign: "right", color: "var(--text-muted)" }}>{fmtK(s.cache_creation_tokens)}</td>
-                        <td style={{ padding: "6px 16px", textAlign: "right", color: "var(--accent)" }}>${s.cost_usd.toFixed(3)}</td>
+                        <td class="agents-history-started">{s.started_at ? s.started_at.slice(0, 16).replace("T", " ") : "—"}</td>
+                        <td class="num">{s.message_count}</td>
+                        <td class="num muted">{fmtK(s.input_tokens)}</td>
+                        <td class="num muted">{fmtK(s.output_tokens)}</td>
+                        <td class="num muted">{fmtK(s.cache_read_tokens)}</td>
+                        <td class="num muted">{fmtK(s.cache_creation_tokens)}</td>
+                        <td class="num accent">${s.cost_usd.toFixed(3)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -144,18 +148,10 @@ function AgentHistoryLightbox({ agentId, onClose }: { agentId: string; onClose: 
               )}
               {/* Resume command — most recent session */}
               {data.sessions.length > 0 && (
-                <div style={{
-                  margin: "12px 16px",
-                  padding: "10px 12px",
-                  background: "var(--bg-elev)",
-                  borderRadius: 6,
-                  border: "1px solid var(--border)",
-                }}>
-                  <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", marginBottom: 6 }}>
-                    RESUME LATEST SESSION
-                  </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <code style={{ fontFamily: "var(--font-mono)", fontSize: "var(--text-xs)", color: "var(--text)", flex: 1, overflowX: "auto", whiteSpace: "nowrap" }}>
+                <div class="agents-resume">
+                  <span class="ui-eyebrow">Resume latest session</span>
+                  <div class="agents-resume-cmd">
+                    <code>
                       the-lab-agent loop --resume {data.sessions[0].session_id}
                     </code>
                     <CopyButton text={`the-lab-agent loop --resume ${data.sessions[0].session_id}`} label="copy cmd" />
@@ -174,9 +170,10 @@ function AgentHistoryLightbox({ agentId, onClose }: { agentId: string; onClose: 
 
 function AgentOutputLightbox({ agentId, onClose }: { agentId: string; onClose: () => void }) {
   const [text, setText] = useState<string>("Loading…");
-  const [follow, setFollow] = useState(true);
+  const { open: follow, toggle: toggleFollow } = useDisclosure(true);
   const bodyRef = useRef<HTMLPreElement>(null);
   const pollRef = useRef<number | null>(null);
+  useEscape(onClose);
 
   async function load() {
     try {
@@ -211,7 +208,7 @@ function AgentOutputLightbox({ agentId, onClose }: { agentId: string; onClose: (
           <div class="lightbox-toolbar">
             <button
               class={`follow-btn${follow ? " follow-active" : ""}`}
-              onClick={() => setFollow(!follow)}
+              onClick={() => toggleFollow()}
             >
               {follow ? "↓ following" : "↓ follow"}
             </button>
@@ -219,17 +216,7 @@ function AgentOutputLightbox({ agentId, onClose }: { agentId: string; onClose: (
           <span class="lightbox-close" onClick={onClose}>×</span>
         </div>
         <div class="lightbox-body" style={{ padding: 0 }}>
-          <pre
-            ref={bodyRef}
-            style={{
-              margin: 0, padding: "10px 14px",
-              fontFamily: "var(--font-mono)", fontSize: "var(--text-sm)",
-              color: "var(--text)", lineHeight: 1.5,
-              whiteSpace: "pre-wrap", wordBreak: "break-word",
-              overflowY: "auto", maxHeight: "75vh",
-              background: "var(--bg)",
-            }}
-          >{text}</pre>
+          <pre ref={bodyRef} class="agents-output-pre">{text}</pre>
         </div>
       </div>
     </div>
@@ -320,36 +307,30 @@ function AgentCostChart({
   const valueLabel = mode === "cost"
     ? `$${last.cost.toFixed(3)}`
     : `${(last.tokens / 1000).toFixed(0)}K tok`;
-  const gradId = `ag-grad-${mode}-${W}`;
   const dotX = points.length === 1 ? (PL + IW).toFixed(1) : px(last.t).toFixed(1);
 
   return (
     <div class="agent-cost-chart">
       <div class="agent-cost-chart-header">
-        <span class="agent-cost-chart-label">
+        <span class="agent-cost-chart-label ui-eyebrow">
           {labelOverride ?? (mode === "cost" ? "Cumulative cost" : "Cumulative tokens")}
         </span>
         <button
-          class="agents-btn"
-          style={{ padding: "1px 6px", fontSize: "var(--text-xs)" }}
+          class="agents-btn agents-btn-copy"
           onClick={() => setMode(mode === "cost" ? "tokens" : "cost")}
         >
           {mode === "cost" ? "tokens →" : "cost →"}
         </button>
       </div>
       <svg width={W} height={H} style={{ display: "block", overflow: "visible" }}>
-        <defs>
-          <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stop-color={color} stop-opacity="0.22" />
-            <stop offset="100%" stop-color={color} stop-opacity="0" />
-          </linearGradient>
-        </defs>
-        <path d={areaD} fill={`url(#${gradId})`} />
+        {/* flat tint under the line — no gradient (see DESIGN.md) */}
+        <path d={areaD} fill={color} fill-opacity="0.1" />
         <path d={lineD} fill="none" stroke={color} stroke-width="1.5"
           stroke-linejoin="round" stroke-linecap="round" />
         <circle cx={dotX} cy={py(lastV).toFixed(1)} r="2.5" fill={color} />
-        <text x={W - PR} y={H - 1} text-anchor="end" font-size="8"
-          fill={color} font-family="var(--font-mono)">{valueLabel}</text>
+        <text x={W - PR} y={H - 1} text-anchor="end"
+          fill={color} font-family="var(--font-mono)"
+          style="font-size:var(--text-xs)">{valueLabel}</text>
       </svg>
     </div>
   );
@@ -499,10 +480,10 @@ export function AgentsView() {
     )}
     <div id="agents-container">
       <div class="pane-bar">
-        <h2 class="pane-bar-title">Agents</h2>
+        <span class="ui-eyebrow pane-bar-title">Agents</span>
         <span class="pane-bar-count">{loaded ? summary : "…"}</span>
         <div class="pane-bar-actions">
-          <button class="agents-btn" onClick={() => refresh()}>↺</button>
+          <button class="ui-btn" onClick={() => refresh()} title="Refresh">↺</button>
         </div>
       </div>
 
@@ -520,13 +501,10 @@ export function AgentsView() {
       {error && <div class="agents-error">{error}</div>}
 
       {loaded && agents.length === 0 && !error ? (
-        <div class="agents-empty">
-          <div class="agents-empty-title">No active agents.</div>
-          <div class="agents-empty-body">
-            Launch one with <code>the-lab-agent</code>
-            {" "}(or <code>the-lab-agent --no-isolated</code> for legacy mode).
-          </div>
-        </div>
+        <EmptyState
+          title="No active agents"
+          body={<>Launch one with <code>the-lab-agent</code> (or <code>the-lab-agent --no-isolated</code> for legacy mode).</>}
+        />
       ) : (
         <div class="agents-grid">
           {agents.map((agent) => {
@@ -537,17 +515,16 @@ export function AgentsView() {
                 <div class="agents-card-top">
                   <div class="agents-card-id-block">
                     <div class="agents-card-id">{agent.agent_id}</div>
-                    <span class="agents-chip">{agent.role || "default"}</span>
+                    <Badge tone="neutral">{agent.role || "default"}</Badge>
                   </div>
-                  <div
-                    class={`agents-pid-status ${alive ? "alive" : "dead"}`}
+                  <span
+                    class="agents-pid-status"
                     title={alive ? `pid ${agent.pid}` : "no pid recorded"}
                   >
-                    <span class="agents-dot" />
-                    <span class="agents-pid-label">
+                    <Badge tone={alive ? "good" : "bad"} dot={alive}>
                       {alive ? `pid ${agent.pid}` : "no pid"}
-                    </span>
-                  </div>
+                    </Badge>
+                  </span>
                 </div>
 
                 <div class="agents-card-row">
@@ -558,7 +535,7 @@ export function AgentsView() {
                         <div class="agents-branch">
                           <code>{agent.current_branch}</code>
                           {" — idea #"}{agent.current_idea.id}
-                          {" "}<span class="agents-chip">{agent.current_idea.status}</span>
+                          {" "}<Badge tone={IDEA_STATUS_TONE[agent.current_idea.status] ?? "neutral"}>{agent.current_idea.status}</Badge>
                         </div>
                         <div class="agents-branch-parent" title={agent.current_idea.description}>
                           {agent.current_idea.description.split("\n")[0].slice(0, 100)}
@@ -659,32 +636,31 @@ export function AgentsView() {
       {pastAgents.length > 0 && (
         <section class="agents-past">
           <div class="agents-messages-header">
-            <h3>Recent agents</h3>
+            <span class="ui-eyebrow">Recent agents</span>
             <span class="agents-messages-meta">{pastAgents.length} completed</span>
           </div>
           <div class="agents-past-list">
             {pastAgents.map((a) => (
               <div class="agents-past-row" key={`${a.agent_id}-${a.completed_at}`}>
-                <span class="agents-card-id" style={{ minWidth: 60 }}>{a.agent_id}</span>
-                <span class="agents-chip">{a.role || "default"}</span>
-                <code style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                <span class="agents-card-id agents-past-id">{a.agent_id}</span>
+                <Badge tone="neutral">{a.role || "default"}</Badge>
+                <code class="agents-past-branch">
                   {a.branch || "—"}
                 </code>
-                <span style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", whiteSpace: "nowrap" }}>
+                <span class="agents-past-time">
                   {a.completed_at ? relativeTime(a.completed_at) : "—"}
                 </span>
                 {agentCost(a.agent_id) != null ? (
-                  <span style={{ fontSize: "var(--text-xs)", color: "var(--accent)", fontWeight: 600, whiteSpace: "nowrap", minWidth: 52, textAlign: "right" }}>
+                  <span class="agents-past-cost">
                     ${agentCost(a.agent_id)!.toFixed(3)}
                   </span>
                 ) : (
-                  <span style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)", minWidth: 52, textAlign: "right" }}>—</span>
+                  <span class="agents-past-cost is-empty">—</span>
                 )}
                 <button
-                  class="agents-btn"
+                  class="agents-btn agents-btn-copy"
                   onClick={() => setHistoryAgentId(a.agent_id)}
                   title="View conversation history and token cost"
-                  style={{ padding: "2px 8px", fontSize: "var(--text-xs)" }}
                 >
                   History
                 </button>

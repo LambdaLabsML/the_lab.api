@@ -3,11 +3,28 @@ import { selectedIdea, selectedMetric, detailTimeline, detailSortNewest } from "
 import { scrollToExperiment, runningProgress, allExperiments } from "../state/signals";
 import { getIdea, getExperimentProgress, getExperimentLog, getExperimentScript, getExperimentOutput, getIdeaDiff } from "../state/api";
 import { formatTime, badgeHtml, escapeHtml } from "../lib/format";
-import { navigateToIdea, navigateFromExperiment } from "../lib/navigate";
 import { Lightbox } from "./lightbox";
 import { JsonView } from "./json-view";
+import { Eyebrow, Stat, Badge, Toggle, EmptyState, type BadgeTone } from "./ui";
+import { useEntityNav, useDisclosure } from "../lib/hooks";
 import type { IdeaDetail, Experiment, Note } from "../lib/types";
 import { getStatusColor, isLowerBetter } from "../lib/colors";
+
+// Map experiment status / note level → a <Badge> tone.
+const STATUS_TONE: Record<string, BadgeTone> = {
+  running: "running",
+  pending: "neutral",
+  completed: "good",
+  failed: "bad",
+  cancelled: "neutral",
+};
+const LEVEL_TONE: Record<string, BadgeTone> = {
+  milestone: "warn",
+  insight: "concluded",
+  observation: "neutral",
+  debug: "bad",
+  note: "neutral",
+};
 
 // ---------------------------------------------------------------------------
 // URL hash helpers — encode/decode lightbox state as shareable deep links.
@@ -131,16 +148,25 @@ export function DetailPanel() {
     return () => clearInterval(timer);
   }, [ideaId]);
 
-  // Scroll to a specific experiment when signaled
+  // Scroll to a specific experiment when signaled, then briefly flash ONLY that
+  // one card so the user sees what they clicked (chart/table/graph → detail).
+  // We match the exact card by the label the signal carries (CSS.escape guards
+  // labels with special chars) and toggle a transient class with a self-fading
+  // keyframe; remove-then-re-add (with a forced reflow) replays it on a repeat
+  // click of the same card.
   useEffect(() => {
     const label = scrollToExperiment.value;
     if (!label) return;
     requestAnimationFrame(() => {
-      const el = document.querySelector(`[data-exp-label="${label}"]`);
+      const sel = (window as any).CSS?.escape ? CSS.escape(label) : label;
+      const el = document.querySelector(`.exp-item[data-exp-label="${sel}"]`) as HTMLElement | null;
       if (el) {
         el.scrollIntoView({ behavior: "smooth", block: "center" });
-        el.classList.add("exp-highlight");
-        setTimeout(() => el.classList.remove("exp-highlight"), 2000);
+        el.classList.remove("exp-flash");
+        // Force reflow so removing + re-adding restarts the keyframe.
+        void el.offsetWidth;
+        el.classList.add("exp-flash");
+        setTimeout(() => el.classList.remove("exp-flash"), 1100);
       }
       scrollToExperiment.value = null;
     });
@@ -512,14 +538,11 @@ export function DetailPanel() {
     return (
       <div id="detail-panel" class="open">
         <div id="detail-content">
-          <div class="detail-empty-state">
-            <div class="detail-empty-icon">⬡</div>
-            <div class="detail-empty-title">No idea selected</div>
-            <div class="detail-empty-body">
-              Click any node in the Graph, a row in the Table, a dot in the chart,
-              or a bar in the Timeline to load idea details here.
-            </div>
-          </div>
+          <EmptyState
+            icon="⬡"
+            title="No idea selected"
+            body="Click any node in the Graph, a row in the Table, a dot in the chart, or a bar in the Timeline to load idea details here."
+          />
         </div>
       </div>
     );
@@ -560,21 +583,22 @@ export function DetailPanel() {
       <div id="detail-panel" class="open">
         {loading && <div class="detail-loading-bar" />}
         <div id="detail-content">
-          <h2>
-            <span>
-              Idea #{ideaId}{" "}
+          <div class="detail-head">
+            <span class="detail-head-title">
+              <span class="detail-head-id">Idea #{ideaId}</span>
               {idea && <span dangerouslySetInnerHTML={{ __html: badgeHtml(idea.status) }} />}
             </span>
-            <span class="close-btn" onClick={close}>&times;</span>
-          </h2>
+            <button type="button" class="detail-close" onClick={close} title="Close">&times;</button>
+          </div>
 
           {loading && !idea && (
-            <div style={{ padding: "20px 0", color: "var(--text-muted)", fontSize: "12px" }}>Loading...</div>
+            <div class="detail-loading-text">Loading…</div>
           )}
 
           {idea && (
             <>
-              {/* Compact meta block — shown FIRST so key stats are above the fold */}
+              {/* Compact meta block — shown FIRST so key stats are above the fold.
+                  Flat --bg surface, hairline-separated rows; no boxed border. */}
               <div class="idea-meta-block">
 
                 {/* Row 1: branch + parents + diff */}
@@ -583,19 +607,14 @@ export function DetailPanel() {
                     {idea.branch && (
                       <>
                         <span class="meta-branch" title={idea.branch}>⎇ {idea.branch}</span>
-                        <button class="meta-btn" onClick={() => openDiff(false)}>diff ↗</button>
+                        <Toggle active={false} onClick={() => openDiff(false)} title="View branch diff">diff ↗</Toggle>
                       </>
                     )}
                     {idea.parent_ids && idea.parent_ids.length > 0 && (
                       <span class="meta-parents">
-                        {idea.parent_ids.map((pid, i) => (
-                          <span key={pid}>
-                            {i === 0 && <span class="meta-arrow">←</span>}
-                            {" "}
-                            <a class="parent-link" href="#"
-                              onClick={(e) => { e.preventDefault(); navigateToIdea(pid); }}
-                              title={`Jump to idea #${pid}`}>#{pid}</a>
-                          </span>
+                        <span class="meta-arrow">←</span>
+                        {idea.parent_ids.map((pid) => (
+                          <ParentLink key={pid} pid={pid} />
                         ))}
                       </span>
                     )}
@@ -605,9 +624,9 @@ export function DetailPanel() {
                 {/* Row 2: experiment stats */}
                 {experiments.length > 0 && (
                   <div class="meta-row meta-stats-row">
-                    <span class="meta-stat-label">{experiments.length} exp</span>
+                    <Eyebrow class="meta-stat-label">{experiments.length} exp</Eyebrow>
                     {STATUS_ORDER.filter(s => expByStatus[s]).map(s => (
-                      <span key={s} class={`meta-pill meta-pill-${s}`}>{expByStatus[s]} {s}</span>
+                      <Badge key={s} tone={STATUS_TONE[s] ?? "neutral"}>{expByStatus[s]} {s}</Badge>
                     ))}
                   </div>
                 )}
@@ -615,15 +634,15 @@ export function DetailPanel() {
                 {/* Row 3: note stats */}
                 {notes.length > 0 && (
                   <div class="meta-row meta-stats-row">
-                    <span class="meta-stat-label">{notes.length} notes</span>
+                    <Eyebrow class="meta-stat-label">{notes.length} notes</Eyebrow>
                     {LEVEL_ORDER.filter(l => noteByLevel[l]).map(l => (
-                      <span key={l} class={`meta-pill meta-pill-note-${l}`}>{noteByLevel[l]} {l}</span>
+                      <Badge key={l} tone={LEVEL_TONE[l] ?? "neutral"}>{noteByLevel[l]} {l}</Badge>
                     ))}
-                    {noteByLevel["note"] ? <span class="meta-pill meta-pill-note-note">{noteByLevel["note"]} note</span> : null}
+                    {noteByLevel["note"] ? <Badge tone="neutral">{noteByLevel["note"]} note</Badge> : null}
                   </div>
                 )}
 
-                {/* Best metric score for this idea */}
+                {/* Best metric score for this idea — reads like a <Stat>. */}
                 {(() => {
                   const mk = selectedMetric.value;
                   if (!mk || experiments.length === 0) return null;
@@ -637,9 +656,13 @@ export function DetailPanel() {
                   if (best === null) return null;
                   const fmtBest = Math.abs(best) >= 100 ? best.toFixed(0) : Math.abs(best) >= 1 ? best.toFixed(2) : best.toFixed(3);
                   return (
-                    <div class="meta-row" style={{ gap: 6 }}>
-                      <span class="meta-stat-label">best {mk.replace(/_/g, " ")}</span>
-                      <span style={{ color: "var(--purple)", fontFamily: "var(--font-mono, monospace)", fontWeight: 700, fontSize: "var(--text-sm)" }}>{fmtBest}</span>
+                    <div class="meta-best">
+                      <Stat
+                        size="md"
+                        tone="best"
+                        label={`best ${mk.replace(/_/g, " ")}`}
+                        value={fmtBest}
+                      />
                     </div>
                   );
                 })()}
@@ -651,30 +674,25 @@ export function DetailPanel() {
               </div>
 
               {/* Description — below meta so stats are visible first */}
-              <details class="detail-desc-wrap" open={idea.description.length < 200}>
-                <summary class="detail-desc-toggle">
-                  {idea.description.length < 200 ? "Description" : `Description (${idea.description.length} chars)`}
-                </summary>
-                <div class="detail-desc">{idea.description}</div>
-              </details>
+              <Description text={idea.description} />
 
-              {/* View controls */}
+              {/* View controls — Timeline/Grouped + sort order toggles */}
               {(notes.length > 0 || experiments.length > 0) && (
                 <div class="detail-view-controls">
-                  <button
-                    class="view-ctrl-btn vc-active"
+                  <Toggle
+                    active={detailTimeline.value}
                     onClick={() => { detailTimeline.value = !detailTimeline.value; }}
                     title={detailTimeline.value ? "Switch to grouped view" : "Switch to timeline view"}
                   >
                     {detailTimeline.value ? "⊞ Timeline" : "⊞ Grouped"}
-                  </button>
-                  <button
-                    class="view-ctrl-btn"
+                  </Toggle>
+                  <Toggle
+                    active={newestFirst}
                     onClick={() => { detailSortNewest.value = !detailSortNewest.value; }}
                     title="Toggle sort order"
                   >
                     {newestFirst ? "↓ Newest first" : "↑ Oldest first"}
-                  </button>
+                  </Toggle>
                 </div>
               )}
 
@@ -712,30 +730,44 @@ export function DetailPanel() {
               ) : (
                 <>
                   {sortedNotes.length > 0 && (
-                    <div class="detail-section">
-                      <div class="label">Notes ({sortedNotes.length})</div>
-                      {sortedNotes.map((note, i) => (
-                        <div key={i} class={`note-item ${note.level}`}>
-                          <div class="note-meta">{note.level} &middot; {formatTime(note.created_at)}</div>
-                          {note.text}
-                        </div>
-                      ))}
-                    </div>
+                    <section class="detail-section">
+                      <div class="detail-section-head">
+                        <Eyebrow>Notes</Eyebrow>
+                        <span class="detail-section-count">{sortedNotes.length}</span>
+                      </div>
+                      <div class="note-list">
+                        {sortedNotes.map((note, i) => (
+                          <div key={i} class={`note-item ${note.level}`}>
+                            <div class="note-meta">
+                              <span class={`note-dot note-dot-${note.level || "note"}`} />
+                              <span class="note-level">{note.level || "note"}</span>
+                              <span class="note-ts">{formatTime(note.created_at)}</span>
+                            </div>
+                            <div class="note-text">{note.text}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </section>
                   )}
                   {sortedExps.length > 0 && (
-                    <div class="detail-section">
-                      <div class="label">Experiments ({sortedExps.length})</div>
-                      {sortedExps.map((exp) => (
-                        <ExperimentItem
-                          key={exp.id}
-                          exp={exp}
-                          progress={progressData[String(exp.id)]}
-                          onShowLog={() => openLog(exp)}
-                          onShowScript={() => openScript(exp)}
-                          onShowOutput={() => openOutput(exp)}
-                        />
-                      ))}
-                    </div>
+                    <section class="detail-section">
+                      <div class="detail-section-head">
+                        <Eyebrow>Experiments</Eyebrow>
+                        <span class="detail-section-count">{sortedExps.length}</span>
+                      </div>
+                      <div class="exp-list">
+                        {sortedExps.map((exp) => (
+                          <ExperimentItem
+                            key={exp.id}
+                            exp={exp}
+                            progress={progressData[String(exp.id)]}
+                            onShowLog={() => openLog(exp)}
+                            onShowScript={() => openScript(exp)}
+                            onShowOutput={() => openOutput(exp)}
+                          />
+                        ))}
+                      </div>
+                    </section>
                   )}
                 </>
               )}
@@ -756,8 +788,8 @@ export function DetailPanel() {
             setLogFollowing(atBottom);
           }}
           toolbar={
-            <button
-              class={`follow-btn${logFollowing ? " follow-active" : ""}`}
+            <Toggle
+              active={logFollowing}
               onClick={() => {
                 const next = !logFollowing;
                 setLogFollowing(next);
@@ -767,10 +799,10 @@ export function DetailPanel() {
               }}
             >
               {logFollowing ? "↓ Following" : "↓ Follow"}
-            </button>
+            </Toggle>
           }
         >
-          {logLoading && <div style={{ color: "var(--text-muted)" }}>Loading...</div>}
+          {logLoading && <div class="lightbox-loading">Loading…</div>}
           {logContent !== null && <pre>{logContent || "(empty)"}</pre>}
         </Lightbox>
       )}
@@ -781,7 +813,7 @@ export function DetailPanel() {
           title={`Script — exp/${scriptExp.label || scriptExp.id}`}
           onClose={() => { setScriptExp(null); setHash({ view: null, exp: null }); }}
         >
-          {scriptLoading && <div style={{ color: "var(--text-muted)" }}>Loading...</div>}
+          {scriptLoading && <div class="lightbox-loading">Loading…</div>}
           {scriptContent !== null && (
             <pre dangerouslySetInnerHTML={{ __html: colorizeScript(scriptContent || "(empty)") }} />
           )}
@@ -808,8 +840,8 @@ export function DetailPanel() {
             toolbar={
               <>
                 {linked && (
-                  <button
-                    class="follow-btn"
+                  <Toggle
+                    active={false}
                     onClick={() => {
                       outputDetailsRef.current = new Map();
                       // Restore the parent's scroll position after the
@@ -820,10 +852,10 @@ export function DetailPanel() {
                     title={linked.path}
                   >
                     ← Back
-                  </button>
+                  </Toggle>
                 )}
-                <button
-                  class="follow-btn"
+                <Toggle
+                  active={false}
                   onClick={() => {
                     // Force a fresh fetch of whatever's currently displayed.
                     // Reset script-execution memory so widgets re-init against
@@ -853,10 +885,10 @@ export function DetailPanel() {
                   title="Re-fetch the file from disk"
                 >
                   ↻ Refresh
-                </button>
+                </Toggle>
                 {!linked && (
-                  <button
-                    class={`follow-btn${outputFollowing ? " follow-active" : ""}`}
+                  <Toggle
+                    active={outputFollowing}
                     onClick={() => {
                       const next = !outputFollowing;
                       setOutputFollowing(next);
@@ -866,15 +898,15 @@ export function DetailPanel() {
                     }}
                   >
                     {outputFollowing ? "↓ Following" : "↓ Follow"}
-                  </button>
+                  </Toggle>
                 )}
               </>
             }
           >
-            {(outputLoading || outputFileLoading) && <div style={{ color: "var(--text-muted)" }}>Loading...</div>}
+            {(outputLoading || outputFileLoading) && <div class="lightbox-loading">Loading…</div>}
             {displayedContent !== null && (
               displayedContent.startsWith("(") ? (
-                <div style={{ color: "var(--text-muted)", fontStyle: "italic" }}>{displayedContent}</div>
+                <div class="lightbox-loading lightbox-loading--italic">{displayedContent}</div>
               ) : (
                 <div
                   class="md-output"
@@ -896,16 +928,15 @@ export function DetailPanel() {
           title={`Diff — ${idea.branch}`}
           onClose={() => { setDiffOpen(false); setHash({ view: null, exp: null }); }}
           toolbar={
-            <label style={{ cursor: "pointer" }}>
-              <input type="checkbox" checked={diffUseMain} onChange={toggleDiffBase} />
-              {" "}vs main
-            </label>
+            <Toggle active={diffUseMain} onClick={toggleDiffBase} title="Diff against main instead of the parent branch">
+              vs main
+            </Toggle>
           }
         >
-          {diffLoading && <div style={{ color: "var(--text-muted)" }}>Loading diff...</div>}
+          {diffLoading && <div class="lightbox-loading">Loading diff…</div>}
           {diffData && (
             <>
-              <pre style={{ marginBottom: "8px", color: "var(--text-muted)" }}>{diffData.stat || "No changes"}</pre>
+              <pre class="diff-stat-pre">{diffData.stat || "No changes"}</pre>
               {diffData.diff && (
                 <pre dangerouslySetInnerHTML={{ __html: colorizeDiff(diffData.diff) }} />
               )}
@@ -1376,6 +1407,40 @@ function renderMarkdown(md: string, basePath = ""): string {
   return html;
 }
 
+/** Parent-idea link — click navigates + hover-highlights via the shared hook. */
+function ParentLink({ pid }: { pid: number }) {
+  const nav = useEntityNav(pid);
+  return (
+    <a
+      class={`parent-link${nav.highlighted ? " is-highlighted" : ""}`}
+      href="#"
+      {...nav.bind}
+      onClick={(e) => { e.preventDefault(); nav.bind.onClick(e as unknown as MouseEvent); }}
+      title={`Jump to idea #${pid}`}
+    >
+      #{pid}
+    </a>
+  );
+}
+
+/** Collapsible idea description — auto-open when short, via useDisclosure. */
+function Description({ text }: { text: string }) {
+  const { open, toggle } = useDisclosure(text.length < 200);
+  return (
+    <div class="detail-desc-wrap">
+      <button
+        type="button"
+        class={`detail-desc-toggle${open ? " is-open" : ""}`}
+        onClick={toggle}
+        aria-expanded={open}
+      >
+        {text.length < 200 ? "Description" : `Description (${text.length} chars)`}
+      </button>
+      {open && <div class="detail-desc">{text}</div>}
+    </div>
+  );
+}
+
 function ExperimentItem({
   exp,
   progress,
@@ -1393,6 +1458,9 @@ function ExperimentItem({
   const statusColor = getStatusColor(exp.status);
   const metricKey = selectedMetric.value;
   const highlights = metricKey ? [metricKey] : [];
+
+  // Experiment-header → graph navigation + hover-highlight via the shared hook.
+  const nav = useEntityNav(exp.idea_id);
 
   // Check if this experiment was a global best at the time it ran
   const isMilestone = (() => {
@@ -1413,13 +1481,13 @@ function ExperimentItem({
   })();
 
   return (
-    <div class="exp-item" data-exp-label={exp.label || exp.id}>
+    <div class={`exp-item${nav.highlighted ? " exp-highlight" : ""}`} data-exp-label={exp.label || exp.id}>
       <div class="exp-header">
-        <span class="exp-id" style={{ cursor: "pointer" }} onClick={() => navigateFromExperiment(exp.idea_id)} title="Scroll to this idea in graph + highlight in charts">
-          {isMilestone && <span style={{ color: "var(--yellow)", marginRight: 4, fontSize: "11px" }} title="New global best at this point">★</span>}
+        <span class="exp-id" {...nav.bind} title="Scroll to this idea in graph + highlight in charts">
+          {isMilestone && <span class="exp-milestone-star" title="New global best at this point">★</span>}
           exp/{exp.label || exp.id}
         </span>
-        {/* Primary metric value — most important number at a glance */}
+        {/* Primary metric value — most important number at a glance; reads like a <Stat>. */}
         {metricKey && exp.metrics && typeof exp.metrics[metricKey] === "number" && !exp._running && (
           <span class="exp-metric-badge" title={`${metricKey} = ${exp.metrics[metricKey]}`}>
             {(exp.metrics[metricKey] as number).toFixed(
@@ -1432,7 +1500,7 @@ function ExperimentItem({
       </div>
       <div class="exp-desc">{exp.description}</div>
       {exp.tags && exp.tags.length > 0 && (
-        <div>{exp.tags.map((t) => <span key={t} class="tag-pill">{t}</span>)}</div>
+        <div class="exp-tags">{exp.tags.map((t) => <span key={t} class="tag-pill">{t}</span>)}</div>
       )}
       {progress && Object.keys(progress).length > 0 ? (
         <JsonView data={progress} label="progress" labelColor={statusColor} startCollapsed />
@@ -1467,10 +1535,10 @@ function ExperimentItem({
       })()}
       <div class="exp-actions">
         {exp.has_output && onShowOutput && (
-          <button class="detail-expand-btn" onClick={onShowOutput}>Show output</button>
+          <Toggle active={false} onClick={onShowOutput}>Show output</Toggle>
         )}
-        <button class="detail-expand-btn" onClick={onShowLog}>Show log</button>
-        <button class="detail-expand-btn" onClick={onShowScript}>Show script</button>
+        <Toggle active={false} onClick={onShowLog}>Show log</Toggle>
+        <Toggle active={false} onClick={onShowScript}>Show script</Toggle>
       </div>
     </div>
   );

@@ -29,7 +29,7 @@ import type {
   DockviewGroupPanel,
 } from "dockview-core";
 
-import { Topbar } from "./components/topbar";
+import { ScrollTop } from "./components/scroll-top";
 import { TaskBanner } from "./components/task-banner";
 import { SuggestPanel } from "./components/suggest-panel";
 import { ChatPanel } from "./components/chat-panel";
@@ -48,6 +48,11 @@ import { DetailPanel } from "./components/detail-panel";
 import { MetricsChart } from "./components/chart-panel/metrics-chart";
 import { ScatterChart } from "./components/chart-panel/scatter-chart";
 import { FilterBar } from "./components/filter-bar";
+import { Eyebrow, Stat, Tooltip } from "./components/ui";
+import { NavRail, SecondaryPanel, type NavSection } from "./components/nav-rail";
+import { ActivityPane } from "./components/activity/activity-pane";
+import { ActivityShortlog } from "./components/activity/activity-shortlog";
+import { SettingsPanel } from "./components/settings-panel";
 import {
   currentView, selectedIdea, selectedMetric, colorMode,
   improvementsOnly, activeTagFilters, tagFilterMode, reverseTime,
@@ -93,6 +98,14 @@ const PANEL_NAMES: Record<string, string> = {
 };
 
 const ALL_PANEL_IDS = Object.keys(PANEL_NAMES);
+
+// Review dashboard sections, surfaced as the left secondary-nav list.
+const REVIEW_SECTIONS: { id: string; label: string; icon: string }[] = [
+  { id: "review-runs",    label: "Experiments", icon: "◉" },
+  { id: "review-ideas",   label: "Ideas",       icon: "◈" },
+  { id: "review-compare", label: "Correlation", icon: "⊞" },
+  { id: "review-detail",  label: "Idea Detail", icon: "▸" },
+];
 
 const PANEL_MAP: Record<string, (params?: any) => preact.JSX.Element> = {
   graph: () => <DagView />,
@@ -487,11 +500,14 @@ function syncUrlFromSignals() {
 export function App() {
   const containerRef = useRef<HTMLDivElement>(null);
   const dockviewRef = useRef<DockviewComponent | null>(null);
-  const [dashboardMode, setDashboardMode] = useState<DashboardMode>("review");
+  const [navSection, setNavSection] = useState<NavSection>("activity");
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [layoutName, setLayoutName] = useState("");
+  const [layoutVersion, setLayoutVersion] = useState(0);
 
   // Initialize dockview
   useEffect(() => {
-    if (dashboardMode !== "workbench") return;
+    if (navSection !== "workbench") return;
     const container = containerRef.current;
     if (!container) return;
 
@@ -815,7 +831,7 @@ export function App() {
       dv.dispose();
       dockviewRef.current = null;
     };
-  }, [dashboardMode]);
+  }, [navSection]);
 
   // Polling, URL sync, server defaults
   useEffect(() => {
@@ -1003,9 +1019,8 @@ export function App() {
 
   const focusPanelIds = availablePanels.value;
   const inFocusMode = isMaximized.value;
-  const isWorkbench = dashboardMode === "workbench";
   const openReviewSection = useCallback((id: string) => {
-    setDashboardMode("review");
+    setNavSection("review");
     requestAnimationFrame(() => {
       const el = document.getElementById(id);
       if (el instanceof HTMLDetailsElement) el.open = true;
@@ -1013,50 +1028,139 @@ export function App() {
     });
   }, []);
 
+  const showSecondary = settingsOpen || navSection === "review" || navSection === "queue" || navSection === "workbench";
+  void layoutVersion; // re-read saved layouts after a save/delete
+  const savedLayouts = getSavedLayouts();
   return (
-    <>
-      <Topbar
-        onResetLayout={handleResetLayout}
-        onSaveLayout={handleSaveLayout}
-        onLoadLayout={handleLoadLayout}
-        onDeleteLayout={handleDeleteLayout}
-        getSavedLayouts={getSavedLayouts}
-        onOpenReview={() => setDashboardMode("review")}
-        onOpenReviewSection={openReviewSection}
-        onOpenWorkbench={() => setDashboardMode("workbench")}
+    <div class="app-shell">
+      <NavRail
+        section={navSection}
+        onSelect={(s) => { setNavSection(s); setSettingsOpen(false); }}
+        settingsOpen={settingsOpen}
+        onToggleSettings={() => setSettingsOpen((v) => !v)}
       />
-      <main class="dashboard-page">
-        <div class="dashboard-modebar" aria-label="Dashboard mode">
-          <button class={dashboardMode === "review" ? "active" : ""} onClick={() => setDashboardMode("review")}>Review</button>
-          <button class={dashboardMode === "workbench" ? "active" : ""} onClick={() => setDashboardMode("workbench")}>Workbench</button>
-        </div>
 
-        {!isWorkbench && <ReviewDashboard onOpenWorkbench={() => setDashboardMode("workbench")} />}
-
-        {isWorkbench && (
-          <>
-            <section class="workspace-shell" aria-label="Dashboard workspace">
-              <div class="workspace-toolbar">
-                <button class="workspace-review-btn" onClick={() => setDashboardMode("review")}>
-                  ← Review
-                </button>
-                <div class="workspace-actions" aria-label="Workspace actions">
+      {showSecondary && (
+        <SecondaryPanel
+          label={settingsOpen ? "Settings" : navSection === "workbench" ? "Workbench" : navSection === "queue" ? "Queue" : "Review sections"}
+        >
+          {settingsOpen ? (
+            <SettingsPanel />
+          ) : (
+            <>
+              {navSection === "review" && (
+                <>
+                  <nav class="nav-secondary-list">
+                    <div class="nav-secondary-head"><Eyebrow>Sections</Eyebrow></div>
+                    {REVIEW_SECTIONS.map((s) => (
+                      <button key={s.id} class="nav-secondary-btn" onClick={() => openReviewSection(s.id)}>
+                        <span class="nav-secondary-icon" aria-hidden="true">{s.icon}</span>
+                        {s.label}
+                      </button>
+                    ))}
+                  </nav>
+                  <ActivityShortlog />
+                </>
+              )}
+              {navSection === "queue" && <ActivityShortlog />}
+              {navSection === "workbench" && (
+                <nav class="nav-secondary-list">
+                  <div class="nav-secondary-head"><Eyebrow>Add panel</Eyebrow></div>
                   {ALL_PANEL_IDS.filter((id) => !_open.has(id)).map((id) => (
-                    <button
-                      key={id}
-                      class="workspace-panel-chip"
-                      onClick={() => handleAddPanel(id)}
-                      title={`Open ${PANEL_NAMES[id]}`}
-                    >
+                    <button key={id} class="nav-secondary-btn" onClick={() => handleAddPanel(id)} title={`Open ${PANEL_NAMES[id]}`}>
+                      <span class="nav-secondary-dot" />
                       {PANEL_NAMES[id]}
                     </button>
                   ))}
                   {ALL_PANEL_IDS.filter((id) => !_open.has(id)).length === 0 && (
-                    <span class="workspace-all-open">all panels open</span>
+                    <div class="nav-secondary-sub"><Eyebrow>all panels open</Eyebrow></div>
                   )}
-                </div>
-              </div>
+                  {trayItems.length > 0 && (
+                    <>
+                      <div class="nav-secondary-sub"><Eyebrow>Floating</Eyebrow></div>
+                      {trayItems.map((id) => (
+                        <button
+                          key={id}
+                          class={`nav-secondary-btn${_floating.has(id) ? " is-open" : ""}`}
+                          onClick={() => handleToggleTrayPanel(id)}
+                          title={PANEL_NAMES[id] || id}
+                        >
+                          <span class="nav-secondary-dot" data-open={_floating.has(id) ? "true" : undefined} />
+                          {PANEL_NAMES[id] || id}
+                        </button>
+                      ))}
+                    </>
+                  )}
 
+                  <div class="nav-secondary-sub"><Eyebrow>Layouts</Eyebrow></div>
+                  <div class="nav-layout-save">
+                    <input
+                      class="nav-layout-input"
+                      placeholder="save as…"
+                      value={layoutName}
+                      onInput={(e) => setLayoutName((e.target as HTMLInputElement).value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && layoutName.trim()) {
+                          handleSaveLayout(layoutName.trim()); setLayoutName(""); setLayoutVersion((v) => v + 1);
+                        }
+                      }}
+                    />
+                    <button
+                      class="ui-btn ui-btn--outlined"
+                      onClick={() => { if (layoutName.trim()) { handleSaveLayout(layoutName.trim()); setLayoutName(""); setLayoutVersion((v) => v + 1); } }}
+                    >
+                      Save
+                    </button>
+                  </div>
+                  {savedLayouts.map((name) => (
+                    <div class="nav-layout-row" key={name}>
+                      <button class="nav-secondary-btn nav-layout-load" onClick={() => handleLoadLayout(name)} title={`Load "${name}"`}>
+                        <span class="nav-secondary-icon" aria-hidden="true">▤</span>
+                        {name}
+                      </button>
+                      <button
+                        class="nav-layout-del"
+                        onClick={() => { handleDeleteLayout(name); setLayoutVersion((v) => v + 1); }}
+                        title="Delete layout"
+                        aria-label={`Delete layout ${name}`}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                  <button class="nav-secondary-btn" onClick={handleResetLayout} title="Reset to the default layout">
+                    <span class="nav-secondary-icon" aria-hidden="true">↺</span>
+                    Reset layout
+                  </button>
+                </nav>
+              )}
+            </>
+          )}
+        </SecondaryPanel>
+      )}
+
+      <div class="app-main">
+        <div class="app-content">
+          {navSection === "activity" && <ActivityPane />}
+
+          {navSection === "review" && (
+            <div class="app-scroll">
+              <main class="dashboard-page">
+                <ReviewDashboard onOpenWorkbench={() => setNavSection("workbench")} />
+              </main>
+            </div>
+          )}
+
+          {navSection === "queue" && (
+            <div class="app-scroll">
+              <main class="dashboard-page">
+                <QueueView />
+              </main>
+            </div>
+          )}
+
+          {navSection === "workbench" && (
+            <section class="workspace-shell" aria-label="Dashboard workspace">
               {inFocusMode && focusPanelIds.length > 0 && (
                 <div class="focus-strip">
                   <span class="focus-strip-label">Focus context</span>
@@ -1072,92 +1176,14 @@ export function App() {
                   ))}
                 </div>
               )}
-
-              <div
-                id="dockview-container"
-                ref={containerRef}
-              />
+              <div id="dockview-container" ref={containerRef} />
             </section>
+          )}
 
-            <div class="panel-tray" aria-label="Panel tray">
-              {trayItems.map((id) => (
-                <button
-                  key={id}
-                  class={_floating.has(id) ? "active" : ""}
-                  onClick={() => handleToggleTrayPanel(id)}
-                  title={PANEL_NAMES[id] || id}
-                >
-                  {PANEL_NAMES[id] || id}
-                </button>
-              ))}
-            </div>
-          </>
-        )}
-      </main>
-      <ChatPanel />
-    </>
-  );
-}
-
-// ── Idea exploration ring ─────────────────────────────────────────────────────
-
-function IdeaRing({ active, concluded, abandoned }: { active: number; concluded: number; abandoned: number }) {
-  const total = active + concluded + abandoned;
-  if (total === 0) return null;
-  const size = 36, sw = 6, r = (size - sw) / 2;
-  const c = 2 * Math.PI * r;
-  const concludedFrac = concluded / total;
-  const activeFrac = active / total;
-  const concludedLen = c * concludedFrac;
-  const activeLen = c * activeFrac;
-  const abandonedLen = c * (abandoned / total);
-  // concluded arc starts at top (-90°), active follows, abandoned last
-  const concludedOffset = 0;
-  const activeOffset = c - concludedLen;
-  const abandonedOffset = c - concludedLen - activeLen;
-
-  return (
-    <svg width={size} height={size} style={{ flexShrink: 0 }} title={`${concluded} concluded · ${active} active · ${abandoned} abandoned`}>
-      {/* Background track */}
-      <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="var(--border)" strokeWidth={sw} />
-      {/* Concluded arc (blue) */}
-      {concludedLen > 0 && (
-        <circle cx={size/2} cy={size/2} r={r} fill="none"
-          stroke="var(--accent)" strokeWidth={sw} strokeOpacity={0.7}
-          strokeDasharray={`${concludedLen} ${c - concludedLen}`}
-          strokeDashoffset={c / 4}
-          strokeLinecap="butt"
-          transform={`rotate(-90 ${size/2} ${size/2})`}
-        />
-      )}
-      {/* Active arc (green) */}
-      {activeLen > 0 && (
-        <circle cx={size/2} cy={size/2} r={r} fill="none"
-          stroke="var(--green)" strokeWidth={sw} strokeOpacity={0.8}
-          strokeDasharray={`${activeLen} ${c - activeLen}`}
-          strokeDashoffset={c / 4 + concludedLen}
-          strokeLinecap="butt"
-          transform={`rotate(-90 ${size/2} ${size/2})`}
-        />
-      )}
-      {/* Abandoned arc (red) */}
-      {abandonedLen > 0 && (
-        <circle cx={size/2} cy={size/2} r={r} fill="none"
-          stroke="var(--red)" strokeWidth={sw} strokeOpacity={0.6}
-          strokeDasharray={`${abandonedLen} ${c - abandonedLen}`}
-          strokeDashoffset={c / 4 + concludedLen + activeLen}
-          strokeLinecap="butt"
-          transform={`rotate(-90 ${size/2} ${size/2})`}
-        />
-      )}
-      {/* Center: active count (more actionable than total) */}
-      <text x={size/2} y={size/2 + 1} textAnchor="middle" fontSize="8" fontWeight="600" fill="var(--green)" fontFamily="var(--font-mono, monospace)">
-        {active}
-      </text>
-      <text x={size/2} y={size/2 + 9} textAnchor="middle" fontSize="6" fill="var(--text-faint)" fontFamily="var(--font-mono, monospace)">
-        active
-      </text>
-    </svg>
+          <ScrollTop />
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -1216,15 +1242,15 @@ function IdeaMiniLeaderboard({ experiments, ideas, metric, lower }: {
                 <span class="emr-rank">{i + 1}</span>
                 <span class="emr-idea">#{id}</span>
                 {untested
-                  ? <span style={{ fontSize: "7px", color: "var(--yellow)", flexShrink: 0 }}>◇</span>
+                  ? <span style={{ fontSize: "var(--text-xs)", color: "var(--yellow)", flexShrink: 0 }}>◇</span>
                   : hasRunning
                     ? <span class="sq-running" style={{ width: 6, height: 6, borderRadius: "50%", flexShrink: 0, display: "inline-block" }} title="running now" />
-                    : <span style={{ fontSize: "7px", opacity: 0.7, flexShrink: 0, color: isActive ? "var(--green)" : "var(--accent)" }}>●</span>
+                    : <span style={{ fontSize: "var(--text-xs)", opacity: 0.7, flexShrink: 0, color: isActive ? "var(--green)" : "var(--accent)" }}>●</span>
                 }
-                <span class="emr-exp" style={{ color: untested ? "var(--yellow)" : hasRunning ? "var(--text)" : "var(--text-muted)", maxWidth: 95, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: (untested || hasRunning) ? 600 : 400 }}>{title}</span>
+                <span class="emr-exp" style={{ color: untested ? "var(--yellow)" : hasRunning ? "var(--text)" : "var(--text-muted)", maxWidth: 128, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: (untested || hasRunning) ? 600 : 400 }}>{title}</span>
                 {untested
-                  ? <span style={{ fontSize: "7px", color: "var(--yellow)", flexShrink: 0 }}>new!</span>
-                  : <span class="emr-count" style={{ color: "var(--text-faint)", fontSize: "7px" }}>{(data as any)?.count}×</span>
+                  ? <span style={{ fontSize: "var(--text-xs)", color: "var(--yellow)", flexShrink: 0 }}>new!</span>
+                  : <span class="emr-count" style={{ color: "var(--text-faint)", fontSize: "var(--text-xs)" }}>{(data as any)?.count}×</span>
                 }
               </div>
             );
@@ -1280,11 +1306,11 @@ function IdeaMiniLeaderboard({ experiments, ideas, metric, lower }: {
   // Tiny sparkline for an idea's score history
   function IdeaSparkline({ vals, lower: lo }: { vals: number[]; lower: boolean }) {
     if (vals.length === 0) return null;
-    const W = 28, H = 10;
+    const W = 46, H = 16;
     if (vals.length === 1) {
       return (
         <svg width={W} height={H} style={{ flexShrink: 0, opacity: 0.5 }}>
-          <circle cx={W/2} cy={H/2} r={2} fill="var(--text-faint)" />
+          <circle cx={W/2} cy={H/2} r={2.4} fill="var(--text-faint)" />
         </svg>
       );
     }
@@ -1294,18 +1320,18 @@ function IdeaMiniLeaderboard({ experiments, ideas, metric, lower }: {
       // flat line
       return (
         <svg width={W} height={H} style={{ flexShrink: 0, opacity: 0.5 }}>
-          <line x1={2} y1={H/2} x2={W-2} y2={H/2} stroke="var(--text-faint)" strokeWidth="1" strokeDasharray="2 1.5" />
+          <line x1={3} y1={H/2} x2={W-3} y2={H/2} stroke="var(--text-faint)" strokeWidth="1.25" strokeDasharray="2.5 2" />
         </svg>
       );
     }
-    const px = (i: number) => 2 + (i / (vals.length - 1)) * (W - 4);
-    const py = (v: number) => H - 2 - ((v - lo_) / range) * (H - 4);
+    const px = (i: number) => 3 + (i / (vals.length - 1)) * (W - 6);
+    const py = (v: number) => H - 3 - ((v - lo_) / range) * (H - 6);
     const d = vals.map((v, i) => `${i === 0 ? "M" : "L"}${px(i).toFixed(1)},${py(v).toFixed(1)}`).join(" ");
     const trend = lo ? vals[0] - vals[vals.length - 1] : vals[vals.length - 1] - vals[0];
     const color = trend > range * 0.1 ? "var(--green)" : trend < -range * 0.1 ? "var(--red)" : "var(--text-faint)";
     return (
-      <svg width={W} height={H} style={{ flexShrink: 0, opacity: 0.75 }}>
-        <path d={d} fill="none" stroke={color} strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+      <svg width={W} height={H} style={{ flexShrink: 0, opacity: 0.8 }}>
+        <path d={d} fill="none" stroke={color} strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
       </svg>
     );
   }
@@ -1316,8 +1342,17 @@ function IdeaMiniLeaderboard({ experiments, ideas, metric, lower }: {
   const scoreRange = Math.abs(bestOverall - worstRanked);
 
   return (
-    <div class="emr-section">
-      <span class="emr-label">top ideas</span>
+    <div class="emr-section emr-section--lb">
+      <span class="emr-label">top ideas · best {fmtMetricName(metric)}</span>
+      {/* column headers — make the leaderboard read standalone */}
+      <div class="emr-row emr-colhead" role="row">
+        <span class="emr-rank">#</span>
+        <span class="emr-idea">idea</span>
+        <span class="emr-exp">title</span>
+        <span class="emr-count emr-colhead-runs">runs</span>
+        <span class="emr-colhead-trend">trend</span>
+        <span class="emr-val">best</span>
+      </div>
       <div class="emr-rows">
         {ranked.map((r, i) => {
           const idea = ideas[r.ideaId];
@@ -1352,8 +1387,8 @@ function IdeaMiniLeaderboard({ experiments, ideas, metric, lower }: {
               )}
               <span class="emr-rank">{i + 1}</span>
               <span class="emr-idea">#{r.ideaId}</span>
-              <span style={{ fontSize: "7px", opacity: 0.7, flexShrink: 0, color: idea?.status === "active" ? "var(--green)" : idea?.status === "concluded" ? "var(--accent)" : "var(--red)" }}>●</span>
-              <span class="emr-exp" style={{ color: "var(--text-muted)", maxWidth: 100, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</span>
+              <span style={{ fontSize: "var(--text-xs)", opacity: 0.7, flexShrink: 0, color: idea?.status === "active" ? "var(--green)" : idea?.status === "concluded" ? "var(--accent)" : "var(--red)" }}>●</span>
+              <span class="emr-exp" style={{ color: "var(--text-muted)", maxWidth: 132, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</span>
               <span class="emr-count" style={{ color: r.count < 5 ? "var(--yellow)" : r.count > 30 ? "var(--text-faint)" : "var(--text-muted)" }}>{r.count}</span>
               <IdeaSparkline vals={history} lower={lower} />
               <span class="emr-val">{fmtV(r.best)}</span>
@@ -1369,7 +1404,7 @@ function IdeaMiniLeaderboard({ experiments, ideas, metric, lower }: {
                   );
                 }
                 return (
-                  <span style={{ fontSize: "7px", color: isStale ? "var(--yellow)" : "var(--text-faint)", flexShrink: 0, fontFamily: "var(--font-mono)" }}
+                  <span style={{ fontSize: "var(--text-xs)", color: isStale ? "var(--yellow)" : "var(--text-faint)", flexShrink: 0, fontFamily: "var(--font-mono)" }}
                     title={`Last experiment: ${daysAgo}d ago`}>
                     {daysAgo}d
                   </span>
@@ -1406,7 +1441,14 @@ const STATUS_SQ_CLASS: Record<string, string> = {
   cancelled: "sq-cancelled",
 };
 
-function ExperimentGrid({ experiments, successRate, milestoneIds }: { experiments: import("./lib/types").Experiment[]; successRate: number | null; milestoneIds?: Set<number> }) {
+function ExperimentGrid({ experiments, successRate, milestoneIds, ideas, metric }: {
+  experiments: import("./lib/types").Experiment[];
+  successRate: number | null;
+  milestoneIds?: Set<number>;
+  ideas: Record<number, import("./lib/types").IdeaNode>;
+  metric: string;
+}) {
+  const highlighted = highlightedIdea.value;
   if (experiments.length === 0) return null;
 
   // Group by idea in chronological order
@@ -1430,18 +1472,37 @@ function ExperimentGrid({ experiments, successRate, milestoneIds }: { experiment
     chrono.filter(e => !e._running && e.status !== "running").slice(-8).map(e => e.id)
   );
 
+  const STATUS_WORD: Record<string, string> = {
+    running: "running", completed: "done", active: "done", failed: "failed",
+    abandoned: "abandoned", concluded: "concluded", queued: "queued",
+    pending: "queued", cancelled: "cancelled",
+  };
+  function fmtScore(v: number) {
+    return Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(2) : v.toFixed(3);
+  }
+
   return (
     <div class="exp-grid-wrap">
+      {/* Caption — say what this strip is before the reader has to guess. */}
+      <div class="exp-grid-caption">
+        <span class="emr-label">experiment timeline</span>
+        <span class="exp-grid-caption-sub">each ▪ = one run · grouped &amp; colored by idea · left→right = oldest→newest</span>
+      </div>
       <div class="exp-grid">
         {ideaOrder.map((ideaId, gi) => {
           const exps = byIdea.get(ideaId)!;
           const ideaCol = ideaColor[ideaId];
+          const idea = ideas[ideaId];
+          const ideaText = idea?.description?.split("\n")[0] ?? "";
+          const dim = highlighted != null && highlighted !== ideaId;
+          const on = highlighted === ideaId;
           return (
             <span
               key={ideaId}
-              class="exp-idea-group"
-              style={gi > 0 ? { marginLeft: 5, cursor: "pointer" } : { cursor: "pointer" }}
-              title={`idea #${ideaId} — click to view`}
+              class={`exp-idea-group${on ? " is-highlighted" : ""}${dim ? " is-dimmed" : ""}`}
+              style={{ "--idea-color": ideaCol, marginLeft: gi > 0 ? 5 : 0, cursor: "pointer" } as any}
+              onMouseEnter={() => { highlightedIdea.value = ideaId; }}
+              onMouseLeave={() => { if (highlightedIdea.value === ideaId) highlightedIdea.value = null; }}
               onClick={() => navigateToIdea(ideaId)}
             >
               {exps.map((e) => {
@@ -1449,13 +1510,24 @@ function ExperimentGrid({ experiments, successRate, milestoneIds }: { experiment
                 const isMilestone = milestoneIds?.has(e.id);
                 const isRecent = recentIds.has(e.id);
                 const cls = `exp-grid-sq ${STATUS_SQ_CLASS[status] ?? "sq-cancelled"}${isMilestone ? " sq-milestone" : ""}${isRecent ? " sq-recent" : ""}`;
+                const score = e.metrics?.[metric];
                 return (
-                  <span
+                  <Tooltip
                     key={e.id}
-                    class={cls}
-                    style={{ "--idea-color": ideaCol } as any}
-                    title={`${e.label ?? e.id} · idea #${e.idea_id} · ${status}${isMilestone ? " · ★ new record" : ""}${isRecent ? " · recent" : ""}`}
-                  />
+                    content={
+                      <>
+                        <span class="ui-tip-title">exp/{e.label ?? e.id}{isMilestone ? " ★" : ""}</span>
+                        <span class="ui-tip-row">idea <b>#{e.idea_id}</b>{ideaText ? <span class="ui-tip-dim"> {ideaText.slice(0, 48)}</span> : null}</span>
+                        <span class="ui-tip-row">status <b>{STATUS_WORD[status] ?? status}</b></span>
+                        {typeof score === "number" && isFinite(score) && (
+                          <span class="ui-tip-row">{fmtMetricName(metric)} <b>{fmtScore(score)}</b></span>
+                        )}
+                        {isMilestone && <span class="ui-tip-row" style={{ color: "var(--purple)" }}>★ new record</span>}
+                      </>
+                    }
+                  >
+                    <span class={cls} />
+                  </Tooltip>
                 );
               })}
             </span>
@@ -1469,15 +1541,14 @@ function ExperimentGrid({ experiments, successRate, milestoneIds }: { experiment
         <span class="sq-legend sq-concluded">concluded</span>
         <span class="sq-legend sq-queued">queued</span>
         {hasMilestones && <span class="sq-legend sq-milestone">★ record</span>}
-        <span class="exp-grid-legend-note">← each square = one experiment, grouped by idea →</span>
+        <span class="sq-legend sq-recent">recent</span>
         {successRate !== null && (() => {
           const r = 7, sw = 2.5, size = 18;
           const c = 2 * Math.PI * r;
           const fill = (successRate / 100) * c;
           const arcColor = successRate < 10 ? "var(--red)" : successRate < 20 ? "var(--yellow)" : "var(--green)";
           return (
-            <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 3, flexShrink: 0 }}
-              title={`${successRate}% of experiments scored above zero`}>
+            <span class="exp-grid-success" title={`${successRate}% of experiments scored above zero`}>
               <svg width={size} height={size} style={{ display: "block", opacity: 0.8 }}>
                 <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="var(--border-soft)" strokeWidth={sw} />
                 <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={arcColor} strokeWidth={sw}
@@ -1487,7 +1558,7 @@ function ExperimentGrid({ experiments, successRate, milestoneIds }: { experiment
                   transform={`rotate(-90 ${size/2} ${size/2})`}
                 />
               </svg>
-              <span style={{ fontSize: "8px", color: arcColor, fontFamily: "var(--font-mono)" }}>{successRate}%</span>
+              <span style={{ fontSize: "var(--text-xs)", color: arcColor, fontFamily: "var(--font-mono)" }}>{successRate}% scored</span>
             </span>
           );
         })()}
@@ -1502,7 +1573,7 @@ function BestSparkline({ experiments, metric, lower }: {
   metric: string;
   lower: boolean;
 }) {
-  const W = 48, H = 18;
+  const W = 72, H = 26;
   const vals: number[] = [];
   let best: number | null = null;
   const sorted = experiments.slice().sort((a, b) => a.id - b.id);
@@ -1520,19 +1591,19 @@ function BestSparkline({ experiments, metric, lower }: {
   // If variance is < 0.1% of the value, show a "plateau" dash instead
   if (range === 0 || (Math.abs(lo) > 0 && range / Math.abs(lo) < 0.001)) {
     return (
-      <svg width={W} height={H} style={{ display: "block", flexShrink: 0, opacity: 0.5 }}>
-        <line x1={4} y1={H/2} x2={W-4} y2={H/2} stroke="var(--text-faint)" strokeWidth="1.5" strokeDasharray="3 2" strokeLinecap="round" />
+      <svg width={W} height={H} style={{ display: "block", flexShrink: 0, opacity: 0.5 }} title="Plateau — best score is flat">
+        <line x1={4} y1={H/2} x2={W-4} y2={H/2} stroke="var(--text-faint)" strokeWidth="1.75" strokeDasharray="3 2" strokeLinecap="round" />
       </svg>
     );
   }
 
-  const px = (i: number) => (i / (recent.length - 1)) * W;
-  const py = (v: number) => H - 2 - ((v - lo) / range) * (H - 4);
+  const px = (i: number) => 2 + (i / (recent.length - 1)) * (W - 4);
+  const py = (v: number) => H - 3 - ((v - lo) / range) * (H - 6);
   const d = recent.map((v, i) => `${i === 0 ? "M" : "L"}${px(i).toFixed(1)},${py(v).toFixed(1)}`).join(" ");
   return (
-    <svg width={W} height={H} style={{ display: "block", flexShrink: 0, opacity: 0.85 }}>
-      <path d={d} fill="none" stroke="var(--purple)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-      <circle cx={px(recent.length - 1)} cy={py(recent[recent.length - 1])} r="2" fill="var(--purple)" />
+    <svg width={W} height={H} style={{ display: "block", flexShrink: 0, opacity: 0.9 }} title="Running best over recent experiments">
+      <path d={d} fill="none" stroke="var(--purple)" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx={px(recent.length - 1)} cy={py(recent[recent.length - 1])} r="2.6" fill="var(--purple)" />
     </svg>
   );
 }
@@ -1563,155 +1634,191 @@ function ScoreDistBar({ experiments, metric, lower }: {
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 2, alignItems: "stretch" }}>
-      <div class="score-dist-bar" title={`Score distribution: red=low scores, green=high scores. Range ${fmtN(lo)}–${fmtN(hi)}`}>
+    <div class="review-mini score-dist">
+      {/* caption header — tells you what this is + the y-axis units (count) */}
+      <div class="score-dist-head">
+        <span class="emr-label">{fmtMetricName(metric)} distribution</span>
+        <span class="score-dist-head-n" title={`${values.length} experiments · tallest bar = ${maxC}`}>n={values.length}</span>
+      </div>
+      <div class="score-dist-bar" title={`How ${fmtMetricName(metric)} is distributed across ${values.length} experiments. Bar height = # of experiments in that range. Range ${fmtN(lo)}–${fmtN(hi)}.`}>
         {counts.map((c, i) => {
           const frac = lower ? 1 - i / (BUCKETS - 1) : i / (BUCKETS - 1);
-          const h = c > 0 ? Math.max(3, Math.round((c / maxC) * 22)) : 1;
+          const h = c > 0 ? Math.max(4, Math.round((c / maxC) * 36)) : 1;
           const clr = `hsl(${Math.round(120 * frac)},70%,52%)`;
           return (
             <span key={i} class="score-dist-tick"
-              style={{ height: `${h}px`, background: c > 0 ? clr : "var(--border-soft)", opacity: c > 0 ? 0.8 : 0.25 }}
+              style={{ height: `${h}px`, background: c > 0 ? clr : "var(--border-soft)", opacity: c > 0 ? 0.85 : 0.25 }}
               title={`${c} exp @ ${(lo + i * size).toFixed(1)}–${(lo + (i+1) * size).toFixed(1)}`}
             />
           );
         })}
       </div>
-      {/* Range label */}
-      <div style={{ display: "flex", justifyContent: "space-between", width: "90px", fontSize: "9px", color: "var(--text-muted)", fontFamily: "var(--font-mono, monospace)" }}>
+      {/* x-axis: low → high score endpoints with units */}
+      <div class="score-dist-range">
         <span>{fmtN(lo)}</span>
+        <span class="score-dist-range-cap">{lower ? "← better" : "worse → better"}</span>
         <span>{fmtN(hi)}</span>
       </div>
     </div>
   );
 }
 
-// ── Mini results list for collapsed Experiments disclosure ───────────────────
+// ── Milestones table — the Experiments summary (#11) ─────────────────────────
+// A clear list of the record-setting experiments (new global bests): which
+// experiment / idea, the metric value, when it landed, and the Δ improvement
+// over the prior record. Column headers, hairline rows, tabular-nums, ★.
 
-function ExpMiniResults({ experiments, metric, lower, milestoneIds, ideas }: {
+function MilestonesTable({ experiments, metric, lower, ideas }: {
   experiments: import("./lib/types").Experiment[];
   metric: string;
   lower: boolean;
-  milestoneIds: Set<number>;
   ideas: Record<number, import("./lib/types").IdeaNode>;
 }) {
-  const withMetric = experiments.filter(
-    (e) => !e._running && typeof e.metrics?.[metric] === "number",
-  );
-  if (withMetric.length === 0 && experiments.filter(e => e._running).length === 0) return null;
+  // Walk completed-with-metric chronologically; emit a row each time the
+  // running best improves. Each row carries its Δ over the previous record.
+  const done = experiments
+    .filter((e) => !e._running && typeof e.metrics?.[metric] === "number" && isFinite(e.metrics![metric] as number))
+    .slice()
+    .sort((a, b) => a.id - b.id);
 
-  // Top 5 by metric
-  const top5 = [...withMetric]
-    .sort((a, b) => {
-      const va = a.metrics![metric] as number;
-      const vb = b.metrics![metric] as number;
-      return lower ? va - vb : vb - va;
-    })
-    .slice(0, 5);
+  type Row = { exp: import("./lib/types").Experiment; val: number; delta: number | null; prev: number | null };
+  const rows: Row[] = [];
+  let best: number | null = null;
+  for (const e of done) {
+    const v = e.metrics![metric] as number;
+    const better = best === null || (lower ? v < best : v > best);
+    if (!better) continue;
+    rows.push({ exp: e, val: v, prev: best, delta: best === null ? null : Math.abs(v - best) });
+    best = v;
+  }
+  if (rows.length === 0) return null;
 
-  // Last 3 by id (most recent runs — show what just happened)
-  const recent3 = [...experiments]
-    .sort((a, b) => b.id - a.id)
-    .slice(0, 3);
-
-  function fmtVal(v: number) {
+  function fmtV(v: number) {
     return Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(2) : v.toFixed(3);
   }
+  function whenAgo(iso: string | null | undefined): string {
+    if (!iso) return "—";
+    const sec = Math.max(0, Math.floor((Date.now() - Date.parse(iso)) / 1000));
+    if (sec < 60) return `${sec}s`;
+    const min = Math.floor(sec / 60);
+    if (min < 60) return `${min}m`;
+    const hr = Math.floor(min / 60);
+    if (hr < 48) return `${hr}h`;
+    return `${Math.floor(hr / 24)}d`;
+  }
 
-  const statusDot: Record<string, string> = {
-    running: "var(--yellow)", completed: "var(--green)", failed: "var(--red)",
-    cancelled: "var(--text-faint)", queued: "var(--text-faint)",
-  };
+  // newest record first — most relevant. Cap the summary at the latest 6 so
+  // it stays breathable; the full record is in the detail TablePanel.
+  const MAX = 6;
+  const allOrdered = rows.slice().reverse();
+  const ordered = allOrdered.slice(0, MAX);
+  const hidden = allOrdered.length - ordered.length;
+  const overallImprovement = rows.length > 1 && rows[0].val !== 0
+    ? Math.abs((best! - rows[0].val) / rows[0].val) * 100
+    : null;
 
   return (
-    <div class="exp-mini-results">
-      {/* Top 5 by metric */}
-      {top5.length > 0 && (
-        <div class="emr-section">
-          <span class="emr-label">top {top5.length}</span>
-          <div class="emr-rows">
-            {top5.map((e, i) => {
-              const v = e.metrics![metric] as number;
-              const isMilestone = milestoneIds.has(e.id);
-              const idea = ideas[e.idea_id];
-              return (
-                <div key={e.id} class={`emr-row${isMilestone ? " emr-milestone" : ""}`}
-                  style={{ cursor: "pointer" }}
-                  onClick={() => navigateToIdea(e.idea_id, e.label ?? String(e.id))}
-                  title={`${e.description?.slice(0, 100) ?? ""}  ·  exp/${e.label ?? e.id} · idea #${e.idea_id}`}
-                >
-                  <span class="emr-rank">{i + 1}</span>
-                  {isMilestone && <span class="emr-star">★</span>}
-                  <code class="emr-exp">exp/{e.label ?? e.id}</code>
-                  <span class="emr-idea">#{e.idea_id}</span>
-                  <span class="emr-val">{fmtVal(v)}</span>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* Recent 3 — highlight stagnation when all score zero, show streak */}
-      {(() => {
-        const recentScores = recent3.filter(e => !e._running && typeof e.metrics?.[metric] === "number")
-          .map(e => e.metrics![metric] as number);
-        const allZero = recentScores.length >= 2 && recentScores.every(v => v === 0);
-        // Count consecutive zeroes across all done experiments
-        const zeroStreak = (() => {
-          if (!allZero) return 0;
-          let streak = 0;
-          for (let i = done.length - 1; i >= 0; i--) {
-            const v = typeof done[i].metrics?.[metric] === "number" ? done[i].metrics![metric] as number : null;
-            if (v === null) break; // stop at experiments without this metric
-            if (v <= 0) streak++;
-            else break;
-          }
-          return streak;
-        })();
-        return (
-      <div class="emr-section">
-        <span class="emr-label" style={allZero ? { color: "var(--red)", fontWeight: 600 } : undefined}>
-          {allZero ? `recent ↓ 0s${zeroStreak > 3 ? ` (${zeroStreak}×)` : ""}` : "recent"}
+    <div class="review-milestones" role="table" aria-label="Milestones — record-setting experiments">
+      <div class="review-mst-caption">
+        <span class="emr-label">milestones · new {fmtMetricName(metric)} records</span>
+        <span class="review-mst-caption-sub">
+          {rows.length} record{rows.length === 1 ? "" : "s"}
+          {overallImprovement != null && <> · <span style={{ color: "var(--purple)" }}>+{overallImprovement.toFixed(0)}% total</span></>}
         </span>
-        <div class="emr-rows">
-          {recent3.map((e) => {
-            const status = e._running ? "running" : (e.status ?? "unknown");
-            const v = typeof e.metrics?.[metric] === "number" ? e.metrics![metric] as number : null;
-            return (
-              <div key={e.id} class="emr-row"
-                style={{ cursor: "pointer" }}
-                onClick={() => navigateToIdea(e.idea_id, e.label ?? String(e.id))}
-                title={`exp/${e.label ?? e.id} · ${status}`}
-              >
-                <span class="emr-dot" style={{ background: statusDot[status] ?? "var(--border)" }} />
-                <code class="emr-exp">exp/{e.label ?? e.id}</code>
-                <span class="emr-idea">#{e.idea_id}</span>
-                <span class="emr-val" style={v === 0 ? { color: "var(--text-faint)" } : undefined}>
-                  {v !== null ? fmtVal(v) : status}
-                </span>
-              </div>
-            );
-          })}
-        </div>
       </div>
-        );
-      })()}
+      <div class="review-mst-table">
+        <div class="review-mst-row review-mst-head" role="row">
+          <span class="review-mst-c-rank" role="columnheader">#</span>
+          <span class="review-mst-c-exp" role="columnheader">experiment</span>
+          <span class="review-mst-c-exptext" role="columnheader">what it tried</span>
+          <span class="review-mst-c-idea" role="columnheader">idea</span>
+          <span class="review-mst-c-ideatext" role="columnheader">idea text</span>
+          <span class="review-mst-c-val" role="columnheader">{fmtMetricName(metric)}</span>
+          <span class="review-mst-c-delta" role="columnheader">Δ</span>
+          <span class="review-mst-c-when" role="columnheader">when</span>
+        </div>
+        {ordered.map((r, i) => {
+          const recNo = rows.length - i; // 1 = first record, N = latest
+          const isLatest = i === 0;
+          const idea = ideas[r.exp.idea_id];
+          const ideaText = idea?.description?.split("\n")[0] ?? "";
+          const expText = (r.exp.description ?? "").split("\n")[0];
+          return (
+            <div
+              key={r.exp.id}
+              class={`review-mst-row${isLatest ? " review-mst-row--latest" : ""}`}
+              role="row"
+              style={{ cursor: "pointer" }}
+              onMouseEnter={() => { highlightedIdea.value = r.exp.idea_id; }}
+              onMouseLeave={() => { if (highlightedIdea.value === r.exp.idea_id) highlightedIdea.value = null; }}
+              onClick={() => navigateToIdea(r.exp.idea_id, r.exp.label ?? String(r.exp.id))}
+              title={`record #${recNo} · exp/${r.exp.label ?? r.exp.id}${expText ? ` — ${expText}` : ""} · idea #${r.exp.idea_id} ${ideaText}`}
+            >
+              <span class="review-mst-c-rank" role="cell">
+                <span class="review-mst-star">★</span>{recNo}
+              </span>
+              <code class="review-mst-c-exp" role="cell">exp/{r.exp.label ?? r.exp.id}</code>
+              <span class="review-mst-c-exptext" role="cell">{expText || "—"}</span>
+              <span class="review-mst-c-idea" role="cell">#{r.exp.idea_id}</span>
+              <span class="review-mst-c-ideatext" role="cell">{ideaText || "—"}</span>
+              <span class="review-mst-c-val" role="cell">{fmtV(r.val)}</span>
+              <span class="review-mst-c-delta" role="cell">
+                {r.delta == null
+                  ? <span class="review-mst-first">first</span>
+                  : <>{lower ? "−" : "+"}{fmtV(r.delta)}</>}
+              </span>
+              <span class="review-mst-c-when" role="cell">{whenAgo(r.exp.finished_at || r.exp.created_at)} ago</span>
+            </div>
+          );
+        })}
+        {hidden > 0 && (
+          <div class="review-mst-more">+{hidden} earlier record{hidden === 1 ? "" : "s"} · open detail for all experiments</div>
+        )}
+      </div>
     </div>
   );
 }
 
-function ProgressRing({ pct }: { pct: number }) {
-  const size = 14, sw = 2, r = (size - sw) / 2;
-  const c = 2 * Math.PI * r;
-  const off = c * (1 - Math.min(Math.max(pct, 0), 100) / 100);
+// ── Idea portfolio — the redesigned "idea boxes" (#7, #D) ────────────────────
+// A labeled segmented bar + an explicit legend with counts. A glance tells you
+// the idea-portfolio breakdown (active / concluded / abandoned / untested)
+// without guessing — no more cryptic ring.
+
+function IdeaPortfolio({ active, concluded, abandoned, untested }: {
+  active: number; concluded: number; abandoned: number; untested: number;
+}) {
+  const total = active + concluded + abandoned;
+  if (total === 0) return null;
+  // untested is a subset of active (active ideas with zero experiments) — shown
+  // as a hatched slice carved out of the active segment so counts still sum.
+  const tested = Math.max(0, active - untested);
+  const pct = (n: number) => total > 0 ? Math.round((n / total) * 100) : 0;
+  const segs: { key: string; n: number; cls: string; label: string }[] = [
+    { key: "tested",    n: tested,     cls: "ipf-active",    label: "active" },
+    { key: "untested",  n: untested,   cls: "ipf-untested",  label: "untested" },
+    { key: "concluded", n: concluded,  cls: "ipf-concluded", label: "concluded" },
+    { key: "abandoned", n: abandoned,  cls: "ipf-abandoned", label: "abandoned" },
+  ];
   return (
-    <svg width={size} height={size} style={{ display: "inline-block", verticalAlign: "middle", marginRight: 4, flexShrink: 0 }}>
-      <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="var(--border)" strokeWidth={sw} />
-      <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="var(--yellow)" strokeWidth={sw}
-        strokeDasharray={c} strokeDashoffset={off} strokeLinecap="round"
-        transform={`rotate(-90 ${size/2} ${size/2})`} />
-    </svg>
+    <div class="idea-portfolio">
+      <div class="ipf-head">
+        <span class="emr-label">idea portfolio · {total} total</span>
+        <span class="ipf-head-sub">{pct(concluded)}% concluded</span>
+      </div>
+      <div class="ipf-bar" role="img"
+        aria-label={`${active} active, ${concluded} concluded, ${abandoned} abandoned${untested > 0 ? `, of which ${untested} untested` : ""}`}>
+        {segs.filter(s => s.n > 0).map(s => (
+          <span key={s.key} class={`ipf-seg ${s.cls}`} style={{ flex: s.n }}
+            title={`${s.n} ${s.label}`} />
+        ))}
+      </div>
+      <div class="ipf-legend">
+        <span class="ipf-leg"><span class="ipf-swatch ipf-active" /> active <b>{active}</b></span>
+        {untested > 0 && <span class="ipf-leg"><span class="ipf-swatch ipf-untested" /> untested <b>{untested}</b></span>}
+        <span class="ipf-leg"><span class="ipf-swatch ipf-concluded" /> concluded <b>{concluded}</b></span>
+        {abandoned > 0 && <span class="ipf-leg"><span class="ipf-swatch ipf-abandoned" /> abandoned <b>{abandoned}</b></span>}
+      </div>
+    </div>
   );
 }
 
@@ -1720,7 +1827,6 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
   const experiments = allExperiments.value;
   const ideas = allIdeas.value;
   const cost = totalAgentCost.value;
-  const logs = logEntries.value;
   const progress = runningProgress.value;
   // Use allIdeas for active count — loads faster than backlogData; fallback to backlogData if allIdeas not loaded
   const ideaListForCount = Object.values(ideas);
@@ -1737,7 +1843,6 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
   const activeRuns = experiments.filter((e) => e._running || e.status === "running");
   const selected = selectedIdea.value;
   const metric = selectedMetric.value || "metric";
-  const latestFinished = done[done.length - 1];
   const avgProgress = activeRuns.length
     ? Math.round(activeRuns.reduce((sum, e) => sum + (progress[e.label || String(e.id)] ?? 0), 0) / activeRuns.length)
     : 0;
@@ -1751,7 +1856,6 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
     if (!bestExp || (lower ? v < bestExp.metrics![metric]! : v > bestExp.metrics![metric]!)) bestExp = e;
   }
   const bestVal = bestExp?.metrics?.[metric];
-  const bestIdea = bestExp ? ideas[bestExp.idea_id] : null;
 
   const liveCount = totalRunning || running;
   const isLive = liveCount > 0;
@@ -1794,34 +1898,6 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
     const sevenDaysAgo = Date.now() - 7 * 24 * 3600 * 1000;
     const recent = done.filter(e => e.finished_at && Date.parse(e.finished_at) > sevenDaysAgo);
     return recent.length > 0 ? (recent.length / 7).toFixed(1) : null;
-  })();
-
-  // Velocity trend: compare last 7 days vs previous 7 days
-  const velocityTrend = (() => {
-    if (!velocityPerDay) return null;
-    const now = Date.now();
-    const sevenAgo = now - 7 * 24 * 3600 * 1000;
-    const fourteenAgo = now - 14 * 24 * 3600 * 1000;
-    const recent7 = done.filter(e => e.finished_at && Date.parse(e.finished_at) > sevenAgo).length;
-    const prev7 = done.filter(e => e.finished_at && Date.parse(e.finished_at) > fourteenAgo && Date.parse(e.finished_at) <= sevenAgo).length;
-    if (prev7 === 0) return null;
-    const diff = recent7 - prev7;
-    if (Math.abs(diff) < 2) return null; // ignore tiny differences
-    return diff > 0 ? "↑" : "↓";
-  })();
-
-  // 14-day activity sparkline: count experiments finished each day
-  const activityBars = (() => {
-    const DAYS = 14;
-    const now = Date.now();
-    const buckets = new Array(DAYS).fill(0);
-    for (const e of done) {
-      if (!e.finished_at) continue;
-      const daysAgo = (now - Date.parse(e.finished_at)) / (24 * 3600 * 1000);
-      if (daysAgo < DAYS) buckets[DAYS - 1 - Math.floor(daysAgo)]++;
-    }
-    const maxB = Math.max(...buckets, 1);
-    return buckets.map(c => c / maxB); // normalized 0-1
   })();
 
   // Experiment success rate: % that scored above zero for the primary metric
@@ -1907,526 +1983,115 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
 
   return (
     <div class="review-page">
-      {/* ── Status strip ─────────────────────────────────────────────── */}
-      <div class="review-status-strip">
-        <div class="review-status-left">
-          <span class={`review-status-dot ${isLive ? "live" : "idle"}${expsSinceBest != null && expsSinceBest > 50 ? " stagnant" : ""}`}
-            title={expsSinceBest != null && expsSinceBest > 50 ? `Stagnant: ${expsSinceBest} experiments since last breakthrough` : undefined}
-          />
-          <span class="review-status-primary">
-            {isLive ? (
-              <>
-                <ProgressRing pct={avgProgress} />
-                <strong>{liveCount}</strong> running{avgProgress > 0 ? ` · ${avgProgress}%` : ""}
-                {activeRuns[0]?.started_at && (() => {
-                  const mins = Math.floor((Date.now() - Date.parse(activeRuns[0].started_at!)) / 60000);
-                  return mins > 0 ? <span class="review-idle-hint"> · {mins}m ·</span> : null;
-                })()}
-                {activeRuns.length > 0 && activeRuns.length <= 4 && (
-                  <span class="review-running-list">
-                    {activeRuns.map((e) => {
-                      const pct = progress[e.label || String(e.id)] ?? 0;
-                      const sz = 12, sw = 1.5, r = (sz - sw) / 2;
-                      const circ = 2 * Math.PI * r;
-                      const off = circ * (1 - Math.min(Math.max(pct, 0), 100) / 100);
-                      return (
-                        <span key={e.id} style={{ display: "inline-flex", alignItems: "center", gap: 2, marginLeft: 6 }}
-                          title={`exp/${e.label ?? e.id}${pct > 0 ? ` · ${Math.round(pct)}%` : ""}`}>
-                          {pct > 0 ? (
-                            <svg width={sz} height={sz} style={{ display: "inline-block", verticalAlign: "middle", flexShrink: 0 }}>
-                              <circle cx={sz/2} cy={sz/2} r={r} fill="none" stroke="var(--border)" strokeWidth={sw} />
-                              <circle cx={sz/2} cy={sz/2} r={r} fill="none" stroke="var(--yellow)" strokeWidth={sw}
-                                strokeDasharray={circ} strokeDashoffset={off} strokeLinecap="round"
-                                transform={`rotate(-90 ${sz/2} ${sz/2})`} />
-                            </svg>
-                          ) : (
-                            <span class="sq-running" style={{ width: 5, height: 5, borderRadius: "50%", display: "inline-block" }} />
-                          )}
-                          <code style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>exp/{e.label ?? e.id}</code>
-                        </span>
-                      );
-                    })}
-                  </span>
-                )}
-              </>
-            ) : (
-              <span class="review-status-idle">
-                idle
-                {lastFinishedAt && <span class="review-idle-hint"> · last {timeAgo(lastFinishedAt)}</span>}
-                {!isLive && expsSinceBest != null && expsSinceBest > 50 && experiments.length > 20 && (() => {
-                  // Suggest the first untested idea when stuck
-                  const ideaExpCountsStatus: Record<number, number> = {};
-                  for (const e of experiments) { if (!e._running) ideaExpCountsStatus[e.idea_id] = (ideaExpCountsStatus[e.idea_id] || 0) + 1; }
-                  const firstUntested = Object.values(ideas)
-                    .filter(i => i.status !== "concluded" && i.status !== "abandoned" && (ideaExpCountsStatus[i.id] ?? 0) === 0)
-                    .slice(0, 1)[0];
-                  if (!firstUntested) return null;
-                  return (
-                    <span class="review-idle-hint"> · →{" "}
-                      <span style={{ color: "var(--yellow)", cursor: "pointer", fontWeight: 600 }}
-                        onClick={() => { navigateToIdea(firstUntested.id); const el = document.getElementById("review-ideas") as HTMLDetailsElement | null; if (el) { el.open = true; el.scrollIntoView({ behavior: "smooth" }); } }}
-                        title={`Try idea #${firstUntested.id}: ${firstUntested.description?.split("\n")[0]}`}>
-                        idea #{firstUntested.id}
-                      </span>
-                    </span>
-                  );
-                })()}
-                {lastFinishedAt && Date.now() - Date.parse(lastFinishedAt) > 3600_000 && (
-                  <span class="review-idle-cta"> — run <code>the-lab-agent</code> to continue</span>
-                )}
-              </span>
-            )}
-          </span>
-          {queued > 0 && (
-            <span class="review-status-item review-status-queue"
-              title={`${queued} experiment${queued !== 1 ? "s" : ""} pending in queue`}>
-              <strong>{queued}</strong> queued
-              <span class="queue-depth-dots">
-                {Array.from({ length: Math.min(queued, 8) }).map((_, i) => (
-                  <span key={i} class="queue-dot" />
-                ))}
-                {queued > 8 && <span class="queue-dot-overflow">+{queued - 8}</span>}
-              </span>
-            </span>
-          )}
-          <span class="review-status-item"><strong>{finished}</strong> done</span>
-          {failed > 0 && <span class="review-status-item review-status-item--warn"><strong>{failed}</strong> failed</span>}
-          {activeIdeas > 0 && <span class="review-status-item"><strong>{activeIdeas}</strong> ideas</span>}
-          {velocityPerDay && (
-            <span class="review-status-item review-status-velocity" title={`Avg experiments per day over last 7 days${velocityTrend ? ` (${velocityTrend === "↑" ? "accelerating" : "slowing"} vs previous 7d)` : ""}`}>
-              <strong>{velocityPerDay}</strong>/day{velocityTrend && (
-                <span style={{ color: velocityTrend === "↑" ? "var(--green)" : "var(--yellow)", fontSize: "10px", marginLeft: 2 }}>{velocityTrend}</span>
-              )}
-            </span>
-          )}
-          <span class="review-status-sep" />
-          <code class="review-status-branch" style={branch === "…" ? { opacity: 0.4 } : undefined}>{branch}</code>
-          {cost != null && (
-            <span class="review-status-item review-status-item--cost"
-              title={milestonesCount > 0 ? `$${(cost / milestonesCount).toFixed(0)} per new record · $${campaignAgeDays ? (cost / campaignAgeDays).toFixed(0) : "?"}/day` : undefined}>
-              ${cost.toFixed(0)}
-              {milestonesCount > 0 && cost > 100 && (
-                <span style={{ color: "var(--text-faint)", fontSize: "var(--text-xs)" }}> / {milestonesCount}★</span>
-              )}
-              {campaignAgeDays != null && campaignAgeDays > 0 && cost > 50 && (
-                <span style={{ color: "var(--text-faint)", fontSize: "var(--text-xs)" }}> · ${Math.round(cost / campaignAgeDays)}/d</span>
-              )}
-            </span>
-          )}
-          {campaignAgeDays !== null && campaignAgeDays > 0 && (
-            <span class="review-status-item review-campaign-age" title={`Campaign started ${campaignAgeDays} days ago`}>
-              {campaignAgeDays}d campaign
-            </span>
-          )}
-        </div>
-        {/* 14-day activity sparkline — hidden on mobile */}
-        {activityBars.some(h => h > 0) ? (
-          <div class="activity-spark" title="Experiment activity over last 14 days (each bar = 1 day)">
-            {activityBars.map((h, i) => (
-              <span key={i} class="activity-bar" style={{
-                height: `${h > 0 ? Math.max(4, Math.round(h * 16)) : 2}px`,
-                background: h > 0 ? "var(--accent)" : "var(--border)",
-                opacity: h > 0 ? 0.7 + h * 0.3 : 0.25,
-              }} />
-            ))}
-          </div>
-        ) : finished > 5 ? (
-          <span class="activity-idle-label" title="No experiments in the last 14 days">quiet 14d</span>
-        ) : null
-        /* hide 'quiet 14d' during loading state when finished=0 */}
-        <button class="review-primary-action" onClick={onOpenWorkbench}>Workbench →</button>
-      </div>
+      {/* ══ Header — one calm instrument cluster ════════════════════════
+          A single status line + a hairline KPI grid + the experiment grid.
+          Replaces the old status-strip / jump-nav / best-bar / snapshot /
+          milestone-timeline pile-up. Color is reserved for status + the
+          single purple "best" accent. */}
 
-      {/* ── Section jump nav ─────────────────────────────────────────── */}
-      <div class="review-jump-nav" title="Jump to any section">
-        {([
-          { id: "review-runs",    icon: "◉", label: "Experiments", badge: finished > 0 ? String(finished) : null, live: running > 0, tip: "All experiments — scores, runs, table" },
-          { id: "review-ideas",   icon: "◈", label: "Ideas",       badge: activeIdeas > 0 ? String(activeIdeas) : null, tip: "Browse ideas, idea health, exploration tree" },
-          { id: "review-compare", icon: "⊞", label: "Correlation",  badge: null, tip: "Scatter plot — correlate any two metrics" },
-          { id: "review-detail",  icon: "▸", label: "Idea Detail", badge: null, tip: "Drill into a single idea's experiments and config" },
-          { id: "review-ops",     icon: "≡", label: "Queue",        badge: queued > 0 ? String(queued) : null, live: liveCount > 0, tip: "Queue & running experiments" },
-        ] as Array<{ id: string; icon: string; label: string; badge: string | null; live?: boolean; tip: string }>).map(s => (
-          <a key={s.id} href={`#${s.id}`}
-            class={`review-jump-pill${s.live ? " review-jump-pill--live" : ""}`}
-            title={s.tip}
-            onClick={(e) => {
-              e.preventDefault();
-              const el = document.getElementById(s.id) as HTMLDetailsElement | null;
-              if (el) { if (!el.open) el.open = true; el.scrollIntoView({ behavior: "smooth", block: "start" }); }
-            }}
-          >
-            <span class="rjp-icon">{s.icon}</span>
-            <span class="rjp-label">{s.label}</span>
-            {s.badge && <span class="rjp-badge">{s.badge}</span>}
-          </a>
-        ))}
-      </div>
-
-      {/* ── Experiment grid — glanceable status tiles ────────────────── */}
-      {/* ── Experiment quality bar — micro indicator above the grid ────── */}
-      {successRate !== null && finished > 10 && (
-        <div style={{ height: 3, background: "var(--border-soft)", borderRadius: 1, overflow: "hidden", marginBottom: -3 }}>
-          <div style={{
-            height: "100%",
-            width: `${successRate}%`,
-            background: successRate > 30 ? "var(--green)" : successRate > 10 ? "var(--yellow)" : "var(--red)",
-            opacity: 0.6,
-            transition: "width 0.5s ease",
-          }} title={`${successRate}% of experiments scored above zero`} />
-        </div>
-      )}
-      <ExperimentGrid experiments={experiments} successRate={successRate} milestoneIds={milestoneIdsSet} />
-
-      {/* ── Campaign narrative — one-sentence plain-English state ──────── */}
-      {bestVal != null && typeof bestVal === "number" && (
-        <div class="review-narrative">
-          {(() => {
-            const stagnant = expsSinceBest != null && expsSinceBest > 20;
-            const stagnantEl = stagnant ? (
-              <span style={{ color: expsSinceBest! > 50 ? "var(--red)" : "var(--yellow)", fontWeight: 600 }}>
-                no improvement in last {expsSinceBest}
-              </span>
-            ) : null;
-            // Stagnation goes FIRST so it's visible even when truncated on narrow screens
-            const parts: preact.ComponentChildren[] = [];
-            if (stagnantEl) parts.push(stagnantEl);
-            if (isLive) {
-              // Show running experiment with progress, elapsed time, and idea
-              const runExp = activeRuns[0];
-              const runIdea = runExp ? ideas[runExp.idea_id] : null;
-              const runDesc = runIdea?.description?.split("\n")[0].slice(0, 32);
-              const pct = runExp ? Math.round(progress[runExp.label || String(runExp.id)] ?? 0) : null;
-              const elapsedMin = runExp?.started_at
-                ? Math.floor((Date.now() - Date.parse(runExp.started_at)) / 60000)
-                : null;
-              parts.push(
-                <span title={runIdea?.description?.split("\n")[0] ?? undefined}>
-                  {liveCount} running{pct != null && pct > 0 ? ` ${pct}%` : ""}
-                  {elapsedMin != null && elapsedMin > 0 && (() => {
-                    const etaMin = pct != null && pct > 5 ? Math.round((elapsedMin / pct) * (100 - pct)) : null;
-                    const etaStr = etaMin != null ? (etaMin > 90 ? `~${Math.round(etaMin/60)}h left` : `~${etaMin}m left`) : null;
-                    return (
-                      <span style={{ color: "var(--text-faint)", fontSize: "var(--text-xs)" }}>
-                        {" "}{elapsedMin}m{etaStr ? <span title="Estimated time remaining based on progress"> · {etaStr}</span> : null}
-                      </span>
-                    );
-                  })()}
-                  {runDesc ? <span style={{ color: "var(--text-faint)" }}> · {runDesc}…</span> : null}
-                </span>
-              );
-            } else if (lastFinishedAt) {
-              // Show last experiment's score if known
-              const lastScore = lastFinishedExp && metric && typeof lastFinishedExp.metrics?.[metric] === "number"
-                ? (lastFinishedExp.metrics![metric] as number)
-                : null;
-              const scoreStr = lastScore !== null
-                ? (Math.abs(lastScore) >= 1 ? lastScore.toFixed(2) : lastScore.toFixed(3))
-                : null;
-              const lastIdea = lastFinishedExp ? ideas[lastFinishedExp.idea_id] : null;
-              const lastIdeaDesc = lastIdea?.description?.split("\n")[0].slice(0, 35);
-              parts.push(
-                <span>
-                  idle {timeAgo(lastFinishedAt)}
-                  {scoreStr !== null && (
-                    <span style={{ color: lastScore! > 0 ? "var(--green)" : "var(--text-faint)", fontSize: "var(--text-xs)" }}>
-                      {" "}→ {scoreStr}
-                    </span>
-                  )}
-                  {(lastIdeaDesc || lastFinishedExp?.idea_id) && (
-                    <span style={{ color: "var(--text-faint)", fontSize: "var(--text-xs)" }}
-                      title={lastIdea?.description?.split("\n")[0] ?? `idea #${lastFinishedExp?.idea_id}`}>
-                      {" · "}{lastIdeaDesc ? `${lastIdeaDesc}…` : `idea #${lastFinishedExp!.idea_id}`}
-                    </span>
-                  )}
-                </span>
-              );
-            }
-            if (finished > 0) parts.push(`${finished} exp`);
-            // Show recent scoring trend: if last 20 all scored 0, flag it
-            const recent20 = done.slice(-20).filter(e => typeof e.metrics?.[metric] === "number");
-            const recent20AllZero = recent20.length >= 5 && recent20.every(e => (e.metrics![metric] as number) <= 0);
-            if (successRate !== null) {
-              if (recent20AllZero) {
-                parts.push(<span style={{ color: "var(--yellow)" }}>0% recent</span>);
-              } else if (successRate < 20) {
-                parts.push(<span style={{ color: "var(--yellow)", opacity: 0.85 }}>{successRate}% scored</span>);
-              } else if (successRate > 50) {
-                parts.push(<span style={{ color: "var(--green)", opacity: 0.85 }}>{successRate}% scored</span>);
-              } else {
-                parts.push(`${successRate}% scored`);
-              }
-            }
-            if (!stagnantEl && bestExp?.finished_at) parts.push(`best set ${timeAgo(bestExp.finished_at)}`);
-            return parts.reduce((acc: preact.ComponentChildren[], p, i) => (
-              i === 0 ? [p] : [...acc, <span style={{ opacity: 0.4 }}> · </span>, p]
-            ), []);
-          })()}
-        </div>
-      )}
-
-      {/* ── Best score callout ───────────────────────────────────────── */}
-      {bestExp != null && bestVal != null && (
-        <div class="review-best-bar">
-          <span class="review-best-label">best {fmtMetricName(metric)}</span>
-          <BestSparkline experiments={done} metric={metric} lower={lower} />
-          <strong class="review-best-value">{typeof bestVal === "number" ? bestVal.toFixed(3) : bestVal}</strong>
-          <span class="review-best-direction" title={lower ? "lower is better" : "higher is better"}>
-            {lower ? "↓ lower better" : "↑ higher better"}
-          </span>
-          <span class="review-best-meta">
-            {(() => {
-              const d = bestIdea ? (bestIdea.description?.split("\n")[0] ?? `idea #${bestExp.idea_id}`) : `idea #${bestExp.idea_id}`;
-              return d.length > 52 ? d.slice(0, 52).replace(/\s+\S*$/, "") + "…" : d;
-            })()}
-            {" · "}<code>{bestExp.label ?? `exp/${bestExp.id}`}</code>
-            {bestExp.finished_at && (
-              <span class="review-best-age"> · {timeAgo(bestExp.finished_at)}</span>
-            )}
-          </span>
-          {expsSinceBest != null && expsSinceBest > 5 && (
-            <span class="review-best-since"
-              title={`${expsSinceBest} experiments run since the last new best — consider a new approach`}
-              style={{ color: expsSinceBest > 50 ? "var(--red)" : expsSinceBest > 20 ? "var(--yellow)" : "var(--text-faint)", fontSize: "var(--text-xs)", fontFamily: "var(--font-mono)" }}>
-              +{expsSinceBest} since
-            </span>
-          )}
-          {/* First → best improvement delta */}
-          {typeof bestVal === "number" && done.length > 5 && (() => {
-            const sorted = done.filter(e => typeof e.metrics?.[metric] === "number").sort((a, b) => a.id - b.id);
-            if (sorted.length < 2) return null;
-            const firstVal = sorted[0].metrics![metric] as number;
-            if (firstVal === 0 || firstVal === bestVal) return null;
-            const delta = lower ? firstVal - bestVal : bestVal - firstVal;
-            if (delta <= 0) return null;
-            const pctImprove = Math.round((delta / Math.abs(firstVal)) * 100);
-            if (pctImprove < 5) return null; // skip if < 5% improvement
-            return (
-              <span style={{ fontSize: "var(--text-xs)", color: "var(--green)", fontFamily: "var(--font-mono)", fontWeight: 600, flexShrink: 0 }}
-                title={`Improved from ${firstVal.toFixed(3)} (first run) to ${(bestVal as number).toFixed(3)} — ${pctImprove}% total improvement`}>
-                +{pctImprove}%
-              </span>
-            );
-          })()}
-        </div>
-      )}
-
-      {/* ── Pivot hint — when deeply stagnant ────────────────────────── */}
-      {expsSinceBest != null && expsSinceBest > 80 && (
-        <div class="review-pivot-hint" title="Consider branching a new idea or exploring under-tried directions">
-          <span style={{ color: "var(--red)" }}>⚠</span>
-          {" "}stuck for {expsSinceBest} experiments
-          {milestonesCount > 1 && finished > 0 && (() => {
-            const avgPer = Math.round(finished / milestonesCount);
-            const overdue = expsSinceBest - avgPer;
-            if (overdue <= 0) return null;
-            const overdueColor = overdue > avgPer * 0.7 ? "var(--red)" : overdue > avgPer * 0.3 ? "var(--yellow)" : "var(--text-faint)";
-            // Stagnation gauge: fill = expsSinceBest / (avgPer * 2), capped at 100%
-            const gaugePct = Math.min(100, Math.round((expsSinceBest / (avgPer * 2)) * 100));
-            const gaugeColor = gaugePct > 75 ? "var(--red)" : gaugePct > 40 ? "var(--yellow)" : "var(--green)";
-            return (
-              <>
-                <span style={{ color: overdueColor, fontSize: "var(--text-xs)", fontWeight: overdue > avgPer * 0.5 ? 600 : 400 }}>
-                  {" "}({overdue} overdue · avg 1/{avgPer})
-                </span>
-                {" "}
-                <span style={{ display: "inline-block", width: 40, height: 4, background: "var(--border-soft)", borderRadius: 2, verticalAlign: "middle", overflow: "hidden" }}
-                  title={`Stagnation gauge: ${gaugePct}% of 2× average window`}>
-                  <span style={{ display: "block", width: `${gaugePct}%`, height: "100%", background: gaugeColor, borderRadius: 2 }} />
-                </span>
-              </>
-            );
-          })()}
-          {" · "}
-          <a href="#review-ops" class="review-pivot-link"
-            onClick={(e) => { e.preventDefault(); const el = document.getElementById("review-ops") as HTMLDetailsElement | null; if (el) { el.open = true; el.scrollIntoView({ behavior: "smooth" }); } }}>
-            open queue
-          </a>
-          {" · "}
-          <a href="#review-ideas" class="review-pivot-link"
-            onClick={(e) => {
-              e.preventDefault();
-              const el = document.getElementById("review-ideas") as HTMLDetailsElement | null;
-              if (el) { el.open = true; el.scrollIntoView({ behavior: "smooth" }); }
-            }}>
-            explore ideas
-          </a>
-          {/* Hint untested ideas if any */}
-          {experiments.length > 20 && (() => {
-            const ideaExpCountsHint: Record<number, number> = {};
-            for (const e of experiments) { if (!e._running) ideaExpCountsHint[e.idea_id] = (ideaExpCountsHint[e.idea_id] || 0) + 1; }
-            const untestedList = Object.values(ideas)
-              .filter(i => i.status !== "concluded" && i.status !== "abandoned" && (ideaExpCountsHint[i.id] ?? 0) === 0)
-              .slice(0, 1);
-            if (untestedList.length === 0) return null;
-            const u = untestedList[0];
-            const title = u.description?.split("\n")[0].slice(0, 35) ?? `idea #${u.id}`;
-            return (
-              <span style={{ fontSize: "var(--text-xs)", color: "var(--text-faint)", marginLeft: 4 }}>
-                · or try{" "}
-                <span style={{ color: "var(--yellow)", fontWeight: 600, cursor: "pointer", textDecoration: "underline" }}
-                  onClick={() => { navigateToIdea(u.id); const el = document.getElementById("review-ideas") as HTMLDetailsElement | null; if (el) { el.open = true; el.scrollIntoView({ behavior: "smooth" }); } }}
-                  title={`Navigate to idea #${u.id}: ${u.description?.split("\n")[0]}`}>
-                  #{u.id}
-                </span>{" "}(never tried)
-              </span>
-            );
-          })()}
-        </div>
-      )}
-
-      {/* ── Milestone timeline — shows when breakthroughs happened ─────── */}
-      {bestExp && milestoneIdsSet.size > 1 && campaignAgeDays && campaignAgeDays > 0 && (
-        <div class="review-milestone-timeline" title="Each ★ marks a new best score — shows when progress was made vs. now">
-          {(() => {
-            const milestones = done
-              .filter(e => milestoneIdsSet.has(e.id) && e.finished_at)
-              .sort((a, b) => a.id - b.id);
-            if (milestones.length < 2) return null;
-            const tStart = Date.parse(milestones[0].finished_at!);
-            const tNow = Date.now();
-            const totalMs = tNow - tStart;
-            const lastMs = Date.parse(milestones[milestones.length - 1].finished_at!) - tStart;
-            const lastPct = (lastMs / totalMs) * 100;
-            return (
-              <>
-                <div class="rmt-bar">
-                  <div class="rmt-active" style={{ width: `${lastPct.toFixed(1)}%` }} />
-                  <div class="rmt-idle"   style={{ width: `${(100 - lastPct).toFixed(1)}%` }} />
-                  {milestones.map((e, mi) => {
-                    const pct = ((Date.parse(e.finished_at!) - tStart) / totalMs) * 100;
-                    const v = typeof e.metrics?.[metric] === "number" ? (e.metrics![metric] as number) : null;
-                    const vStr = v !== null ? (Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(2) : v.toFixed(3)) : "";
-                    const isLast = mi === milestones.length - 1;
-                    // Experiment count between this and previous milestone
-                    const prevM = mi > 0 ? milestones[mi - 1] : null;
-                    const expsBetween = prevM
-                      ? done.filter(x => x.id > prevM.id && x.id <= e.id).length
-                      : null;
-                    const midPct = prevM
-                      ? (((Date.parse(prevM.finished_at!) - tStart) + (Date.parse(e.finished_at!) - tStart)) / 2 / totalMs) * 100
-                      : null;
-                    return (
-                      <span key={e.id}>
-                        <span class={`rmt-dot${isLast ? " rmt-dot--best" : ""}`} style={{ left: `${pct.toFixed(1)}%` }} title={`${e.label ?? `exp/${e.id}`}: ${vStr}`} />
-                        {vStr && (
-                          <span style={{ position: "absolute", left: `${pct.toFixed(1)}%`, transform: "translateX(-50%)", top: isLast ? "-15px" : "-12px", fontSize: isLast ? "9px" : "7px", color: isLast ? "var(--purple)" : "var(--text-faint)", fontFamily: "var(--font-mono)", fontWeight: isLast ? 700 : 500, whiteSpace: "nowrap", letterSpacing: "-0.02em", opacity: isLast ? 1 : 0.75 }}>
-                            {vStr}
-                          </span>
-                        )}
-                        {expsBetween != null && expsBetween > 5 && midPct != null && (
-                          <span style={{ position: "absolute", left: `${midPct.toFixed(1)}%`, transform: "translateX(-50%)", top: "-12px", fontSize: "7px", color: "var(--text-muted)", fontFamily: "var(--font-mono)", whiteSpace: "nowrap", fontWeight: 500 }}
-                            title={`${expsBetween} experiments between milestones`}>
-                            {expsBetween}
-                          </span>
-                        )}
-                      </span>
-                    );
-                  })}
-                </div>
-                <div class="rmt-labels">
-                  <span>campaign start</span>
-                  <span style={{ marginLeft: `${lastPct.toFixed(1)}%`, transform: "translateX(-50%)" }} class="rmt-last-label">
-                    last record · {timeAgo(milestones[milestones.length - 1].finished_at!)}
-                  </span>
-                  {/* Show stagnation days in the amber zone */}
-                  {(() => {
-                    const stagnantMs = Date.now() - Date.parse(milestones[milestones.length - 1].finished_at!);
-                    const stagnantDays = Math.floor(stagnantMs / 86400000);
-                    const midPct = lastPct + (100 - lastPct) / 2;
-                    return stagnantDays > 0 ? (
-                      <span style={{ position: "absolute", left: `${midPct.toFixed(1)}%`, transform: "translateX(-50%)", color: "color-mix(in srgb, var(--yellow) 60%, transparent)", fontSize: "7px" }}>
-                        {stagnantDays}d idle
-                      </span>
-                    ) : null;
-                  })()}
-                  <span style={{ marginLeft: "auto" }}>now</span>
-                </div>
-              </>
-            );
-          })()}
-        </div>
-      )}
-
-      {/* ── Campaign stats strip — always visible compact summary ─────────── */}
-      {finished > 5 && (
-        <div class="review-campaign-snapshot">
-          {bestVal != null && typeof bestVal === "number" && (
-            <span class="rcs-item rcs-item--best" title={`Best ${fmtMetricName(metric)} achieved`}>
-              <span class="rcs-label">best</span>
-              <span class="rcs-value">{bestVal.toFixed(bestVal >= 100 ? 0 : bestVal >= 1 ? 2 : 3)}</span>
-            </span>
-          )}
-          {successRate !== null && (
-            <span class="rcs-item" title="% experiments that scored above zero">
-              <span class="rcs-label">scored</span>
-              <span class="rcs-value" style={{ color: successRate < 15 ? "var(--yellow)" : "var(--text)" }}>{successRate}%</span>
-            </span>
-          )}
-          <span class="rcs-item" title="Total experiments run">
-            <span class="rcs-label">exp</span>
-            <span class="rcs-value">{finished}</span>
-          </span>
-          {milestonesCount > 0 && (
-            <span class="rcs-item" title={`${milestonesCount} new best scores; 1 per ${Math.round(finished/milestonesCount)} exp avg`}>
-              <span class="rcs-label">records</span>
-              <span class="rcs-value">{milestonesCount}★</span>
-            </span>
-          )}
-          {expsSinceBest != null && expsSinceBest > 0 && (
-            <span class="rcs-item" style={{ position: "relative" }}
-              title={expsSinceBest > 0 && milestonesCount > 0 ? `${expsSinceBest} experiments since last record · avg was ${Math.round(finished/milestonesCount)} per record` : `${expsSinceBest} experiments since last new best`}>
-              <span class="rcs-label">since ★{milestonesCount > 0 && finished > 0 && expsSinceBest > Math.round(finished/milestonesCount) ? (
-                <span style={{ color: "var(--text-faint)", fontWeight: 400, marginLeft: 2 }}>
-                  +{expsSinceBest - Math.round(finished/milestonesCount)}
-                </span>
-              ) : null}</span>
-              <span class="rcs-value" style={{ color: expsSinceBest > 80 ? "var(--red)" : expsSinceBest > 30 ? "var(--yellow)" : "var(--text)" }}>
-                {expsSinceBest}
-              </span>
-              {/* Mini bar showing how far past the avg we are */}
-              {milestonesCount > 0 && finished > 0 && (() => {
-                const avgPer = Math.round(finished / milestonesCount);
-                const overdueRatio = Math.min(expsSinceBest / avgPer, 3); // cap at 3× overdue
-                const barPct = Math.min(100, (expsSinceBest / (avgPer * 2)) * 100);
-                return (
-                  <div style={{ position: "absolute", bottom: 2, left: 6, right: 6, height: 2, background: "var(--border-soft)", borderRadius: 1 }}>
-                    <div style={{ width: `${Math.min(100, (avgPer / (avgPer * 2)) * 100)}%`, height: "100%", background: "var(--text-faint)", borderRadius: 1, opacity: 0.4 }} />
-                    <div style={{ position: "absolute", top: 0, left: 0, width: `${barPct}%`, height: "100%", background: overdueRatio > 1 ? "var(--red)" : overdueRatio > 0.5 ? "var(--yellow)" : "var(--green)", borderRadius: 1, opacity: 0.8 }} />
-                  </div>
-                );
+      {/* ── Status line — one dot, the live/idle sentence, branch, action ── */}
+      <div class="review-statusline">
+        <span class={`review-status-dot ${isLive ? "live" : "idle"}${expsSinceBest != null && expsSinceBest > 50 ? " stagnant" : ""}`}
+          title={expsSinceBest != null && expsSinceBest > 50 ? `Stagnant: ${expsSinceBest} experiments since last record` : undefined}
+        />
+        <span class="review-statusline-text">
+          {isLive ? (
+            <>
+              <strong>{liveCount}</strong> running{avgProgress > 0 ? ` · ${avgProgress}%` : ""}
+              {queued > 0 && <span class="review-statusline-dim"> · {queued} queued</span>}
+              {activeRuns[0]?.started_at && (() => {
+                const mins = Math.floor((Date.now() - Date.parse(activeRuns[0].started_at!)) / 60000);
+                return mins > 0 ? <span class="review-statusline-dim"> · {mins}m elapsed</span> : null;
               })()}
-            </span>
+            </>
+          ) : (
+            <>
+              idle
+              {lastFinishedAt && <span class="review-statusline-dim"> · last record {timeAgo(lastFinishedAt)}</span>}
+              {queued > 0 && <span class="review-statusline-dim"> · {queued} queued</span>}
+              {expsSinceBest != null && expsSinceBest > 50 && (
+                <span class="review-statusline-warn" title={`${expsSinceBest} experiments since the last new best — consider a new approach`}>
+                  {" · "}stuck {expsSinceBest}
+                </span>
+              )}
+            </>
           )}
-          {cost != null && cost > 50 && (
-            <span class="rcs-item" title={`Total: $${cost.toFixed(0)} · ${milestonesCount > 0 ? `$${(cost/milestonesCount).toFixed(0)} per new record` : ""} · $${campaignAgeDays ? (cost/campaignAgeDays).toFixed(0) : "?"}/day`}>
-              <span class="rcs-label">{milestonesCount > 0 ? "$/★" : "cost"}</span>
-              <span class="rcs-value">{milestonesCount > 0 ? `$${(cost/milestonesCount).toFixed(0)}` : `$${cost.toFixed(0)}`}</span>
+        </span>
+        <code class="review-statusline-branch" style={branch === "…" ? { opacity: 0.4 } : undefined}>{branch}</code>
+        <button class="review-statusline-action" onClick={onOpenWorkbench}>Workbench →</button>
+      </div>
+
+      {/* ── KPI cluster — confident mono Stats on a hairline grid ──────── */}
+      <div class="review-kpis ui-hairline-grid">
+        <div class="review-kpi">
+          <span class="ui-stat-label">best {fmtMetricName(metric)}</span>
+          <span class="review-kpi-row">
+            <span class="ui-stat-value ui-stat-value--best">
+              {bestVal != null && typeof bestVal === "number"
+                ? bestVal.toFixed(bestVal >= 100 ? 0 : bestVal >= 1 ? 2 : 3)
+                : "—"}
             </span>
-          )}
-          {campaignAgeDays != null && campaignAgeDays > 0 && (
-            <span class="rcs-item" title={`Campaign started ${campaignAgeDays} days ago`}>
-              <span class="rcs-label">age</span>
-              <span class="rcs-value">{campaignAgeDays}d</span>
-            </span>
-          )}
-          {/* ETA: when can we expect next breakthrough based on pace */}
-          {velocityPerDay && milestonesCount > 0 && finished > 0 && expsSinceBest != null && (() => {
-            const avgPer = Math.round(finished / milestonesCount);
-            const remaining = Math.max(0, avgPer - expsSinceBest);
-            if (remaining === 0) return null; // already overdue, don't show ETA
-            const daysToBreakthrough = (remaining / parseFloat(velocityPerDay!)).toFixed(1);
-            return (
-              <span class="rcs-item" title={`At current pace, next expected record in ~${remaining} more experiments (~${daysToBreakthrough}d)`}>
-                <span class="rcs-label">eta ★</span>
-                <span class="rcs-value" style={{ fontSize: "13px" }}>{daysToBreakthrough}d</span>
+            <BestSparkline experiments={done} metric={metric} lower={lower} />
+          </span>
+          <span class="ui-stat-sub">
+            {lower ? "↓ lower better" : "↑ higher better"}
+            {expsSinceBest != null && expsSinceBest > 5 && (
+              <span style={{ color: expsSinceBest > 50 ? "var(--red)" : expsSinceBest > 20 ? "var(--yellow)" : "var(--text-faint)", marginLeft: 6 }}
+                title={`${expsSinceBest} experiments since the last new best`}>
+                +{expsSinceBest} since ★
               </span>
-            );
-          })()}
-          {!selectedMetric.value && (
-            <span class="rcs-hint">↑ select a metric to view chart</span>
-          )}
+            )}
+          </span>
         </div>
-      )}
+
+        <div class="review-kpi">
+          <span class="ui-stat-label">experiments</span>
+          <span class="ui-stat-value">{finished}</span>
+          <span class="ui-stat-sub">
+            {running > 0 && <span style={{ color: "var(--yellow)" }}>{running} running</span>}
+            {running > 0 && failed > 0 && " · "}
+            {failed > 0 && <span style={{ color: "var(--red)" }}>{failed} failed</span>}
+            {running === 0 && failed === 0 && velocityPerDay ? `${velocityPerDay}/day` : null}
+          </span>
+        </div>
+
+        {successRate !== null && (
+          <div class="review-kpi">
+            <span class="ui-stat-label">success</span>
+            <span class={`ui-stat-value${successRate < 15 ? " ui-stat-value--warn" : successRate > 50 ? " ui-stat-value--good" : ""}`}>{successRate}%</span>
+            <span class="ui-stat-sub">scored above zero</span>
+          </div>
+        )}
+
+        {milestonesCount > 0 && (
+          <div class="review-kpi">
+            <span class="ui-stat-label">records</span>
+            <span class="ui-stat-value ui-stat-value--best">{milestonesCount}</span>
+            <span class="ui-stat-sub">{finished > 0 ? `1 per ${Math.round(finished / milestonesCount)} exp` : "new bests"}</span>
+          </div>
+        )}
+
+        {activeIdeas > 0 && (
+          <div class="review-kpi">
+            <span class="ui-stat-label">ideas</span>
+            <span class="ui-stat-value">{activeIdeas}</span>
+            <span class="ui-stat-sub">active{ideasConcluded > 0 ? ` · ${ideasConcluded} done` : ""}</span>
+          </div>
+        )}
+
+        {cost != null && cost > 0 && (
+          <div class="review-kpi">
+            <span class="ui-stat-label">cost</span>
+            <span class="ui-stat-value">${cost >= 1000 ? `${(cost / 1000).toFixed(1)}k` : cost.toFixed(0)}</span>
+            <span class="ui-stat-sub">
+              {milestonesCount > 0 ? `$${(cost / milestonesCount).toFixed(0)}/★` : campaignAgeDays ? `over ${campaignAgeDays}d` : "total"}
+            </span>
+          </div>
+        )}
+      </div>
+
+      {/* ── Experiment grid — glanceable per-experiment status tiles ───── */}
+      <ExperimentGrid experiments={experiments} successRate={successRate} milestoneIds={milestoneIdsSet} ideas={ideas} metric={metric} />
 
       {/* ── Chart — collapses to compact empty state when no metric selected ── */}
       {(() => {
@@ -2461,83 +2126,64 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
             isStagnant ? "⚠ stagnant" : null,
           ].filter(Boolean).join(" · ")}
           preview={
-            <div class="emr-preview">
-              {/* Score distribution + success rate */}
-              <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+            <div class="emr-preview emr-preview--runs">
+              {/* Centerpiece (#11): the milestones table — every record-setting run. */}
+              <MilestonesTable experiments={experiments} metric={metric} lower={lower} ideas={ideas} />
+
+              {/* Supporting minis: each self-explanatory with caption + axis labels. */}
+              <div class="review-mini-col">
+                {/* Score distribution — already labeled (x range + units caption). */}
                 <ScoreDistBar experiments={experiments} metric={metric} lower={lower} />
-                {successRate !== null && (
-                  <div style={{ width: "90px", display: "flex", flexDirection: "column", gap: 1 }}>
-                    <div style={{ height: 3, background: "var(--border-soft)", borderRadius: 2, overflow: "hidden" }} title={`${successRate}% of experiments scored above zero`}>
-                      <div style={{ height: "100%", width: `${successRate}%`, background: successRate > 30 ? "var(--green)" : successRate > 10 ? "var(--yellow)" : "var(--red)", borderRadius: 2, transition: "width 0.5s ease" }} />
-                    </div>
-                    <span style={{ fontSize: "7px", color: "var(--text-faint)", fontFamily: "var(--font-mono)" }}>{successRate}% scored</span>
-                  </div>
-                )}
-                {milestonesCount > 0 && finished > 0 && (
-                  <div style={{ width: "90px", display: "flex", flexDirection: "column", gap: 1 }}
-                    title={`${milestonesCount} new best scores found in ${finished} experiments`}>
-                    <div style={{ height: 3, background: "var(--border-soft)", borderRadius: 2, overflow: "hidden" }}>
-                      <div style={{ height: "100%", width: `${Math.min(100, milestonesCount * 20)}%`, background: "var(--purple)", borderRadius: 2, opacity: 0.7 }} />
-                    </div>
-                    <span style={{ fontSize: "7px", color: "var(--text-faint)", fontFamily: "var(--font-mono)" }}>{milestonesCount} records · 1/{Math.round(finished/milestonesCount)}</span>
-                  </div>
-                )}
-                {/* Success rate trend: recent vs earlier */}
-                {metric && finished > 40 && successRate !== null && (
-                  (() => {
-                    const withMetric = done.filter(e => typeof e.metrics?.[metric] === "number");
-                    if (withMetric.length < 20) return null;
-                    const half = Math.floor(withMetric.length / 2);
-                    const early = withMetric.slice(0, half);
-                    const recent = withMetric.slice(-half);
-                    const earlyRate = Math.round((early.filter(e => (e.metrics![metric] as number) > 0).length / early.length) * 100);
-                    const recentRate = Math.round((recent.filter(e => (e.metrics![metric] as number) > 0).length / recent.length) * 100);
-                    const delta = recentRate - earlyRate;
-                    if (Math.abs(delta) < 2) return null;
-                    return (
-                      <div style={{ fontSize: "7px", color: delta > 0 ? "var(--green)" : "var(--red)", fontFamily: "var(--font-mono)" }}
-                        title={`Success rate: ${earlyRate}% earlier → ${recentRate}% recent`}>
-                        trend {delta > 0 ? `↑+${delta}%` : `↓${delta}%`}
-                      </div>
-                    );
-                  })()
-                )}
-                {/* Mini recent-scores sparkline: last 30 experiments as tiny bars */}
+
+                {/* Recent runs: last N scores as bars, with caption + value axis. */}
                 {(() => {
                   const recent30 = done.slice(-30).filter(e => typeof e.metrics?.[metric] === "number");
                   if (recent30.length < 5) return null;
                   const vals = recent30.map(e => e.metrics![metric] as number);
                   const maxV = Math.max(...vals, 0.001);
-                  const W = 90, H = 14;
+                  const W = 150, H = 26;
                   return (
-                    <div title={`Last ${recent30.length} experiments score distribution`}>
-                      <svg width={W} height={H} style={{ display: "block", overflow: "visible" }}>
-                        {vals.map((v, i) => {
-                          const barW = Math.max(1, W / vals.length - 1);
-                          const barH = v > 0 ? Math.max(2, (v / maxV) * (H - 2)) : 2;
-                          const x = i * (W / vals.length);
-                          const isRecent = i >= vals.length - 5;
-                          return (
-                            <rect key={i} x={x} y={H - barH} width={barW} height={barH}
-                              fill={v > 0 ? (isRecent ? "var(--green)" : "var(--accent)") : "var(--border-soft)"}
-                              opacity={v > 0 ? (isRecent ? 0.9 : 0.6) : 0.4}
-                              rx={1}
-                            />
-                          );
-                        })}
-                      </svg>
-                      <span style={{ fontSize: "6px", color: "var(--text-faint)", fontFamily: "var(--font-mono)" }}>last {recent30.length} runs</span>
+                    <div class="review-mini">
+                      <div class="review-mini-chart" style={{ display: "flex", alignItems: "flex-end", gap: 4 }}>
+                        <svg width={W} height={H} style={{ display: "block", overflow: "visible" }}
+                          role="img" aria-label={`Score of the last ${recent30.length} experiments`}>
+                          {vals.map((v, i) => {
+                            const barW = Math.max(1.5, W / vals.length - 1.5);
+                            const barH = v > 0 ? Math.max(2, (v / maxV) * (H - 2)) : 2;
+                            const x = i * (W / vals.length);
+                            const isRecent = i >= vals.length - 5;
+                            return (
+                              <rect key={i} x={x} y={H - barH} width={barW} height={barH}
+                                fill={v > 0 ? (isRecent ? "var(--green)" : "var(--accent)") : "var(--border-soft)"}
+                                opacity={v > 0 ? (isRecent ? 0.9 : 0.6) : 0.4}
+                                rx={1}
+                              />
+                            );
+                          })}
+                        </svg>
+                        <span class="review-mini-ymax">{maxV >= 100 ? maxV.toFixed(0) : maxV.toFixed(1)}</span>
+                      </div>
+                      <div class="review-mini-cap">
+                        <span>{fmtMetricName(metric)} · last {recent30.length} runs</span>
+                        <span class="review-mini-cap-end" style={{ color: "var(--green)" }}>● newest 5</span>
+                      </div>
                     </div>
                   );
                 })()}
+
+                {/* Success-rate bar — explicit % label. */}
+                {successRate !== null && (
+                  <div class="review-mini">
+                    <div class="review-mini-meter" title={`${successRate}% of experiments scored above zero`}>
+                      <span style={{ width: `${successRate}%`, background: successRate > 30 ? "var(--green)" : successRate > 10 ? "var(--yellow)" : "var(--red)" }} />
+                    </div>
+                    <div class="review-mini-cap">
+                      <span>success rate</span>
+                      <span class="review-mini-cap-end">{successRate}% scored &gt; 0</span>
+                    </div>
+                  </div>
+                )}
               </div>
-              <ExpMiniResults
-                experiments={experiments}
-                metric={metric}
-                lower={lower}
-                milestoneIds={milestoneIdsSet}
-                ideas={ideas}
-              />
             </div>
           }
         >
@@ -2575,56 +2221,20 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
             return parts.join(" · ");
           })()}
           preview={
-            <div class="emr-preview">
-              {/* Exploration ring + health bar row */}
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, position: "relative" }}>
-                  {isLive && (() => {
-                    const runExp = activeRuns[0];
-                    const runPct = runExp ? Math.round(progress[runExp.label || String(runExp.id)] ?? 0) : null;
-                    const runIdea = runExp ? ideas[runExp.idea_id] : null;
-                    const runDesc = runIdea?.description?.split("\n")[0].slice(0, 40) ?? "";
-                    return (
-                      <span class="sq-running" style={{ position: "absolute", top: 1, right: 1, width: 5, height: 5, borderRadius: "50%", zIndex: 2 }}
-                        title={`${liveCount} running now: exp/${runExp?.label ?? runExp?.id}${runPct ? ` (${runPct}%)` : ""}${runDesc ? `\n${runDesc}` : ""}`} />
-                    );
-                  })()}
-                  <IdeaRing active={ideasActive} concluded={ideasConcluded} abandoned={ideasAbandoned} />
-                  {ideasConcluded + ideasActive + ideasAbandoned > 0 && (
-                    <span style={{ fontSize: "8px", color: "var(--text-faint)", fontFamily: "var(--font-mono, monospace)", whiteSpace: "nowrap", textAlign: "center" }}>
-                      {Math.round((ideasConcluded / (ideasConcluded + ideasActive + ideasAbandoned)) * 100)}% done
-                      {(() => {
-                        // Coverage: % of active ideas that have been tried at least once
-                        if (experiments.length <= 20 || activeIdeas === 0) return null;
-                        const ideaExpCountsRing: Record<number, number> = {};
-                        for (const e of experiments) { if (!e._running) ideaExpCountsRing[e.idea_id] = (ideaExpCountsRing[e.idea_id] || 0) + 1; }
-                        const activeList2 = Object.values(ideas).filter(i => i.status !== "concluded" && i.status !== "abandoned");
-                        const triedCount = activeList2.filter(i => (ideaExpCountsRing[i.id] ?? 0) > 0).length;
-                        const coveragePct = Math.round((triedCount / activeList2.length) * 100);
-                        return coveragePct < 100 ? <> · {coveragePct}% tried</> : null;
-                      })()}
-                    </span>
-                  )}
-                </div>
-                <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 3 }}>
-                  <div class="idea-health-bar">
-                    {ideasActive > 0    && <span class="ihb-seg ihb-active"    style={{ flex: ideasActive }}    title={`${ideasActive} active`} />}
-                    {ideasConcluded > 0 && <span class="ihb-seg ihb-concluded" style={{ flex: ideasConcluded }} title={`${ideasConcluded} concluded`} />}
-                    {ideasAbandoned > 0 && <span class="ihb-seg ihb-abandoned" style={{ flex: ideasAbandoned }} title={`${ideasAbandoned} abandoned`} />}
-                  </div>
-                  <div style={{ display: "flex", gap: 6, fontSize: "7px", fontFamily: "var(--font-mono)", color: "var(--text-faint)", flexWrap: "wrap" }}>
-                    {ideasActive > 0    && <span><span style={{ color: "var(--green)" }}>●</span> {ideasActive} active</span>}
-                    {ideasConcluded > 0 && <span><span style={{ color: "var(--accent)" }}>●</span> {ideasConcluded} done</span>}
-                    {ideasAbandoned > 0 && <span><span style={{ color: "var(--red)" }}>●</span> {ideasAbandoned} abandoned</span>}
-                    {experiments.length > 20 && (() => {
-                      const ideaExpCountsAll: Record<number, number> = {};
-                      for (const e of experiments) { if (!e._running) ideaExpCountsAll[e.idea_id] = (ideaExpCountsAll[e.idea_id] || 0) + 1; }
-                      const nt = Object.values(ideas).filter(i => i.status !== "concluded" && i.status !== "abandoned" && (ideaExpCountsAll[i.id] ?? 0) === 0).length;
-                      return nt > 0 ? <span style={{ color: "var(--yellow)", fontWeight: 600 }}>◇ {nt} untested</span> : null;
-                    })()}
-                  </div>
-                </div>
-              </div>
+            <div class="emr-preview emr-preview--ideas">
+              {/* Redesigned (#7): a labeled segmented portfolio bar + legend —
+                  a glance shows active / concluded / abandoned / untested. */}
+              <IdeaPortfolio
+                active={ideasActive}
+                concluded={ideasConcluded}
+                abandoned={ideasAbandoned}
+                untested={(() => {
+                  if (experiments.length <= 20) return 0;
+                  const counts: Record<number, number> = {};
+                  for (const e of experiments) { if (!e._running) counts[e.idea_id] = (counts[e.idea_id] || 0) + 1; }
+                  return Object.values(ideas).filter(i => i.status !== "concluded" && i.status !== "abandoned" && (counts[i.id] ?? 0) === 0).length;
+                })()}
+              />
               <IdeaMiniLeaderboard
                 experiments={experiments}
                 ideas={ideas}
@@ -2673,18 +2283,38 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
             const color = absR > 0.7 ? "var(--green)" : absR > 0.3 ? "var(--yellow)" : "var(--text-faint)";
             const label = absR < 0.15 ? "r≈0" : `r=${r.toFixed(2)}`;
             const dir = r > 0 ? "↑" : r < 0 ? "↓" : "";
-            const insight = absR > 0.5 ? (
-              r > 0
-                ? <span style={{ fontSize: "8px", color: "var(--text-faint)", marginLeft: 4 }}>more {fmtMetricName(yk).replace(/ \(.*\)/, "")} → higher score</span>
-                : <span style={{ fontSize: "8px", color: "var(--text-faint)", marginLeft: 4 }}>less {fmtMetricName(yk).replace(/ \(.*\)/, "")} → higher score</span>
-            ) : null;
+
+            // Mini scatter — a true small version of the full ScatterChart, with axes.
+            const W = 132, H = 60;
+            const xlo = Math.min(...xs), xhi = Math.max(...xs);
+            const ylo = Math.min(...ys), yhi = Math.max(...ys);
+            const xr = xhi - xlo || 1, yr = yhi - ylo || 1;
+            const px = (v: number) => 2 + ((v - xlo) / xr) * (W - 4);
+            const py = (v: number) => H - 2 - ((v - ylo) / yr) * (H - 4);
+            const trend = absR > 0.3 && den !== 0 ? (() => {
+              const slope = num / xs.reduce((s,x) => s + (x-mx)**2, 0);
+              const b = my - slope * mx;
+              return { x1: px(xlo), y1: py(slope * xlo + b), x2: px(xhi), y2: py(slope * xhi + b) };
+            })() : null;
+
             return (
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 3, flexWrap: "nowrap" }}>
-                <span style={{ display: "inline-flex", alignItems: "center", gap: 3, background: "var(--bg-hi)", borderRadius: 4, padding: "1px 6px", fontSize: "9px", fontFamily: "var(--font-mono)", color, fontWeight: 600 }}>
-                  {label}{dir && <span style={{ color, opacity: 0.8 }}>{dir}</span>}
-                </span>
-                {insight}
-              </span>
+              <div class="review-mini review-scatter-mini">
+                <div class="review-mini-cap">
+                  <span class="review-scatter-ylab" title={`y-axis: ${fmtMetricName(yk)}`}>{fmtMetricName(yk)}</span>
+                  <span class="review-scatter-r" style={{ color }}>{label}{dir && <span style={{ opacity: 0.8 }}>{dir}</span>}</span>
+                </div>
+                <svg width={W} height={H} class="review-scatter-svg" role="img"
+                  aria-label={`${fmtMetricName(xk)} versus ${fmtMetricName(yk)}, ${pairs.length} points, correlation ${label}`}>
+                  {trend && <line x1={trend.x1} y1={trend.y1} x2={trend.x2} y2={trend.y2} stroke={color} strokeWidth="1" strokeDasharray="2 2" opacity={0.7} />}
+                  {pairs.map((e, i) => (
+                    <circle key={i} cx={px(xs[i])} cy={py(ys[i])} r={2} fill="var(--accent)" opacity={0.55} />
+                  ))}
+                </svg>
+                <div class="review-mini-cap">
+                  <span class="review-scatter-xlab" title={`x-axis: ${fmtMetricName(xk)}`}>x: {fmtMetricName(xk)}</span>
+                  <span class="review-mini-cap-end">{pairs.length} pts</span>
+                </div>
+              </div>
             );
           })()}
         >
@@ -2695,96 +2325,25 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
 
         <div class="review-section-sep">explore ideas</div>
 
-        <ReviewDisclosure
-          id="review-detail"
-          title="Idea Detail"
-          icon="▸"
-          autoOpen={!!selected}
-          action={selected
-            ? `idea #${selected}${selectedIdeaBest != null ? ` · best: ${selectedIdeaBest.toFixed(3)}` : ""}`
-            : "none selected"}
-          preview={!selected ? (
-            <span style={{ fontSize: "8px", color: "var(--text-faint)", fontStyle: "italic", fontFamily: "var(--font-mono)" }}>
-              click any idea above to explore
+        {/* Idea Detail — permanent, always-open flat section (#10). Not a
+            summary/detail toggle: the full DetailPanel is always visible.
+            Hairline-separated heading (eyebrow + title) like a section head. */}
+        <section id="review-detail" class="review-section review-permanent">
+          <div class="review-permanent-head">
+            <div class="review-disclosure-title">
+              <span class="review-section-icon" aria-hidden="true">▸</span>
+              <h2>Idea Detail</h2>
+            </div>
+            <span class="review-permanent-sub">
+              {selected
+                ? <>idea #{selected}{selectedIdeaBest != null && <> · <b style={{ color: "var(--purple)" }}>best {selectedIdeaBest.toFixed(3)}</b></>}</>
+                : <span style={{ fontStyle: "italic" }}>click any idea above to explore</span>}
             </span>
-          ) : undefined}
-        >
+          </div>
           <div class="review-panel review-detail-panel">
             <DetailPanel />
           </div>
-        </ReviewDisclosure>
-
-        <div class="review-section-sep">operations & log</div>
-
-        <ReviewDisclosure
-          id="review-ops"
-          title="Queue"
-          icon="≡"
-          accent={liveCount > 0 ? "live" : undefined}
-          action={queued + liveCount > 0
-            ? `${queued} queued · ${liveCount} running`
-            : lastFinishedAt
-              ? `ready · idle ${timeAgo(lastFinishedAt)}`
-              : `ready · 0 running`}
-          preview={
-            queued + liveCount > 0 ? (
-              <div class="idea-health-bar">
-                {liveCount > 0 && <span class="ihb-seg ihb-active" style={{ flex: liveCount }} title={`${liveCount} running`} />}
-                {queued > 0    && <span class="ihb-seg ihb-queued" style={{ flex: queued }}    title={`${queued} queued`} />}
-              </div>
-            ) : undefined
-          }
-        >
-          <div class="review-panel review-ops-panel">
-            <QueueView />
-          </div>
-        </ReviewDisclosure>
-
-        <ReviewDisclosure
-          id="review-log"
-          title="Log"
-          icon="≔"
-          action={logs.length > 0
-            ? `${logs.length} events · last: ${logs[0].title?.slice(0, 40) || logs[0].type}`
-            : lastFinishedExp
-              ? `no events · ${lastFinishedExp.label ?? `exp/${lastFinishedExp.id}`} finished ${timeAgo(lastFinishedAt)}`
-              : "no events yet"}
-          preview={logs.length > 0 ? (() => {
-            const dotItems = logs.slice(0, 6).map((e, i) => {
-              let c: string, dotTitle: string;
-              if (e.type === "experiment_completed") {
-                const s = metric ? (e.metrics?.[metric] as number | undefined) : undefined;
-                const scored = typeof s === "number" && s > 0;
-                c = scored ? "var(--green)" : "var(--text-faint)";
-                dotTitle = `${e.title || "completed"}${s != null ? ` · ${fmtMetricName(metric)}: ${typeof s === "number" ? s.toFixed(3) : s}` : ""}`;
-              } else if (e.type === "experiment_failed") {
-                c = "var(--red)"; dotTitle = e.title || "failed";
-              } else if (e.type === "idea_created") {
-                c = "var(--accent)"; dotTitle = e.title || "idea created";
-              } else {
-                c = "var(--text-faint)"; dotTitle = e.title || e.type;
-              }
-              return { c, dotTitle, i };
-            });
-            // Check if all completed experiments in last 6 scored zero
-            const completedDots = dotItems.filter((_, idx) => logs[idx]?.type === "experiment_completed");
-            const allZero = completedDots.length >= 3 && completedDots.every(d => d.c === "var(--text-faint)");
-            return (
-              <div style={{ display: "flex", gap: 3, alignItems: "center" }}>
-                {dotItems.map(({ c, dotTitle, i }) => (
-                  <span key={i} style={{ width: 6, height: 6, borderRadius: "50%", background: c, flexShrink: 0, opacity: 1 - i * 0.12 }} title={dotTitle} />
-                ))}
-                {allZero && (
-                  <span style={{ fontSize: "8px", color: "var(--yellow)", marginLeft: 2, fontFamily: "var(--font-mono)" }} title="Recent experiments all scored zero">all 0</span>
-                )}
-              </div>
-            );
-          })() : undefined}
-        >
-          <div class="review-panel review-log-panel">
-            <LogView />
-          </div>
-        </ReviewDisclosure>
+        </section>
       </div>
     </div>
   );
@@ -2821,15 +2380,25 @@ function ReviewDisclosure({
   };
   return (
     <details ref={ref} class={`review-disclosure review-section${accent ? ` review-disclosure--${accent}` : ""}`} id={id}>
+      {/* The whole heading row is the summary (click anywhere to toggle).
+          It reads as a flat heading + summary, with a summary⇄detail switch
+          on the right — not a boxed accordion. */}
       <summary>
-        <div class="review-disclosure-title">
-          {icon && <span class="review-section-icon">{icon}</span>}
-          <h2>{title}</h2>
+        <div class="review-disclosure-head">
+          <div class="review-disclosure-title">
+            {icon && <span class="review-section-icon" aria-hidden="true">{icon}</span>}
+            <h2>{title}</h2>
+          </div>
+          <div class="review-disclosure-summary">
+            <p>{action}</p>
+            {preview}
+          </div>
         </div>
-        <div class="review-disclosure-summary">
-          <p>{action}</p>
-          {preview}
-        </div>
+        {/* summary ⇄ detail switch — .ui-toggle language, the disclosure control */}
+        <span class="review-disclosure-switch" role="presentation">
+          <span class="rds-opt rds-opt--summary">summary</span>
+          <span class="rds-opt rds-opt--detail">detail</span>
+        </span>
       </summary>
       {children}
     </details>
@@ -2854,7 +2423,7 @@ function ReviewBranchPreview() {
   const layout = currentLayout.value;
   const highlighted = highlightedIdea.value;
   if (!graph || !layout || graph.nodes.length === 0) {
-    return <div class="review-branch-empty">no ideas</div>;
+    return <span class="review-branch-empty"><Eyebrow>no ideas yet</Eyebrow></span>;
   }
 
   const width = 360;

@@ -1,8 +1,10 @@
-/* suggest.scss — Suggest panel styles */
+/* suggest.scss — Suggest-an-idea panel.
+   Design language: flat fills, hairline field borders, eyebrow field labels,
+   ghost secondary buttons + a single accent CTA. */
 
 #suggest-toggle {
   background: var(--bg-elev);
-  border-bottom: 1px solid var(--border);
+  box-shadow: inset 0 -1px var(--border-soft);
   padding: 6px 20px;
   cursor: pointer;
   font-size: var(--text-base);
@@ -19,46 +21,54 @@
 
 #suggest-panel {
   background: var(--bg);
-  border-bottom: 1px solid var(--border);
   overflow: hidden;
   flex-shrink: 0;
-  padding: var(--space-4) 20px;
 }
 #suggest-panel.collapsed { display: none; }
 
-#suggest-panel .suggest-form { max-width: 600px; }
+#suggest-panel .suggest-form { max-width: 600px; padding: var(--space-4) 20px; }
 #suggest-panel textarea,
 #suggest-panel input[type="text"],
 #suggest-panel input[type="url"] {
   background: var(--bg-elev);
   color: var(--text);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-soft);
   border-radius: var(--radius-sm);
   padding: 6px 10px;
   font-family: var(--font-mono);
   font-size: var(--text-base);
   width: 100%;
+  outline: none;
 }
+#suggest-panel textarea:focus,
+#suggest-panel input[type="text"]:focus,
+#suggest-panel input[type="url"]:focus { border-color: var(--accent); }
 #suggest-panel select {
   background: var(--bg-elev);
   color: var(--text);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-soft);
   border-radius: var(--radius-sm);
   font-family: var(--font);
   font-size: var(--text-sm);
-  padding: 2px 6px;
+  padding: 3px 6px;
   cursor: pointer;
   outline: none;
   width: 100%;
 }
 #suggest-panel select:focus { border-color: var(--accent); }
 #suggest-panel textarea { min-height: 60px; resize: vertical; }
-#suggest-panel .form-group { margin-bottom: 10px; }
+#suggest-panel .form-group { margin-bottom: 12px; }
+
+/* eyebrow field label */
 #suggest-panel .form-label {
   display: block;
-  font-size: var(--text-sm);
-  color: var(--text-muted);
-  margin-bottom: 4px;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin-bottom: 5px;
 }
 #suggest-panel .priority-group { display: flex; gap: var(--space-4); align-items: center; }
 #suggest-panel .priority-group label {
@@ -70,19 +80,21 @@
   cursor: pointer;
 }
 
+/* the single accent CTA */
 .suggest-btn {
   background: var(--accent);
   color: var(--bg);
   border: 1px solid var(--accent);
   border-radius: var(--radius-sm);
-  padding: 2px var(--space-2);
+  padding: 4px var(--space-3);
   font-family: inherit;
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
   cursor: pointer;
   font-weight: 600;
+  transition: filter var(--transition-fast);
 }
-.suggest-btn:hover { background: var(--accent-dim); border-color: var(--accent-dim); }
-.suggest-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.suggest-btn:hover:not(:disabled) { filter: brightness(1.12); }
+.suggest-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .suggest-msg {
   font-size: var(--text-base);
@@ -96,23 +108,26 @@
 
 .link-row { display: flex; gap: var(--space-2); align-items: center; margin-bottom: 6px; }
 .link-row input { flex: 1; }
+
+/* ghost secondary buttons */
 .add-link-btn {
-  padding: 2px var(--space-2);
-  background: none;
-  border: 1px solid var(--border);
+  padding: 4px var(--space-2);
+  background: transparent;
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
   color: var(--text-muted);
   font: inherit;
   font-size: var(--text-xs);
   cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast);
 }
-.add-link-btn:hover { color: var(--text); border-color: var(--text-muted); }
+.add-link-btn:hover { color: var(--text); background: var(--bg-hi); }
 .remove-link-btn {
   background: none;
   border: none;
   color: var(--red);
   cursor: pointer;
-  font-size: 16px;
+  font-size: var(--text-xl);
   padding: 0 4px;
   line-height: 1;
 }
@@ -120,43 +135,44 @@
 
 .resource-chip {
   display: inline-block;
-  padding: 2px var(--space-2);
-  border-radius: 10px;
+  padding: 1px 7px;
+  border-radius: var(--radius-md);
   font-size: var(--text-xs);
   font-weight: 500;
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
+  background: transparent;
+  border: 1px solid var(--border-soft);
   color: var(--accent);
   text-decoration: none;
   margin-right: 4px;
   margin-top: 3px;
 }
-.resource-chip:hover { background: var(--bg-hi); border-color: var(--accent); }
+.resource-chip:hover { background: var(--bg-hi); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
 
 .attach-link-btn {
-  padding: 2px var(--space-2);
-  background: none;
-  border: 1px solid var(--border);
+  padding: 4px var(--space-2);
+  background: transparent;
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
   color: var(--text-muted);
   font: inherit;
   font-size: var(--text-xs);
   cursor: pointer;
   margin-top: var(--space-2);
+  transition: color var(--transition-fast), background var(--transition-fast);
 }
-.attach-link-btn:hover { color: var(--text); border-color: var(--text-muted); }
+.attach-link-btn:hover { color: var(--text); background: var(--bg-hi); }
 
 .attach-form {
   margin-top: var(--space-2);
   padding: 10px;
-  background: var(--bg);
-  border: 1px solid var(--border);
+  background: var(--bg-elev);
+  box-shadow: inset 0 0 0 1px var(--border-soft);
   border-radius: var(--radius-sm);
 }
 .attach-form input {
-  background: var(--bg-elev);
+  background: var(--bg);
   color: var(--text);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-soft);
   border-radius: var(--radius-sm);
   padding: 4px var(--space-2);
   font-family: var(--font-mono);

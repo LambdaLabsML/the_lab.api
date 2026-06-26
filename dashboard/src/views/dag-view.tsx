@@ -11,12 +11,12 @@ import { useRef, useEffect, useState } from "preact/hooks";
 import { navigateToIdea } from "../lib/navigate";
 import type { IdeaNode, StationPos, SubwayLayout } from "../lib/types";
 import { graphData, currentLayout, highlightedIdea, allIdeas, allExperiments, runningProgress } from "../state/signals";
-import { colorMode, selectedIdea, selectedMetric, improvementsOnly, activeTagFilters, tagFilterMode, reverseTime, showAbandoned, showConcluded, showRunning, colorTheme } from "../state/settings";
+import { colorMode, selectedIdea, selectedMetric, activeTagFilters, tagFilterMode, reverseTime, showAbandoned, showConcluded, showRunning, colorTheme, showNodeText } from "../state/settings";
 import { useSetting } from "../state/settings";
 import { _ideaHasGlobalImprovement, resetGlobalBestBeforeCache } from "../lib/colors";
 import { drawSubwayLines } from "../lib/subway-lines";
-// dynamic — driven by lib/colors.ts (IDEA_PALETTE, getStatusColor, _colorForIdea)
-import { IDEA_PALETTE, STATUS_ORDER, _colorForIdea, getStatusColor } from "../lib/colors";
+// dynamic — driven by lib/colors.ts (IDEA_PALETTE lane colours, _colorForIdea for SVG dots)
+import { IDEA_PALETTE, STATUS_ORDER, _colorForIdea } from "../lib/colors";
 import { filterMetricExperiments } from "../lib/chart-data";
 import { escapeHtml, ideaTitle, badgeHtml } from "../lib/format";
 
@@ -47,10 +47,11 @@ export function DagView() {
       for (const e of entries) {
         if (e.contentRect.width > 10 && e.contentRect.height > 10) {
           setVisibleKey(k => k + 1);
-          // Scroll to show the most recent ideas (right end of graph)
+          // Scroll to show the most recent ideas (right end of graph). The
+          // scroll container is the #graph-container parent of this #graph ref.
           requestAnimationFrame(() => {
-            const graphEl = el.querySelector("#graph-container, #graph") as HTMLElement;
-            if (graphEl) el.scrollLeft = graphEl.scrollWidth;
+            const scroller = el.closest("#graph-container") as HTMLElement | null;
+            if (scroller) scroller.scrollLeft = scroller.scrollWidth;
           });
         }
       }
@@ -79,7 +80,14 @@ export function DagView() {
       ideaProgress[exp.idea_id] = Math.max(ideaProgress[exp.idea_id] || 0, pct);
     }
   }
-  const compactMode = improvementsOnly.value;
+  // Text vs Mini is a single exclusive choice now (showNodeText). The old
+  // "important-only" density tier is retired, so compactMode is always false;
+  // textOff alone drives the compact node-only pill map.
+  const compactMode = false;
+  // When node text is toggled OFF, the whole map collapses to the compact,
+  // node-only rendering: every node becomes a pill so the connections stay
+  // visible but the labels disappear. Read it like compactMode (a signal).
+  const textOff = !showNodeText.value;
   const reversed = reverseTime.value;
 
   // Build set of hidden idea statuses
@@ -101,7 +109,10 @@ export function DagView() {
   if (data) {
     for (const n of data.nodes) {
       const statusHidden = hiddenStatuses.has(n.has_running ? "active" : n.status);
-      if (statusHidden) {
+      if (textOff) {
+        // Node text hidden → every node is a compact pill.
+        isImportant[n.id] = false;
+      } else if (statusHidden) {
         isImportant[n.id] = false;
       } else if (compactMode) {
         isImportant[n.id] =
@@ -113,8 +124,19 @@ export function DagView() {
     }
   }
 
-  // Override compactMode if any status filters are active
-  const effectiveCompactMode = compactMode || hiddenStatuses.size > 0;
+  // Compact path is active when: improvements-only mode, any status filter, or
+  // node text is toggled off (the whole map becomes node-only pills).
+  const effectiveCompactMode = compactMode || hiddenStatuses.size > 0 || textOff;
+
+  // =========================================================================
+  // CACHE INVALIDATION — measured full-station heights become wrong when the
+  // node-text toggle flips (with text off the markup is hidden / collapsed),
+  // so clear the module-level station-size cache whenever it changes. Declared
+  // BEFORE the render effect so it runs first (Preact runs effects in order).
+  // =========================================================================
+  useEffect(() => {
+    for (const k in _stationSizeCache) delete _stationSizeCache[k];
+  }, [textOff]);
 
   // =========================================================================
   // COMBINED MEASUREMENT + RENDER — single effect to avoid ordering issues
@@ -153,13 +175,12 @@ export function DagView() {
       let mHtml = '<div style="position:absolute;visibility:hidden;top:0;left:0">';
       for (const n of needsMeasure) {
         const ds = n.has_running ? "running" : (n.has_queued ? "queued" : n.status);
-        const sc = getStatusColor(ds);
         const lc = IDEA_PALETTE[layout.ideaLane[n.id] % IDEA_PALETTE.length];
         mHtml +=
-          '<div class="subway-station" data-id="' + n.id +
-          '" style="position:static;border-color:' + sc +
-          ';border-left:4px solid ' + lc +
-          (n.status === "suggested" ? ";border-style:dashed" : "") +
+          '<div class="subway-station' +
+          (n.status === "suggested" ? " is-suggested" : "") +
+          '" data-id="' + n.id +
+          '" style="position:static;--lane:' + lc +
           '"><div class="subway-header"><span class="subway-id">#' +
           n.id + "</span>" + badgeHtml(ds, ideaProgress[n.id]) +
           '<span class="subway-desc">' +
@@ -498,10 +519,12 @@ export function DagView() {
       const p = stationPos[n.id];
       if (!p) continue;
       const ds = n.has_running ? "running" : n.status;
-      const nodeColor = colorForIdea(n.id, mode);
+      const laneColor = IDEA_PALETTE[layout.ideaLane[n.id] % IDEA_PALETTE.length];
 
       if (effectiveCompactMode && !isImportant[n.id]) {
-        // Compact pill node — positioned at column start like full stations
+        // Compact pill node — positioned at column start like full stations.
+        // Lane colour lives in the thin stripe + the mono ID; the surface stays
+        // a quiet --bg-elev chip (no saturated fill, no white text).
         html +=
           '<div class="subway-dot" data-id="' + n.id +
           '" title="#' + n.id + ': ' + escapeHtml(n.description) +
@@ -509,18 +532,20 @@ export function DagView() {
           'px;top:' + p.y +
           'px;width:' + COMPACT_W +
           'px;height:' + COMPACT_H +
-          'px;background:' + nodeColor +
+          'px;--lane:' + laneColor +
           '"><span class="subway-dot-id">#' + n.id + '</span></div>';
       } else {
-        // Full station node
+        // Full station node — flat surface, thin lane stripe, badge carries status.
         html +=
-          '<div class="subway-station" data-id="' +
+          '<div class="subway-station' +
+          (n.status === "suggested" ? " is-suggested" : "") +
+          '" data-id="' +
           n.id +
           '" title="' +
           escapeHtml(n.description) +
           '" style="' +
           "left:" + p.x + "px;top:" + p.y + "px;width:" + p.w + "px" +
-          ";border-color:" + nodeColor +
+          ";--lane:" + laneColor +
           '">' +
           '<div class="subway-header"><span class="subway-id">#' +
           n.id + "</span>" + badgeHtml(ds, ideaProgress[n.id]) +
@@ -629,7 +654,7 @@ export function DagView() {
           }
           if (ancestors[from] && ancestors[to]) {
             (el as SVGElement).style.opacity = "1";
-            (el as SVGElement).style.strokeWidth = "5";
+            (el as SVGElement).style.strokeWidth = "3";
           } else {
             (el as SVGElement).style.opacity = "0.1";
             (el as SVGElement).style.strokeWidth = "";
@@ -663,7 +688,7 @@ export function DagView() {
 
     // Apply current highlight state (in case it was set before render)
     applyHighlight(highlightedIdea.value);
-  }, [data, layout, mode, metric, ideas, experiments, effectiveCompactMode, tags, tagMode, reversed, showAbandoned.value, showConcluded.value, showRunning.value, theme, visibleKey]);
+  }, [data, layout, mode, metric, ideas, experiments, effectiveCompactMode, textOff, tags, tagMode, reversed, showAbandoned.value, showConcluded.value, showRunning.value, theme, visibleKey]);
 
   // =========================================================================
   // HIGHLIGHT EFFECT — reacts to highlightedIdea changes without full re-render
@@ -742,12 +767,38 @@ export function DagView() {
   // JSX — the container div hosts imperatively managed DOM content.
   // =========================================================================
   return (
-    <div id="graph-container">
-      <div
-        id="graph"
-        ref={containerRef}
-        style={{ position: "relative", minHeight: "100%" }}
-      />
+    <div class="subway-wrap">
+      {/* Floating chrome — quiet .ui-toggle chips over the top-right of the map.
+          Lives in the non-scrolling wrapper so it stays pinned while the map
+          scrolls. TEXT flips showNodeText (off → compact node-only map, labels
+          hidden). MINI flips improvementsOnly (the existing compact-only mode). */}
+      <div class="subway-toolbar" role="group" aria-label="Node display mode">
+        <button
+          type="button"
+          class={"ui-toggle" + (showNodeText.value ? " is-active" : "")}
+          title="Full nodes with idea text"
+          aria-pressed={showNodeText.value}
+          onClick={() => { showNodeText.value = true; }}
+        >
+          TEXT
+        </button>
+        <button
+          type="button"
+          class={"ui-toggle" + (!showNodeText.value ? " is-active" : "")}
+          title="Compact node-only map"
+          aria-pressed={!showNodeText.value}
+          onClick={() => { showNodeText.value = false; }}
+        >
+          MINI
+        </button>
+      </div>
+      <div id="graph-container">
+        <div
+          id="graph"
+          ref={containerRef}
+          style={{ position: "relative", minHeight: "100%" }}
+        />
+      </div>
     </div>
   );
 }

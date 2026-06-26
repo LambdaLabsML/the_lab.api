@@ -161,3 +161,15 @@ export const chartMinified = useSetting("chartMinified", false);
 
 /** Colorblind-friendly status color overrides. */
 export const colorblindMode = useSetting("colorblindMode", false);
+
+/** Graph node display mode. true = full labeled nodes ("Text"); false = compact
+ *  node-only pill map ("Mini"). The graph toolbar offers Text vs Mini as a single
+ *  exclusive choice. Defaults to Mini for a clean overview of the idea branch. */
+export const showNodeText = useSetting("showNodeText", false);
+
+/** Width (px) of the left secondary nav panel, and whether it's collapsed. */
+export const sidebarWidth = useSetting("sidebarWidth", 248);
+export const sidebarCollapsed = useSetting("sidebarCollapsed", false);
+
+/** Slight hacker-noise ambient texture behind the UI. Applied as data-texture. */
+export const uiTexture = useSetting("uiTexture", true);

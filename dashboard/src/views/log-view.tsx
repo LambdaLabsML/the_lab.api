@@ -1,16 +1,17 @@
 import { useState } from "preact/hooks";
 import { logEntries } from "../state/signals";
 import { selectedIdea } from "../state/settings";
-import { formatTime, escapeHtml } from "../lib/format";
+import { formatTime } from "../lib/format";
 import type { LogEntry } from "../lib/types";
+import { Toggle, EmptyState } from "../components/ui";
 
 const FILTERS = [
-  { key: "idea", label: "Ideas", color: "var(--accent)", defaultOn: true },
-  { key: "experiment", label: "Experiments", color: "var(--green)", defaultOn: true },
-  { key: "note-insight", label: "Insight", color: "var(--accent)", defaultOn: true },
-  { key: "note-milestone", label: "Milestone", color: "var(--yellow)", defaultOn: true },
-  { key: "note-observation", label: "Observation", color: "var(--text-muted)", defaultOn: true },
-  { key: "note-debug", label: "Debug", color: "var(--red)", defaultOn: false },
+  { key: "idea", label: "Ideas", defaultOn: true },
+  { key: "experiment", label: "Experiments", defaultOn: true },
+  { key: "note-insight", label: "Insight", defaultOn: true },
+  { key: "note-milestone", label: "Milestone", defaultOn: true },
+  { key: "note-observation", label: "Observation", defaultOn: true },
+  { key: "note-debug", label: "Debug", defaultOn: false },
 ];
 
 export function LogView() {
@@ -34,28 +35,32 @@ export function LogView() {
     <div id="log-container">
       <div class="pane-bar">
         <h2 class="pane-bar-title">Log</h2>
-        <span class="pane-bar-count">{filtered.length} entries{truncated ? ` (capped at ${MAX_VISIBLE})` : ""}</span>
-        <div class="pane-bar-actions" style={{ gap: 8 }}>
+        <span class="pane-bar-count">
+          {filtered.length} entries{truncated ? ` (capped at ${MAX_VISIBLE})` : ""}
+        </span>
+        <div class="pane-bar-actions log-filters">
           {FILTERS.map((f) => (
-            <label key={f.key} style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: "var(--text-xs)", color: active[f.key] ? "var(--text)" : "var(--text-faint)", cursor: "pointer", userSelect: "none" }}>
-              <span style={{ width: 8, height: 8, borderRadius: "50%", background: active[f.key] ? f.color : "var(--border)", display: "inline-block", flexShrink: 0 }} />
-              <input type="checkbox" checked={!!active[f.key]} onChange={() => toggle(f.key)} style={{ display: "none" }} />
+            <Toggle
+              key={f.key}
+              active={!!active[f.key]}
+              onClick={() => toggle(f.key)}
+              class={`log-filter log-filter--${f.key}`}
+            >
+              <span class="log-filter-dot" />
               {f.label}
-            </label>
+            </Toggle>
           ))}
         </div>
       </div>
       <div id="log-entries">
         {filtered.length === 0 && (
-          <div style={{ padding: "40px", color: "var(--text-faint)", textAlign: "center" }}>
-            No log entries yet
-          </div>
+          <EmptyState icon="⌗" title="No log entries yet" />
         )}
         {visible.map((entry, i) => (
           <LogEntryRow key={i} entry={entry} />
         ))}
         {truncated && (
-          <div style={{ padding: "12px", color: "var(--text-faint)", textAlign: "center", fontSize: "11px" }}>
+          <div class="log-truncated">
             Showing {MAX_VISIBLE} of {filtered.length} entries
           </div>
         )}
@@ -85,8 +90,8 @@ function LogEntryRow({ entry }: { entry: LogEntry }) {
       {entry.metrics && Object.keys(entry.metrics).length > 0 && (
         <div class="log-metrics">{JSON.stringify(entry.metrics)}</div>
       )}
-      {entry.extra && <div class="log-body" style={{ fontStyle: "italic", color: "var(--text-muted)" }}>{entry.extra}</div>}
-      {entry.runtime && <div class="log-body" style={{ color: "var(--text-faint)", fontSize: "10px" }}>runtime: {entry.runtime}</div>}
+      {entry.extra && <div class="log-body log-extra">{entry.extra}</div>}
+      {entry.runtime && <div class="log-body log-runtime">runtime: {entry.runtime}</div>}
     </div>
   );
 }

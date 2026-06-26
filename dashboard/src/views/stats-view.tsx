@@ -1,6 +1,8 @@
 import { useState, useEffect, useMemo } from "preact/hooks";
 import { getApiStats } from "../state/api";
 import type { ApiStatsResponse } from "../state/api";
+import { useSelection, useDisclosure } from "../lib/hooks";
+import { Stat, Toggle, IconButton, EmptyState } from "../components/ui";
 
 interface HistoryEntry {
   t: string;
@@ -54,7 +56,8 @@ function findExamples(
 export function StatsView() {
   const [stats, setStats] = useState<StatsData | null>(null);
   const [patternLen, setPatternLen] = useState(1);
-  const [selected, setSelected] = useState<string | null>(null);
+  // single-select pattern row (click again to clear)
+  const { selected, select, clear: clearSelected } = useSelection<string>();
 
   useEffect(() => {
     getApiStats(Math.max(patternLen, 2)).then(setStats).catch(() => {});
@@ -85,7 +88,7 @@ export function StatsView() {
     return findExamples(hist, selected, patternLen);
   }, [selected, stats?.history, patternLen]);
 
-  if (!stats) return <div style={{ padding: 20, color: "var(--text-faint)" }}>Loading stats...</div>;
+  if (!stats) return <div class="stats-loading">Loading stats…</div>;
 
   // Compute quick summary: top 3 endpoints by call count
   const topEndpoints = (stats.calls ?? []).slice(0, 3);
@@ -94,7 +97,7 @@ export function StatsView() {
   return (
     <div class="stats-view">
       <div class="pane-bar">
-        <h2 class="pane-bar-title">Stats</h2>
+        <span class="ui-eyebrow pane-bar-title">Stats</span>
         <span class="pane-bar-count">{stats.total_calls.toLocaleString()} calls</span>
       </div>
 
@@ -102,39 +105,49 @@ export function StatsView() {
       <div class="stats-summary-row">
         {topEndpoints.map((e) => (
           <div class="stats-summary-pill" key={e.endpoint} title={e.endpoint}>
-            <span class="stats-summary-count">{e.count}</span>
-            <span class="stats-summary-label">{e.endpoint.replace(/^(GET|POST|PUT|PATCH|DELETE) \/api\/v1\//, "").replace(/\/\{id\}.*/, "")}</span>
+            <Stat
+              size="sm"
+              tone="accent"
+              value={e.count}
+              sub={e.endpoint.replace(/^(GET|POST|PUT|PATCH|DELETE) \/api\/v1\//, "").replace(/\/\{id\}.*/, "")}
+            />
           </div>
         ))}
         {totalKB > 0 && (
           <div class="stats-summary-pill">
-            <span class="stats-summary-count">{totalKB > 1000 ? `${(totalKB/1000).toFixed(0)}MB` : `${totalKB.toFixed(0)}KB`}</span>
-            <span class="stats-summary-label">total transferred</span>
+            <Stat
+              size="sm"
+              tone="accent"
+              value={totalKB > 1000 ? `${(totalKB/1000).toFixed(0)}MB` : `${totalKB.toFixed(0)}KB`}
+              sub="total transferred"
+            />
           </div>
         )}
       </div>
 
       {/* Response size table */}
       {stats.response_sizes && stats.response_sizes.length > 0 && (
-        <div class="stats-card" style={{ marginBottom: "var(--space-3)", flexShrink: 0 }}>
-          <div class="stats-card-title">Response sizes · MCP calls only (KB)</div>
-          <div class="stats-card-body" style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "var(--text-sm)", fontFamily: "var(--font-mono)" }}>
+        <div class="stats-card stats-card-sizes">
+          <div class="stats-card-title">
+            <span class="ui-eyebrow">Response sizes · MCP calls only (KB)</span>
+          </div>
+          <div class="stats-card-body stats-sizes-body">
+            <table class="stats-size-table">
               <thead>
                 <tr>
                   {["endpoint", "calls", "total KB", "avg KB", "max KB"].map((h) => (
-                    <th key={h} style={{ textAlign: h === "endpoint" ? "left" : "right", color: "var(--text-muted)", padding: "2px 8px", borderBottom: "1px solid var(--border-soft)", fontWeight: 600 }}>{h}</th>
+                    <th key={h} class={h === "endpoint" ? "" : "num"}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {stats.response_sizes.slice(0, 20).map((r) => (
-                  <tr key={r.endpoint} style={{ borderBottom: "1px solid var(--border-soft)" }}>
-                    <td style={{ padding: "3px 8px", color: "var(--text)", maxWidth: 320, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.endpoint.replace(/^(GET|POST|PUT|PATCH|DELETE) /, "")}</td>
-                    <td style={{ padding: "3px 8px", textAlign: "right", color: "var(--text-muted)" }}>{r.calls}</td>
-                    <td style={{ padding: "3px 8px", textAlign: "right", color: r.total_kb > 1000 ? "var(--red)" : r.total_kb > 100 ? "var(--yellow)" : "var(--text)" }}>{r.total_kb.toLocaleString()}</td>
-                    <td style={{ padding: "3px 8px", textAlign: "right", color: r.avg_kb > 20 ? "var(--yellow)" : "var(--text-muted)" }}>{r.avg_kb}</td>
-                    <td style={{ padding: "3px 8px", textAlign: "right", color: "var(--text-muted)" }}>{r.max_kb}</td>
+                  <tr key={r.endpoint}>
+                    <td class="stats-size-endpoint">{r.endpoint.replace(/^(GET|POST|PUT|PATCH|DELETE) /, "")}</td>
+                    <td class="num muted">{r.calls}</td>
+                    <td class="num" style={{ color: r.total_kb > 1000 ? "var(--red)" : r.total_kb > 100 ? "var(--yellow)" : "var(--text)" }}>{r.total_kb.toLocaleString()}</td>
+                    <td class="num" style={{ color: r.avg_kb > 20 ? "var(--yellow)" : "var(--text-muted)" }}>{r.avg_kb}</td>
+                    <td class="num muted">{r.max_kb}</td>
                   </tr>
                 ))}
               </tbody>
@@ -147,24 +160,25 @@ export function StatsView() {
         {/* Left: patterns list */}
         <div class="stats-card">
           <div class="stats-card-title">
-            Common Patterns
+            <span class="ui-eyebrow">Common Patterns</span>
             <span class="stats-len-selector">
               {[1, 2, 3, 4, 5].map((n) => (
-                <span
+                <Toggle
                   key={n}
-                  class={`stats-len-btn${patternLen === n ? " active" : ""}`}
-                  onClick={() => { setPatternLen(n); setSelected(null); }}
+                  active={patternLen === n}
+                  onClick={() => { setPatternLen(n); clearSelected(); }}
                   title={n === 1 ? "Individual endpoints" : `${n}-step sequences`}
+                  class="stats-len-btn"
                 >
                   {n}
-                </span>
+                </Toggle>
               ))}
               <span class="stats-len-label">steps</span>
             </span>
           </div>
           <div class="stats-card-body">
             {rows.length === 0 && (
-              <div class="stats-empty">No {patternLen}-step patterns recorded yet</div>
+              <EmptyState title="No patterns yet" body={`No ${patternLen}-step patterns recorded yet.`} />
             )}
             {rows.slice(0, 20).map((r) => {
               const pct = (r.count / topCount) * 100;
@@ -173,7 +187,7 @@ export function StatsView() {
                 <div
                   key={r.key}
                   class={`stats-bar-row${patternLen > 1 ? " pattern" : ""}${isSelected ? " selected" : ""}`}
-                  onClick={() => setSelected(isSelected ? null : r.key)}
+                  onClick={() => select(r.key)}
                 >
                   <div class={`stats-bar-bg${patternLen > 1 ? " pattern" : ""}`} style={{ width: pct + "%" }} />
                   <PatternLabel pattern={r.key} nSteps={patternLen} />
@@ -187,14 +201,16 @@ export function StatsView() {
         {/* Right: examples detail */}
         <div class="stats-card">
           <div class="stats-card-title">
-            {selected ? "Recent Examples" : "Recent Calls"}
+            <span class="ui-eyebrow">{selected ? "Recent Examples" : "Recent Calls"}</span>
             {selected && (
-              <span class="stats-clear-btn" onClick={() => setSelected(null)}>&times; clear</span>
+              <IconButton class="stats-clear-btn" onClick={() => clearSelected()} title="Clear selection">
+                &times; clear
+              </IconButton>
             )}
           </div>
           <div class="stats-card-body history">
             {selected && examples.length === 0 && (
-              <div class="stats-empty">No recent examples in history (history tracks live calls only)</div>
+              <EmptyState title="No examples" body="No recent examples in history (history tracks live calls only)." />
             )}
             {selected && examples.map((group, gi) => (
               <div key={gi} class="stats-example-group">
@@ -258,7 +274,7 @@ function EndpointPath({ path, short }: { path: string; short?: boolean }) {
 }
 
 function HistoryRow({ entry, showDate }: { entry: HistoryEntry; showDate?: boolean }) {
-  const [expanded, setExpanded] = useState(false);
+  const { open: expanded, toggle: toggleExpanded } = useDisclosure(false);
   const time = new Date(entry.t);
   const timeStr = showDate
     ? time.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })
@@ -272,7 +288,7 @@ function HistoryRow({ entry, showDate }: { entry: HistoryEntry; showDate?: boole
 
   return (
     <div class={`stats-history-row${expanded ? " expanded" : ""}`}>
-      <div class="stats-history-main" onClick={() => hasArgs && setExpanded(!expanded)}>
+      <div class="stats-history-main" onClick={() => { if (hasArgs) toggleExpanded(); }}>
         <span class="stats-history-time">{timeStr}</span>
         <MethodPill method={entry.method} small />
         <EndpointPath path={entry.path} />

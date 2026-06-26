@@ -4,7 +4,8 @@
  */
 
 export function ProgressRing({ pct, size = 16 }: { pct: number; size?: number }) {
-  const strokeWidth = 2;
+  // thin, clean stroke that stays proportional at any size
+  const strokeWidth = Math.max(1.5, size * 0.1);
   const r = (size - strokeWidth) / 2;
   const circumference = 2 * Math.PI * r;
   const offset = circumference * (1 - Math.min(pct, 100) / 100);
@@ -18,7 +19,7 @@ export function ProgressRing({ pct, size = 16 }: { pct: number; size?: number })
     >
       <circle
         cx={center} cy={center} r={r}
-        fill="none" stroke="var(--border)" stroke-width={strokeWidth}
+        fill="none" stroke="var(--border-soft)" stroke-width={strokeWidth}
       />
       <circle
         cx={center} cy={center} r={r}
@@ -32,7 +33,7 @@ export function ProgressRing({ pct, size = 16 }: { pct: number; size?: number })
           x={center} y={center}
           text-anchor="middle" dominant-baseline="central"
           fill="var(--yellow)" font-size={size * 0.35}
-          font-family="SF Mono, Fira Code, Consolas, monospace"
+          font-family="var(--font-mono)"
         >
           {Math.round(pct)}
         </text>

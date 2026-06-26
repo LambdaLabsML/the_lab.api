@@ -1,5 +1,5 @@
-import { useEffect } from "preact/hooks";
 import type { ComponentChildren } from "preact";
+import { useEscape } from "../lib/hooks";
 
 interface LightboxProps {
   title: string;
@@ -11,15 +11,11 @@ interface LightboxProps {
 }
 
 export function Lightbox({ title, onClose, children, toolbar, bodyRef, onBodyScroll }: LightboxProps) {
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
-    }
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  // Escape-to-close via the shared window-level handler (auto cleanup).
+  useEscape(onClose);
 
   function handleBackdrop(e: MouseEvent) {
+    // backdrop-click guard: only close when the click is on the backdrop itself
     if ((e.target as HTMLElement).classList.contains("lightbox-backdrop")) {
       onClose();
     }

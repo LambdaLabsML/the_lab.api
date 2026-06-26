@@ -1,6 +1,10 @@
 /**
  * FilterBar — Tags and status visibility toggles.
  * Metric/color selectors and chart toggles moved to MetricsChart.
+ *
+ * Design language (see dashboard/DESIGN.md): status toggles are .ui-toggle
+ * chips, dividers are hairline .ui-sep--v separators, type is token-scaled
+ * (never hardcoded px), inputs sit on elevation with hairline borders.
  */
 
 import { useRef, useState } from "preact/hooks";
@@ -13,6 +17,7 @@ import {
   filterText,
 } from "../state/settings";
 import { TagFilter } from "./chart-panel/tag-filter";
+import { Toggle, Separator, Eyebrow } from "./ui";
 
 /** Isolated input — uses useState to avoid signal reads in render path. */
 function FilterInput() {
@@ -23,18 +28,28 @@ function FilterInput() {
       <input
         ref={inputRef}
         type="text"
-        placeholder="Filter..."
+        placeholder="Filter…"
         defaultValue={filterText.value}
         onInput={(e) => {
           const v = (e.target as HTMLInputElement).value;
           filterText.value = v;
           setHasText(!!v);
         }}
-        style={{ background: "var(--bg-elev)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: "3px", padding: "2px 6px", fontSize: "10px", fontFamily: "inherit", width: "120px", outline: "none" }}
+        style={{
+          background: "var(--bg)",
+          color: "var(--text)",
+          border: "1px solid var(--border-soft)",
+          borderRadius: "var(--radius-sm)",
+          padding: "3px 7px",
+          fontSize: "var(--text-xs)",
+          fontFamily: "var(--font-mono)",
+          width: "120px",
+          outline: "none",
+        }}
       />
       {hasText && (
         <span
-          style={{ color: "var(--text-muted)", cursor: "pointer", fontSize: "12px", lineHeight: "1" }}
+          style={{ color: "var(--text-faint)", cursor: "pointer", fontSize: "var(--text-lg)", lineHeight: "1" }}
           onClick={() => {
             filterText.value = "";
             if (inputRef.current) inputRef.current.value = "";
@@ -51,13 +66,22 @@ export function FilterBar() {
   return (
     <div class="filter-bar-standalone">
       <FilterInput />
-      <span style={{ width: "1px", height: "18px", background: "var(--border)", margin: "0 4px" }} />
-      <span>
-        Color:{" "}
+      <Separator vertical />
+      <span style={{ display: "inline-flex", alignItems: "center", gap: "5px" }}>
+        <Eyebrow>Color</Eyebrow>
         <select
           value={colorMode.value}
           onChange={(e) => { colorMode.value = (e.target as HTMLSelectElement).value; }}
-          style={{ background: "var(--bg-elev)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: "3px", padding: "1px 4px", fontFamily: "inherit", fontSize: "10px" }}
+          style={{
+            background: "var(--bg)",
+            color: "var(--text)",
+            border: "1px solid var(--border-soft)",
+            borderRadius: "var(--radius-sm)",
+            padding: "2px 5px",
+            fontFamily: "var(--font-mono)",
+            fontSize: "var(--text-xs)",
+            outline: "none",
+          }}
         >
           <option value="status+improve">status + improve</option>
           <option value="lane">by lane</option>
@@ -66,29 +90,28 @@ export function FilterBar() {
           <option value="idea">by idea</option>
         </select>
       </span>
-      <span style={{ width: "1px", height: "18px", background: "var(--border)", margin: "0 4px" }} />
+      <Separator vertical />
       <TagFilter />
-      <span style={{ width: "1px", height: "18px", background: "var(--border)", margin: "0 4px" }} />
-      <span class="status-filters" style={{ display: "inline-flex", gap: "4px", alignItems: "center" }}>
-        Show:
-        <StatusToggle label="concluded" signal={showConcluded} color="var(--accent)" />
-        <StatusToggle label="abandoned" signal={showAbandoned} color="var(--red)" />
-        <StatusToggle label="running" signal={showRunning} color="var(--yellow)" />
+      <Separator vertical />
+      <span class="status-filters" style={{ display: "inline-flex", gap: "5px", alignItems: "center" }}>
+        <Eyebrow>Show</Eyebrow>
+        <StatusToggle label="concluded" signal={showConcluded} />
+        <StatusToggle label="abandoned" signal={showAbandoned} />
+        <StatusToggle label="running" signal={showRunning} />
       </span>
     </div>
   );
 }
 
-function StatusToggle({ label, signal: s, color }: { label: string; signal: Signal<boolean>; color: string }) {
+function StatusToggle({ label, signal: s }: { label: string; signal: Signal<boolean> }) {
   const active = s.value;
   return (
-    <span
-      class={`tag-toggle${active ? " active" : ""}`}
-      style={active ? { borderColor: color, color } : undefined}
+    <Toggle
+      active={active}
       onClick={() => { s.value = !active; }}
       title={active ? `Hide ${label} ideas` : `Show ${label} ideas`}
     >
       {label}
-    </span>
+    </Toggle>
   );
 }

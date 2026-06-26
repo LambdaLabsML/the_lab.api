@@ -1,0 +1,286 @@
+@use './tokens' as *;
+
+/* activity.scss — styles for the live Activity pane (the default content).
+   Design language (see dashboard/DESIGN.md): hairline separators + elevation,
+   never boxes; flat fills, no gradients; token-driven small type; one accent
+   for the selected thing. The pane fills its container and scrolls internally
+   (the .ui-panel--scroll on .activity-pane handles overflow). */
+
+.activity-pane { height: 100%; }
+
+/* Body is flush; sections are separated by hairlines, not boxes. */
+.activity-body {
+  display: flex;
+  flex-direction: column;
+}
+
+.activity-section {
+  padding: var(--space-3);
+  /* hairline rule between sections — not a wrapping border */
+  box-shadow: inset 0 -1px var(--border-soft);
+}
+.activity-section--feed { flex: 1 1 auto; }
+
+.activity-section-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+.activity-section-count {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── 1. Now running ──────────────────────────────────────────────────────── */
+
+.activity-running {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.activity-run-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.activity-run-top {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.activity-run-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.activity-run-pct {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--yellow);
+  font-variant-numeric: tabular-nums;
+}
+.activity-progress {
+  position: relative;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--bg-hi);
+  overflow: hidden;
+}
+.activity-progress-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  height: 100%;
+  background: var(--yellow);
+  border-radius: 2px;
+  transition: width var(--transition-fast);
+}
+/* No determinate pct yet — a calm sliding sweep, flat fill (no gradient). */
+.activity-progress-fill.is-indeterminate {
+  width: 32%;
+  animation: activity-sweep 1.6s ease-in-out infinite;
+}
+@keyframes activity-sweep {
+  0%   { left: -34%; }
+  100% { left: 100%; }
+}
+
+/* ── 2. Agents roster ────────────────────────────────────────────────────── */
+
+.activity-roster {
+  display: flex;
+  flex-direction: column;
+}
+.activity-agent {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  text-align: left;
+  padding: 6px var(--space-2);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  min-width: 0;
+  transition: background var(--transition-fast);
+  /* hairline between rows, not a box */
+  box-shadow: inset 0 -1px var(--border-soft);
+  &:last-child { box-shadow: none; }
+  &:hover { background: var(--bg-hi); }
+  &.is-selected {
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+    box-shadow: inset 2px 0 var(--accent), inset 0 -1px var(--border-soft);
+  }
+}
+.activity-dot {
+  flex-shrink: 0;
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  &.is-live { background: var(--green); animation: ui-blink 1.6s steps(2, start) infinite; }
+  &.is-dead { background: var(--text-faint); opacity: 0.6; }
+}
+.activity-agent-id {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text);
+}
+.activity-agent-work {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.activity-agent-work-title { color: var(--text); }
+.activity-agent-idle { color: var(--text-faint); font-style: italic; }
+.activity-agent-tail {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.activity-agent-cost {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--green);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── 3. Activity feed ────────────────────────────────────────────────────── */
+
+.activity-feed {
+  display: flex;
+  flex-direction: column;
+}
+.activity-line {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: 4px 0;
+  min-width: 0;
+  font-size: var(--text-sm);
+  box-shadow: inset 0 -1px var(--border-soft);
+  &:last-child { box-shadow: none; }
+}
+.activity-line-dot {
+  flex-shrink: 0;
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  align-self: center;
+}
+.activity-line-time {
+  flex-shrink: 0;
+  width: 5.5ch;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.activity-line-label {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 22ch;
+}
+.activity-line-label--best    { color: var(--purple); }
+.activity-line-label--good    { color: var(--green); }
+.activity-line-label--bad     { color: var(--red); }
+.activity-line-label--warn    { color: var(--yellow); }
+.activity-line-label--accent  { color: var(--accent); }
+.activity-line-label--muted   { color: var(--text-faint); }
+.activity-line-label--neutral { color: var(--text-muted); }
+.activity-line-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Messages read in full — let them wrap rather than truncate. */
+.activity-line--message .activity-line-text {
+  white-space: normal;
+  color: var(--text);
+}
+.activity-line-meta {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+}
+
+/* ── 4. Message composer ─────────────────────────────────────────────────── */
+
+.activity-composer {
+  /* keep the composer in view at the bottom of the scrolling column */
+  position: sticky;
+  bottom: 0;
+  background: var(--bg-elev);
+  box-shadow: inset 0 1px var(--border-soft);
+}
+.activity-composer-controls { margin-bottom: var(--space-2); }
+.activity-to-select {
+  appearance: none;
+  background: var(--bg);
+  color: var(--text-muted);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  max-width: 100%;
+  &:hover { border-color: var(--text-muted); }
+  &:focus { outline: none; border-color: var(--accent); color: var(--text); }
+}
+.activity-composer-row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-end;
+}
+.activity-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  resize: none;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: 1.4;
+  &::placeholder { color: var(--text-faint); }
+  &:focus { outline: none; border-color: var(--accent); }
+}
+.activity-send-btn {
+  flex-shrink: 0;
+  align-self: stretch;
+}
+.activity-send-error {
+  margin-bottom: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--red);
+}

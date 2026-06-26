@@ -1,25 +1,39 @@
-/* tags.css — Tag styles */
+/* tags.scss — Tag styles.
+   Tag chips read as the shared .ui-toggle language (faint by default, accent
+   when active); the static .tag-pill reads as a .ui-badge. See dashboard/DESIGN.md.
+   .tag-toggle is still consumed by filter-bar.tsx and .tag-pill by detail-panel.tsx,
+   so they stay but adopt the design language rather than bespoke pill chrome. */
 
+/* Static tag badge (read-only label) — .ui-badge language. */
 .tag-pill {
-  display: inline-block; padding: 1px 7px; border-radius: 10px;
+  display: inline-block; padding: 1px 7px; border-radius: var(--radius-sm);
   font-size: var(--text-xs); font-weight: 600;
   background: var(--badge-blue-bg); color: var(--badge-blue-fg);
   margin-right: 4px; margin-top: 2px;
 }
 
+/* Clickable tag chip — mirrors .ui-toggle (active = accent, no bespoke pill). */
 .tag-toggle {
-  display: inline-block; padding: 2px var(--space-2); border-radius: 10px;
-  font-size: var(--text-xs); font-weight: 600; background: var(--bg-elev);
-  border: 1px solid var(--border); color: var(--text-muted); cursor: pointer;
-  user-select: none; transition: all var(--transition-base);
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 9px; border-radius: var(--radius-md);
+  font-size: var(--text-xs); font-family: var(--font-mono);
+  background: transparent;
+  border: 1px solid var(--border-soft); color: var(--text-faint); cursor: pointer;
+  user-select: none;
+  transition: color var(--transition-fast), background var(--transition-fast),
+    border-color var(--transition-fast);
   white-space: nowrap; flex-shrink: 0;
 }
-.tag-toggle:hover { border-color: var(--text-muted); color: var(--text); }
-.tag-toggle.active { background: var(--badge-blue-bg); border-color: var(--accent); color: var(--badge-blue-fg); }
+.tag-toggle:hover { color: var(--text); border-color: var(--text-muted); }
+.tag-toggle.active {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
 
 .tag-rename-input {
   background: var(--bg); color: var(--text); border: 1px solid var(--accent-dim);
-  border-radius: 10px; padding: 2px var(--space-2); font-family: inherit;
+  border-radius: var(--radius-md); padding: 3px var(--space-2); font-family: var(--font-mono);
   font-size: var(--text-xs); font-weight: 600; width: 90px; outline: none;
 }
 

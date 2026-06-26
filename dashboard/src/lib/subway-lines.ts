@@ -56,6 +56,16 @@ export function drawSubwayLines(
   function inX(p: NodePos) { return reversed ? p.r : p.l; }
   const dir = reversed ? -1 : 1; // sign for horizontal offsets
 
+  // Quiet, consistent line language (see DESIGN.md):
+  //  - Lane backbones are the structural spine: thin but the most opaque line.
+  //  - Branch lines are secondary: thinner still and noticeably lower opacity.
+  //  - Station dots are small and crisp.
+  const BACKBONE_W = 2.5;
+  const BACKBONE_OPACITY = 0.55;
+  const BRANCH_W = 1.5;
+  const BRANCH_OPACITY = 0.32;
+  const DOT_R = 3.5;
+
   let s = '';
 
   // 1. Lane backbone lines — orthogonal routing between consecutive same-lane stations
@@ -77,7 +87,7 @@ export function drawSubwayLines(
           '<line x1="' + aOut + '" y1="' + a.cy +
           '" x2="' + bIn + '" y2="' + b.cy +
           '" stroke="' + color +
-          '" stroke-width="4" stroke-opacity="0.7"' +
+          '" stroke-width="' + BACKBONE_W + '" stroke-opacity="' + BACKBONE_OPACITY + '"' +
           ' stroke-linecap="round"' + edgeAttr + '/>';
       } else {
         const mx = (aOut + bIn) / 2;
@@ -93,7 +103,7 @@ export function drawSubwayLines(
           ' Q' + mx + ',' + b.cy + ' ' + (mx + dir * r) + ',' + b.cy +
           ' L' + bIn + ',' + b.cy +
           '" fill="none" stroke="' + color +
-          '" stroke-width="4" stroke-opacity="0.7"' +
+          '" stroke-width="' + BACKBONE_W + '" stroke-opacity="' + BACKBONE_OPACITY + '"' +
           ' stroke-linecap="round"' + edgeAttr + '/>';
       }
     }
@@ -158,7 +168,7 @@ export function drawSubwayLines(
         ' Q' + jx + ',' + c.cy + ' ' + (jx + dir * r) + ',' + c.cy +
         ' L' + cIn + ',' + c.cy +
         '" fill="none" stroke="' + br.color +
-        '" stroke-width="3" stroke-opacity="0.7"' +
+        '" stroke-width="' + BRANCH_W + '" stroke-opacity="' + BRANCH_OPACITY + '"' +
         ' stroke-linecap="round" stroke-linejoin="round"' +
         ' data-from="' + br.pid + '" data-to="' + br.cid + '" class="svg-edge"/>';
     }
@@ -172,8 +182,8 @@ export function drawSubwayLines(
     s +=
       '<circle cx="' + dotX +
       '" cy="' + pos[n.id].cy +
-      '" r="6" fill="' + dotColor +
-      '" stroke="var(--bg)" stroke-width="2.5"' +
+      '" r="' + DOT_R + '" fill="' + dotColor +
+      '" stroke="var(--bg)" stroke-width="1.5"' +
       ' data-idea="' + n.id + '" class="svg-dot"/>';
   }
 

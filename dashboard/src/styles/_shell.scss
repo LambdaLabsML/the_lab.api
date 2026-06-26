@@ -1,0 +1,317 @@
+@use './tokens' as *;
+
+/* _shell.scss — the v2 app shell: thin nav rail (level 1) + contextual secondary
+   panel (level 2) + slim top bar + content router. See dashboard/DESIGN.md.
+   Separation is by elevation + a single hairline, never a wrapping box. */
+
+.app-shell {
+  display: flex;
+  height: 100svh;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+/* ── Nav rail (level 1) ─────────────────────────────────────────────────── */
+.nav-rail {
+  flex: 0 0 auto;
+  width: 62px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  padding: 8px 0;
+  background: var(--bg-elev);
+  box-shadow: inset -1px 0 var(--border-soft);
+  z-index: 6;
+}
+.nav-rail .ui-tip-trigger { align-self: center; padding: 4px 0 12px; }
+.nav-rail-mark {
+  color: var(--accent);
+  font-size: var(--text-xl);
+  line-height: 1;
+  user-select: none;
+  cursor: help;
+  transition: color var(--transition-base);
+  &--on   { color: var(--accent); }
+  &--off  { color: var(--yellow); }
+  &--auth { color: var(--red); }
+}
+.ws-word--on   { color: var(--green) !important; }
+.ws-word--off  { color: var(--yellow) !important; }
+.ws-word--auth { color: var(--red) !important; }
+.nav-rail-group { display: flex; flex-direction: column; gap: 2px; }
+.nav-rail-spacer { flex: 1 1 auto; }
+.nav-rail-btn {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 9px 2px;
+  border: 0;
+  background: transparent;
+  color: var(--text-faint);
+  font: inherit;
+  cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast);
+  &:hover { color: var(--text); background: var(--bg-hi); }
+  &.is-active {
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+  }
+  &.is-active::before {
+    content: "";
+    position: absolute;
+    left: 0; top: 6px; bottom: 6px;
+    width: 2px;
+    background: var(--accent);
+    border-radius: 0 2px 2px 0;
+  }
+}
+.nav-rail-icon { font-size: var(--text-lg); line-height: 1; }
+.nav-rail-label {
+  font-family: var(--font-mono);
+  font-size: 9px;       /* rail labels stay tiny regardless of the user's font scale */
+  letter-spacing: 0.02em;
+}
+
+/* ── Secondary panel (level 2) ──────────────────────────────────────────── */
+.nav-secondary {
+  position: relative;
+  flex: 0 0 auto;       /* width set inline (resizable, persisted) */
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-elev);
+  box-shadow: inset -1px 0 var(--border-soft);
+}
+.nav-secondary-inner {
+  flex: 1 1 0%;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+/* drag handle on the right edge */
+.nav-secondary-resize {
+  position: absolute;
+  top: 0; right: -3px;
+  width: 6px; height: 100%;
+  cursor: col-resize;
+  z-index: 7;
+  &:hover { box-shadow: inset -2px 0 var(--accent); }
+}
+/* collapse to a thin re-open tab */
+.nav-secondary-collapse,
+.nav-secondary-reopen {
+  border: 0;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  line-height: 1;
+  transition: color var(--transition-fast), background var(--transition-fast);
+  &:hover { color: var(--accent); }
+}
+.nav-secondary-collapse {
+  position: absolute;
+  top: 7px; right: 7px;
+  z-index: 8;
+  width: 20px; height: 20px;
+  border-radius: var(--radius-sm);
+  &:hover { background: var(--bg-hi); }
+}
+.nav-secondary-reopen {
+  flex: 0 0 auto;
+  width: 16px;
+  align-self: stretch;
+  background: var(--bg-elev);
+  box-shadow: inset -1px 0 var(--border-soft);
+  &:hover { background: var(--bg-hi); }
+}
+.nav-secondary-head { padding: 11px 12px 6px; }
+.nav-secondary-sub  { padding: 12px 12px 4px; }
+.nav-secondary-list { display: flex; flex-direction: column; padding-bottom: 8px; }
+.nav-secondary-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+  width: 100%;
+  padding: 7px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast);
+  &:hover { color: var(--text); background: var(--bg-hi); }
+  &.is-open { color: var(--text-faint); }
+}
+.nav-secondary-icon { width: 14px; text-align: center; color: var(--text-faint); flex-shrink: 0; }
+.nav-secondary-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--border); flex-shrink: 0;
+  &[data-open="true"] { background: var(--accent); }
+}
+
+/* ── Main column ────────────────────────────────────────────────────────── */
+.app-main {
+  flex: 1 1 0%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* ── Slim top bar ───────────────────────────────────────────────────────── */
+.slim-topbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 38px;
+  padding: 0 14px;
+  background: var(--bg-elev);
+  box-shadow: inset 0 -1px var(--border-soft);
+}
+.slim-topbar-mark {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: var(--text-base);
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+.slim-topbar-branch {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+.slim-topbar-branch-name { color: var(--accent); flex-shrink: 0; }
+.slim-topbar-branch-title {
+  color: var(--text-faint);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.slim-topbar-spacer { flex: 1 1 auto; }
+
+/* ── Content router ─────────────────────────────────────────────────────── */
+.app-content {
+  flex: 1 1 0%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.app-scroll { flex: 1 1 0%; min-height: 0; overflow: auto; }
+.app-content > .activity-pane { flex: 1 1 0%; min-height: 0; }
+
+/* Workbench fills the content area (overrides the standalone clamp height). */
+.app-content > .workspace-shell { flex: 1 1 0%; min-height: 0; border: 0; }
+.app-content #dockview-container { height: 100%; min-height: 0; }
+
+/* Settings renders in the main scroll, at a comfortable reading width. */
+.app-scroll > .settings-panel { max-width: 760px; }
+
+/* ── Activity shortlog (shown in the Review / Queue secondary panel) ─────── */
+.activity-shortlog { display: flex; flex-direction: column; }
+.shortlog-block {
+  padding-bottom: 8px;
+  box-shadow: inset 0 -1px var(--border-soft);
+  &:last-child { box-shadow: none; }
+}
+.shortlog-sub {
+  display: flex; align-items: baseline; gap: 6px;
+  padding: 10px 12px 4px;
+}
+.shortlog-count {
+  font-family: var(--font-mono); font-size: var(--text-xs);
+  color: var(--text-faint); font-variant-numeric: tabular-nums;
+}
+.shortlog-idle {
+  padding: 2px 12px 6px;
+  color: var(--text-faint); font-size: var(--text-xs); font-family: var(--font-mono);
+}
+.shortlog-row {
+  display: flex; align-items: center; gap: 7px;
+  width: 100%; text-align: left;
+  padding: 5px 12px; border: 0; background: transparent;
+  color: var(--text-muted); font: inherit; font-size: var(--text-sm);
+  cursor: pointer; min-width: 0;
+  transition: color var(--transition-fast), background var(--transition-fast);
+  &:hover { color: var(--text); background: var(--bg-hi); }
+}
+.shortlog-dot {
+  flex-shrink: 0; width: 6px; height: 6px; border-radius: 50%;
+  &.is-running { background: var(--yellow); animation: ui-blink 1.4s steps(2, start) infinite; }
+  &.is-done { background: var(--green); }
+  &.is-bad  { background: var(--red); }
+}
+.shortlog-row-main {
+  flex: 1 1 auto; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.shortlog-pct, .shortlog-time {
+  flex-shrink: 0; font-family: var(--font-mono); font-size: var(--text-xs);
+  color: var(--text-faint); font-variant-numeric: tabular-nums;
+}
+
+/* ── Workbench: saved-layouts list in the secondary ────────────────────── */
+.nav-layout-save {
+  display: flex; gap: 6px;
+  padding: 4px 12px 8px;
+}
+.nav-layout-input {
+  flex: 1 1 0%; min-width: 0;
+  background: var(--bg); color: var(--text);
+  border: 1px solid var(--border-soft); border-radius: var(--radius-sm);
+  padding: 4px 7px; font: inherit; font-family: var(--font-mono); font-size: var(--text-xs);
+  &::placeholder { color: var(--text-faint); }
+  &:focus { outline: none; border-color: var(--accent); }
+}
+.nav-layout-row {
+  display: flex; align-items: center;
+  &:hover { background: var(--bg-hi); }
+  .nav-secondary-btn:hover { background: transparent; }
+}
+.nav-layout-del {
+  flex-shrink: 0;
+  width: 26px; align-self: stretch;
+  border: 0; background: transparent;
+  color: var(--text-faint); cursor: pointer;
+  font-family: var(--font-mono); font-size: var(--text-sm);
+  &:hover { color: var(--red); }
+}
+
+/* ── Back-to-top affordance ────────────────────────────────────────────── */
+.scroll-top {
+  position: fixed;
+  bottom: 18px; right: 18px;
+  z-index: var(--z-dropdown);
+  width: 34px; height: 34px;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--bg-elev);
+  color: var(--text-muted);
+  font-size: var(--text-base);
+  cursor: pointer;
+  box-shadow: var(--shadow-md);
+  opacity: 0; pointer-events: none; transform: translateY(6px);
+  transition: opacity var(--transition-base), transform var(--transition-base),
+    color var(--transition-fast), border-color var(--transition-fast);
+  &:hover { color: var(--accent); border-color: var(--accent); }
+  &.is-visible { opacity: 1; pointer-events: auto; transform: none; }
+}
+
+/* Narrow screens: drop the secondary panel, shrink the rail. */
+@media (max-width: 760px) {
+  .nav-secondary, .nav-secondary-reopen { display: none; }
+  .nav-rail { width: 52px; }
+  .nav-rail-label { font-size: 8px; }
+  .nav-rail-icon { font-size: var(--text-base); }
+  .slim-topbar { padding: 0 10px; }
+}

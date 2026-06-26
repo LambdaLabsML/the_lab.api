@@ -191,7 +191,8 @@ export function ChatPanel() {
                 disabled={sending}
               />
               <button
-                class="chat-send-btn"
+                type="button"
+                class={`ui-btn chat-send-btn${input.trim() && !sending ? " is-active" : ""}`}
                 onClick={handleSend}
                 disabled={!input.trim() || sending}
               >

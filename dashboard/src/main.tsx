@@ -1,12 +1,13 @@
 import { render } from "preact";
 import { App } from "./app";
-import { colorTheme, fontFamily, fontSize, colorblindMode } from "./state/settings";
+import { colorTheme, fontFamily, fontSize, colorblindMode, uiTexture } from "./state/settings";
 import { effect } from "@preact/signals";
 import { ALL_PAIRINGS, DEFAULT_PAIRING } from "./lib/fonts";
 import "dockview-core/dist/styles/dockview.css";
 import "./styles/tailwind.css";
 import "./styles/dockview-overrides.scss";
 import "./styles/global.scss";
+import "./styles/_ui.scss";
 import "./styles/topbar.scss";
 import "./styles/chart.scss";
 import "./styles/subway.scss";
@@ -23,6 +24,9 @@ import "./styles/task.scss";
 import "./styles/stats.scss";
 import "./styles/chat.scss";
 import "./styles/table.scss";
+import "./styles/_shell.scss";
+import "./styles/activity.scss";
+import "./styles/settings-panel.scss";
 
 // Apply theme / font-family / font-size on every change
 effect(() => {
@@ -41,6 +45,10 @@ effect(() => {
   const s = fontSize.value;
   if (s === "m") document.documentElement.removeAttribute("data-font-size");
   else document.documentElement.setAttribute("data-font-size", s);
+});
+// Slight hacker-noise ambient texture (see styles/_ui.scss).
+effect(() => {
+  document.documentElement.setAttribute("data-texture", uiTexture.value ? "on" : "off");
 });
 
 // Colorblind mode: override status CSS variables with Okabe-Ito safe palette.

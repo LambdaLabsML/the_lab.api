@@ -1,4 +1,6 @@
-/* chat.scss — Floating message-agents panel */
+/* chat.scss — Floating message-agents panel.
+   Design language: a floating surface (elevation + shadow), inside it hairline
+   separators + flat fills, eyebrow header, ghost close, .ui-btn send. */
 
 #chat-fab {
   position: fixed;
@@ -6,19 +8,19 @@
   width: 44px;
   height: 44px;
   border-radius: 50%;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-soft);
   background: var(--bg-elev);
   color: var(--accent);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+  box-shadow: var(--shadow-md);
   transition: background var(--transition-base), transform var(--transition-base), border-color var(--transition-base);
 }
 #chat-fab:hover {
   background: var(--bg-hi);
-  border-color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
   transform: scale(1.06);
 }
 
@@ -27,11 +29,11 @@
   z-index: 1000;
   height: 420px;
   background: var(--bg-elev);
-  border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   display: flex;
   flex-direction: column;
-  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+  /* floating window: elevation shadow + thin frame, content uses hairlines */
+  box-shadow: inset 0 0 0 1px var(--border-soft), var(--shadow-lg);
   overflow: hidden;
   touch-action: none;
 }
@@ -40,31 +42,38 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 9px 12px;
-  background: var(--bg);
-  border-bottom: 1px solid var(--border);
+  padding: 8px 12px 7px;
+  background: var(--bg-elev);
+  box-shadow: inset 0 -1px var(--border-soft);
   flex-shrink: 0;
   cursor: grab;
   user-select: none;
 }
 .chat-header-dragging { cursor: grabbing; }
 
+/* eyebrow header title */
 .chat-title {
-  font-size: var(--text-sm);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
   font-weight: 600;
-  color: var(--text);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-faint);
 }
 
+/* ghost close */
 .chat-close-btn {
   background: none;
   border: none;
   color: var(--text-faint);
-  font-size: 18px;
+  font-size: var(--text-xl);
   line-height: 1;
   cursor: pointer;
-  padding: 0 2px;
+  padding: 0 4px;
+  border-radius: var(--radius-sm);
+  transition: color var(--transition-fast), background var(--transition-fast);
 }
-.chat-close-btn:hover { color: var(--text); }
+.chat-close-btn:hover { color: var(--text); background: var(--bg-hi); }
 
 .chat-messages {
   flex: 1;
@@ -82,7 +91,7 @@
   margin-top: 30px;
   padding: 0 16px;
   line-height: 1.6;
-  code { color: var(--text-muted); }
+  code { color: var(--text-muted); font-family: var(--font-mono); }
 }
 
 .chat-msg { max-width: 100%; }
@@ -91,6 +100,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
+  font-family: var(--font-mono);
   font-size: var(--text-xs);
   font-weight: 600;
   margin-bottom: 3px;
@@ -106,6 +116,7 @@
 .chat-msg-user .chat-msg-label   { color: var(--accent); }
 .chat-msg-agent .chat-msg-label  { color: var(--green); }
 
+/* message bubble = elevation step on the panel surface, no border box */
 .chat-msg-content {
   font-size: var(--text-sm);
   line-height: 1.5;
@@ -113,7 +124,6 @@
   white-space: pre-wrap;
   word-break: break-word;
   background: var(--bg);
-  border: 1px solid var(--border-soft);
   border-radius: var(--radius-md);
   padding: 6px 10px;
 }
@@ -123,7 +133,7 @@
   font-size: var(--text-xs);
   color: var(--red);
   background: color-mix(in srgb, var(--red) 8%, transparent);
-  border-top: 1px solid var(--border);
+  box-shadow: inset 0 1px var(--border-soft);
   flex-shrink: 0;
 }
 
@@ -132,17 +142,18 @@
   flex-direction: column;
   gap: 6px;
   padding: 8px 12px;
-  background: var(--bg);
-  border-top: 1px solid var(--border);
+  background: var(--bg-elev);
+  box-shadow: inset 0 1px var(--border-soft);
   flex-shrink: 0;
 }
 
 .chat-to-select {
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
+  background: var(--bg);
+  border: 1px solid var(--border-soft);
   border-radius: var(--radius-sm);
   color: var(--text-muted);
   font: inherit;
+  font-family: var(--font-mono);
   font-size: var(--text-xs);
   padding: 3px 6px;
   cursor: pointer;
@@ -158,8 +169,8 @@
 
 .chat-input {
   flex: 1;
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
+  background: var(--bg);
+  border: 1px solid var(--border-soft);
   border-radius: var(--radius-md);
   color: var(--text);
   font: inherit;
@@ -173,25 +184,16 @@
 .chat-input::placeholder { color: var(--text-faint); }
 .chat-input:disabled { opacity: 0.5; }
 
-.chat-send-btn {
-  background: var(--accent);
-  color: var(--bg);
-  border: none;
-  border-radius: var(--radius-md);
+/* send — .ui-btn handles ghost/active; these tweaks size it as the row CTA */
+.chat-send-btn.ui-btn {
+  align-self: flex-end;
+  flex-shrink: 0;
   padding: 6px 14px;
-  font: inherit;
   font-size: var(--text-sm);
   font-weight: 600;
-  cursor: pointer;
   white-space: nowrap;
-  flex-shrink: 0;
-  align-self: flex-end;
 }
-.chat-send-btn:hover:not(:disabled) { filter: brightness(1.15); }
 .chat-send-btn:disabled { opacity: 0.35; cursor: default; }
-
-.chat-messages::-webkit-scrollbar { width: 4px; }
-.chat-messages::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 
 @media (max-width: 500px) {
   #chat-panel {

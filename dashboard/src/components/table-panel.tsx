@@ -9,6 +9,8 @@ import { collectChartKeys, resolveNumericValue } from "../lib/chart-data";
 import { _colorForExp, isLowerBetter } from "../lib/colors";
 import { navigateToIdea } from "../lib/navigate";
 import { badgeHtml, fmtMetricName } from "../lib/format";
+import { useMultiSelection, useDisclosure } from "../lib/hooks";
+import { Badge, EmptyState, type BadgeTone } from "./ui";
 import type { Experiment } from "../lib/types";
 
 // ---------------------------------------------------------------------------
@@ -21,17 +23,13 @@ function fmtNum(n: number): string {
   return n.toFixed(4).replace(/0+$/, "").replace(/\.$/, "");
 }
 
-// ---------------------------------------------------------------------------
-// Status badge color
-// ---------------------------------------------------------------------------
-
-// dynamic — driven by idea status; hex kept for inline background style
-const STATUS_BADGE_COLORS: Record<string, string> = {
-  active: "#238636",
-  running: "#6e4b00",
-  concluded: "#1f6feb",
-  abandoned: "#da3633",
-  suggested: "#2d1a00",
+// Idea status → design-language Badge tone.
+const STATUS_TONE: Record<string, BadgeTone> = {
+  active: "active",
+  running: "running",
+  concluded: "concluded",
+  abandoned: "abandoned",
+  suggested: "warn",
 };
 
 // ---------------------------------------------------------------------------
@@ -45,8 +43,10 @@ export function TablePanel() {
   const defaultMetric = selectedMetric.value;
   const [sortKey, setSortKey] = useState<string>(defaultMetric || "label");
   const [sortDir, setSortDir] = useState<SortDir>(defaultMetric ? "desc" : "asc");
-  const [hiddenCols, setHiddenCols] = useState<Set<string>>(new Set());
-  const [showColMenu, setShowColMenu] = useState(false);
+  // column visibility — Set-backed multi-selection (the "hidden" set)
+  const { set: hiddenCols, toggle: toggleHiddenCol, clear: clearHiddenCols } = useMultiSelection<string>();
+  // hidden-columns picker disclosure
+  const colMenu = useDisclosure(false);
   const [colOrder, setColOrder] = useState<string[] | null>(null);
   const [dragCol, setDragCol] = useState<string | null>(null);
   const [dragOverCol, setDragOverCol] = useState<string | null>(null);
@@ -253,7 +253,7 @@ export function TablePanel() {
   // Get experiment color dot
   function dotColor(exp: Experiment): string {
     const c = _colorForExp(exp, metric || "", mode, layout, ideas, filtered);
-    return c || "#8b949e";
+    return c || "var(--text-muted)";
   }
 
   return (
@@ -319,7 +319,7 @@ export function TablePanel() {
                   }}
                   onContextMenu={(e) => {
                     e.preventDefault();
-                    setHiddenCols(new Set([...hiddenCols, mk]));
+                    if (!hiddenCols.has(mk)) toggleHiddenCol(mk);
                   }}
                   style={`${dragOverCol === mk ? "border-left: 2px solid var(--accent);" : ""}cursor: grab;`}
                 >
@@ -327,36 +327,35 @@ export function TablePanel() {
                 </th>
               ))}
               {hiddenCols.size > 0 && (
-                <th style="width: 24px; position: relative;">
-                  <span
-                    style="cursor: pointer; color: var(--accent); font-size: 12px;"
-                    onClick={() => setShowColMenu(!showColMenu)}
-                    title="Show hidden columns"
-                  >+</span>
-                  {showColMenu && (
-                    <div style="position: absolute; top: 100%; right: 0; background: var(--bg-elev); border: 1px solid var(--border); border-radius: 4px; padding: 4px; z-index: 10; min-width: 120px;">
+                <th class="table-colmenu-th">
+                  <button
+                    type="button"
+                    class={`table-colmenu-toggle${colMenu.open ? " is-open" : ""}`}
+                    onClick={colMenu.toggle}
+                    title={`Show hidden columns (${hiddenCols.size})`}
+                  >+{hiddenCols.size}</button>
+                  {colMenu.open && (
+                    <div class="table-colmenu">
                       {[...hiddenCols].sort().map((col) => (
-                        <div
+                        <button
+                          type="button"
                           key={col}
-                          style="padding: 2px 8px; cursor: pointer; font-size: 10px; color: var(--text-muted); white-space: nowrap;"
+                          class="table-colmenu-item"
                           onClick={() => {
-                            const next = new Set(hiddenCols);
-                            next.delete(col);
-                            setHiddenCols(next);
-                            setShowColMenu(false);
+                            toggleHiddenCol(col);
+                            colMenu.onClose();
                           }}
-                          onMouseEnter={(e) => { (e.target as HTMLElement).style.color = 'var(--text)'; }}
-                          onMouseLeave={(e) => { (e.target as HTMLElement).style.color = 'var(--text-muted)'; }}
                         >
                           {col}
-                        </div>
+                        </button>
                       ))}
-                      <div
-                        style="padding: 2px 8px; cursor: pointer; font-size: 10px; color: var(--accent); border-top: 1px solid var(--border); margin-top: 2px; padding-top: 4px;"
-                        onClick={() => { setHiddenCols(new Set()); setShowColMenu(false); }}
+                      <button
+                        type="button"
+                        class="table-colmenu-item table-colmenu-all"
+                        onClick={() => { clearHiddenCols(); colMenu.onClose(); }}
                       >
                         Show all
-                      </div>
+                      </button>
                     </div>
                   )}
                 </th>
@@ -369,7 +368,7 @@ export function TablePanel() {
               return (
                 <tr
                   key={exp.id}
-                  style={isHighlighted ? "background: var(--bg-hi)" : undefined}
+                  class={isHighlighted ? "is-highlighted" : undefined}
                   onMouseEnter={() => { highlightedIdea.value = exp.idea_id; }}
                   onMouseLeave={() => { if (highlightedIdea.value === exp.idea_id) highlightedIdea.value = null; }}
                   onClick={() => navigateToIdea(exp.idea_id, exp.label)}
@@ -381,7 +380,7 @@ export function TablePanel() {
                     />
                   </td>
                   <td style="text-align:center; padding:3px 2px;">
-                    {milestoneIds.has(exp.id) && <span class="exp-milestone">\u2605</span>}
+                    {milestoneIds.has(exp.id) && <span class="exp-milestone">★</span>}
                   </td>
                   <td>
                     <span class="exp-link">
@@ -397,9 +396,9 @@ export function TablePanel() {
                     {exp._running ? (
                       <span dangerouslySetInnerHTML={{ __html: badgeHtml("running", runningProgress.value[exp.label || String(exp.id)]) }} />
                     ) : (
-                      <span class={`badge badge-${exp.idea_status || "active"}`}>
+                      <Badge tone={STATUS_TONE[exp.idea_status || "active"] ?? "neutral"}>
                         {exp.idea_status || "active"}
-                      </span>
+                      </Badge>
                     )}
                   </td>
                   {visibleMetrics.map((mk) => {
@@ -438,11 +437,12 @@ export function TablePanel() {
             })}
             {sorted.length === 0 && (
               <tr>
-                <td
-                  colspan={4 + visibleMetrics.length + (hiddenCols.size > 0 ? 1 : 0)}
-                  style="text-align: center; color: var(--text-muted); padding: 20px;"
-                >
-                  No experiments match current filters
+                <td colspan={5 + visibleMetrics.length + (hiddenCols.size > 0 ? 1 : 0)}>
+                  <EmptyState
+                    icon="⊘"
+                    title="No experiments"
+                    body="No experiments match the current filters."
+                  />
                 </td>
               </tr>
             )}

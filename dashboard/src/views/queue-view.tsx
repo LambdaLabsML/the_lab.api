@@ -10,12 +10,22 @@ import {
   upsertResource,
 } from "../state/api";
 import { selectedIdea } from "../state/settings";
+import { useDisclosure } from "../lib/hooks";
+import { Badge, EmptyState, IconButton, Toggle, type BadgeTone } from "../components/ui";
 import type {
   QueueExp,
   QueueSnapshot,
   ResourceState,
   ResourceUpsertBody,
 } from "../lib/types";
+
+// Recent-experiment status → design-language Badge tone.
+const RECENT_STATUS_TONE: Record<string, BadgeTone> = {
+  completed: "good",
+  failed: "bad",
+  cancelled: "neutral",
+  running: "running",
+};
 
 // dynamic — driven by holder index; hex required for template-string style injection
 const HOLDER_PALETTE = [
@@ -373,7 +383,7 @@ export function QueueView() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [editingResource, setEditingResource] = useState<string | null>(null);
-  const [showAddResource, setShowAddResource] = useState(false);
+  const { open: showAddResource, onOpen: openAddResource, onClose: closeAddResource } = useDisclosure(false);
   const [intervalDraft, setIntervalDraft] = useState<string>("");
   const [, setTick] = useState(0);
 
@@ -490,7 +500,7 @@ export function QueueView() {
   async function handleSubmitResource(body: ResourceUpsertBody, isNew: boolean) {
     await withBusy(async () => {
       await upsertResource(body.name, body);
-      if (isNew) setShowAddResource(false);
+      if (isNew) closeAddResource();
       else setEditingResource(null);
       await refresh();
     });
@@ -514,14 +524,17 @@ export function QueueView() {
   return (
     <div id="queue-container">
       <div class="pane-bar">
-        <h2 class="pane-bar-title">Queue</h2>
+        <span class="ui-eyebrow pane-bar-title">Queue</span>
         <span class="pane-bar-count">{loaded ? summary : "…"}</span>
         <div class="pane-bar-actions">
-          <label class="queue-toggle" style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>
-            <input type="checkbox" checked={!!snapshot?.config.paused} disabled={!snapshot || busy} onChange={handleTogglePause} />
-            Paused
-          </label>
-          <button class="queue-btn" style={{ padding: "2px 8px", fontSize: "var(--text-xs)" }} onClick={() => refresh()} disabled={busy}>↺</button>
+          <Toggle
+            active={!!snapshot?.config.paused}
+            onClick={() => { if (snapshot && !busy) handleTogglePause(); }}
+            title={snapshot?.config.paused ? "Queue is paused — click to resume" : "Pause the queue"}
+          >
+            {snapshot?.config.paused ? "paused" : "running"}
+          </Toggle>
+          <IconButton onClick={() => refresh()} disabled={busy} title="Refresh">↺</IconButton>
         </div>
       </div>
 
@@ -544,7 +557,7 @@ export function QueueView() {
 
       <section class="queue-section">
         <div class="queue-section-header">
-          <h3>Resources</h3>
+          <span class="ui-eyebrow">Resources</span>
           <span class="queue-section-meta">{resources.length} pool{resources.length === 1 ? "" : "s"}</span>
         </div>
         <div class="queue-resources-grid">
@@ -613,7 +626,7 @@ export function QueueView() {
             );
           })}
           {resources.length === 0 && loaded && (
-            <div class="queue-empty">No resources configured.</div>
+            <EmptyState title="No resources" body="No resources configured." />
           )}
         </div>
         {showAddResource ? (
@@ -621,14 +634,14 @@ export function QueueView() {
             <ResourceForm
               initial={null}
               isNew={true}
-              onCancel={() => setShowAddResource(false)}
+              onCancel={closeAddResource}
               onSubmit={(body) => handleSubmitResource(body, true)}
             />
           </div>
         ) : (
           <button
             class="queue-add-btn"
-            onClick={() => setShowAddResource(true)}
+            onClick={openAddResource}
             disabled={busy}
           >
             + Add resource
@@ -639,7 +652,7 @@ export function QueueView() {
       <section class="queue-section queue-lists">
         <div class="queue-list-col">
           <div class="queue-section-header">
-            <h3>Queued</h3>
+            <span class="ui-eyebrow">Queued</span>
             <span class="queue-section-meta">{queued.length}</span>
           </div>
           <div class="queue-list">
@@ -716,14 +729,14 @@ export function QueueView() {
               </div>
             ))}
             {queued.length === 0 && loaded && (
-              <div class="queue-empty">No experiments queued.</div>
+              <EmptyState title="Queue empty" body="No experiments queued." />
             )}
           </div>
         </div>
 
         <div class="queue-list-col">
           <div class="queue-section-header">
-            <h3>Running</h3>
+            <span class="ui-eyebrow">Running</span>
             <span class="queue-section-meta">{running.length}</span>
           </div>
           <div class="queue-list">
@@ -768,7 +781,7 @@ export function QueueView() {
               </div>
             ))}
             {running.length === 0 && loaded && (
-              <div class="queue-empty">Nothing running.</div>
+              <EmptyState title="Idle" body="Nothing running." />
             )}
           </div>
         </div>
@@ -776,7 +789,7 @@ export function QueueView() {
 
       <section class="queue-section">
         <div class="queue-section-header">
-          <h3>Recent</h3>
+          <span class="ui-eyebrow">Recent</span>
           <span class="queue-section-meta">{recent.length}</span>
         </div>
         <div class="queue-list">
@@ -790,7 +803,7 @@ export function QueueView() {
                 <div class="queue-row-main">
                   <div class="queue-row-label-line">
                     <code class="queue-row-label">exp/{exp.label}</code>
-                    <span class="agents-chip" style={{ textTransform: "uppercase" }}>{status}</span>
+                    <Badge tone={RECENT_STATUS_TONE[status] ?? "neutral"}>{status}</Badge>
                     <button
                       class="queue-link"
                       onClick={() => handleOpenIdea(exp.idea_id)}
@@ -829,7 +842,7 @@ export function QueueView() {
             );
           })}
           {recent.length === 0 && loaded && (
-            <div class="queue-empty">No finished experiments yet.</div>
+            <EmptyState title="Nothing finished" body="No finished experiments yet." />
           )}
         </div>
       </section>

@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import { listPrompts, getPrompt, putPrompt, deletePromptRole } from "../state/api";
 import type { PromptMeta } from "../lib/types";
 import { formatTime } from "../lib/format";
+import { Badge, EmptyState, IconButton } from "../components/ui";
+import { useCopyToClipboard, useSelection } from "../lib/hooks";
 
 const ROLE_REGEX = /^[a-z0-9_-]{1,32}$/;
 
@@ -18,13 +20,13 @@ function formatSize(size: number): string {
 
 export function PromptsView() {
   const [roles, setRoles] = useState<PromptMeta[]>([]);
-  const [selectedRole, setSelectedRole] = useState<string | null>(null);
+  const { selected: selectedRole, setSelected: setSelectedRole } = useSelection<string>();
   const [content, setContent] = useState("");
   const [savedContent, setSavedContent] = useState("");
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
   const [listError, setListError] = useState<string | null>(null);
-  const [copyState, setCopyState] = useState<"idle" | "copied">("idle");
+  const { copied, copy } = useCopyToClipboard();
   const [showAddForm, setShowAddForm] = useState(false);
   const [newRoleName, setNewRoleName] = useState("");
   const [addError, setAddError] = useState<string | null>(null);
@@ -143,19 +145,6 @@ export function PromptsView() {
     }
   }
 
-  async function handleCopyLaunch() {
-    if (selectedRole === null) return;
-    const cmd = launchCommand(selectedRole);
-    try {
-      await navigator.clipboard.writeText(cmd);
-      setCopyState("copied");
-      window.setTimeout(() => setCopyState("idle"), 1500);
-    } catch {
-      // fallback: select via prompt
-      window.prompt("Copy launch command:", cmd);
-    }
-  }
-
   async function handleAddRole(e: Event) {
     e.preventDefault();
     const name = newRoleName.trim();
@@ -193,7 +182,7 @@ export function PromptsView() {
 
   const saveLabel =
     saveState === "saving"
-      ? "Saving..."
+      ? "Saving…"
       : saveState === "saved"
       ? "Saved"
       : saveState === "error"
@@ -206,7 +195,8 @@ export function PromptsView() {
     <div id="prompts-container">
       <aside class="prompts-sidebar">
         <div class="prompts-sidebar-header">
-          <h3>Roles</h3>
+          <span class="ui-eyebrow">Roles</span>
+          <span class="prompts-sidebar-count">{roles.length}</span>
         </div>
         {listError && <div class="prompts-error">{listError}</div>}
         <div class="prompts-role-list">
@@ -218,7 +208,7 @@ export function PromptsView() {
             >
               <div class="prompts-role-name">
                 {r.role}
-                {r.role === "default" && <span class="prompts-role-badge">default</span>}
+                {r.role === "default" && <Badge tone="concluded">default</Badge>}
               </div>
               <div class="prompts-role-meta">
                 {formatSize(r.size)} · {formatTime(r.updated_at)}
@@ -243,10 +233,11 @@ export function PromptsView() {
             />
             {addError && <div class="prompts-add-error">{addError}</div>}
             <div class="prompts-add-actions">
-              <button type="submit" class="prompts-btn-primary">Add</button>
-              <button
-                type="button"
-                class="prompts-btn"
+              <button type="submit" class="ui-btn ui-btn--outlined is-active">
+                Add
+              </button>
+              <IconButton
+                outlined
                 onClick={() => {
                   setShowAddForm(false);
                   setNewRoleName("");
@@ -254,14 +245,11 @@ export function PromptsView() {
                 }}
               >
                 Cancel
-              </button>
+              </IconButton>
             </div>
           </form>
         ) : (
-          <button
-            class="prompts-add-btn"
-            onClick={() => setShowAddForm(true)}
-          >
+          <button class="prompts-add-btn" onClick={() => setShowAddForm(true)}>
             + Add role
           </button>
         )}
@@ -270,13 +258,17 @@ export function PromptsView() {
       <main class="prompts-main">
         {selectedRole === null ? (
           <div class="prompts-placeholder">
-            Select a role on the left to edit its prompt.
+            <EmptyState
+              icon="✎"
+              title="No role selected"
+              body="Select a role on the left to edit its prompt."
+            />
           </div>
         ) : (
           <>
             <div class="prompts-main-header">
               <div class="prompts-main-title">
-                <h2>{selectedRole}</h2>
+                <span class="ui-eyebrow">{selectedRole}</span>
                 <div class="prompts-main-subtitle">
                   {selectedRole === "default"
                     ? "Base prompt applied when no --role flag is set."
@@ -284,25 +276,28 @@ export function PromptsView() {
                 </div>
               </div>
               <div class="prompts-main-actions">
-                <button
-                  class={`prompts-btn${copyState === "copied" ? " copied" : ""}`}
-                  onClick={handleCopyLaunch}
+                <IconButton
+                  outlined
+                  class={copied ? "is-copied" : ""}
+                  onClick={() => copy(launchCommand(selectedRole))}
                   title={launchCommand(selectedRole)}
                 >
-                  {copyState === "copied" ? "Copied!" : "Copy launch command"}
-                </button>
+                  {copied ? "Copied!" : "Copy launch command"}
+                </IconButton>
                 {selectedRole !== "default" && (
-                  <button class="prompts-btn danger" onClick={handleDelete}>
+                  <IconButton outlined class="prompts-btn-danger" onClick={handleDelete}>
                     Delete
-                  </button>
+                  </IconButton>
                 )}
-                <button
-                  class={`prompts-btn primary prompts-save-${saveState}${dirty ? " dirty" : ""}`}
+                <IconButton
+                  outlined
+                  active={dirty}
+                  class={`prompts-save-${saveState}`}
                   onClick={handleSave}
                   disabled={!dirty || saveState === "saving"}
                 >
                   {saveLabel}
-                </button>
+                </IconButton>
               </div>
             </div>
             {error && <div class="prompts-error">{error}</div>}

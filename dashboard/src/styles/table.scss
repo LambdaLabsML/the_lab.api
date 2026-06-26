@@ -1,40 +1,159 @@
+/* Table panel — design-language data table.
+   Sticky --bg-elev header with eyebrow column labels, hairline row separators,
+   no vertical gridlines, hover → --bg-hi, selected (cross-highlight) → accent
+   tint, numbers right-aligned tabular-nums. See dashboard/DESIGN.md § Tables. */
+
 .table-panel { height: 100%; display: flex; flex-direction: column; overflow: hidden; }
 .table-wrap { flex: 1; overflow: auto; }
-.table-panel table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
-.table-panel th {
-  position: sticky; top: 0; z-index: 1;
-  background: var(--bg-elev); color: var(--text-muted);
-  padding: 4px 8px; text-align: left; cursor: pointer;
-  border-bottom: 1px solid var(--border); font-weight: 600;
-  white-space: nowrap; user-select: none;
+
+.table-panel table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
 }
-.table-panel th:hover { color: var(--text); }
+
+/* ── Header — sticky elevation band, eyebrow column labels ── */
+.table-panel th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-elev);
+  padding: 6px 8px;
+  text-align: left;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  /* eyebrow: uppercase, mono, faint, letter-spaced — and a single hairline rule */
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  box-shadow: inset 0 -1px var(--border-soft);
+  transition: color var(--transition-fast);
+}
+.table-panel th:hover { color: var(--text-muted); }
 .table-panel th.sorted { color: var(--accent); }
 .table-panel th.metric-selected { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+
+/* ── Body cells — hairline row separators, no vertical lines ── */
 .table-panel td {
-  padding: 3px 8px; border-bottom: 1px solid var(--border-soft);
-  color: var(--text); white-space: nowrap;
+  padding: 3px 8px;
+  border-bottom: 1px solid var(--border-soft);
+  color: var(--text);
+  white-space: nowrap;
 }
-.table-panel tr:hover td { background: var(--bg-hi); }
 .table-panel tr { cursor: pointer; }
-.table-panel .exp-link { color: var(--accent); font-weight: 600; cursor: pointer; font-family: var(--font-mono, monospace); }
+.table-panel tr:hover td { background: var(--bg-hi); }
+/* cross-component highlight (hovered idea elsewhere) → subtle accent tint */
+.table-panel tr.is-highlighted td { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+
+.table-panel .exp-link {
+  color: var(--accent);
+  font-weight: 600;
+  cursor: pointer;
+  font-family: var(--font-mono);
+}
 .table-panel .exp-link:hover { text-decoration: underline; }
-.table-panel .color-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; flex-shrink: 0; }
-.table-panel .metric-val { font-family: var(--font-mono, monospace); text-align: right; color: var(--text-muted); font-size: var(--text-xs); }
+
+.table-panel .color-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 4px;
+  flex-shrink: 0;
+}
+
+/* ── Numeric metric columns — right-aligned, tabular ── */
+.table-panel .metric-val {
+  font-family: var(--font-mono);
+  text-align: right;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
 .table-panel td.metric-selected { background: color-mix(in srgb, var(--accent) 5%, transparent); }
+
 .table-panel .idea-desc {
-  max-width: 220px; overflow: hidden; text-overflow: ellipsis; display: inline-block;
-  color: var(--text-muted); font-size: var(--text-xs); vertical-align: middle;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: inline-block;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  vertical-align: middle;
 }
-/* Ensure status badge is never truncated */
-.table-panel .badge {
-  min-width: 72px; justify-content: center; font-size: var(--text-xs);
-  white-space: nowrap; flex-shrink: 0;
+
+/* Status badge cell — keep a comfortable min-width so it never truncates */
+.table-panel .badge,
+.table-panel .ui-badge {
+  min-width: 72px;
+  justify-content: center;
 }
-.table-panel .status-badge { font-size: var(--text-xs); padding: 1px 5px; border-radius: 3px; color: #fff; }
+
 .table-panel .exp-milestone {
-  font-size: 10px; vertical-align: middle;
-  color: var(--yellow); text-shadow: 0 0 4px color-mix(in srgb, var(--yellow) 40%, transparent);
+  font-size: var(--text-base);
+  vertical-align: middle;
+  color: var(--yellow);
+}
+
+/* ── Hidden-columns picker ── */
+.table-colmenu-th {
+  width: 28px;
+  position: relative;
+  text-align: center;
+}
+.table-colmenu-toggle {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--text-faint);
+  background: transparent;
+  border: none;
+  padding: 1px 4px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+.table-colmenu-toggle:hover,
+.table-colmenu-toggle.is-open { color: var(--accent); background: var(--bg-hi); }
+
+.table-colmenu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 10;
+  min-width: 120px;
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-1);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+}
+.table-colmenu-item {
+  text-align: left;
+  padding: 3px 8px;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+.table-colmenu-item:hover { color: var(--text); background: var(--bg-hi); }
+.table-colmenu-all {
+  color: var(--accent);
+  margin-top: var(--space-1);
+  box-shadow: inset 0 1px var(--border-soft);
+  padding-top: 5px;
 }
 
 /* On mobile, compact layout: hide ★ and metric cols, shrink Idea column */
@@ -44,5 +163,6 @@
   .table-panel th:nth-child(n+6),
   .table-panel td:nth-child(n+6) { display: none; }
   .table-panel .idea-desc { max-width: 110px; }
-  .table-panel .badge { min-width: 64px; font-size: 8px; padding: 1px 4px; }
+  .table-panel .badge,
+  .table-panel .ui-badge { min-width: 64px; }
 }

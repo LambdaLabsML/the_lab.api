@@ -1,10 +1,12 @@
-/* stats.css — Usage Stats view */
+/* stats.css — Usage Stats view. Design language: cards are surfaces separated
+   by elevation + a single hairline header rule (not boxes); eyebrow headers;
+   confident mono stats; ghost toggles. See dashboard/DESIGN.md. */
 
 .stats-view { padding: 0 var(--space-4) var(--space-4); overflow: hidden; flex: 1; display: flex; flex-direction: column; background: var(--bg-elev); gap: var(--space-3); }
-.stats-header { display: flex; align-items: baseline; gap: var(--space-3); margin-bottom: var(--space-4); }
-.stats-header h2 { margin: 0; font-size: var(--text-base); color: var(--text); }
-.stats-total { color: var(--accent); font-size: var(--text-base); font-weight: 600; }
 
+.stats-loading { padding: var(--space-4); color: var(--text-faint); font-size: var(--text-sm); }
+
+/* ── Quick-glance summary ── */
 .stats-summary-row {
   display: flex;
   gap: 6px;
@@ -14,26 +16,14 @@
 
 .stats-summary-pill {
   display: flex;
-  flex-direction: column;
-  gap: 1px;
-  padding: 5px 10px;
+  padding: 6px 10px;
   background: var(--bg);
-  border: 1px solid var(--border-soft);
   border-radius: var(--radius-md);
+  box-shadow: inset 0 0 0 1px var(--border-soft);
   min-width: 0;
 }
-
-.stats-summary-count {
-  font-size: var(--text-base);
-  font-weight: 700;
-  color: var(--accent);
-  font-family: var(--font-mono, monospace);
-  line-height: 1;
-}
-
-.stats-summary-label {
-  font-size: var(--text-xs);
-  color: var(--text-faint);
+/* the Stat sub line acts as the pill caption — clamp its width */
+.stats-summary-pill .ui-stat-sub {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -43,30 +33,43 @@
 .stats-columns { display: flex; gap: var(--space-3); flex: 1; min-height: 0; }
 @media (max-width: 900px) { .stats-columns { flex-direction: column; } }
 
-.stats-card { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; flex: 1; display: flex; flex-direction: column; min-width: 0; }
+/* ── Cards — surface + elevation, hairline header rule (no box) ── */
+.stats-card {
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.stats-card-sizes { flex: 0 0 auto; margin-bottom: var(--space-3); }
+
 .stats-card-title {
-  padding: 10px 14px; font-size: var(--text-sm); font-weight: 600;
-  letter-spacing: 0; color: var(--text-muted); border-bottom: 1px solid var(--border-soft);
-  display: flex; align-items: center; gap: var(--space-2); background: var(--bg-elev);
+  padding: 7px 12px 6px;
+  box-shadow: inset 0 -1px var(--border-soft); /* hairline rule */
+  display: flex; align-items: center; gap: var(--space-2);
+  background: var(--bg-elev);
 }
 .stats-card-body { padding: 6px var(--space-2); overflow-y: auto; flex: 1; min-height: 0; }
-.stats-card-body.history { }
+.stats-sizes-body { overflow-x: auto; }
 
-/* --- Bar rows --- */
+/* ── Bar rows ── */
 .stats-bar-row {
   position: relative; display: flex; align-items: center; gap: 6px;
   padding: 4px var(--space-2); border-radius: var(--radius-sm); margin-bottom: 1px; overflow: hidden;
+  cursor: pointer;
 }
-.stats-bar-row { cursor: pointer; }
-.stats-bar-row:hover { background: var(--bg-elev); }
-.stats-bar-row.selected { background: color-mix(in srgb, var(--accent) 27%, transparent); outline: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); }
+.stats-bar-row:hover { background: var(--bg-hi); }
+.stats-bar-row.selected { background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .stats-bar-bg {
   position: absolute; left: 0; top: 0; bottom: 0;
-  background: color-mix(in srgb, var(--accent) 6%, transparent); border-radius: var(--radius-sm); pointer-events: none;
+  background: color-mix(in srgb, var(--accent) 7%, transparent); border-radius: var(--radius-sm); pointer-events: none;
 }
-.stats-bar-bg.pattern { background: color-mix(in srgb, var(--green) 6%, transparent); }
+.stats-bar-bg.pattern { background: color-mix(in srgb, var(--green) 7%, transparent); }
 .stats-bar-count {
   position: relative; color: var(--accent); font-weight: 700; font-size: var(--text-sm);
+  font-family: var(--font-mono); font-variant-numeric: tabular-nums;
   margin-left: auto; flex-shrink: 0; min-width: 28px; text-align: right;
 }
 .stats-bar-count.pattern { color: var(--green); }
@@ -75,41 +78,75 @@
   flex-wrap: wrap; flex: 1; min-width: 0;
 }
 .stats-arrow { color: var(--text-faint); font-size: var(--text-xs); margin: 0 2px; }
-.stats-empty { color: var(--text-faint); font-style: italic; padding: var(--space-2); }
 
-/* --- Endpoint path styling --- */
+/* ── Endpoint path styling ── */
 .stats-endpoint {
   position: relative; color: var(--text); font-size: var(--text-sm); white-space: nowrap;
   overflow: hidden; text-overflow: ellipsis;
 }
 .stats-endpoint.short { font-size: var(--text-xs); max-width: 140px; }
 
-/* --- n-gram selector --- */
-.stats-len-selector { display: inline-flex; align-items: center; gap: 2px; margin-left: auto; }
+/* ── n-gram selector — compact .ui-toggle group ── */
+.stats-len-selector { display: inline-flex; align-items: center; gap: 3px; margin-left: auto; }
 .stats-len-btn {
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 22px; height: 20px; border-radius: var(--radius-sm);
-  background: none; border: 1px solid var(--border); color: var(--text-muted); cursor: pointer;
-  font-size: var(--text-xs); font-weight: 700; transition: all var(--transition-base);
+  min-width: 20px;
+  justify-content: center;
+  padding: 2px 6px;
+  font-weight: 700;
 }
-.stats-len-btn:hover { background: var(--border); color: var(--text); }
-.stats-len-btn.active { background: color-mix(in srgb, var(--accent) 20%, transparent); color: var(--accent); border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
-.stats-len-label { color: var(--text-faint); font-size: var(--text-xs); margin-left: 3px; text-transform: none; letter-spacing: 0; font-weight: 400; }
+.stats-len-label { color: var(--text-faint); font-size: var(--text-xs); margin-left: 3px; font-family: var(--font-mono); }
 
-/* --- Method pills (extend existing .api-method) --- */
+/* ── Method pills (extend frozen .api-method) ── */
 .api-method.small { font-size: var(--text-xs); padding: 0 4px; min-width: 28px; }
 .api-method.put { background: var(--badge-blue-bg); color: var(--accent); }
 .api-method.delete { background: var(--badge-red-bg); color: var(--red); }
 
-/* --- History log --- */
-.stats-history-row { border-bottom: 1px solid var(--border-soft); }
-.stats-history-row:last-child { border-bottom: none; }
+/* ── Response-size table — design-language table ── */
+.stats-size-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.stats-size-table th {
+  text-align: left;
+  padding: 3px 8px;
+  box-shadow: inset 0 -1px var(--border-soft);
+  /* eyebrow column labels */
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+.stats-size-table th.num,
+.stats-size-table td.num { text-align: right; }
+.stats-size-table td {
+  padding: 3px 8px;
+  border-bottom: 1px solid var(--border-soft);
+  color: var(--text);
+}
+.stats-size-table td.muted { color: var(--text-muted); }
+.stats-size-table tr:hover td { background: var(--bg-hi); }
+.stats-size-endpoint {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── History log ── */
+.stats-history-row { box-shadow: inset 0 -1px var(--border-soft); }
+.stats-history-row:last-child { box-shadow: none; }
 .stats-history-main {
   display: flex; align-items: center; gap: 6px;
   padding: 4px var(--space-2); font-size: var(--text-sm); cursor: default;
 }
-.stats-history-main:hover { background: var(--bg-elev); border-radius: var(--radius-sm); }
-.stats-history-time { color: var(--text-faint); font-size: var(--text-xs); flex-shrink: 0; min-width: 62px; }
+.stats-history-main:hover { background: var(--bg-hi); border-radius: var(--radius-sm); }
+.stats-history-time { color: var(--text-faint); font-size: var(--text-xs); flex-shrink: 0; min-width: 62px; font-variant-numeric: tabular-nums; }
 .stats-history-args-preview {
   color: var(--text-faint); font-size: var(--text-xs); overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0;
@@ -121,8 +158,15 @@
 }
 .stats-detail-label { color: var(--accent); font-weight: 600; margin-right: 4px; }
 
-/* --- Example groups --- */
-.stats-example-group { border-bottom: 1px solid var(--border-soft); padding-bottom: 4px; margin-bottom: 4px; }
-.stats-example-group:last-child { border-bottom: none; margin-bottom: 0; }
-.stats-clear-btn { margin-left: auto; color: var(--text-faint); cursor: pointer; font-size: var(--text-xs); text-transform: none; letter-spacing: 0; font-weight: 400; }
-.stats-clear-btn:hover { color: var(--red); }
+/* ── Example groups ── */
+.stats-example-group { box-shadow: inset 0 -1px var(--border-soft); padding-bottom: 4px; margin-bottom: 4px; }
+.stats-example-group:last-child { box-shadow: none; margin-bottom: 0; }
+
+/* clear button — .ui-btn override: stay compact and tint red on hover */
+.stats-clear-btn {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  padding: 2px 6px;
+}
+.stats-clear-btn:hover { color: var(--red); background: var(--bg-hi); }

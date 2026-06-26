@@ -1,4 +1,5 @@
 import { currentView } from "../state/settings";
+import { IconButton } from "./ui";
 
 const TABS = [
   { key: "dag", label: "Graph", path: "/graph" },
@@ -19,15 +20,26 @@ export function ViewTabs() {
 
   return (
     <div id="view-tabs">
-      {TABS.map((tab) => (
-        <div
-          key={tab.key}
-          class={`view-tab${view === tab.key ? " active" : ""}`}
-          onClick={() => switchTo(tab.key)}
-        >
-          {tab.label}
-        </div>
-      ))}
+      {TABS.map((tab) => {
+        const active = view === tab.key;
+        return (
+          <IconButton
+            key={tab.key}
+            active={active}
+            class="view-tab-btn"
+            onClick={() => switchTo(tab.key)}
+            // active tab = subtle accent underline, not a heavy box
+            style={{
+              borderRadius: 0,
+              padding: "7px 14px 6px",
+              fontSize: "var(--text-base)",
+              boxShadow: active ? "inset 0 -2px var(--accent)" : "inset 0 -2px transparent",
+            }}
+          >
+            {tab.label}
+          </IconButton>
+        );
+      })}
     </div>
   );
 }
