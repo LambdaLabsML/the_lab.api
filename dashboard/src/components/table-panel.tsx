@@ -213,12 +213,12 @@ export function TablePanel() {
         const mb = milestoneIds.has(b.id) ? 1 : 0;
         cmp = mb - ma;
       } else {
-        // Metric column
+        // Metric column — always put missing values at bottom regardless of sort direction
         const va = resolveNumericValue(a, sortKey);
         const vb = resolveNumericValue(b, sortKey);
         if (va === undefined && vb === undefined) cmp = 0;
-        else if (va === undefined) cmp = 1;
-        else if (vb === undefined) cmp = -1;
+        else if (va === undefined) return 1;   // a has no value → goes to bottom
+        else if (vb === undefined) return -1;  // b has no value → goes to bottom
         else cmp = va - vb;
       }
       return sortDir === "asc" ? cmp : -cmp;
