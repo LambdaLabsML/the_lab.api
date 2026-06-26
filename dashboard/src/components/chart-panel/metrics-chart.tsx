@@ -247,18 +247,21 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
     ? (v: string) => { setLocalMetric(v); if (instanceId && updatePanelTitle) updatePanelTitle(instanceId, `Metrics: ${v}`); }
     : (v: string) => { selectedMetric.value = v; };
 
-  // Auto-select best metric via useEffect (correct Preact pattern — avoids mutating signals during render)
+  // Auto-select best metric via useEffect. Re-runs when allKeys changes (more experiments load).
+  // Also upgrades to preferred metrics if a non-preferred metric was selected initially.
   const allKeysStr = allKeys.join(',');
   useEffect(() => {
-    if (isClone) return; // clones manage their own local metric
-    if (selectedMetric.value) return; // already set
+    if (isClone) return;
     if (allKeys.length === 0) return;
     const preferred = [
       "accuracy_per_mtoken", "agent_accuracy", "accuracy",
       "score", "total_score", "progress_score", "final_score",
       "f1", "bleu", "rouge", "pass_at_1", "pass_at_10",
     ];
-    // Prefer metrics that have non-zero values
+    const current = selectedMetric.value;
+    const alreadyPreferred = current && preferred.includes(current);
+    if (alreadyPreferred) return; // already on a good metric
+    // Pick best preferred metric with non-zero values, then fall back
     const nonZeroKeys = allKeys.filter(k => {
       const lower = isLowerBetter(k);
       return experiments.some(e => {
@@ -267,8 +270,9 @@ export function MetricsChart({ instanceId, initialMetric }: { instanceId?: strin
       });
     });
     const keyPool = nonZeroKeys.length > 0 ? nonZeroKeys : allKeys;
-    const best = preferred.find(k => keyPool.includes(k)) || preferred.find(k => allKeys.includes(k)) || keyPool[0] || allKeys[0];
-    if (best) setMetric(best);
+    const best = preferred.find(k => keyPool.includes(k)) || preferred.find(k => allKeys.includes(k));
+    if (best && best !== current) setMetric(best);
+    else if (!current) setMetric(keyPool[0] || allKeys[0]);
   }, [allKeysStr, isClone]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
