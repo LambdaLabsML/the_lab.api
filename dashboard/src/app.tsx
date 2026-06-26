@@ -1820,7 +1820,7 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
           {queued > 0 && <span class="review-status-item"><strong>{queued}</strong> queued</span>}
           <span class="review-status-item"><strong>{finished}</strong> done</span>
           {failed > 0 && <span class="review-status-item review-status-item--warn"><strong>{failed}</strong> failed</span>}
-          <span class="review-status-item"><strong>{activeIdeas}</strong> ideas</span>
+          {activeIdeas > 0 && <span class="review-status-item"><strong>{activeIdeas}</strong> ideas</span>}
           {velocityPerDay && (
             <span class="review-status-item review-status-velocity" title={`Avg experiments per day over last 7 days`}>
               <strong>{velocityPerDay}</strong>/day
@@ -2076,8 +2076,12 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
           id="review-ideas"
           title="Ideas"
           action={(() => {
-            const avgDepth = activeIdeas > 0 ? (finished / activeIdeas).toFixed(1) : null;
-            return `${activeIdeas} active · ${ideasConcluded} concluded${ideasAbandoned > 0 ? ` · ${ideasAbandoned} abandoned` : ""}`;
+            // Count under-explored active ideas (< 5 experiments with metric data)
+            const ideaExpCounts: Record<number, number> = {};
+            for (const e of done) { if (typeof e.metrics?.[metric] === "number") ideaExpCounts[e.idea_id] = (ideaExpCounts[e.idea_id] || 0) + 1; }
+            const underExplored = Object.values(ideas).filter(i => i.status !== "concluded" && i.status !== "abandoned" && (ideaExpCounts[i.id] ?? 0) < 5).length;
+            const base = `${activeIdeas} active · ${ideasConcluded} concluded${ideasAbandoned > 0 ? ` · ${ideasAbandoned} abandoned` : ""}`;
+            return underExplored > 0 ? `${base} · ${underExplored} under-explored` : base;
           })()}
           preview={
             <div class="emr-preview">
