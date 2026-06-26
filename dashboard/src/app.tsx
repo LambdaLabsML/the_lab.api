@@ -2038,16 +2038,17 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
       </div>
 
       {/* ── Section jump nav ─────────────────────────────────────────── */}
-      <div class="review-jump-nav">
+      <div class="review-jump-nav" title="Jump to any section">
         {([
-          { id: "review-runs",    icon: "◉", label: "Experiments", badge: finished > 0 ? String(finished) : null, live: running > 0 },
-          { id: "review-ideas",   icon: "◈", label: "Ideas",       badge: activeIdeas > 0 ? String(activeIdeas) : null },
-          { id: "review-compare", icon: "⊞", label: "Correlation", badge: null },
-          { id: "review-detail",  icon: "▸", label: "Idea Detail", badge: null },
-          { id: "review-ops",     icon: "≡", label: "Queue",       badge: queued > 0 ? String(queued) : null, live: liveCount > 0 },
-        ] as Array<{ id: string; icon: string; label: string; badge: string | null; live?: boolean }>).map(s => (
+          { id: "review-runs",    icon: "◉", label: "Experiments", badge: finished > 0 ? String(finished) : null, live: running > 0, tip: "All experiments — scores, runs, table" },
+          { id: "review-ideas",   icon: "◈", label: "Ideas",       badge: activeIdeas > 0 ? String(activeIdeas) : null, tip: "Browse ideas, idea health, exploration tree" },
+          { id: "review-compare", icon: "⊞", label: "Correlation",  badge: null, tip: "Scatter plot — correlate any two metrics" },
+          { id: "review-detail",  icon: "▸", label: "Idea Detail", badge: null, tip: "Drill into a single idea's experiments and config" },
+          { id: "review-ops",     icon: "≡", label: "Queue",        badge: queued > 0 ? String(queued) : null, live: liveCount > 0, tip: "Queue & running experiments" },
+        ] as Array<{ id: string; icon: string; label: string; badge: string | null; live?: boolean; tip: string }>).map(s => (
           <a key={s.id} href={`#${s.id}`}
             class={`review-jump-pill${s.live ? " review-jump-pill--live" : ""}`}
+            title={s.tip}
             onClick={(e) => {
               e.preventDefault();
               const el = document.getElementById(s.id) as HTMLDetailsElement | null;
@@ -2675,7 +2676,7 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
           </div>
         </ReviewDisclosure>
 
-        <div class="review-section-sep">explore</div>
+        <div class="review-section-sep">explore ideas</div>
 
         <ReviewDisclosure
           id="review-detail"
@@ -2684,10 +2685,10 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
           autoOpen={!!selected}
           action={selected
             ? `idea #${selected}${selectedIdeaBest != null ? ` · best: ${selectedIdeaBest.toFixed(3)}` : ""}`
-            : "none selected · click any idea"}
+            : "none selected"}
           preview={!selected ? (
             <span style={{ fontSize: "8px", color: "var(--text-faint)", fontStyle: "italic", fontFamily: "var(--font-mono)" }}>
-              click any idea to explore
+              click any idea above to explore
             </span>
           ) : undefined}
         >
@@ -2696,7 +2697,7 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
           </div>
         </ReviewDisclosure>
 
-        <div class="review-section-sep">operations</div>
+        <div class="review-section-sep">operations & log</div>
 
         <ReviewDisclosure
           id="review-ops"
