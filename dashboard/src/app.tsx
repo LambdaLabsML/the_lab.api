@@ -1714,17 +1714,19 @@ function ExperimentGrid({ experiments, milestoneIds, ideas, metric, queueCapacit
   const hasMilestones = ms.length > 0;
   const hasRunning = running.length > 0;
   const hasConcluded = concludedIdeas.length > 0;
-  const summaryCount = queuedIdeas.length + recentExps.length + concludedIdeas.length + ms.length;
+  const summaryCount = running.length + queuedIdeas.length + recentExps.length + concludedIdeas.length + ms.length;
   const shownDetail = running.length + ms.length + recentExps.length;
 
-  // (#97) queue capacity: filled = the queued squares shown; empty = the rest of
-  // total capacity (cap the strip to a sane width). Show the group when there's
-  // anything filled OR a known capacity to visualize.
+  // (#97/#99) the parallel-job queue strip. Slots are occupied by running jobs
+  // (blue) and waited on by queued ideas (yellow); the rest of capacity is free
+  // (outline). Counting running jobs is what makes a *launch* show up: when a
+  // queued idea starts running it stays occupied here instead of snapping back
+  // to "queued 0/cap". (cap the strip to a sane width.)
   const QUEUE_MAX = 32;
-  const filledQueue = queuedIdeas.length;
+  const occupiedQueue = running.length + queuedIdeas.length;
   const cap = queueCapacity != null && queueCapacity > 0 ? queueCapacity : null;
-  const emptyQueue = cap != null ? Math.max(0, Math.min(QUEUE_MAX, cap) - filledQueue) : 0;
-  const hasQueued = filledQueue > 0 || emptyQueue > 0;
+  const emptyQueue = cap != null ? Math.max(0, Math.min(QUEUE_MAX, cap) - occupiedQueue) : 0;
+  const hasQueued = occupiedQueue > 0 || emptyQueue > 0;
 
   // an idea-node square (queued / concluded) — colored by an explicit status class
   const IdeaSquare = ({ node, status, sqCls }: {
@@ -1811,7 +1813,7 @@ function ExperimentGrid({ experiments, milestoneIds, ideas, metric, queueCapacit
         <span class="emr-label">experiment timeline</span>
         <span class="exp-grid-caption-sub">
           {view === "summary"
-            ? <>queued, recent, concluded &amp; records — {summaryCount} of {total}</>
+            ? <>running, recent, concluded &amp; records — {summaryCount} of {total}</>
             : <>showing {shownDetail} of {total} — records, running &amp; recent</>}
         </span>
         {/* summary ⇄ detail switch — same .ui-toggle language as the disclosures */}
@@ -1826,11 +1828,13 @@ function ExperimentGrid({ experiments, milestoneIds, ideas, metric, queueCapacit
           are omitted. */}
       {view === "summary" ? (
         <div class="tl-groups">
-          {hasQueued && <SqGroup label="queued" kind="queued" ideaNodes={queuedIdeas} ideaStatus="queued" ideaSqCls="sq-queued"
+          {hasQueued && <SqGroup label="running" kind="queued"
+            items={running}
+            ideaNodes={queuedIdeas} ideaStatus="queued" ideaSqCls="sq-queued"
             emptySlots={emptyQueue}
             labelOverride={cap != null
-              ? <>queued <b>{filledQueue}/{Math.min(QUEUE_MAX, cap)}</b></>
-              : undefined} />}
+              ? <>running <b>{running.length}/{Math.min(QUEUE_MAX, cap)}</b></>
+              : <>running <b>{running.length}</b></>} />}
           {recentExps.length > 0 && <SqGroup label="recent" kind="recent" items={recentExps} />}
           {hasConcluded && <SqGroup label="concluded" kind="concluded" ideaNodes={concludedIdeas} ideaStatus="concluded" ideaSqCls="sq-concluded" />}
           {hasMilestones && <SqGroup label="records" kind="records" items={ms} />}
