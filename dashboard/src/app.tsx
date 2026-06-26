@@ -1425,6 +1425,10 @@ function ExperimentGrid({ experiments, successRate, milestoneIds }: { experiment
   const hasRunning = experiments.some((e) => e._running || e.status === "running");
   const hasFailed  = experiments.some((e) => e.status === "failed" || e.status === "abandoned");
   const hasMilestones = milestoneIds && milestoneIds.size > 0;
+  // Find the last 8 completed experiment IDs (by id) for recency highlighting
+  const recentIds = new Set(
+    chrono.filter(e => !e._running && e.status !== "running").slice(-8).map(e => e.id)
+  );
 
   return (
     <div class="exp-grid-wrap">
@@ -1443,13 +1447,14 @@ function ExperimentGrid({ experiments, successRate, milestoneIds }: { experiment
               {exps.map((e) => {
                 const status = e._running ? "running" : (e.status ?? "unknown");
                 const isMilestone = milestoneIds?.has(e.id);
-                const cls = `exp-grid-sq ${STATUS_SQ_CLASS[status] ?? "sq-cancelled"}${isMilestone ? " sq-milestone" : ""}`;
+                const isRecent = recentIds.has(e.id);
+                const cls = `exp-grid-sq ${STATUS_SQ_CLASS[status] ?? "sq-cancelled"}${isMilestone ? " sq-milestone" : ""}${isRecent ? " sq-recent" : ""}`;
                 return (
                   <span
                     key={e.id}
                     class={cls}
                     style={{ "--idea-color": ideaCol } as any}
-                    title={`${e.label ?? e.id} · idea #${e.idea_id} · ${status}${isMilestone ? " · ★ new record" : ""}`}
+                    title={`${e.label ?? e.id} · idea #${e.idea_id} · ${status}${isMilestone ? " · ★ new record" : ""}${isRecent ? " · recent" : ""}`}
                   />
                 );
               })}

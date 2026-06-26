@@ -695,6 +695,12 @@ body {
   opacity: 1;
   box-shadow: 0 0 3px var(--purple);
 }
+/* Recent: last 8 completed experiments — brighter, white border to show current position */
+.exp-grid-sq.sq-recent:not(.sq-running):not(.sq-milestone) {
+  opacity: 1;
+  outline: 1px solid rgba(255,255,255,0.25);
+  outline-offset: 1px;
+}
 
 /* Legend */
 .exp-grid-legend {
