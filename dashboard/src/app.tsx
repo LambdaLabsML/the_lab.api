@@ -1799,14 +1799,24 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
       {bestVal != null && typeof bestVal === "number" && (
         <div class="review-narrative">
           {(() => {
-            const parts: string[] = [];
+            const parts: preact.ComponentChildren[] = [];
             if (isLive) parts.push(`${liveCount} running`);
             else if (lastFinishedAt) parts.push(`idle ${timeAgo(lastFinishedAt)}`);
-            if (finished > 0) parts.push(`${finished} experiments tried`);
+            if (finished > 0) parts.push(`${finished} experiments`);
             if (successRate !== null) parts.push(`${successRate}% scored`);
-            if (expsSinceBest != null && expsSinceBest > 10) parts.push(`no improvement in last ${expsSinceBest}`);
-            else if (bestExp?.finished_at) parts.push(`best set ${timeAgo(bestExp.finished_at)}`);
-            return parts.join(" · ");
+            const stagnant = expsSinceBest != null && expsSinceBest > 20;
+            if (stagnant) {
+              parts.push(
+                <span style={{ color: expsSinceBest! > 50 ? "var(--red)" : "var(--yellow)", fontWeight: 600 }}>
+                  no improvement in last {expsSinceBest}
+                </span>
+              );
+            } else if (bestExp?.finished_at) {
+              parts.push(`best set ${timeAgo(bestExp.finished_at)}`);
+            }
+            return parts.reduce((acc: preact.ComponentChildren[], p, i) => (
+              i === 0 ? [p] : [...acc, <span style={{ opacity: 0.4 }}> · </span>, p]
+            ), []);
           })()}
         </div>
       )}
