@@ -477,7 +477,7 @@ body {
   height: 9px;
   border-radius: 2px;
   flex-shrink: 0;
-  cursor: default;
+  cursor: pointer;
   transition: transform var(--transition-fast);
   &:hover { transform: scale(1.5); }
 }

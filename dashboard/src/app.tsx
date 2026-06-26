@@ -1799,21 +1799,20 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
       {bestVal != null && typeof bestVal === "number" && (
         <div class="review-narrative">
           {(() => {
+            const stagnant = expsSinceBest != null && expsSinceBest > 20;
+            const stagnantEl = stagnant ? (
+              <span style={{ color: expsSinceBest! > 50 ? "var(--red)" : "var(--yellow)", fontWeight: 600 }}>
+                no improvement in last {expsSinceBest}
+              </span>
+            ) : null;
+            // Stagnation goes FIRST so it's visible even when truncated on narrow screens
             const parts: preact.ComponentChildren[] = [];
+            if (stagnantEl) parts.push(stagnantEl);
             if (isLive) parts.push(`${liveCount} running`);
             else if (lastFinishedAt) parts.push(`idle ${timeAgo(lastFinishedAt)}`);
-            if (finished > 0) parts.push(`${finished} experiments`);
+            if (finished > 0) parts.push(`${finished} exp`);
             if (successRate !== null) parts.push(`${successRate}% scored`);
-            const stagnant = expsSinceBest != null && expsSinceBest > 20;
-            if (stagnant) {
-              parts.push(
-                <span style={{ color: expsSinceBest! > 50 ? "var(--red)" : "var(--yellow)", fontWeight: 600 }}>
-                  no improvement in last {expsSinceBest}
-                </span>
-              );
-            } else if (bestExp?.finished_at) {
-              parts.push(`best set ${timeAgo(bestExp.finished_at)}`);
-            }
+            if (!stagnantEl && bestExp?.finished_at) parts.push(`best set ${timeAgo(bestExp.finished_at)}`);
             return parts.reduce((acc: preact.ComponentChildren[], p, i) => (
               i === 0 ? [p] : [...acc, <span style={{ opacity: 0.4 }}> · </span>, p]
             ), []);
