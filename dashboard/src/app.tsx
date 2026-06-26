@@ -1310,6 +1310,11 @@ function IdeaMiniLeaderboard({ experiments, ideas, metric, lower }: {
     );
   }
 
+  // Compute score range for relative bars
+  const bestOverall = ranked[0]?.best ?? 0;
+  const worstRanked = ranked[ranked.length - 1]?.best ?? 0;
+  const scoreRange = Math.abs(bestOverall - worstRanked);
+
   return (
     <div class="emr-section">
       <span class="emr-label">top ideas</span>
@@ -1329,12 +1334,22 @@ function IdeaMiniLeaderboard({ experiments, ideas, metric, lower }: {
             ? `↳ ${getAncestor2(idea?.parent_ids?.[0] ? ideas[idea.parent_ids[0]] : undefined)}`
             : rawDesc2.slice(0, 40) || `idea #${r.ideaId}`;
           const history = ideaHistory[r.ideaId] ?? [];
+          // Relative score bar: 100% = best, proportional for others
+          const scorePct = ranked.length > 1 && scoreRange > 1e-9
+            ? lower
+              ? Math.round(((worstRanked - r.best) / scoreRange) * 80 + 20)
+              : Math.round(((r.best - worstRanked) / scoreRange) * 80 + 20)
+            : 100;
           return (
             <div key={r.ideaId} class={`emr-row${i === 0 ? " emr-milestone" : ""}`}
-              style={{ cursor: "pointer" }}
+              style={{ cursor: "pointer", position: "relative" }}
               onClick={() => navigateToIdea(r.ideaId)}
               title={`idea #${r.ideaId}: ${idea?.description?.split("\n")[0] ?? ""}`}
             >
+              {/* Relative score bar at bottom of row */}
+              {ranked.length > 1 && (
+                <span style={{ position: "absolute", bottom: 0, left: 0, height: 2, width: `${scorePct}%`, background: i === 0 ? "var(--purple)" : "var(--border-soft)", borderRadius: 1, opacity: i === 0 ? 0.5 : 0.35 }} />
+              )}
               <span class="emr-rank">{i + 1}</span>
               <span class="emr-idea">#{r.ideaId}</span>
               <span style={{ fontSize: "7px", opacity: 0.7, flexShrink: 0, color: idea?.status === "active" ? "var(--green)" : idea?.status === "concluded" ? "var(--accent)" : "var(--red)" }}>●</span>
