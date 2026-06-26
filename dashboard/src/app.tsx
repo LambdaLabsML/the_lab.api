@@ -30,6 +30,7 @@ import type {
 } from "dockview-core";
 
 import { ScrollTop } from "./components/scroll-top";
+import { AgentBar } from "./components/agent-bar";
 import { TaskBanner } from "./components/task-banner";
 import { SuggestPanel } from "./components/suggest-panel";
 import { ChatPanel } from "./components/chat-panel";
@@ -1140,6 +1141,7 @@ export function App() {
       )}
 
       <div class="app-main">
+        <AgentBar />
         <div class="app-content">
           {navSection === "activity" && <ActivityPane />}
 
@@ -1336,24 +1338,23 @@ function IdeaMiniLeaderboard({ experiments, ideas, metric, lower }: {
     );
   }
 
-  // Compute score range for relative bars
-  const bestOverall = ranked[0]?.best ?? 0;
-  const worstRanked = ranked[ranked.length - 1]?.best ?? 0;
-  const scoreRange = Math.abs(bestOverall - worstRanked);
+  const STATUS_DOT_COLOR = (s?: string) =>
+    s === "active" ? "var(--green)" : s === "concluded" ? "var(--accent)" : s === "abandoned" ? "var(--red)" : "var(--text-faint)";
 
   return (
     <div class="emr-section emr-section--lb">
       <span class="emr-label">top ideas · best {fmtMetricName(metric)}</span>
-      {/* column headers — make the leaderboard read standalone */}
-      <div class="emr-row emr-colhead" role="row">
-        <span class="emr-rank">#</span>
-        <span class="emr-idea">idea</span>
-        <span class="emr-exp">title</span>
-        <span class="emr-count emr-colhead-runs">runs</span>
-        <span class="emr-colhead-trend">trend</span>
-        <span class="emr-val">best</span>
-      </div>
-      <div class="emr-rows">
+      {/* Real aligned grid table (#22): table owns the column tracks; header +
+          every row are subgrid rows so the columns line up exactly. */}
+      <div class="emr-lb-table">
+        <div class="emr-lb-row emr-lb-head" role="row">
+          <span class="emr-lb-rank" role="columnheader">#</span>
+          <span class="emr-lb-idea" role="columnheader">idea</span>
+          <span class="emr-lb-title" role="columnheader">title</span>
+          <span class="emr-lb-runs" role="columnheader">runs</span>
+          <span class="emr-lb-spark" role="columnheader">trend</span>
+          <span class="emr-lb-val" role="columnheader">best</span>
+        </div>
         {ranked.map((r, i) => {
           const idea = ideas[r.ideaId];
           const rawDesc2 = idea?.description?.split("\n")[0] ?? "";
@@ -1369,55 +1370,45 @@ function IdeaMiniLeaderboard({ experiments, ideas, metric, lower }: {
             ? `↳ ${getAncestor2(idea?.parent_ids?.[0] ? ideas[idea.parent_ids[0]] : undefined)}`
             : rawDesc2.slice(0, 40) || `idea #${r.ideaId}`;
           const history = ideaHistory[r.ideaId] ?? [];
-          // Relative score bar: 100% = best, proportional for others
-          const scorePct = ranked.length > 1 && scoreRange > 1e-9
-            ? lower
-              ? Math.round(((worstRanked - r.best) / scoreRange) * 80 + 20)
-              : Math.round(((r.best - worstRanked) / scoreRange) * 80 + 20)
-            : 100;
+          const lastTxt = r.lastFinished ? (() => {
+            const h = Math.floor((Date.now() - Date.parse(r.lastFinished!)) / 3600000);
+            return h < 24 ? `${h}h ago` : `${Math.floor(h / 24)}d ago`;
+          })() : null;
+          const gap = i > 0 && ranked[0].best !== r.best
+            ? (lower ? `+${(r.best - ranked[0].best).toFixed(2)}` : `−${(ranked[0].best - r.best).toFixed(2)}`)
+            : null;
           return (
-            <div key={r.ideaId} class={`emr-row${i === 0 ? " emr-milestone" : ""}`}
-              style={{ cursor: "pointer", position: "relative" }}
-              onClick={() => navigateToIdea(r.ideaId)}
-              title={`idea #${r.ideaId}: ${idea?.description?.split("\n")[0] ?? ""}`}
+            <Tooltip
+              key={r.ideaId}
+              content={
+                <>
+                  <span class="ui-tip-title">idea #{r.ideaId}{i === 0 ? "  ★ best" : ""}</span>
+                  <span class="ui-tip-row">best {fmtMetricName(metric)} <b>{fmtV(r.best)}</b></span>
+                  <span class="ui-tip-row">runs <b>{r.count}</b></span>
+                  {gap && <span class="ui-tip-row">vs #1 <b>{gap}</b></span>}
+                  <span class="ui-tip-row">status <b>{idea?.status ?? "—"}</b></span>
+                  {lastTxt && <span class="ui-tip-row">last run <b>{lastTxt}</b></span>}
+                  {rawDesc2 && <span class="ui-tip-dim">{rawDesc2.slice(0, 64)}</span>}
+                </>
+              }
             >
-              {/* Relative score bar at bottom of row */}
-              {ranked.length > 1 && (
-                <span style={{ position: "absolute", bottom: 0, left: 0, height: 2, width: `${scorePct}%`, background: i === 0 ? "var(--purple)" : "var(--border-soft)", borderRadius: 1, opacity: i === 0 ? 0.5 : 0.35 }} />
-              )}
-              <span class="emr-rank">{i + 1}</span>
-              <span class="emr-idea">#{r.ideaId}</span>
-              <span style={{ fontSize: "var(--text-xs)", opacity: 0.7, flexShrink: 0, color: idea?.status === "active" ? "var(--green)" : idea?.status === "concluded" ? "var(--accent)" : "var(--red)" }}>●</span>
-              <span class="emr-exp" style={{ color: "var(--text-muted)", maxWidth: 132, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</span>
-              <span class="emr-count" style={{ color: r.count < 5 ? "var(--yellow)" : r.count > 30 ? "var(--text-faint)" : "var(--text-muted)" }}>{r.count}</span>
-              <IdeaSparkline vals={history} lower={lower} />
-              <span class="emr-val">{fmtV(r.best)}</span>
-              {r.lastFinished && (() => {
-                const hoursAgo = Math.floor((Date.now() - Date.parse(r.lastFinished)) / 3600000);
-                const daysAgo = Math.floor(hoursAgo / 24);
-                const isHot = hoursAgo < 24;  // ran in last 24h
-                const isStale = daysAgo > 7;
-                if (isHot) {
-                  return (
-                    <span class="sq-running" style={{ width: 5, height: 5, borderRadius: "50%", flexShrink: 0, display: "inline-block" }}
-                      title={`Last experiment: ${hoursAgo}h ago (active!)`} />
-                  );
-                }
-                return (
-                  <span style={{ fontSize: "var(--text-xs)", color: isStale ? "var(--yellow)" : "var(--text-faint)", flexShrink: 0, fontFamily: "var(--font-mono)" }}
-                    title={`Last experiment: ${daysAgo}d ago`}>
-                    {daysAgo}d
-                  </span>
-                );
-              })()}
-              {i > 0 && ranked[0].best !== r.best && (
-                <span class="emr-gap">
-                  {lower
-                    ? `+${(r.best - ranked[0].best).toFixed(1)}`
-                    : `-${(ranked[0].best - r.best).toFixed(1)}`}
+              <div class={`emr-lb-row${i === 0 ? " emr-lb-row--best" : ""}`}
+                role="row"
+                onMouseEnter={() => { highlightedIdea.value = r.ideaId; }}
+                onMouseLeave={() => { if (highlightedIdea.value === r.ideaId) highlightedIdea.value = null; }}
+                onClick={() => navigateToIdea(r.ideaId)}
+              >
+                <span class="emr-lb-rank" role="cell">{i + 1}</span>
+                <span class="emr-lb-idea" role="cell">
+                  <span class="emr-lb-statusdot" style={{ background: STATUS_DOT_COLOR(idea?.status) }} />
+                  #{r.ideaId}
                 </span>
-              )}
-            </div>
+                <span class="emr-lb-title" role="cell">{title}</span>
+                <span class="emr-lb-runs" role="cell">{r.count}</span>
+                <span class="emr-lb-spark" role="cell"><IdeaSparkline vals={history} lower={lower} /></span>
+                <span class="emr-lb-val" role="cell">{fmtV(r.best)}{gap && <span class="emr-lb-gap">{gap}</span>}</span>
+              </div>
+            </Tooltip>
           );
         })}
       </div>
@@ -1441,6 +1432,73 @@ const STATUS_SQ_CLASS: Record<string, string> = {
   cancelled: "sq-cancelled",
 };
 
+const EXP_STATUS_WORD: Record<string, string> = {
+  running: "running", completed: "done", active: "done", failed: "failed",
+  abandoned: "abandoned", concluded: "concluded", queued: "queued",
+  pending: "queued", cancelled: "cancelled",
+};
+
+/** One curated tile in the redesigned timeline. */
+function TimelineTile({ exp, ideaCol, ideas, metric, isMilestone, recNo }: {
+  exp: import("./lib/types").Experiment;
+  ideaCol: string;
+  ideas: Record<number, import("./lib/types").IdeaNode>;
+  metric: string;
+  isMilestone: boolean;
+  recNo?: number;
+}) {
+  const highlighted = highlightedIdea.value;
+  const dim = highlighted != null && highlighted !== exp.idea_id;
+  const on = highlighted === exp.idea_id;
+  const status = exp._running ? "running" : (exp.status ?? "unknown");
+  const sqCls = STATUS_SQ_CLASS[status] ?? "sq-cancelled";
+  const idea = ideas[exp.idea_id];
+  const ideaText = idea?.description?.split("\n")[0] ?? "";
+  const expText = (exp.description ?? "").split("\n")[0];
+  const score = exp.metrics?.[metric];
+  function fmtScore(v: number) {
+    return Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(2) : v.toFixed(3);
+  }
+  function clip(s: string, n: number) { return s.length > n ? s.slice(0, n - 1) + "…" : s; }
+
+  return (
+    <Tooltip
+      content={
+        <>
+          <span class="ui-tip-title">exp/{exp.label ?? exp.id}{isMilestone ? "  ★" : ""}</span>
+          {typeof score === "number" && isFinite(score) && (
+            <span class="ui-tip-row">{fmtMetricName(metric)} <b>{fmtScore(score)}</b></span>
+          )}
+          <span class="ui-tip-row">idea #{exp.idea_id} <b>{EXP_STATUS_WORD[status] ?? status}</b></span>
+          {isMilestone && <span class="ui-tip-dim" style={{ color: "var(--purple)" }}>★ new record{recNo ? ` #${recNo}` : ""}</span>}
+          {ideaText && <span class="ui-tip-dim">{clip(ideaText, 64)}</span>}
+          {expText && expText !== ideaText && <span class="ui-tip-dim">{clip(expText, 64)}</span>}
+        </>
+      }
+    >
+      <span
+        class={`tl-tile${isMilestone ? " tl-milestone" : ""}${on ? " is-highlighted" : ""}${dim ? " is-dimmed" : ""}`}
+        style={{ "--idea-color": ideaCol } as any}
+        onMouseEnter={() => { highlightedIdea.value = exp.idea_id; }}
+        onMouseLeave={() => { if (highlightedIdea.value === exp.idea_id) highlightedIdea.value = null; }}
+        onClick={() => navigateToIdea(exp.idea_id, exp.label ?? String(exp.id))}
+      >
+        <span class={`tl-dot ${sqCls}${isMilestone ? " sq-milestone" : ""}`} />
+        <span class="tl-label">{isMilestone && <span class="tl-star">★</span>}exp/{exp.label ?? exp.id}</span>
+        <span class="tl-idea">#{exp.idea_id}</span>
+        {typeof score === "number" && isFinite(score)
+          ? <span class={`tl-score${isMilestone ? " tl-score--best" : ""}`}>{fmtScore(score)}</span>
+          : <span class="tl-score tl-score--none">{EXP_STATUS_WORD[status] ?? status}</span>}
+      </span>
+    </Tooltip>
+  );
+}
+
+// Redesigned Experiment Timeline (#30): instead of one square per experiment
+// (which forces painful horizontal scroll), show only the experiments that
+// matter — milestones (records) + currently-running + a handful of recent — as
+// readable labeled tiles in a clean strip. Hover cards + highlightedIdea sync
+// preserved; a short legend explains the tile groups.
 function ExperimentGrid({ experiments, successRate, milestoneIds, ideas, metric }: {
   experiments: import("./lib/types").Experiment[];
   successRate: number | null;
@@ -1448,100 +1506,54 @@ function ExperimentGrid({ experiments, successRate, milestoneIds, ideas, metric 
   ideas: Record<number, import("./lib/types").IdeaNode>;
   metric: string;
 }) {
-  const highlighted = highlightedIdea.value;
   if (experiments.length === 0) return null;
 
-  // Group by idea in chronological order
-  const ideaOrder: number[] = [];
-  const byIdea = new Map<number, typeof experiments[0][]>();
   const chrono = experiments.slice().sort((a, b) => a.id - b.id);
-  for (const e of chrono) {
-    if (!byIdea.has(e.idea_id)) { byIdea.set(e.idea_id, []); ideaOrder.push(e.idea_id); }
-    byIdea.get(e.idea_id)!.push(e);
-  }
+  const total = experiments.length;
 
-  // Build idea → palette color index
+  // idea → stable palette color (by first appearance, like before)
   const ideaColor: Record<number, string> = {};
-  ideaOrder.forEach((id, i) => { ideaColor[id] = IDEA_PALETTE[i % IDEA_PALETTE.length]; });
+  let ci = 0;
+  for (const e of chrono) if (!(e.idea_id in ideaColor)) ideaColor[e.idea_id] = IDEA_PALETTE[ci++ % IDEA_PALETTE.length];
 
-  const hasRunning = experiments.some((e) => e._running || e.status === "running");
-  const hasFailed  = experiments.some((e) => e.status === "failed" || e.status === "abandoned");
-  const hasMilestones = milestoneIds && milestoneIds.size > 0;
-  // Find the last 8 completed experiment IDs (by id) for recency highlighting
-  const recentIds = new Set(
-    chrono.filter(e => !e._running && e.status !== "running").slice(-8).map(e => e.id)
-  );
+  // ── curate the tiles ──
+  const running = chrono.filter(e => e._running || e.status === "running");
+  const ms = chrono.filter(e => milestoneIds?.has(e.id));
+  const msIds = new Set(ms.map(e => e.id));
+  // recent done experiments not already shown as running/milestone
+  const recent = chrono
+    .filter(e => !e._running && e.status !== "running" && !msIds.has(e.id))
+    .slice(-6);
 
-  const STATUS_WORD: Record<string, string> = {
-    running: "running", completed: "done", active: "done", failed: "failed",
-    abandoned: "abandoned", concluded: "concluded", queued: "queued",
-    pending: "queued", cancelled: "cancelled",
-  };
-  function fmtScore(v: number) {
-    return Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(2) : v.toFixed(3);
-  }
+  // recNo per milestone (1 = first record)
+  const msRecNo = new Map<number, number>();
+  ms.forEach((e, i) => msRecNo.set(e.id, i + 1));
+
+  const hasMilestones = ms.length > 0;
+  const hasRunning = running.length > 0;
+  const shownCount = running.length + ms.length + recent.length;
+
+  // a tile section (running / milestones / recent), each with its own caption
+  const Section = ({ label, items, kind }: { label: string; items: typeof chrono; kind: string }) =>
+    items.length === 0 ? null : (
+      <div class={`tl-section tl-section--${kind}`}>
+        <span class="tl-section-label">{label}</span>
+        <div class="tl-tiles">
+          {items.map(e => (
+            <TimelineTile key={e.id} exp={e} ideaCol={ideaColor[e.idea_id]} ideas={ideas}
+              metric={metric} isMilestone={msIds.has(e.id)} recNo={msRecNo.get(e.id)} />
+          ))}
+        </div>
+      </div>
+    );
 
   return (
     <div class="exp-grid-wrap">
-      {/* Caption — say what this strip is before the reader has to guess. */}
       <div class="exp-grid-caption">
         <span class="emr-label">experiment timeline</span>
-        <span class="exp-grid-caption-sub">each ▪ = one run · grouped &amp; colored by idea · left→right = oldest→newest</span>
-      </div>
-      <div class="exp-grid">
-        {ideaOrder.map((ideaId, gi) => {
-          const exps = byIdea.get(ideaId)!;
-          const ideaCol = ideaColor[ideaId];
-          const idea = ideas[ideaId];
-          const ideaText = idea?.description?.split("\n")[0] ?? "";
-          const dim = highlighted != null && highlighted !== ideaId;
-          const on = highlighted === ideaId;
-          return (
-            <span
-              key={ideaId}
-              class={`exp-idea-group${on ? " is-highlighted" : ""}${dim ? " is-dimmed" : ""}`}
-              style={{ "--idea-color": ideaCol, marginLeft: gi > 0 ? 5 : 0, cursor: "pointer" } as any}
-              onMouseEnter={() => { highlightedIdea.value = ideaId; }}
-              onMouseLeave={() => { if (highlightedIdea.value === ideaId) highlightedIdea.value = null; }}
-              onClick={() => navigateToIdea(ideaId)}
-            >
-              {exps.map((e) => {
-                const status = e._running ? "running" : (e.status ?? "unknown");
-                const isMilestone = milestoneIds?.has(e.id);
-                const isRecent = recentIds.has(e.id);
-                const cls = `exp-grid-sq ${STATUS_SQ_CLASS[status] ?? "sq-cancelled"}${isMilestone ? " sq-milestone" : ""}${isRecent ? " sq-recent" : ""}`;
-                const score = e.metrics?.[metric];
-                return (
-                  <Tooltip
-                    key={e.id}
-                    content={
-                      <>
-                        <span class="ui-tip-title">exp/{e.label ?? e.id}{isMilestone ? " ★" : ""}</span>
-                        <span class="ui-tip-row">idea <b>#{e.idea_id}</b>{ideaText ? <span class="ui-tip-dim"> {ideaText.slice(0, 48)}</span> : null}</span>
-                        <span class="ui-tip-row">status <b>{STATUS_WORD[status] ?? status}</b></span>
-                        {typeof score === "number" && isFinite(score) && (
-                          <span class="ui-tip-row">{fmtMetricName(metric)} <b>{fmtScore(score)}</b></span>
-                        )}
-                        {isMilestone && <span class="ui-tip-row" style={{ color: "var(--purple)" }}>★ new record</span>}
-                      </>
-                    }
-                  >
-                    <span class={cls} />
-                  </Tooltip>
-                );
-              })}
-            </span>
-          );
-        })}
-      </div>
-      <div class="exp-grid-legend">
-        {hasRunning && <span class="sq-legend sq-running">running</span>}
-        <span class="sq-legend sq-done">done</span>
-        {hasFailed && <span class="sq-legend sq-failed">failed</span>}
-        <span class="sq-legend sq-concluded">concluded</span>
-        <span class="sq-legend sq-queued">queued</span>
-        {hasMilestones && <span class="sq-legend sq-milestone">★ record</span>}
-        <span class="sq-legend sq-recent">recent</span>
+        <span class="exp-grid-caption-sub">
+          showing {shownCount} of {total} — records, running &amp; recent · colored by idea
+        </span>
         {successRate !== null && (() => {
           const r = 7, sw = 2.5, size = 18;
           const c = 2 * Math.PI * r;
@@ -1552,16 +1564,26 @@ function ExperimentGrid({ experiments, successRate, milestoneIds, ideas, metric 
               <svg width={size} height={size} style={{ display: "block", opacity: 0.8 }}>
                 <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="var(--border-soft)" strokeWidth={sw} />
                 <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={arcColor} strokeWidth={sw}
-                  strokeDasharray={`${fill} ${c - fill}`}
-                  strokeDashoffset={c / 4}
-                  strokeLinecap="round"
-                  transform={`rotate(-90 ${size/2} ${size/2})`}
-                />
+                  strokeDasharray={`${fill} ${c - fill}`} strokeDashoffset={c / 4} strokeLinecap="round"
+                  transform={`rotate(-90 ${size/2} ${size/2})`} />
               </svg>
               <span style={{ fontSize: "var(--text-xs)", color: arcColor, fontFamily: "var(--font-mono)" }}>{successRate}% scored</span>
             </span>
           );
         })()}
+      </div>
+
+      <div class="tl-strip">
+        <Section label="running" items={running} kind="running" />
+        <Section label={`records (★ ${ms.length})`} items={ms} kind="milestone" />
+        <Section label="recent" items={recent} kind="recent" />
+      </div>
+
+      <div class="exp-grid-legend">
+        {hasRunning && <span class="sq-legend sq-running">running</span>}
+        {hasMilestones && <span class="sq-legend sq-milestone">★ record / new best</span>}
+        <span class="sq-legend sq-done">recent done</span>
+        <span class="exp-grid-legend-note">hover a tile for detail · click to open the idea</span>
       </div>
     </div>
   );
@@ -1600,11 +1622,26 @@ function BestSparkline({ experiments, metric, lower }: {
   const px = (i: number) => 2 + (i / (recent.length - 1)) * (W - 4);
   const py = (v: number) => H - 3 - ((v - lo) / range) * (H - 6);
   const d = recent.map((v, i) => `${i === 0 ? "M" : "L"}${px(i).toFixed(1)},${py(v).toFixed(1)}`).join(" ");
+  const fmtv = (v: number) => Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(2) : v.toFixed(3);
+  const startBest = recent[0], endBest = recent[recent.length - 1];
+  const gain = startBest !== 0 ? Math.abs((endBest - startBest) / startBest) * 100 : null;
   return (
-    <svg width={W} height={H} style={{ display: "block", flexShrink: 0, opacity: 0.9 }} title="Running best over recent experiments">
-      <path d={d} fill="none" stroke="var(--purple)" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
-      <circle cx={px(recent.length - 1)} cy={py(recent[recent.length - 1])} r="2.6" fill="var(--purple)" />
-    </svg>
+    <Tooltip
+      content={
+        <>
+          <span class="ui-tip-title">{fmtMetricName(metric)} · best so far</span>
+          <span class="ui-tip-row">current best <b>{fmtv(best!)}</b></span>
+          <span class="ui-tip-row">over <b>last {recent.length}</b></span>
+          {gain != null && gain >= 0.5 && <span class="ui-tip-row">improved <b>+{gain.toFixed(0)}%</b></span>}
+          <span class="ui-tip-dim">running best after each experiment</span>
+        </>
+      }
+    >
+      <svg width={W} height={H} style={{ display: "block", flexShrink: 0, opacity: 0.9 }}>
+        <path d={d} fill="none" stroke="var(--purple)" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" />
+        <circle cx={px(recent.length - 1)} cy={py(recent[recent.length - 1])} r="2.6" fill="var(--purple)" />
+      </svg>
+    </Tooltip>
   );
 }
 
@@ -1633,6 +1670,10 @@ function ScoreDistBar({ experiments, metric, lower }: {
     return Math.abs(v) >= 10 ? v.toFixed(0) : v.toFixed(1);
   }
 
+  // median bucket (for the hover card)
+  let cum = 0; const half = values.length / 2; let medBucket = 0;
+  for (let i = 0; i < BUCKETS; i++) { cum += counts[i]; if (cum >= half) { medBucket = i; break; } }
+
   return (
     <div class="review-mini score-dist">
       {/* caption header — tells you what this is + the y-axis units (count) */}
@@ -1640,19 +1681,31 @@ function ScoreDistBar({ experiments, metric, lower }: {
         <span class="emr-label">{fmtMetricName(metric)} distribution</span>
         <span class="score-dist-head-n" title={`${values.length} experiments · tallest bar = ${maxC}`}>n={values.length}</span>
       </div>
-      <div class="score-dist-bar" title={`How ${fmtMetricName(metric)} is distributed across ${values.length} experiments. Bar height = # of experiments in that range. Range ${fmtN(lo)}–${fmtN(hi)}.`}>
-        {counts.map((c, i) => {
-          const frac = lower ? 1 - i / (BUCKETS - 1) : i / (BUCKETS - 1);
-          const h = c > 0 ? Math.max(4, Math.round((c / maxC) * 36)) : 1;
-          const clr = `hsl(${Math.round(120 * frac)},70%,52%)`;
-          return (
-            <span key={i} class="score-dist-tick"
-              style={{ height: `${h}px`, background: c > 0 ? clr : "var(--border-soft)", opacity: c > 0 ? 0.85 : 0.25 }}
-              title={`${c} exp @ ${(lo + i * size).toFixed(1)}–${(lo + (i+1) * size).toFixed(1)}`}
-            />
-          );
-        })}
-      </div>
+      <Tooltip
+        content={
+          <>
+            <span class="ui-tip-title">{fmtMetricName(metric)} distribution</span>
+            <span class="ui-tip-row">experiments <b>{values.length}</b></span>
+            <span class="ui-tip-row">range <b>{fmtN(lo)} – {fmtN(hi)}</b></span>
+            <span class="ui-tip-row">most land near <b>{fmtN(lo + (medBucket + 0.5) * size)}</b></span>
+            <span class="ui-tip-dim">bar height = # of experiments in that score range</span>
+          </>
+        }
+      >
+        <div class="score-dist-bar">
+          {counts.map((c, i) => {
+            const frac = lower ? 1 - i / (BUCKETS - 1) : i / (BUCKETS - 1);
+            const h = c > 0 ? Math.max(4, Math.round((c / maxC) * 36)) : 1;
+            const clr = `hsl(${Math.round(120 * frac)},70%,52%)`;
+            return (
+              <span key={i} class="score-dist-tick"
+                style={{ height: `${h}px`, background: c > 0 ? clr : "var(--border-soft)", opacity: c > 0 ? 0.85 : 0.25 }}
+                title={`${c} exp @ ${(lo + i * size).toFixed(1)}–${(lo + (i+1) * size).toFixed(1)}`}
+              />
+            );
+          })}
+        </div>
+      </Tooltip>
       {/* x-axis: low → high score endpoints with units */}
       <div class="score-dist-range">
         <span>{fmtN(lo)}</span>
@@ -1809,14 +1862,30 @@ function IdeaPortfolio({ active, concluded, abandoned, untested }: {
         aria-label={`${active} active, ${concluded} concluded, ${abandoned} abandoned${untested > 0 ? `, of which ${untested} untested` : ""}`}>
         {segs.filter(s => s.n > 0).map(s => (
           <span key={s.key} class={`ipf-seg ${s.cls}`} style={{ flex: s.n }}
-            title={`${s.n} ${s.label}`} />
+            title={`${s.n} ${s.label} — ${pct(s.n)}% of ${total}`} />
         ))}
       </div>
+      {/* legend items are the hoverable, labeled representation of the segments */}
       <div class="ipf-legend">
-        <span class="ipf-leg"><span class="ipf-swatch ipf-active" /> active <b>{active}</b></span>
-        {untested > 0 && <span class="ipf-leg"><span class="ipf-swatch ipf-untested" /> untested <b>{untested}</b></span>}
-        <span class="ipf-leg"><span class="ipf-swatch ipf-concluded" /> concluded <b>{concluded}</b></span>
-        {abandoned > 0 && <span class="ipf-leg"><span class="ipf-swatch ipf-abandoned" /> abandoned <b>{abandoned}</b></span>}
+        {([
+          { key: "active",    n: active,    cls: "ipf-active",    label: "active",    note: "ideas still being explored" },
+          ...(untested > 0 ? [{ key: "untested", n: untested, cls: "ipf-untested", label: "untested", note: "active ideas with no experiments yet" }] : []),
+          { key: "concluded", n: concluded, cls: "ipf-concluded", label: "concluded", note: "ideas finished with a conclusion" },
+          ...(abandoned > 0 ? [{ key: "abandoned", n: abandoned, cls: "ipf-abandoned", label: "abandoned", note: "ideas dropped without conclusion" }] : []),
+        ]).map(s => (
+          <Tooltip
+            key={s.key}
+            content={
+              <>
+                <span class="ui-tip-title">{s.n} {s.label} {s.n === 1 ? "idea" : "ideas"}</span>
+                <span class="ui-tip-row">share <b>{pct(s.n)}%</b> of {total}</span>
+                <span class="ui-tip-dim">{s.note}</span>
+              </>
+            }
+          >
+            <span class="ipf-leg"><span class={`ipf-swatch ${s.cls}`} /> {s.label} <b>{s.n}</b></span>
+          </Tooltip>
+        ))}
       </div>
     </div>
   );
@@ -2018,7 +2087,6 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
           )}
         </span>
         <code class="review-statusline-branch" style={branch === "…" ? { opacity: 0.4 } : undefined}>{branch}</code>
-        <button class="review-statusline-action" onClick={onOpenWorkbench}>Workbench →</button>
       </div>
 
       {/* ── KPI cluster — confident mono Stats on a hairline grid ──────── */}
@@ -2141,28 +2209,42 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
                   if (recent30.length < 5) return null;
                   const vals = recent30.map(e => e.metrics![metric] as number);
                   const maxV = Math.max(...vals, 0.001);
+                  const lastV = vals[vals.length - 1];
+                  const fmtv = (v: number) => Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(2) : v.toFixed(3);
                   const W = 150, H = 26;
                   return (
                     <div class="review-mini">
-                      <div class="review-mini-chart" style={{ display: "flex", alignItems: "flex-end", gap: 4 }}>
-                        <svg width={W} height={H} style={{ display: "block", overflow: "visible" }}
-                          role="img" aria-label={`Score of the last ${recent30.length} experiments`}>
-                          {vals.map((v, i) => {
-                            const barW = Math.max(1.5, W / vals.length - 1.5);
-                            const barH = v > 0 ? Math.max(2, (v / maxV) * (H - 2)) : 2;
-                            const x = i * (W / vals.length);
-                            const isRecent = i >= vals.length - 5;
-                            return (
-                              <rect key={i} x={x} y={H - barH} width={barW} height={barH}
-                                fill={v > 0 ? (isRecent ? "var(--green)" : "var(--accent)") : "var(--border-soft)"}
-                                opacity={v > 0 ? (isRecent ? 0.9 : 0.6) : 0.4}
-                                rx={1}
-                              />
-                            );
-                          })}
-                        </svg>
-                        <span class="review-mini-ymax">{maxV >= 100 ? maxV.toFixed(0) : maxV.toFixed(1)}</span>
-                      </div>
+                      <Tooltip
+                        content={
+                          <>
+                            <span class="ui-tip-title">{fmtMetricName(metric)} · recent runs</span>
+                            <span class="ui-tip-row">window <b>last {recent30.length}</b></span>
+                            <span class="ui-tip-row">latest <b>{fmtv(lastV)}</b></span>
+                            <span class="ui-tip-row">peak <b>{fmtv(maxV)}</b></span>
+                            <span class="ui-tip-dim">green bars = newest 5 runs</span>
+                          </>
+                        }
+                      >
+                        <div class="review-mini-chart" style={{ display: "flex", alignItems: "flex-end", gap: 4 }}>
+                          <svg width={W} height={H} style={{ display: "block", overflow: "visible" }}
+                            role="img" aria-label={`Score of the last ${recent30.length} experiments`}>
+                            {vals.map((v, i) => {
+                              const barW = Math.max(1.5, W / vals.length - 1.5);
+                              const barH = v > 0 ? Math.max(2, (v / maxV) * (H - 2)) : 2;
+                              const x = i * (W / vals.length);
+                              const isRecent = i >= vals.length - 5;
+                              return (
+                                <rect key={i} x={x} y={H - barH} width={barW} height={barH}
+                                  fill={v > 0 ? (isRecent ? "var(--green)" : "var(--accent)") : "var(--border-soft)"}
+                                  opacity={v > 0 ? (isRecent ? 0.9 : 0.6) : 0.4}
+                                  rx={1}
+                                />
+                              );
+                            })}
+                          </svg>
+                          <span class="review-mini-ymax">{maxV >= 100 ? maxV.toFixed(0) : maxV.toFixed(1)}</span>
+                        </div>
+                      </Tooltip>
                       <div class="review-mini-cap">
                         <span>{fmtMetricName(metric)} · last {recent30.length} runs</span>
                         <span class="review-mini-cap-end" style={{ color: "var(--green)" }}>● newest 5</span>
@@ -2174,9 +2256,19 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
                 {/* Success-rate bar — explicit % label. */}
                 {successRate !== null && (
                   <div class="review-mini">
-                    <div class="review-mini-meter" title={`${successRate}% of experiments scored above zero`}>
-                      <span style={{ width: `${successRate}%`, background: successRate > 30 ? "var(--green)" : successRate > 10 ? "var(--yellow)" : "var(--red)" }} />
-                    </div>
+                    <Tooltip
+                      content={
+                        <>
+                          <span class="ui-tip-title">success rate</span>
+                          <span class="ui-tip-row">scored &gt; 0 <b>{successRate}%</b></span>
+                          <span class="ui-tip-dim">share of finished experiments that beat zero on {fmtMetricName(metric)}</span>
+                        </>
+                      }
+                    >
+                      <div class="review-mini-meter">
+                        <span style={{ width: `${successRate}%`, background: successRate > 30 ? "var(--green)" : successRate > 10 ? "var(--yellow)" : "var(--red)" }} />
+                      </div>
+                    </Tooltip>
                     <div class="review-mini-cap">
                       <span>success rate</span>
                       <span class="review-mini-cap-end">{successRate}% scored &gt; 0</span>
@@ -2340,7 +2432,9 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
                 : <span style={{ fontStyle: "italic" }}>click any idea above to explore</span>}
             </span>
           </div>
-          <div class="review-panel review-detail-panel">
+          {/* Flush (#23): no gray --bg-elev card — DetailPanel sits directly
+              on the page background under the heading. */}
+          <div class="review-detail-flush">
             <DetailPanel />
           </div>
         </section>
@@ -2380,25 +2474,32 @@ function ReviewDisclosure({
   };
   return (
     <details ref={ref} class={`review-disclosure review-section${accent ? ` review-disclosure--${accent}` : ""}`} id={id}>
-      {/* The whole heading row is the summary (click anywhere to toggle).
-          It reads as a flat heading + summary, with a summary⇄detail switch
-          on the right — not a boxed accordion. */}
+      {/* Two-row summary (#27): row 1 is the title line (icon + title + key
+          counts + the summary⇄detail switch); row 2 is the summary content
+          (plots/tables) BELOW the title — never crammed beside it. */}
       <summary>
-        <div class="review-disclosure-head">
+        {/* Row 1 — title line */}
+        <div class="review-disclosure-bar">
           <div class="review-disclosure-title">
             {icon && <span class="review-section-icon" aria-hidden="true">{icon}</span>}
             <h2>{title}</h2>
           </div>
-          <div class="review-disclosure-summary">
-            <p>{action}</p>
+          <p class="review-disclosure-counts">{action}</p>
+          {/* summary ⇄ detail switch — .ui-toggle language, the disclosure control */}
+          <span class="review-disclosure-switch" role="presentation">
+            <span class="rds-opt rds-opt--summary">summary</span>
+            <span class="rds-opt rds-opt--detail">detail</span>
+          </span>
+        </div>
+        {/* Row 2 — summary content (only meaningful when collapsed).
+            Guard clicks here so interacting with the preview (navigating an
+            idea, hovering a plot) does NOT toggle the disclosure; only the
+            title line / switch toggles it. */}
+        {preview && (
+          <div class="review-disclosure-preview" onClick={(e) => e.preventDefault()}>
             {preview}
           </div>
-        </div>
-        {/* summary ⇄ detail switch — .ui-toggle language, the disclosure control */}
-        <span class="review-disclosure-switch" role="presentation">
-          <span class="rds-opt rds-opt--summary">summary</span>
-          <span class="rds-opt rds-opt--detail">detail</span>
-        </span>
+        )}
       </summary>
       {children}
     </details>

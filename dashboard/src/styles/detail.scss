@@ -200,25 +200,26 @@
 }
 
 /* Click-affordance flash — scoped to the single card that a chart/table/graph
-   click scrolled to (the effect adds .exp-flash only on the matched element).
-   A subtle, modern accent treatment: a soft left accent bar + whisper tint that
-   eases in then fades over ~1s — not a heavy full-card glow. Self-clearing
-   keyframe; JS removes the class after. */
+   click scrolled to (the effect adds .exp-flash only on the matched element,
+   AFTER the scroll settles). Matches the selected-row look (.exp-highlight):
+   an `inset 2px 0 var(--accent)` left bar + a faint accent tint that eases in
+   over ~120ms (≈11% of the 1.1s run) then fades back out over ~1s. Token
+   colors only; not a heavy glow. Self-clearing keyframe; JS removes the class. */
 .exp-item.exp-flash {
-  animation: exp-flash 1s ease-out both;
+  animation: exp-flash 1.1s ease-out both;
 }
 @keyframes exp-flash {
   0% {
     background: transparent;
-    box-shadow: inset 0 0 0 1px transparent;
+    box-shadow: inset 2px 0 transparent;
   }
-  15% {
-    background: color-mix(in srgb, var(--accent) 9%, transparent);
-    box-shadow: inset 3px 0 var(--accent);
+  11% {
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    box-shadow: inset 2px 0 var(--accent);
   }
   100% {
     background: transparent;
-    box-shadow: inset 0 0 0 1px transparent;
+    box-shadow: inset 2px 0 transparent;
   }
 }
 

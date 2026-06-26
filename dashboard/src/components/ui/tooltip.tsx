@@ -1,12 +1,19 @@
 /**
- * Tooltip — a compact, on-brand hover card. Wrap any (inline) trigger:
- *   <Tooltip content={<>…</>}>{child}</Tooltip>
- * The card is position:fixed (so it escapes panel overflow clipping), centered
- * above the trigger, and flips below when near the top edge. content==null →
- * renders the child with no tooltip. See dashboard/DESIGN.md.
+ * Tooltip — a compact, on-brand hover card built on a robust floating layer.
+ *
+ * Positioning is two-pass: on hover we capture the trigger rect, render the card
+ * hidden, then (in a layout effect, before paint) measure it and clamp it inside
+ * the viewport — flipping top↔bottom when there isn't room and nudging left/right
+ * so it never spills off-screen. This is the shared base for every hover card
+ * (rail status, experiment/idea boxes, summary plots …). See dashboard/DESIGN.md.
+ *
+ *   <Tooltip content={<>…</>}>{trigger}</Tooltip>
  */
-import { useState, useRef, useCallback } from "preact/hooks";
+import { useState, useRef, useLayoutEffect, useCallback } from "preact/hooks";
 import type { ComponentChildren } from "preact";
+
+const MARGIN = 8; // min gap from viewport edge
+const GAP = 8;    // gap between trigger and card
 
 export function Tooltip({
   content,
@@ -19,29 +26,44 @@ export function Tooltip({
   placement?: "top" | "bottom";
   class?: string;
 }) {
-  const [box, setBox] = useState<{ x: number; y: number; place: "top" | "bottom" } | null>(null);
-  const ref = useRef<HTMLSpanElement>(null);
+  const triggerRef = useRef<HTMLSpanElement>(null);
+  const cardRef = useRef<HTMLSpanElement>(null);
+  const [anchor, setAnchor] = useState<{ left: number; top: number; right: number; bottom: number; cx: number } | null>(null);
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
 
   const show = useCallback(() => {
-    const el = ref.current;
+    const el = triggerRef.current;
     if (!el) return;
     const r = el.getBoundingClientRect();
-    // flip below when too close to the top of the viewport
-    const place: "top" | "bottom" = placement === "top" && r.top < 96 ? "bottom" : placement;
-    setBox({
-      x: Math.round(r.left + r.width / 2),
-      y: Math.round(place === "top" ? r.top : r.bottom),
-      place,
-    });
-  }, [placement]);
+    setAnchor({ left: r.left, top: r.top, right: r.right, bottom: r.bottom, cx: r.left + r.width / 2 });
+    setPos(null);
+  }, []);
+  const hide = useCallback(() => { setAnchor(null); setPos(null); }, []);
 
-  const hide = useCallback(() => setBox(null), []);
+  // Measure the rendered card and clamp it into the viewport (pre-paint).
+  useLayoutEffect(() => {
+    if (!anchor || !cardRef.current) return;
+    const card = cardRef.current.getBoundingClientRect();
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+
+    let top = placement === "top" ? anchor.top - card.height - GAP : anchor.bottom + GAP;
+    // flip if it would clip
+    if (placement === "top" && top < MARGIN) top = anchor.bottom + GAP;
+    if (placement === "bottom" && top + card.height > vh - MARGIN) top = anchor.top - card.height - GAP;
+    top = Math.max(MARGIN, Math.min(top, vh - card.height - MARGIN));
+
+    let left = anchor.cx - card.width / 2;
+    left = Math.max(MARGIN, Math.min(left, vw - card.width - MARGIN));
+
+    setPos({ left, top });
+  }, [anchor, placement]);
 
   if (content == null || content === false) return <>{children}</>;
 
   return (
     <span
-      ref={ref}
+      ref={triggerRef}
       class={`ui-tip-trigger ${cls}`}
       onMouseEnter={show}
       onMouseLeave={hide}
@@ -49,11 +71,16 @@ export function Tooltip({
       onFocusOut={hide}
     >
       {children}
-      {box && (
+      {anchor && (
         <span
-          class={`ui-tip ui-tip--${box.place}`}
+          ref={cardRef}
+          class="ui-tip"
           role="tooltip"
-          style={{ left: `${box.x}px`, top: `${box.y}px` }}
+          style={{
+            left: `${pos ? pos.left : anchor.left}px`,
+            top: `${pos ? pos.top : anchor.top}px`,
+            visibility: pos ? "visible" : "hidden",
+          }}
         >
           {content}
         </span>

@@ -148,28 +148,78 @@ export function DetailPanel() {
     return () => clearInterval(timer);
   }, [ideaId]);
 
-  // Scroll to a specific experiment when signaled, then briefly flash ONLY that
-  // one card so the user sees what they clicked (chart/table/graph → detail).
-  // We match the exact card by the label the signal carries (CSS.escape guards
-  // labels with special chars) and toggle a transient class with a self-fading
-  // keyframe; remove-then-re-add (with a forced reflow) replays it on a repeat
-  // click of the same card.
+  // Scroll to a specific experiment when signaled, then — only AFTER the scroll
+  // settles — briefly flash ONLY that one card so the user sees what they
+  // clicked (chart/table/graph → detail).
+  //
+  // Context: the panel is embedded in the Review page inside a scrolling
+  // ancestor (.app-scroll), so we use scrollIntoView({block:"center"}) which
+  // walks every scroll-ancestor. The target card may not be in the DOM yet
+  // (navigation switches idea, then getIdea() resolves and the cards render),
+  // so we retry across a few animation frames before giving up. We match the
+  // exact card by the label the signal carries — `exp.label || exp.id`, the
+  // same shape chartNavClick/useEntityNav produce — with CSS.escape to guard
+  // labels containing special characters. The transient .exp-flash class drives
+  // a self-fading keyframe; remove → reflow → add replays it on a repeat click.
   useEffect(() => {
     const label = scrollToExperiment.value;
     if (!label) return;
-    requestAnimationFrame(() => {
-      const sel = (window as any).CSS?.escape ? CSS.escape(label) : label;
+    let cancelled = false;
+    let rafId = 0;
+    const timeouts: number[] = [];
+    let onEnd: (() => void) | null = null;
+    const sel = (window as any).CSS?.escape ? CSS.escape(label) : label;
+
+    function flash(el: HTMLElement) {
+      el.classList.remove("exp-flash");
+      // Force reflow so removing + re-adding restarts the keyframe.
+      void el.offsetWidth;
+      el.classList.add("exp-flash");
+      timeouts.push(window.setTimeout(() => el.classList.remove("exp-flash"), 1200));
+    }
+
+    function afterScroll(el: HTMLElement) {
+      // Apply the highlight only once the scroll has come to rest. Prefer the
+      // native `scrollend` event; fall back to a timeout in browsers/containers
+      // that don't emit it (and as a hard cap if the position was already
+      // correct and no scroll occurred).
+      let done = false;
+      const fire = () => {
+        if (done || cancelled) return;
+        done = true;
+        if (onEnd) window.removeEventListener("scrollend", onEnd, true);
+        flash(el);
+      };
+      onEnd = fire;
+      window.addEventListener("scrollend", onEnd, true);
+      timeouts.push(window.setTimeout(fire, 500));
+    }
+
+    // Retry-find the card: it may render a frame or two after the idea loads.
+    let tries = 0;
+    function attempt() {
+      if (cancelled) return;
       const el = document.querySelector(`.exp-item[data-exp-label="${sel}"]`) as HTMLElement | null;
       if (el) {
         el.scrollIntoView({ behavior: "smooth", block: "center" });
-        el.classList.remove("exp-flash");
-        // Force reflow so removing + re-adding restarts the keyframe.
-        void el.offsetWidth;
-        el.classList.add("exp-flash");
-        setTimeout(() => el.classList.remove("exp-flash"), 1100);
+        afterScroll(el);
+        scrollToExperiment.value = null;
+        return;
       }
-      scrollToExperiment.value = null;
-    });
+      if (++tries > 20) {            // ~ up to 1s of frames; card never appeared
+        scrollToExperiment.value = null;
+        return;
+      }
+      rafId = window.requestAnimationFrame(attempt);
+    }
+    attempt();
+
+    return () => {
+      cancelled = true;
+      if (rafId) window.cancelAnimationFrame(rafId);
+      timeouts.forEach((t) => window.clearTimeout(t));
+      if (onEnd) window.removeEventListener("scrollend", onEnd, true);
+    };
   }, [scrollToExperiment.value, idea]);
 
   // Progress polling

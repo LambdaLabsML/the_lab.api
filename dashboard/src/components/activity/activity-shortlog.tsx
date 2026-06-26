@@ -50,16 +50,23 @@ export function ActivityShortlog() {
             const label = e.label || String(e.id);
             const pct = progress[label];
             return (
-              <button
-                key={`r-${e.id}`}
-                class="shortlog-row"
-                onClick={() => navigateToIdea(e.idea_id, label)}
-                title={ideas[e.idea_id]?.description}
-              >
-                <span class="shortlog-dot is-running" />
-                <span class="shortlog-row-main">#{e.idea_id} {ideaTitle(ideas[e.idea_id]?.description ?? "")}</span>
-                {typeof pct === "number" && <span class="shortlog-pct">{Math.round(pct)}%</span>}
-              </button>
+              <div class="shortlog-run" key={`r-${e.id}`}>
+                <button
+                  class="shortlog-row"
+                  onClick={() => navigateToIdea(e.idea_id, label)}
+                  title={ideas[e.idea_id]?.description}
+                >
+                  <span class="shortlog-dot is-running" />
+                  <span class="shortlog-row-main">#{e.idea_id} {ideaTitle(ideas[e.idea_id]?.description ?? "")}</span>
+                  {typeof pct === "number" && <span class="shortlog-pct">{Math.round(pct)}%</span>}
+                </button>
+                <span class="shortlog-progress">
+                  <span
+                    class={`shortlog-progress-fill${typeof pct === "number" ? "" : " is-indeterminate"}`}
+                    style={typeof pct === "number" ? { width: `${Math.min(100, Math.max(0, pct))}%` } : undefined}
+                  />
+                </span>
+              </div>
             );
           })
         )}

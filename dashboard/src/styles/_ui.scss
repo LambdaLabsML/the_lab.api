@@ -238,9 +238,8 @@
   white-space: normal;
   animation: ui-tip-in 0.1s ease-out;
 }
-.ui-tip--top    { transform: translate(-50%, calc(-100% - 8px)); }
-.ui-tip--bottom { transform: translate(-50%, 8px); }
-@keyframes ui-tip-in { from { opacity: 0; transform-origin: center; } }
+/* positioned by top-left (clamped to viewport) in components/ui/tooltip.tsx */
+@keyframes ui-tip-in { from { opacity: 0; } }
 
 /* structured tooltip content helpers */
 .ui-tip-title { color: var(--text); font-weight: 700; display: block; }
