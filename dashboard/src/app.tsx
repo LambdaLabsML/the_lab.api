@@ -2032,6 +2032,30 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
         <button class="review-primary-action" onClick={onOpenWorkbench}>Workbench →</button>
       </div>
 
+      {/* ── Section jump nav ─────────────────────────────────────────── */}
+      <div class="review-jump-nav">
+        {([
+          { id: "review-runs",    icon: "◉", label: "Experiments", badge: finished > 0 ? String(finished) : null, live: running > 0 },
+          { id: "review-ideas",   icon: "◈", label: "Ideas",       badge: activeIdeas > 0 ? String(activeIdeas) : null },
+          { id: "review-compare", icon: "⊞", label: "Correlation", badge: null },
+          { id: "review-detail",  icon: "▸", label: "Idea Detail", badge: null },
+          { id: "review-ops",     icon: "≡", label: "Queue",       badge: queued > 0 ? String(queued) : null, live: liveCount > 0 },
+        ] as Array<{ id: string; icon: string; label: string; badge: string | null; live?: boolean }>).map(s => (
+          <a key={s.id} href={`#${s.id}`}
+            class={`review-jump-pill${s.live ? " review-jump-pill--live" : ""}`}
+            onClick={(e) => {
+              e.preventDefault();
+              const el = document.getElementById(s.id) as HTMLDetailsElement | null;
+              if (el) { if (!el.open) el.open = true; el.scrollIntoView({ behavior: "smooth", block: "start" }); }
+            }}
+          >
+            <span class="rjp-icon">{s.icon}</span>
+            <span class="rjp-label">{s.label}</span>
+            {s.badge && <span class="rjp-badge">{s.badge}</span>}
+          </a>
+        ))}
+      </div>
+
       {/* ── Experiment grid — glanceable status tiles ────────────────── */}
       {/* ── Experiment quality bar — micro indicator above the grid ────── */}
       {successRate !== null && finished > 10 && (
