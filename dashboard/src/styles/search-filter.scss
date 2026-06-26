@@ -32,6 +32,33 @@
   color: var(--text-faint);
 }
 
+/* active category-prefix cue — a compact colored chip before the input text.
+   Signals `tag:` / `idea:` scoping without re-typing the prefix anywhere. */
+.sf-prefix {
+  --sf-pill-accent: var(--accent);
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--sf-pill-accent) 14%, transparent);
+  color: var(--sf-pill-accent);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: lowercase;
+  white-space: nowrap;
+  line-height: 1.5;
+}
+.sf-prefix-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--sf-pill-accent);
+}
+
 .sf-input {
   flex: 1 1 auto;
   min-width: 0;

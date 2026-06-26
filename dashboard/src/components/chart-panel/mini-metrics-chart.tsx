@@ -1,9 +1,10 @@
 /**
- * MiniMetricsChart — landing-page-style SVG chart for the minified mode.
+ * MiniMetricsChart — landing-page-style SVG chart. This is now the ONLY render
+ * mode for the metrics chart (the Chart.js canvas path was removed).
  *
  * Dots = experiments, stepped purple line = current best, gold dots = metric
- * improvements, dashed vertical drops to x-axis. Colors and ordering follow
- * the normal chart mode exactly (uses buildChartData). Click a dot to navigate.
+ * improvements (records), dashed vertical drops to x-axis. Colors and ordering
+ * follow buildChartData. Click a dot to navigate to its idea.
  *
  * Design notes (see dashboard/DESIGN.md):
  *  - Renders 1:1 in real pixels (viewBox == measured size) so dots and text are
@@ -12,6 +13,14 @@
  *    user's font-size setting instead of hardcoding font-size="9".
  *  - Flat purple tint under the best-line — no gradient.
  *  - Click/hover routed through the shared useEntityNav hook.
+ *
+ * Step mode (impOnly): the run list collapses to just the milestone
+ * (record-setting) experiments up to the last record, then shows ALL
+ * experiments after the last record (the in-progress push toward the next
+ * record). Long flat stretches between early records collapse to step points.
+ *
+ * Point size: dot radii are multiplied by a factor driven by chartPointSize
+ * (s | m | l → 0.75 | 1 | 1.4).
  */
 
 import { useEffect, useRef, useState } from "preact/hooks";
@@ -24,6 +33,9 @@ import type { Experiment, IdeaNode, SubwayLayout } from "../../lib/types";
 
 const MIN_PX_PER_POINT = 8;
 const PAD = { l: 34, r: 12, t: 10, b: 18 };
+
+/** Dot-radius multiplier per chartPointSize step. */
+const PT_SIZE_SCALE: Record<"s" | "m" | "l", number> = { s: 0.75, m: 1, l: 1.4 };
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -61,11 +73,12 @@ function wrapText(text: string, maxChars: number, maxRows: number): string[] {
 // ── single dot (its own component so it can use the nav hook) ──────────────────
 
 function MiniDot({
-  exp, x, y, baselineY, color, isMilestone, fontXs, onHoverChange,
+  exp, x, y, baselineY, color, isMilestone, fontXs, note, sizeScale, onHoverChange,
 }: {
   exp: (Experiment & { _running?: boolean }) | undefined;
   x: number; y: number; baselineY: number;
-  color: string; isMilestone: boolean; fontXs: number;
+  color: string; isMilestone: boolean; fontXs: number; note?: string;
+  sizeScale: number;
   onHoverChange: (hovered: boolean) => void;
 }) {
   const ideaId = exp?.idea_id ?? -1;
@@ -77,10 +90,11 @@ function MiniDot({
   const faded = anyHighlight && !highlighted;
   const isRunning = exp?._running ?? false;
 
-  // small, crisp radii (1:1 px) — milestones a touch larger, highlight larger still
-  const r = highlighted
+  // small, crisp radii (1:1 px) — milestones a touch larger, highlight larger
+  // still — then scaled by the user's point-size setting.
+  const r = (highlighted
     ? (isMilestone ? 4 : 3.2)
-    : (isMilestone ? 3.2 : 2.4);
+    : (isMilestone ? 3.2 : 2.4)) * sizeScale;
   const dotColor = isMilestone ? "var(--yellow)" : color;
   const strokeColor = highlighted ? "var(--text)" : isMilestone ? "var(--bg)" : "none";
   const strokeW = highlighted ? 1.3 : isMilestone ? 1 : 0;
@@ -103,9 +117,10 @@ function MiniDot({
         <circle cx={x} cy={y} r={r} fill={dotColor}
           stroke={strokeColor} stroke-width={strokeW} opacity={faded ? 0.2 : 1} />
       )}
-      {isMilestone && !faded && (
-        <text x={x + 5} y={y - 5} fill="var(--yellow)" font-size={fontXs}
-          font-family="var(--font-mono)">metric improved</text>
+      {/* Milestone caption — purple + clickable (sits inside this clickable <g>) */}
+      {isMilestone && !faded && note && (
+        <text x={x + 5} y={y - 5} fill="var(--purple)" font-size={fontXs}
+          font-family="var(--font-mono)" opacity="0.95" style="cursor:pointer;">{note}</text>
       )}
       <circle cx={x} cy={y} r="9" fill="transparent" />
     </g>
@@ -116,7 +131,8 @@ function MiniDot({
 
 export function MiniMetricsChart({
   metric, experiments, ideas, layout, hiddenStatuses, hideRunning,
-  impOnly, colorMode, tags, tagMode, reversed, mean,
+  impOnly, colorMode, tags, tagMode, reversed, mean, logScale = false, clip = false,
+  pointSize = "m",
 }: {
   metric: string;
   experiments: Experiment[];
@@ -130,6 +146,9 @@ export function MiniMetricsChart({
   tagMode: string;
   reversed: boolean;
   mean: boolean;
+  logScale?: boolean;
+  clip?: boolean;
+  pointSize?: "s" | "m" | "l";
 }) {
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -153,8 +172,11 @@ export function MiniMetricsChart({
     return () => ro.disconnect();
   }, []);
 
+  // Build the FULL run (impOnly handled below by our own step-collapse rule, so
+  // buildChartData is always called with improvementsOnly=false). This keeps
+  // milestone detection consistent and lets us show post-record experiments.
   const chartData = metric ? buildChartData(
-    metric, experiments, tags, tagMode, impOnly, colorMode,
+    metric, experiments, tags, tagMode, /* improvementsOnly */ false, colorMode,
     ideas, layout, reversed, hiddenStatuses, mean, hideRunning,
   ) : null;
 
@@ -169,7 +191,58 @@ export function MiniMetricsChart({
   }
 
   const lower = isLowerBetter(metric);
-  const { values, pointColors, expData, labels } = chartData;
+  const sizeScale = PT_SIZE_SCALE[pointSize] ?? 1;
+
+  // ── Milestone (record) detection over the FULL ordered list ──────────────────
+  // Records are tracked in display order. The "running best" line is stepped to
+  // these. When reversed, the chronological order is the reverse of display
+  // order, so we scan accordingly and keep runningBest aligned to display index.
+  const fullValues = chartData.values;
+  const fullN = fullValues.length;
+  const fullMilestones = new Set<number>();   // display indices that set a record
+  const runningBestFull: number[] = new Array(fullN);
+  let lastRecordIdx = -1;                      // display index of the most recent record
+  if (reversed) {
+    let best: number | null = null;
+    for (let i = fullN - 1; i >= 0; i--) {
+      const v = fullValues[i];
+      const isBetter = isFinite(v) && (best === null || (lower ? v < best : v > best));
+      if (isBetter) { best = v; fullMilestones.add(i); lastRecordIdx = Math.max(lastRecordIdx, i); }
+      runningBestFull[i] = best ?? v;
+    }
+  } else {
+    let best: number | null = null;
+    for (let i = 0; i < fullN; i++) {
+      const v = fullValues[i];
+      const isBetter = isFinite(v) && (best === null || (lower ? v < best : v > best));
+      if (isBetter) { best = v; fullMilestones.add(i); lastRecordIdx = i; }
+      runningBestFull[i] = best ?? v;
+    }
+  }
+
+  // ── Step-mode collapse (#69) ─────────────────────────────────────────────────
+  // Keep: every record up to (and including) the last record, PLUS every
+  // experiment AFTER the last record (running optimization toward the next
+  // record — these are the only non-record points worth showing). Flat
+  // stretches between early records collapse to their step points.
+  let keepIdx: number[];
+  if (impOnly) {
+    keepIdx = [];
+    for (let i = 0; i < fullN; i++) {
+      if (fullMilestones.has(i) || i > lastRecordIdx) keepIdx.push(i);
+    }
+  } else {
+    keepIdx = fullValues.map((_, i) => i);
+  }
+
+  // Project the full arrays onto the kept indices.
+  const values = keepIdx.map((i) => fullValues[i]);
+  const pointColors = keepIdx.map((i) => chartData.pointColors[i]);
+  const expData = keepIdx.map((i) => chartData.expData[i]);
+  const labels = keepIdx.map((i) => chartData.labels[i]);
+  const runningBest = keepIdx.map((i) => runningBestFull[i]);
+  const milestones = new Set<number>();
+  keepIdx.forEach((srcI, dstI) => { if (fullMilestones.has(srcI)) milestones.add(dstI); });
   const n = values.length;
 
   // 1:1 pixel coordinate space — viewBox matches measured size, no scaling.
@@ -183,35 +256,35 @@ export function MiniMetricsChart({
   const rightEdge = svgW - PAD.r;
   const baselineY = H - PAD.b;
 
-  // Y range
+  // ── Y range ──────────────────────────────────────────────────────────────────
+  // Optionally clip outliers (IQR fence) and/or use a log scale, mirroring the
+  // toolbar toggles. Log scale only applies when all finite values are positive.
   const finite = values.filter(isFinite);
-  const dataMin = Math.min(...finite);
-  const dataMax = Math.max(...finite);
-  const yPad = (dataMax - dataMin) * 0.12 || Math.abs(dataMax) * 0.05 || 0.01;
-  const yMin = dataMin - yPad;
-  const yMax = dataMax + yPad;
-
-  const toX = (i: number) => PAD.l + (n <= 1 ? plotW / 2 : (i / (n - 1)) * plotW);
-  const toY = (v: number) => PAD.t + (1 - (v - yMin) / (yMax - yMin)) * plotH;
-
-  // Running best + milestone detection (chronological; suffix-max when reversed)
-  const milestones = new Set<number>();
-  const runningBest: number[] = new Array(n);
-  if (reversed) {
-    let best: number | null = null;
-    for (let i = n - 1; i >= 0; i--) {
-      const isBetter = best === null || (lower ? values[i] < best : values[i] > best);
-      if (isBetter) { best = values[i]; milestones.add(i); }
-      runningBest[i] = best!;
-    }
-  } else {
-    let best: number | null = null;
-    for (let i = 0; i < n; i++) {
-      const isBetter = best === null || (lower ? values[i] < best : values[i] > best);
-      if (isBetter) { best = values[i]; milestones.add(i); }
-      runningBest[i] = best!;
+  let dataMin = Math.min(...finite);
+  let dataMax = Math.max(...finite);
+  if (clip && finite.length >= 4) {
+    const sorted = [...finite].sort((a, b) => a - b);
+    const q1 = sorted[Math.floor(sorted.length * 0.25)];
+    const q3 = sorted[Math.floor(sorted.length * 0.75)];
+    const iqr = q3 - q1;
+    if (iqr > 0) {
+      const lo = q1 - 1.5 * iqr;
+      const hi = q3 + 1.5 * iqr;
+      dataMin = Math.max(dataMin, lo);
+      dataMax = Math.min(dataMax, hi);
     }
   }
+  const useLog = logScale && finite.every((v) => v > 0);
+  const tform = useLog ? Math.log10 : (x: number) => x;
+  const tMin = tform(dataMin);
+  const tMax = tform(dataMax);
+  const tPad = (tMax - tMin) * 0.12 || Math.abs(tMax) * 0.05 || 0.01;
+  const yMin = tMin - tPad;
+  const yMax = tMax + tPad;
+  const clampV = (v: number) => Math.min(dataMax, Math.max(dataMin, v));
+
+  const toX = (i: number) => PAD.l + (n <= 1 ? plotW / 2 : (i / (n - 1)) * plotW);
+  const toY = (v: number) => PAD.t + (1 - (tform(clampV(v)) - yMin) / (yMax - yMin)) * plotH;
 
   // Stepped best-score path
   const stepPoints = values.map((_, i) => [toX(i), toY(runningBest[i])] as const);
@@ -239,15 +312,18 @@ export function MiniMetricsChart({
         style={`display:block;${needsScroll ? `min-width:${svgW}px;` : ""}`}
       >
         {/* Y grid + labels */}
-        {yTicks.map((y, i) => (
-          <g key={i}>
-            <line x1={PAD.l} x2={rightEdge} y1={toY(y)} y2={toY(y)}
-              stroke="var(--border-soft)" stroke-width="1" />
-            <text x={PAD.l - 5} y={toY(y) + font.xs * 0.34}
-              fill="var(--text-faint)" font-size={font.xs} text-anchor="end"
-              font-family="var(--font-mono)">{fmtVal(y)}</text>
-          </g>
-        ))}
+        {yTicks.map((ty, i) => {
+          const v = useLog ? Math.pow(10, ty) : ty;
+          return (
+            <g key={i}>
+              <line x1={PAD.l} x2={rightEdge} y1={PAD.t + (1 - (ty - yMin) / (yMax - yMin)) * plotH} y2={PAD.t + (1 - (ty - yMin) / (yMax - yMin)) * plotH}
+                stroke="var(--border-soft)" stroke-width="1" />
+              <text x={PAD.l - 5} y={PAD.t + (1 - (ty - yMin) / (yMax - yMin)) * plotH + font.xs * 0.34}
+                fill="var(--text-faint)" font-size={font.xs} text-anchor="end"
+                font-family="var(--font-mono)">{fmtVal(v)}</text>
+            </g>
+          );
+        })}
 
         {/* X baseline */}
         <line x1={PAD.l} x2={rightEdge} y1={baselineY} y2={baselineY} stroke="var(--border)" />
@@ -260,19 +336,30 @@ export function MiniMetricsChart({
           stroke-linejoin="round" stroke-linecap="round" />
 
         {/* Dots */}
-        {values.map((v, i) => (
-          <MiniDot
-            key={i}
-            exp={expData?.[i] as any}
-            x={toX(i)} y={toY(v)} baselineY={baselineY}
-            color={pointColors[i] ?? "var(--text-muted)"}
-            isMilestone={milestones.has(i)}
-            fontXs={font.xs}
-            onHoverChange={(h) => setHoveredIdx(h ? i : (cur) => (cur === i ? null : cur))}
-          />
-        ))}
+        {values.map((v, i) => {
+          const e = expData?.[i] as (Experiment & { _running?: boolean }) | undefined;
+          const isMs = milestones.has(i);
+          // milestone caption: "idea/exp · excerpt…" (purple, clickable)
+          const note = isMs && e
+            ? `${e.idea_id}/${e.label ?? e.id} ${(ideas[e.idea_id]?.description ?? "").replace(/\s+/g, " ").trim().slice(0, 22)}`.trim()
+            : undefined;
+          return (
+            <MiniDot
+              key={i}
+              exp={e}
+              x={toX(i)} y={toY(v)} baselineY={baselineY}
+              color={pointColors[i] ?? "var(--text-muted)"}
+              isMilestone={isMs}
+              fontXs={font.xs}
+              note={note}
+              sizeScale={sizeScale}
+              onHoverChange={(h) => setHoveredIdx(h ? i : (cur) => (cur === i ? null : cur))}
+            />
+          );
+        })}
 
-        {/* Hover tooltip */}
+        {/* Hover tooltip — canonical experiment fields (matches timeline/table):
+            exp/label · value (bold), idea #N · status, dim title excerpt, ★ record. */}
         {hoveredIdx !== null && (() => {
           const i = hoveredIdx;
           const x = toX(i);
@@ -284,12 +371,12 @@ export function MiniMetricsChart({
           const ideaRows = wrapText(idea?.description ?? "", 92, 2);
           const isMs = milestones.has(i);
           const lh = font.xs + 3;
-          const headRows = 4; // metric · value · idea/status · best
+          const headRows = 4; // metric · exp/value · idea/status · best
           const tooltipW = 214;
           const tooltipH = lh * (headRows + ideaRows.length) + 12;
           const tx = Math.max(PAD.l + 2, Math.min(svgW - tooltipW - PAD.r, x + 10));
           const ty = Math.max(PAD.t + 2, y - tooltipH - 8);
-          const ny = (n: number) => ty + lh * n;
+          const ny = (k: number) => ty + lh * k;
           return (
             <g pointer-events="none" font-family="var(--font-mono)">
               <line x1={x} y1={y - 4} x2={tx + 10} y2={ty + tooltipH}
@@ -302,7 +389,7 @@ export function MiniMetricsChart({
                 {metric ? fmtMetricName(metric) : "metric"}
               </text>
               <text x={tx + 8} y={ny(2)} fill="var(--text)" font-size={font.sm} font-weight="700">
-                {label} · {fmtVal(values[i])}{isMs ? "  ★" : ""}
+                {label} · {fmtVal(values[i])}{isMs ? "  ★ record" : ""}
               </text>
               <text x={tx + 8} y={ny(3)} fill="var(--purple)" font-size={font.xs}>
                 idea #{exp?.idea_id}{status ? ` · ${status}` : ""}

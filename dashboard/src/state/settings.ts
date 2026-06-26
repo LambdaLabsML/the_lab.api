@@ -159,6 +159,9 @@ export const showBestLine = useSetting("showBestLine", true);
 /** Minified chart: tiny dots, no axis labels — global overview mode. */
 export const chartMinified = useSetting("chartMinified", false);
 
+/** Chart point/dot size: s | m | l. */
+export const chartPointSize = useSetting<"s" | "m" | "l">("chartPointSize", "m");
+
 /** Colorblind-friendly status color overrides. */
 export const colorblindMode = useSetting("colorblindMode", false);
 
@@ -170,6 +173,9 @@ export const showNodeText = useSetting("showNodeText", false);
 /** Width (px) of the left secondary nav panel, and whether it's collapsed. */
 export const sidebarWidth = useSetting("sidebarWidth", 248);
 export const sidebarCollapsed = useSetting("sidebarCollapsed", false);
+
+/** Per-section open/closed (summary/detail) state of the Overview disclosures. */
+export const reviewOpenSections = useSetting<Record<string, boolean>>("reviewOpenSections", {});
 
 /** Slight hacker-noise ambient texture behind the UI. Applied as data-texture. */
 export const uiTexture = useSetting("uiTexture", true);

@@ -778,16 +778,17 @@ export function DagView() {
           class="subway-search"
           placeholder="find idea…"
           applied={[]}
-          suggest={(q) => {
+          suggest={(q, category) => {
+            // graph only has ideas; "idea:" lists all, other prefixes match nothing
+            if (category && category !== "idea") return [];
             const query = q.trim().toLowerCase();
-            if (!query) return [];
+            if (!query && !category) return [];
             const out: FilterItem[] = [];
             for (const id in ideas) {
               const title = ideaTitle(ideas[id]?.description ?? "");
-              if (`#${id}`.includes(query) || String(id).includes(query) || title.toLowerCase().includes(query)) {
-                out.push({ id: `idea:${id}`, category: "idea", label: `#${id} ${title}`, value: String(id) });
-              }
-              if (out.length >= 8) break;
+              const match = !query || `#${id}`.includes(query) || String(id).includes(query) || title.toLowerCase().includes(query);
+              if (match) out.push({ id: `idea:${id}`, category: "idea", label: `#${id} ${title}`, value: String(id) });
+              if (out.length >= 30) break;
             }
             return out;
           }}

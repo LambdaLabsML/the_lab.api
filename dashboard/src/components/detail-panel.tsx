@@ -148,47 +148,75 @@ export function DetailPanel() {
     return () => clearInterval(timer);
   }, [ideaId]);
 
-  // Scroll to a specific experiment when signaled, then — only AFTER the scroll
-  // settles — briefly flash ONLY that one card so the user sees what they
-  // clicked (chart/table/graph → detail).
+  // Scroll-to-pane THEN highlight (#50). When `scrollToExperiment` fires we
+  // scroll the matching experiment card into view, wait for the scroll to
+  // SETTLE, and only then briefly flash ONLY that one card.
   //
-  // Context: the panel is embedded in the Review page inside a scrolling
-  // ancestor (.app-scroll), so we use scrollIntoView({block:"center"}) which
+  // Context: the panel is embedded in the Overview/Review page inside a
+  // scrolling ancestor (.app-scroll), so scrollIntoView({block:"center"})
   // walks every scroll-ancestor. The target card may not be in the DOM yet
   // (navigation switches idea, then getIdea() resolves and the cards render),
-  // so we retry across a few animation frames before giving up. We match the
-  // exact card by the label the signal carries — `exp.label || exp.id`, the
-  // same shape chartNavClick/useEntityNav produce — with CSS.escape to guard
-  // labels containing special characters. The transient .exp-flash class drives
-  // a self-fading keyframe; remove → reflow → add replays it on a repeat click.
+  // so we retry across animation frames until it exists. We match the exact
+  // card by the label the signal carries — `exp.label || exp.id`, the same
+  // shape chartNavClick/useEntityNav produce — with CSS.escape to guard labels
+  // with special chars. The transient .exp-flash class drives a self-fading
+  // keyframe; remove → reflow → add replays it on a repeat click.
+  //
+  // The whole sequence is tracked in a ref (not the effect closure) so that
+  // clearing the signal — which re-renders and re-runs this effect — does NOT
+  // cancel the in-flight scroll-settle/flash. We only abort a run when a NEW
+  // run supersedes it or the component unmounts.
+  const flashOpRef = useRef<{ cancel: () => void } | null>(null);
   useEffect(() => {
     const label = scrollToExperiment.value;
     if (!label) return;
+
+    // Supersede any in-flight run, then start a fresh one.
+    flashOpRef.current?.cancel();
+
     let cancelled = false;
     let rafId = 0;
     const timeouts: number[] = [];
     let onEnd: (() => void) | null = null;
     const sel = (window as any).CSS?.escape ? CSS.escape(label) : label;
+    const op = {
+      cancel() {
+        cancelled = true;
+        if (rafId) window.cancelAnimationFrame(rafId);
+        timeouts.forEach((t) => window.clearTimeout(t));
+        if (onEnd) window.removeEventListener("scrollend", onEnd, true);
+      },
+    };
+    flashOpRef.current = op;
 
     function flash(el: HTMLElement) {
       el.classList.remove("exp-flash");
-      // Force reflow so removing + re-adding restarts the keyframe.
+      // Force reflow so removing + re-adding restarts the keyframe (replay).
       void el.offsetWidth;
       el.classList.add("exp-flash");
-      timeouts.push(window.setTimeout(() => el.classList.remove("exp-flash"), 1200));
+      timeouts.push(window.setTimeout(() => el.classList.remove("exp-flash"), 1000));
     }
 
     function afterScroll(el: HTMLElement) {
-      // Apply the highlight only once the scroll has come to rest. Prefer the
-      // native `scrollend` event; fall back to a timeout in browsers/containers
-      // that don't emit it (and as a hard cap if the position was already
-      // correct and no scroll occurred).
+      // Highlight only once the scroll has come to rest. Prefer the native
+      // `scrollend` event (fires on the scroll-ancestor and bubbles to window
+      // in capture); fall back to a ~500ms timeout for browsers/containers that
+      // don't emit it (and as a hard cap when the card was already in view and
+      // no scroll occurred). Then add a small extra beat (~200ms) before the
+      // flash so it reads as "arrive, then highlight" (#62) rather than firing
+      // the instant the scroll ends.
       let done = false;
       const fire = () => {
         if (done || cancelled) return;
         done = true;
         if (onEnd) window.removeEventListener("scrollend", onEnd, true);
-        flash(el);
+        // Keep `op` referenced through the extra beat so a superseding click
+        // can still cancel this pending flash; release once it actually fires.
+        timeouts.push(window.setTimeout(() => {
+          if (cancelled) return;
+          if (flashOpRef.current === op) flashOpRef.current = null;
+          flash(el);
+        }, 200));
       };
       onEnd = fire;
       window.addEventListener("scrollend", onEnd, true);
@@ -203,10 +231,13 @@ export function DetailPanel() {
       if (el) {
         el.scrollIntoView({ behavior: "smooth", block: "center" });
         afterScroll(el);
+        // Mark handled — clearing the signal re-runs this effect; the ref keeps
+        // the pending scroll-settle/flash alive across that re-render.
         scrollToExperiment.value = null;
         return;
       }
-      if (++tries > 20) {            // ~ up to 1s of frames; card never appeared
+      if (++tries > 30) {            // ~0.5s of frames; card never appeared
+        if (flashOpRef.current === op) flashOpRef.current = null;
         scrollToExperiment.value = null;
         return;
       }
@@ -214,13 +245,13 @@ export function DetailPanel() {
     }
     attempt();
 
-    return () => {
-      cancelled = true;
-      if (rafId) window.cancelAnimationFrame(rafId);
-      timeouts.forEach((t) => window.clearTimeout(t));
-      if (onEnd) window.removeEventListener("scrollend", onEnd, true);
-    };
+    // NOTE: no teardown here — we deliberately do not cancel on the re-render
+    // caused by clearing the signal. Cancellation happens via flashOpRef when a
+    // newer run starts; the unmount-cleanup effect below aborts the last run.
   }, [scrollToExperiment.value, idea]);
+
+  // Abort any in-flight flash op when the panel unmounts.
+  useEffect(() => () => flashOpRef.current?.cancel(), []);
 
   // Progress polling
   useEffect(() => {

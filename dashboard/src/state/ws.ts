@@ -27,6 +27,9 @@ export const wsConnected = signal<boolean>(false);
 /** True when auth failed (close code 1008) — prevents reconnect. */
 export const wsAuthFailed = signal<boolean>(false);
 
+/** Epoch ms of the last websocket message received (for connection stats). */
+export const wsLastMessageAt = signal<number | null>(null);
+
 // ---------------------------------------------------------------------------
 // Auth token helper
 // ---------------------------------------------------------------------------
@@ -143,6 +146,7 @@ function connect(): void {
     } catch {
       return; // ignore malformed frames
     }
+    wsLastMessageAt.value = Date.now();
 
     // Track the sequence number for gap-recovery on reconnect
     if (typeof event.seq === "number" && event.seq > lastSeq) {

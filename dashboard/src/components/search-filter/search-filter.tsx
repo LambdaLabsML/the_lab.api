@@ -3,9 +3,18 @@
  *
  * One text input drives a grouped suggestions dropdown; chosen suggestions
  * become category-colored pills below the input. The component owns no data —
- * consumers pass `applied` pills and a `suggest(query)` function and react to
- * the `onApply` / `onApplyText` / `onToggle` / `onRemove` callbacks. This keeps
- * it generic enough to drive both Review content filtering and idea-graph nav.
+ * consumers pass `applied` pills and a `suggest(query, category?)` function and
+ * react to the `onApply` / `onApplyText` / `onToggle` / `onRemove` callbacks.
+ * This keeps it generic enough to drive both Review content filtering and the
+ * idea-graph nav.
+ *
+ * Category-prefix search: typing a leading `category:` token (e.g. `tag:`,
+ * `idea:`, `experiment:`) restricts suggestions to that category. The parsed
+ * prefix is passed as the optional second arg to `suggest`, and the remainder
+ * (text after the colon) as the first; consumers return ALL matches in that
+ * category, including everything when the remainder is empty (so `tag:` alone
+ * lists every tag). A small chip in the field signals the active prefix while
+ * the input text itself stays clean (the prefix is never double-rendered).
  *
  * Design language (see dashboard/DESIGN.md): hairline field, flat fills, one
  * accent, token type. The dropdown reuses the tooltip's fixed + viewport-clamped
@@ -15,7 +24,7 @@
  *   <SearchFilter
  *     placeholder="Filter…"
  *     applied={pills}
- *     suggest={(q) => matches(q)}
+ *     suggest={(q, cat) => matches(q, cat)}
  *     onApply={addPill}
  *     onApplyText={addFreeText}
  *     onToggle={togglePill}
@@ -41,8 +50,15 @@ export interface SearchFilterProps {
   placeholder?: string;
   /** current pills (controlled) — `active` defaults to true when undefined */
   applied: Array<FilterItem & { active?: boolean }>;
-  /** consumer returns matches across categories for the current query */
-  suggest: (query: string) => FilterItem[];
+  /**
+   * Consumer returns matches for the current query. When the user types a
+   * leading `category:` prefix, it is parsed off and passed as `category`
+   * (lower-cased), with `query` set to the remainder after the colon. With a
+   * non-empty `category`, return ALL matches in that category — including
+   * everything when `query` is empty. With no prefix, `category` is undefined
+   * and `query` is the full input (matches across categories, as before).
+   */
+  suggest: (query: string, category?: string) => FilterItem[];
   /** add a pill (from a suggestion) */
   onApply: (item: FilterItem) => void;
   /** Enter on raw text with no highlighted suggestion → free-text filter */
@@ -58,6 +74,17 @@ export interface SearchFilterProps {
 
 const MARGIN = 8; // min gap from viewport edge
 const GAP = 4; // gap between input and dropdown
+
+/** A leading `category:` token, e.g. "tag:" / "idea:foo" / "experiment: bar". */
+const PREFIX_RE = /^([a-zA-Z][\w-]*):\s?(.*)$/;
+
+/** Parse a leading `category:` prefix off the raw input.
+ *  → `{ category, remainder }` when present (category lower-cased), else null. */
+function parsePrefix(raw: string): { category: string; remainder: string } | null {
+  const m = PREFIX_RE.exec(raw);
+  if (!m) return null;
+  return { category: m[1].toLowerCase(), remainder: m[2] };
+}
 
 /** Case-insensitive match span for emphasizing the typed substring in a label. */
 function matchSpan(label: string, query: string): [number, number] | null {
@@ -107,10 +134,21 @@ export function SearchFilter({
   // also filters them out.
   const appliedIds = useMemo(() => new Set(applied.map((p) => p.id)), [applied]);
 
+  // Parse a leading `category:` prefix. When present, suggestions are restricted
+  // to that category and the substring highlight uses only the remainder.
+  const prefix = useMemo(() => parsePrefix(query), [query]);
+
   // Flatten raw suggestions → de-duped, grouped-by-category, with a stable flat
   // index per row for keyboard navigation.
   const { groups, flat } = useMemo(() => {
-    const raw = query.trim() ? suggest(query.trim()) : [];
+    // With a prefix, ask for the category even when the remainder is empty
+    // (e.g. `tag:` lists every tag). Without one, fall back to the trimmed
+    // full query and skip when it's empty, as before.
+    const raw = prefix
+      ? suggest(prefix.remainder.trim(), prefix.category)
+      : query.trim()
+        ? suggest(query.trim())
+        : [];
     const seen = new Set<string>();
     const ordered: FilterItem[] = [];
     for (const it of raw) {
@@ -138,9 +176,12 @@ export function SearchFilter({
       });
     }
     return { groups, flat };
-  }, [query, suggest, appliedIds]);
+  }, [query, prefix, suggest, appliedIds]);
 
-  const showMenu = open && query.trim().length > 0 && flat.length > 0;
+  // Open whenever we have something to show: a non-empty query, or an active
+  // category prefix (which may legitimately list everything on an empty remainder).
+  const hasInput = query.trim().length > 0 || prefix != null;
+  const showMenu = open && hasInput && flat.length > 0;
 
   const captureAnchor = useCallback(() => {
     const el = fieldRef.current;
@@ -206,13 +247,24 @@ export function SearchFilter({
   );
 
   const applyText = useCallback(() => {
-    const t = query.trim();
-    if (!t || !onApplyText) return;
+    if (!onApplyText) return;
+    // With a category prefix, the free text is the remainder only — strip a
+    // dangling `cat:` so Enter on a bare prefix doesn't create a "tag:" pill.
+    const t = (prefix ? prefix.remainder : query).trim();
+    if (!t) {
+      // bare prefix with no remainder → nothing to filter; just clear the field
+      if (prefix) {
+        setQuery("");
+        close();
+        inputRef.current?.focus();
+      }
+      return;
+    }
     onApplyText(t);
     setQuery("");
     close();
     inputRef.current?.focus();
-  }, [query, onApplyText, close]);
+  }, [query, prefix, onApplyText, close]);
 
   const onKeyDown = useCallback(
     (e: JSX.TargetedKeyboardEvent<HTMLInputElement>) => {
@@ -246,7 +298,9 @@ export function SearchFilter({
     row?.scrollIntoView({ block: "nearest" });
   }, [active, showMenu]);
 
-  const q = query.trim();
+  // Substring to emphasize in suggestion labels: the remainder under a prefix,
+  // otherwise the full trimmed query.
+  const q = (prefix ? prefix.remainder : query).trim();
   const hasPills = applied.length > 0;
 
   return (
@@ -256,6 +310,20 @@ export function SearchFilter({
           <circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.4" />
           <line x1="10.5" y1="10.5" x2="14" y2="14" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
         </svg>
+        {prefix && (
+          <span
+            class="sf-prefix"
+            title={`Filtering within ${prefix.category}`}
+            style={
+              categoryColor?.(prefix.category)
+                ? ({ "--sf-pill-accent": categoryColor(prefix.category) } as JSX.CSSProperties)
+                : undefined
+            }
+          >
+            <span class="sf-prefix-dot" aria-hidden="true" />
+            {prefix.category}
+          </span>
+        )}
         <input
           ref={inputRef}
           class="sf-input"

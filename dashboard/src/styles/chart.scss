@@ -82,6 +82,38 @@
 }
 .chart-toolbar::-webkit-scrollbar { display: none; }
 
+/* Point-size control (s | m | l) — segmented hairline group, ghost chrome.
+   Drives chartPointSize; the mini chart scales its dot radii by it. */
+.chart-ptsize {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.chart-ptsize-btn {
+  appearance: none;
+  background: transparent;
+  border: none;
+  color: var(--text-faint);
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.2;
+  padding: 3px 7px;
+  cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast);
+  /* hairline divider between segments */
+  box-shadow: inset 1px 0 var(--border-soft);
+}
+.chart-ptsize-btn:first-child { box-shadow: none; }
+.chart-ptsize-btn:hover { color: var(--text); background: var(--bg-hi); }
+.chart-ptsize-btn.is-active {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
 /* Data distribution hint strip below toolbar */
 .chart-dist-hint {
   font-size: var(--text-xs);

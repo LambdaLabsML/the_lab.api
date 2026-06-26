@@ -6,9 +6,19 @@
  * SecondaryPanel — the resizable / collapsible level-2 panel next to the rail.
  */
 import type { ComponentChildren } from "preact";
+import { useState, useEffect } from "preact/hooks";
 import { sidebarWidth, sidebarCollapsed } from "../state/settings";
-import { wsConnected, wsAuthFailed } from "../state/ws";
+import { wsConnected, wsAuthFailed, wsLastMessageAt } from "../state/ws";
 import { Tooltip } from "./ui";
+
+function relAgo(ms: number | null): string {
+  if (!ms) return "—";
+  const s = Math.max(0, Math.floor((Date.now() - ms) / 1000));
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  return `${Math.floor(m / 60)}h ago`;
+}
 
 export type NavSection = "review" | "activity" | "queue" | "workbench" | "tools";
 
@@ -33,8 +43,16 @@ export function NavRail({
   settingsOpen: boolean;
   onToggleSettings: () => void;
 }) {
+  // tick every 6s so the "last update Xs ago" stat stays live while hovering
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const t = window.setInterval(() => setTick((n) => n + 1), 6000);
+    return () => window.clearInterval(t);
+  }, []);
+
   const wsState = wsAuthFailed.value ? "auth" : wsConnected.value ? "on" : "off";
   const wsLabel = wsAuthFailed.value ? "auth failed" : wsConnected.value ? "connected" : "reconnecting…";
+  const lastStr = relAgo(wsLastMessageAt.value);
 
   const item = (it: RailItem) => {
     const active = section === it.id && !settingsOpen;
@@ -60,6 +78,7 @@ export function NavRail({
           <>
             <span class="ui-tip-title">the_lab</span>
             <span class="ui-tip-row"><span>websocket</span><b class={`ws-word ws-word--${wsState}`}>{wsLabel}</b></span>
+            <span class="ui-tip-row"><span>last update</span><b>{lastStr}</b></span>
           </>
         }
         placement="bottom"

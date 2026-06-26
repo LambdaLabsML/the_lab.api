@@ -89,30 +89,54 @@ body {
   margin: 0 auto;
 }
 
-/* ── Review search / filter (#34) — full-width row above the sections ── */
-.review-search {
-  width: 100%;
+/* ── Top row (#45) — [ metric select ] [ search … ], one tidy labeled row.
+   Each field stacks a small eyebrow over its control; the row wraps cleanly
+   at narrow widths (metric over search). */
+.review-topbar {
+  display: flex;
+  align-items: flex-start; /* (#53) labels sit above their controls, tops aligned */
+  gap: var(--space-3);
+  flex-wrap: wrap;
 }
-.review-search-field {
-  width: 100%;
+.review-topbar-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.review-topbar-eyebrow {
+  color: var(--text-faint);
+  /* match the big-score header eyebrow weight/spacing */
+  letter-spacing: 0.12em;
+}
+.review-topbar-metric {
+  flex: 0 0 auto;
+  cursor: pointer;
+  /* the select fills the metric field width (which hugs its content) */
+  .review-metric-select-input { width: 100%; }
+}
+.review-topbar-search {
+  flex: 1 1 320px;
+  min-width: 220px;
+}
+/* align the select height with the search field (same font + vertical rhythm) */
+.review-topbar .review-metric-select-input {
+  font-size: var(--text-base);
+  padding-top: 5px;
+  padding-bottom: 5px;
+  max-width: 280px;
 }
 
-/* ── Chart head (#36) — eyebrow + prominent metric selector above chart ── */
+/* the SearchFilter + its field span the search column */
+.review-search { width: 100%; }
+.review-search-field { width: 100%; }
+
+/* ── Chart caption (#36/#45) — eyebrow above the chart (metric moved up) ── */
 .review-chart-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: var(--space-3);
   padding: 2px 2px 0;
-}
-.review-metric-select {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  cursor: pointer;
-}
-.review-metric-select-label {
-  color: var(--text-faint);
 }
 .review-metric-select-input {
   /* on-brand select — .ui-toggle language: hairline field, accent on focus */
@@ -141,6 +165,14 @@ body {
   &:hover { background-color: var(--bg-hi); border-color: var(--accent); }
   &:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent); }
   optgroup, option { background: var(--bg-elev); color: var(--text); font-weight: 400; }
+  &.is-empty {
+    color: var(--text-faint);
+    border-color: var(--border-soft);
+    background-image: none;
+    cursor: default;
+    font-weight: 400;
+    padding-right: 10px;
+  }
 }
 
 /* ── Shared pane patterns ──────────────────────────────────────────── */
@@ -199,85 +231,7 @@ body {
   code { color: var(--text-muted); font-family: var(--font-mono, monospace); }
 }
 
-/* ── Header: status line ────────────────────────────────────────────
-   One quiet line — status dot + the live/idle sentence + branch + action.
-   Sits on canvas; no box. */
-
-.review-statusline {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: 2px 0 9px;
-  min-width: 0;
-  font-size: var(--text-sm);
-  color: var(--text-muted);
-  font-family: var(--font-mono, monospace);
-}
-
-.review-statusline-text {
-  min-width: 0;
-  color: var(--text);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  strong { color: var(--text); font-weight: 700; }
-}
-
-.review-statusline-dim { color: var(--text-faint); }
-.review-statusline-warn { color: var(--yellow); font-weight: 600; }
-
-.review-statusline-branch {
-  margin-left: auto;
-  flex-shrink: 0;
-  font-size: var(--text-xs);
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
-  padding: 1px 6px;
-  border-radius: var(--radius-sm);
-}
-
-.review-statusline-action {
-  flex: 0 0 auto;
-  border: 1px solid var(--border-soft);
-  background: transparent;
-  color: var(--text-muted);
-  border-radius: var(--radius-sm);
-  padding: 4px 9px;
-  font: inherit;
-  font-size: var(--text-sm);
-  font-weight: 600;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: color var(--transition-fast), border-color var(--transition-fast), background var(--transition-fast);
-  &:hover { color: var(--text); border-color: var(--text-muted); background: var(--bg-hi); }
-}
-
-@keyframes dot-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--green) 50%, transparent); }
-  50%       { box-shadow: 0 0 0 4px color-mix(in srgb, var(--green) 0%, transparent); }
-}
-
-@keyframes dot-pulse-amber {
-  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--yellow) 50%, transparent); }
-  50%       { box-shadow: 0 0 0 4px color-mix(in srgb, var(--yellow) 0%, transparent); }
-}
-
-.review-status-dot {
-  flex-shrink: 0;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  &.live  {
-    background: var(--green);
-    animation: dot-pulse 1.8s ease-in-out infinite;
-  }
-  &.live.stagnant {
-    background: var(--yellow);
-    animation: dot-pulse-amber 2.5s ease-in-out infinite;
-  }
-  &.idle  { background: var(--text-faint); opacity: 0.5; }
-  &.idle.stagnant { background: var(--yellow); opacity: 0.6; animation: dot-pulse-amber 3s ease-in-out infinite; }
-}
+/* (#40) the live status line was removed — the KPI cluster + timeline carry state. */
 
 /* ── Idea health bar ───────────────────────────────────────────────── */
 
@@ -306,8 +260,13 @@ body {
    A row of confident mono Stats on the landingpage hairline-grid trick
    (gap:1px on a --border bg). Calm, flat, one purple accent for "best". */
 
+/* KPI cluster (#63): a SINGLE row by default — auto-fit columns that fill the
+   width when there's room (all KPIs on one line) and wrap to a 2nd row only
+   when too narrow for the min cell width. auto-fit collapses empty tracks so
+   the hairline-grid never shows a gap on a partial last row. Balanced, no
+   overflow at any width. */
 .review-kpis {
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(clamp(120px, 15%, 168px), 1fr));
 }
 
 .review-kpi {
@@ -315,6 +274,7 @@ body {
   flex-direction: column;
   gap: 5px;
   padding: var(--space-2) var(--space-3);
+  min-width: 0; /* allow the cell to shrink instead of overflowing the grid */
 }
 
 .review-kpi-row {
@@ -324,8 +284,14 @@ body {
   min-width: 0;
 }
 
-/* Bump the KPI numbers up — the header's headline figures. */
-.review-kpi .ui-stat-value { font-size: calc(var(--text-xl) * 1.15); }
+/* Bump the KPI numbers up — the header's headline figures. Guard overflow. */
+.review-kpi .ui-stat-value {
+  font-size: calc(var(--text-xl) * 1.15);
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 .review-kpi .ui-stat-sub {
   display: flex;
@@ -333,10 +299,10 @@ body {
   gap: 4px;
   flex-wrap: wrap;
   line-height: 1.3;
+  min-width: 0;
 }
 
 @media (max-width: 600px) {
-  .review-kpis { grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); }
   .review-kpi { padding: 8px 10px; }
 }
 
@@ -352,7 +318,7 @@ body {
 /* caption — names the strip + decodes the encoding before you have to guess */
 .exp-grid-caption {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
 }
 .exp-grid-caption .emr-label {
@@ -367,50 +333,87 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* the summary⇄detail switch in the timeline caption — push it to the right */
+.tl-switch { margin-left: auto; }
 
-/* ── Redesigned timeline strip (#30) — curated, readable tiles, minimal
-   scroll. Sections (running / records / recent) wrap onto rows; each tile is
-   a labeled chip colored by its idea, with a status dot. ────────────────── */
-.tl-strip {
+/* ── Timeline summary (#54): small SQUARES only (like legend swatches), no
+   text — records (purple), recent 5 (status color), queued (yellow). Compact,
+   wrapping; hover card + click intact. ─────────────────────────────────── */
+.tl-squares {
   display: flex;
   flex-wrap: wrap;
-  align-items: stretch;
-  gap: 6px 14px;
+  gap: 4px;
+  align-items: center;
 }
-.tl-section {
+.tl-squares .ui-tip-trigger { display: inline-flex; }
+.tl-sq {
+  width: 11px;
+  height: 11px;
+  border-radius: 2px;
+  flex-shrink: 0;
+  cursor: pointer;
+  transition: transform var(--transition-fast), opacity var(--transition-fast);
+  &:hover,
+  &.is-highlighted { transform: scale(1.3); }
+  &.is-dimmed { opacity: 0.3; }
+}
+/* queued squares read yellow in the timeline (per #54) */
+.tl-sq.sq-queued { background: var(--yellow); opacity: 0.8; animation: none; }
+.tl-sq.sq-milestone {
+  background: var(--purple);
+  opacity: 1;
+  box-shadow: 0 0 3px var(--purple);
+}
+
+/* ── Timeline groups (#65): records / recent / queued (or running / records /
+   recent in detail), each a column with a tidy eyebrow header ABOVE its
+   squares/chips. No inline per-item labels. ──────────────────────────────── */
+.tl-groups {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px 18px;
+}
+.tl-group {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
   min-width: 0;
 }
-.tl-section-label {
+.tl-group-label {
   font-family: var(--font-mono, monospace);
   font-size: var(--text-xs);
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--text-faint);
+  b { color: var(--text-muted); font-weight: 700; margin-left: 2px; }
 }
-.tl-section--milestone .tl-section-label { color: var(--purple); }
-.tl-section--running   .tl-section-label { color: var(--yellow); }
+.tl-group--records .tl-group-label { color: var(--purple); }
+.tl-group--running .tl-group-label { color: var(--yellow); }
+.tl-group--queued  .tl-group-label { color: var(--yellow); }
 .tl-tiles {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
 }
 
+/* Detail chips (#66): taller RECTANGLES with dense two-line text — line 1 is
+   exp label + idea#, line 2 is score + status. Idea color is a thin left rule. */
 .tl-tile {
   display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  max-width: 168px;
-  padding: 2px 7px 2px 6px;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+  max-width: 150px;
+  padding: 3px 7px 3px 6px;
   border-radius: var(--radius-sm);
   background: var(--bg-elev);
   /* the idea color reads as a left rule, not a full box */
   box-shadow: inset 2px 0 var(--idea-color, var(--border)), inset 0 0 0 1px var(--border-soft);
   font-family: var(--font-mono, monospace);
   font-size: var(--text-xs);
+  line-height: 1.35;
   cursor: pointer;
   white-space: nowrap;
   transition: background var(--transition-fast), opacity var(--transition-fast), box-shadow var(--transition-fast);
@@ -423,21 +426,21 @@ body {
     box-shadow: inset 2px 0 var(--purple), inset 0 0 0 1px color-mix(in srgb, var(--purple) 45%, transparent);
   }
 }
+.tl-tile-l1, .tl-tile-l2 { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
 .tl-dot {
-  width: 8px; height: 8px; border-radius: 2px; flex-shrink: 0;
+  width: 7px; height: 7px; border-radius: 2px; flex-shrink: 0;
 }
-.tl-star { color: var(--purple); margin-right: 3px; }
+.tl-star { color: var(--purple); margin-right: 2px; }
 .tl-label { color: var(--accent); overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .tl-milestone .tl-label { color: var(--text); font-weight: 600; }
-.tl-idea { color: var(--text-faint); flex-shrink: 0; }
+.tl-idea { color: var(--text-faint); flex-shrink: 0; margin-left: auto; }
 .tl-score {
-  margin-left: 2px;
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
   flex-shrink: 0;
 }
 .tl-score--best { color: var(--purple); font-weight: 700; }
-.tl-score--none { color: var(--text-faint); font-style: italic; }
+.tl-status { color: var(--text-faint); margin-left: auto; }
 /* the Tooltip wraps each tile in an inline-flex trigger — keep it tight */
 .tl-tiles .ui-tip-trigger { min-width: 0; max-width: 100%; }
 
@@ -455,51 +458,12 @@ body {
   box-shadow: 0 0 3px var(--purple);
 }
 
-/* Legend */
-.exp-grid-legend {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.sq-legend {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: var(--text-xs);
-  color: var(--text-faint);
-  &::before {
-    content: "";
-    display: inline-block;
-    width: 8px; height: 8px;
-    border-radius: 2px;
-  }
-}
-.sq-legend.sq-done::before      { background: var(--green);      opacity: 0.75; }
-.sq-legend.sq-running::before   { background: var(--yellow); }
-.sq-legend.sq-failed::before    { background: var(--red); }
-.sq-legend.sq-concluded::before { background: var(--accent);     opacity: 0.7; }
-.sq-legend.sq-queued::before    { background: var(--text-faint); opacity: 0.5; }
-.sq-legend.sq-milestone::before { background: var(--purple); box-shadow: 0 0 3px var(--purple); }
-.sq-legend.sq-recent::before    { background: var(--text-muted); outline: 1px solid rgba(255,255,255,0.25); outline-offset: 1px; }
-
+/* hint line under the timeline (the per-group eyebrows replace the old legend) */
 .exp-grid-legend-note {
-  margin-left: auto;
   font-size: var(--text-xs);
   color: var(--text-faint);
   opacity: 0.7;
 }
-
-/* success-rate dial — sits in the caption row, pushed to the right */
-.exp-grid-success {
-  margin-left: auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  flex-shrink: 0;
-}
-
 
 /* ── Workspace all-open label ──────────────────────────────────────── */
 
@@ -520,14 +484,20 @@ body {
   flex-shrink: 0;
 }
 
+/* muted by default (#58); the whole bar reads as one accent shape on hover */
 .score-dist-tick {
   flex: 1;
   border-radius: 1px 1px 0 0;
   min-width: 5px;
-  transition: opacity var(--transition-fast);
+  background: var(--text-muted);
+  opacity: 0.55;
+  transition: opacity var(--transition-fast), background var(--transition-fast);
   cursor: default;
-  &:hover { opacity: 1 !important; }
+  &.is-empty { background: var(--border-soft); opacity: 0.25; }
 }
+/* un-mute when the bar OR the whole section is hovered (#73) */
+.score-dist-bar:hover .score-dist-tick:not(.is-empty),
+.review-section:hover .score-dist-tick:not(.is-empty) { background: var(--accent); opacity: 0.8; }
 
 .score-dist-range {
   display: flex;
@@ -651,41 +621,35 @@ body {
   .exp-mini-results .emr-section:nth-child(2) { display: none; }
 }
 
-/* ── Summary preview layouts (summary = minis, hairline-separated) ───── */
-
-/* Experiments summary: milestones table is the centerpiece, supporting
-   minis sit in a slim column on the right — separated by a vertical hairline,
-   not boxed. Both columns breathe. */
-.emr-preview--runs {
+/* ── Summary preview layouts (#47) — Experiments & Ideas share ONE shape:
+   a primary aligned table on the left (flex 1) and a fixed supporting column
+   on the right, separated by a vertical hairline (not boxed). Same gap, same
+   right-column width, same order — so the two panes read as a tidy set. */
+.emr-preview--runs,
+.emr-preview--ideas {
   flex-direction: row;
   align-items: stretch;
   gap: var(--space-4);
   width: 100%;
 }
-.emr-preview--runs .review-milestones { flex: 1 1 auto; min-width: 0; }
-.emr-preview--runs .review-mini-col {
+/* left: the primary table fills the row */
+.emr-preview--runs .review-milestones,
+.emr-preview--ideas .emr-section--lb {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+/* right: the supporting column — identical width + hairline divider on both */
+.emr-preview--runs .review-mini-col,
+.emr-preview--ideas .review-mini-col {
   flex: 0 0 auto;
-  width: 168px;
+  width: 200px;
   display: flex;
   flex-direction: column;
   gap: 12px;
   padding-left: var(--space-4);
   box-shadow: inset 1px 0 var(--border-soft); /* vertical hairline between */
 }
-
-.emr-preview--ideas {
-  flex-direction: row;
-  align-items: flex-start;
-  gap: var(--space-4);
-  width: 100%;
-}
-.emr-preview--ideas .idea-portfolio { flex: 0 0 auto; width: 196px; }
-.emr-preview--ideas .emr-section {
-  flex: 1 1 auto;
-  min-width: 0;
-  padding-left: var(--space-4);
-  box-shadow: inset 1px 0 var(--border-soft);
-}
+.emr-preview--ideas .idea-portfolio { width: 100%; }
 
 /* ── A captioned mini chart wrapper — axis labels + caption, reads alone ── */
 .review-mini {
@@ -716,14 +680,29 @@ body {
   font-variant-numeric: tabular-nums;
   flex-shrink: 0;
 }
-/* slim labeled meter (e.g. success rate) */
+/* slim labeled meter (e.g. success rate) — muted by default (#58), accent on hover */
 .review-mini-meter {
   height: 5px;
   border-radius: 3px;
   background: var(--border-soft);
   overflow: hidden;
-  > span { display: block; height: 100%; border-radius: 3px; transition: width 0.5s ease; }
+  > span {
+    display: block; height: 100%; border-radius: 3px;
+    background: var(--text-muted);
+    transition: width 0.5s ease, background var(--transition-fast);
+  }
+  /* un-mute on its own hover OR the whole section's hover (#73) */
+  &:hover > span { background: var(--accent); }
 }
+.review-section:hover .review-mini-meter > span { background: var(--accent); }
+
+/* recent-runs mini bars — muted neutrals by default (#58); newest 5 a touch
+   brighter; un-mute on the chart's OR the section's hover (#73). */
+.rmb { fill: var(--text-muted); opacity: 0.45; transition: fill var(--transition-fast), opacity var(--transition-fast); }
+.rmb--recent { opacity: 0.7; }
+.rmb--zero { fill: var(--border-soft); opacity: 0.35; }
+.review-mini-chart:hover .rmb:not(.rmb--zero),
+.review-section:hover .rmb:not(.rmb--zero) { fill: var(--accent); opacity: 0.85; }
 
 /* ── Score distribution: caption header + x-axis (already present) ───── */
 .score-dist { width: 100%; }
@@ -774,8 +753,9 @@ body {
    subgrid spanning all columns, so cells line up across header + all rows. */
 .review-mst-table {
   display: grid;
-  /* rank · exp · exp-text · idea · idea-text · value · Δ · when */
-  grid-template-columns: 2.6em auto minmax(0, 1.1fr) 3.2em minmax(0, 1.4fr) 4.4em 3.4em 3.4em;
+  /* (#59) ★ · exp · idea# · what-it-tried · value · Δ · when — fixed tracks so
+     nothing overflows; "what it tried" is the only flexible column. */
+  grid-template-columns: 2.4em minmax(4.5em, auto) 3.2em minmax(0, 1fr) 4.4em 3.6em 2.8em;
   font-family: var(--font-mono, monospace);
   font-size: var(--text-sm);
 }
@@ -825,16 +805,15 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* text columns (#12): dimmed + ellipsized so the table stays clean */
-.review-mst-c-exptext,
-.review-mst-c-ideatext {
+/* "what it tried" text column: dimmed + ellipsized so the table stays clean */
+.review-mst-c-exptext {
   color: var(--text-faint);
   font-size: var(--text-xs);
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
 }
-.review-mst-c-idea { color: var(--text-faint); font-size: var(--text-xs); }
+.review-mst-c-idea { color: var(--text-faint); font-size: var(--text-xs); white-space: nowrap; }
 .review-mst-c-val {
   color: var(--purple);
   font-weight: 700;
@@ -855,6 +834,9 @@ body {
   text-align: right;
   font-size: var(--text-xs);
   font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .review-mst-more {
   grid-column: 1 / -1;
@@ -863,15 +845,6 @@ body {
   font-size: var(--text-xs);
   color: var(--text-faint);
 }
-/* At medium widths drop the experiment-text column first (idea text is the
-   more meaningful one) — 7 columns: rank·exp·idea·idea-text·value·Δ·when. */
-@media (max-width: 1100px) {
-  .review-mst-table {
-    grid-template-columns: 2.6em auto 3.2em minmax(0, 1.4fr) 4.4em 3.4em 3.4em;
-  }
-  .review-mst-c-exptext { display: none; }
-}
-
 /* ── Idea portfolio — labeled segmented bar + legend (#7) ─────────────── */
 .idea-portfolio { display: flex; flex-direction: column; gap: 6px; }
 .ipf-head {
@@ -900,17 +873,20 @@ body {
   gap: 1px;
   background: var(--border);
 }
+/* Ideas right-side (#73): the WHOLE portfolio (bar + legend) is muted by
+   default — desaturated, calm — and un-mutes (full status colors) when the
+   Ideas section is hovered. Mirrors the experiment-plot muting. */
 .ipf-seg { min-width: 4px; }
-.ipf-active    { background: var(--green);      opacity: 0.85; }
-.ipf-concluded { background: var(--accent);     opacity: 0.75; }
-.ipf-abandoned { background: var(--red);        opacity: 0.7; }
-/* untested: active-but-untried — green base with a hatch so it reads as "open" */
+.ipf-active    { background: var(--green); }
+.ipf-concluded { background: var(--accent); }
+.ipf-abandoned { background: var(--red); }
+/* untested: active-but-untried — hatch so it reads as "open" */
 .ipf-untested {
   background:
     repeating-linear-gradient(45deg,
-      color-mix(in srgb, var(--yellow) 85%, transparent) 0 2px,
+      color-mix(in srgb, var(--yellow) 70%, transparent) 0 2px,
       transparent 2px 5px),
-    color-mix(in srgb, var(--green) 30%, var(--bg-elev));
+    color-mix(in srgb, var(--green) 22%, var(--bg-elev));
 }
 .ipf-legend {
   display: flex;
@@ -918,15 +894,23 @@ body {
   gap: 4px 12px;
   font-family: var(--font-mono, monospace);
   font-size: var(--text-xs);
-  color: var(--text-muted);
+  color: var(--text-faint);
 }
 .ipf-leg { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
-.ipf-leg b { color: var(--text); font-weight: 700; font-variant-numeric: tabular-nums; }
-.ipf-swatch {
-  width: 9px; height: 9px; border-radius: 2px; flex-shrink: 0;
-  &.ipf-active    { background: var(--green);  opacity: 0.85; }
-  &.ipf-concluded { background: var(--accent); opacity: 0.75; }
-  &.ipf-abandoned { background: var(--red);    opacity: 0.7; }
+.ipf-leg b { color: var(--text-muted); font-weight: 700; font-variant-numeric: tabular-nums; }
+.ipf-swatch { width: 9px; height: 9px; border-radius: 2px; flex-shrink: 0; }
+/* muted state: desaturate the bar + swatches, soften the head accent */
+.ipf-bar, .ipf-swatch {
+  filter: saturate(0.25);
+  opacity: 0.6;
+  transition: filter var(--transition-fast), opacity var(--transition-fast);
+}
+.ipf-head-sub { transition: color var(--transition-fast); }
+/* un-mute on the section's (or the portfolio's own) hover */
+.review-section:hover, .idea-portfolio:hover {
+  .ipf-bar, .ipf-swatch { filter: none; opacity: 1; }
+  .ipf-legend { color: var(--text-muted); }
+  .ipf-leg b { color: var(--text); }
 }
 
 /* ── Idea leaderboard — real aligned grid table (#22) ────────────────────
@@ -976,7 +960,17 @@ body {
   display: inline-flex; align-items: center; gap: 5px;
   color: var(--text-muted); font-size: var(--text-xs); white-space: nowrap;
 }
-.emr-lb-statusdot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; opacity: 0.8; }
+/* status dot is MUTED by default (#58); its status color shows on row
+   hover and for the best row only */
+/* (#74) leaderboard table is NOT muted — the status dot always carries its
+   full status color (the sparkline trend is colored in JS). */
+.emr-lb-statusdot {
+  width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
+  background: var(--text-faint);
+  &.is-active    { background: var(--green); }
+  &.is-concluded { background: var(--accent); }
+  &.is-abandoned { background: var(--red); }
+}
 .emr-lb-title { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .emr-lb-runs { text-align: right; color: var(--text-faint); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
 .emr-lb-spark { display: inline-flex; align-items: center; justify-content: center; }
@@ -1001,9 +995,11 @@ body {
 }
 
 @media (max-width: 800px) {
+  /* both previews stack: table on top, supporting column below, hairline above it */
   .emr-preview--runs,
   .emr-preview--ideas { flex-direction: column; }
-  .emr-preview--runs .review-mini-col {
+  .emr-preview--runs .review-mini-col,
+  .emr-preview--ideas .review-mini-col {
     width: 100%;
     padding-left: 0;
     box-shadow: inset 0 1px var(--border-soft);
@@ -1012,16 +1008,11 @@ body {
     flex-wrap: wrap;
     gap: 14px;
   }
-  .emr-preview--ideas .emr-section {
-    padding-left: 0;
-    box-shadow: inset 0 1px var(--border-soft);
-    padding-top: 8px;
-  }
   /* On mobile keep the milestones table — it's the point of the section.
-     Drop the "what it tried" + "when" columns; the remaining 6 cells
-     (rank · exp · idea · idea-text · value · Δ) re-flow into 6 columns. */
+     Drop "what it tried" + "when"; the remaining 5 cells
+     (★ · exp · idea · value · Δ) re-flow into 5 columns. */
   .review-mst-table {
-    grid-template-columns: 2.4em auto 2.6em minmax(0, 1fr) 3.6em 3em;
+    grid-template-columns: 2.4em minmax(4.5em, 1fr) 3.2em 4.4em 3.6em;
   }
   .review-mst-row { gap: 6px; }
   .review-mst-c-exptext,
@@ -1116,24 +1107,27 @@ body {
 }
 
 /* Flush Idea-Detail body (#23) — no surrounding gray card; DetailPanel
-   renders directly on the page (canvas) background under the heading. */
+   renders directly on the page (canvas) background under the heading.
+   (#51) height:auto with NO inner overflow so the panel grows to its natural
+   height and the MAIN content scroll handles it — no nested scrollbar. */
 .review-detail-flush {
   position: relative;
   min-width: 0;
-  height: 620px;
+  height: auto;
   margin: 2px 0 4px 8px;
   background: transparent; /* flush — no --bg-elev box */
-  overflow: hidden;
+  overflow: visible;
 }
 .review-detail-flush #detail-panel {
   position: relative;
   inset: auto;
   display: block;
   width: 100%;
-  height: 100%;
+  height: auto;
   max-width: none;
   border-left: 0;
   background: transparent;
+  overflow: visible;
 }
 
 /* ── Permanent (always-open) section — Idea Detail (#10) ──────────────
@@ -1312,12 +1306,26 @@ body {
   color: var(--text-faint);
   transition: color var(--transition-fast), background var(--transition-fast);
 }
+/* button variant (timeline switch) — reset native button chrome */
+button.rds-opt {
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-family: var(--font-mono, monospace);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  line-height: 1.4;
+  &:hover { color: var(--text); }
+}
 /* Closed → "summary" is the active view; open → "detail" is active. */
 .review-disclosure:not([open]) .rds-opt--summary,
-.review-disclosure[open] .rds-opt--detail {
+.review-disclosure[open] .rds-opt--detail,
+.rds-opt.is-on {
   color: var(--accent);
   background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
+/* the timeline switch isn't inside a summary — give it a hover border itself */
+.tl-switch { transition: border-color var(--transition-fast); &:hover { border-color: var(--text-muted); } }
 
 .review-summary-pills {
   display: flex;
@@ -1626,14 +1634,6 @@ body {
   /* Experiment grid — hide the verbose caption sub on mobile (legend covers it) */
   .exp-grid-caption-sub { display: none; }
 
-  /* Status line — let it wrap, hide the redundant Workbench button (tab bar covers it) */
-  .review-statusline {
-    flex-wrap: wrap;
-    gap: 6px;
-    font-size: var(--text-xs);
-  }
-  .review-statusline-action { display: none; }
-
   /* Chart wrap — shorter on mobile to show disclosures above fold */
   .review-chart-wrap {
     height: clamp(220px, 30vh, 300px);
@@ -1646,8 +1646,7 @@ body {
   }
 
   /* Table — allow horizontal scroll */
-  .review-table-panel,
-  .review-detail-flush {
+  .review-table-panel {
     height: 480px;
   }
 
@@ -1668,8 +1667,7 @@ body {
     height: 370px;
   }
 
-  .review-table-panel,
-  .review-detail-flush {
+  .review-table-panel {
     height: 520px;
   }
 

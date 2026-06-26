@@ -64,6 +64,7 @@ import {
   applyServerDefaults,
   dashboardLayout,
   filterText,
+  reviewOpenSections,
 } from "./state/settings";
 import { startPolling, stopPolling } from "./state/polling";
 import { startWs, stopWs } from "./state/ws";
@@ -1395,17 +1396,18 @@ function IdeaMiniLeaderboard({ experiments, ideas, metric, lower }: {
     const px = (i: number) => 3 + (i / (vals.length - 1)) * (W - 6);
     const py = (v: number) => H - 3 - ((v - lo_) / range) * (H - 6);
     const d = vals.map((v, i) => `${i === 0 ? "M" : "L"}${px(i).toFixed(1)},${py(v).toFixed(1)}`).join(" ");
+    // (#74) leaderboard table is NOT muted — color the trend by direction
     const trend = lo ? vals[0] - vals[vals.length - 1] : vals[vals.length - 1] - vals[0];
     const color = trend > range * 0.1 ? "var(--green)" : trend < -range * 0.1 ? "var(--red)" : "var(--text-faint)";
     return (
-      <svg width={W} height={H} style={{ flexShrink: 0, opacity: 0.8 }}>
+      <svg width={W} height={H} class="emr-spark-svg" style={{ flexShrink: 0 }}>
         <path d={d} fill="none" stroke={color} strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
       </svg>
     );
   }
 
-  const STATUS_DOT_COLOR = (s?: string) =>
-    s === "active" ? "var(--green)" : s === "concluded" ? "var(--accent)" : s === "abandoned" ? "var(--red)" : "var(--text-faint)";
+  const statusDotCls = (s?: string) =>
+    s === "active" ? "is-active" : s === "concluded" ? "is-concluded" : s === "abandoned" ? "is-abandoned" : "";
 
   return (
     <div class="emr-section emr-section--lb">
@@ -1466,7 +1468,7 @@ function IdeaMiniLeaderboard({ experiments, ideas, metric, lower }: {
               >
                 <span class="emr-lb-rank" role="cell">{i + 1}</span>
                 <span class="emr-lb-idea" role="cell">
-                  <span class="emr-lb-statusdot" style={{ background: STATUS_DOT_COLOR(idea?.status) }} />
+                  <span class={`emr-lb-statusdot ${statusDotCls(idea?.status)}`} />
                   #{r.ideaId}
                 </span>
                 <span class="emr-lb-title" role="cell">{title}</span>
@@ -1504,8 +1506,68 @@ const EXP_STATUS_WORD: Record<string, string> = {
   pending: "queued", cancelled: "cancelled",
 };
 
-/** One curated tile in the redesigned timeline. */
-function TimelineTile({ exp, ideaCol, ideas, metric, isMilestone, recNo }: {
+function fmtScoreShort(v: number) {
+  return Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(2) : v.toFixed(3);
+}
+function clipText(s: string, n: number) { return s.length > n ? s.slice(0, n - 1) + "…" : s; }
+
+/** Shared hover card for a timeline experiment (matches the mini-chart tooltip). */
+function timelineTipContent(
+  exp: import("./lib/types").Experiment,
+  ideas: Record<number, import("./lib/types").IdeaNode>,
+  metric: string,
+  isMilestone: boolean,
+  recNo?: number,
+) {
+  const status = exp._running ? "running" : (exp.status ?? "unknown");
+  const idea = ideas[exp.idea_id];
+  const ideaText = idea?.description?.split("\n")[0] ?? "";
+  const expText = (exp.description ?? "").split("\n")[0];
+  const score = exp.metrics?.[metric];
+  return (
+    <>
+      <span class="ui-tip-title">exp/{exp.label ?? exp.id}{isMilestone ? "  ★" : ""}</span>
+      {typeof score === "number" && isFinite(score) && (
+        <span class="ui-tip-row">{fmtMetricName(metric)} <b>{fmtScoreShort(score)}</b></span>
+      )}
+      <span class="ui-tip-row">idea #{exp.idea_id} <b>{EXP_STATUS_WORD[status] ?? status}</b></span>
+      {isMilestone && <span class="ui-tip-dim" style={{ color: "var(--purple)" }}>★ new record{recNo ? ` #${recNo}` : ""}</span>}
+      {ideaText && <span class="ui-tip-dim">{clipText(ideaText, 64)}</span>}
+      {expText && expText !== ideaText && <span class="ui-tip-dim">{clipText(expText, 64)}</span>}
+    </>
+  );
+}
+
+/** Compact summary square (#54): a small box only (like the legend swatches),
+   no text. Color: milestone → purple, otherwise the status color. */
+function TimelineSquare({ exp, ideas, metric, isMilestone, recNo, sqClsOverride }: {
+  exp: import("./lib/types").Experiment;
+  ideas: Record<number, import("./lib/types").IdeaNode>;
+  metric: string;
+  isMilestone: boolean;
+  recNo?: number;
+  sqClsOverride?: string;
+}) {
+  const highlighted = highlightedIdea.value;
+  const dim = highlighted != null && highlighted !== exp.idea_id;
+  const on = highlighted === exp.idea_id;
+  const status = exp._running ? "running" : (exp.status ?? "unknown");
+  const sqCls = sqClsOverride ?? STATUS_SQ_CLASS[status] ?? "sq-cancelled";
+  return (
+    <Tooltip content={timelineTipContent(exp, ideas, metric, isMilestone, recNo)}>
+      <span
+        class={`tl-sq ${sqCls}${isMilestone ? " sq-milestone" : ""}${on ? " is-highlighted" : ""}${dim ? " is-dimmed" : ""}`}
+        onMouseEnter={() => { highlightedIdea.value = exp.idea_id; }}
+        onMouseLeave={() => { if (highlightedIdea.value === exp.idea_id) highlightedIdea.value = null; }}
+        onClick={() => navigateToIdea(exp.idea_id, exp.label ?? String(exp.id))}
+      />
+    </Tooltip>
+  );
+}
+
+/** Detail chip (#66): a taller rectangle with dense two-line text —
+   line 1: exp label + idea#, line 2: score + status. Hover card for the rest. */
+function TimelineChip({ exp, ideaCol, ideas, metric, isMilestone, recNo }: {
   exp: import("./lib/types").Experiment;
   ideaCol: string;
   ideas: Record<number, import("./lib/types").IdeaNode>;
@@ -1518,30 +1580,10 @@ function TimelineTile({ exp, ideaCol, ideas, metric, isMilestone, recNo }: {
   const on = highlighted === exp.idea_id;
   const status = exp._running ? "running" : (exp.status ?? "unknown");
   const sqCls = STATUS_SQ_CLASS[status] ?? "sq-cancelled";
-  const idea = ideas[exp.idea_id];
-  const ideaText = idea?.description?.split("\n")[0] ?? "";
-  const expText = (exp.description ?? "").split("\n")[0];
   const score = exp.metrics?.[metric];
-  function fmtScore(v: number) {
-    return Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(2) : v.toFixed(3);
-  }
-  function clip(s: string, n: number) { return s.length > n ? s.slice(0, n - 1) + "…" : s; }
-
+  const hasScore = typeof score === "number" && isFinite(score);
   return (
-    <Tooltip
-      content={
-        <>
-          <span class="ui-tip-title">exp/{exp.label ?? exp.id}{isMilestone ? "  ★" : ""}</span>
-          {typeof score === "number" && isFinite(score) && (
-            <span class="ui-tip-row">{fmtMetricName(metric)} <b>{fmtScore(score)}</b></span>
-          )}
-          <span class="ui-tip-row">idea #{exp.idea_id} <b>{EXP_STATUS_WORD[status] ?? status}</b></span>
-          {isMilestone && <span class="ui-tip-dim" style={{ color: "var(--purple)" }}>★ new record{recNo ? ` #${recNo}` : ""}</span>}
-          {ideaText && <span class="ui-tip-dim">{clip(ideaText, 64)}</span>}
-          {expText && expText !== ideaText && <span class="ui-tip-dim">{clip(expText, 64)}</span>}
-        </>
-      }
-    >
+    <Tooltip content={timelineTipContent(exp, ideas, metric, isMilestone, recNo)}>
       <span
         class={`tl-tile${isMilestone ? " tl-milestone" : ""}${on ? " is-highlighted" : ""}${dim ? " is-dimmed" : ""}`}
         style={{ "--idea-color": ideaCol } as any}
@@ -1549,64 +1591,112 @@ function TimelineTile({ exp, ideaCol, ideas, metric, isMilestone, recNo }: {
         onMouseLeave={() => { if (highlightedIdea.value === exp.idea_id) highlightedIdea.value = null; }}
         onClick={() => navigateToIdea(exp.idea_id, exp.label ?? String(exp.id))}
       >
-        <span class={`tl-dot ${sqCls}${isMilestone ? " sq-milestone" : ""}`} />
-        <span class="tl-label">{isMilestone && <span class="tl-star">★</span>}exp/{exp.label ?? exp.id}</span>
-        <span class="tl-idea">#{exp.idea_id}</span>
-        {typeof score === "number" && isFinite(score)
-          ? <span class={`tl-score${isMilestone ? " tl-score--best" : ""}`}>{fmtScore(score)}</span>
-          : <span class="tl-score tl-score--none">{EXP_STATUS_WORD[status] ?? status}</span>}
+        <span class="tl-tile-l1">
+          <span class="tl-label">{isMilestone && <span class="tl-star">★</span>}exp/{exp.label ?? exp.id}</span>
+          <span class="tl-idea">#{exp.idea_id}</span>
+        </span>
+        <span class="tl-tile-l2">
+          <span class={`tl-dot ${sqCls}${isMilestone ? " sq-milestone" : ""}`} />
+          {hasScore && <span class={`tl-score${isMilestone ? " tl-score--best" : ""}`}>{fmtScoreShort(score!)}</span>}
+          <span class="tl-status">{EXP_STATUS_WORD[status] ?? status}</span>
+        </span>
       </span>
     </Tooltip>
   );
 }
 
-// Redesigned Experiment Timeline (#30): instead of one square per experiment
-// (which forces painful horizontal scroll), show only the experiments that
-// matter — milestones (records) + currently-running + a handful of recent — as
-// readable labeled tiles in a clean strip. Hover cards + highlightedIdea sync
-// preserved; a short legend explains the tile groups.
-function ExperimentGrid({ experiments, successRate, milestoneIds, ideas, metric }: {
+// Experiment Timeline (#46). Two views, toggled locally:
+//   summary (default) — EVERY experiment as a status dot with its score below,
+//     wrapping, grouped & colored by idea, no heavy boxes.
+//   detail — the curated, more-informative chips (running / records / recent).
+// Hover cards + hover→highlightedIdea cross-highlight in both.
+function ExperimentGrid({ experiments, milestoneIds, ideas, metric }: {
   experiments: import("./lib/types").Experiment[];
-  successRate: number | null;
   milestoneIds?: Set<number>;
   ideas: Record<number, import("./lib/types").IdeaNode>;
   metric: string;
 }) {
+  const [view, setView] = useState<"summary" | "detail">("summary");
   if (experiments.length === 0) return null;
 
   const chrono = experiments.slice().sort((a, b) => a.id - b.id);
   const total = experiments.length;
 
-  // idea → stable palette color (by first appearance, like before)
+  // idea → stable palette color (by first appearance)
   const ideaColor: Record<number, string> = {};
   let ci = 0;
   for (const e of chrono) if (!(e.idea_id in ideaColor)) ideaColor[e.idea_id] = IDEA_PALETTE[ci++ % IDEA_PALETTE.length];
 
-  // ── curate the tiles ──
-  const running = chrono.filter(e => e._running || e.status === "running");
+  // milestone bookkeeping
   const ms = chrono.filter(e => milestoneIds?.has(e.id));
   const msIds = new Set(ms.map(e => e.id));
-  // recent done experiments not already shown as running/milestone
-  const recent = chrono
-    .filter(e => !e._running && e.status !== "running" && !msIds.has(e.id))
-    .slice(-6);
-
-  // recNo per milestone (1 = first record)
   const msRecNo = new Map<number, number>();
   ms.forEach((e, i) => msRecNo.set(e.id, i + 1));
 
+  // shared curation: running, records, the recent done experiments
+  const running = chrono.filter(e => e._running || e.status === "running");
+  const recent5 = chrono
+    .filter(e => !e._running && e.status !== "running" && e.status !== "queued" && e.status !== "pending" && !msIds.has(e.id))
+    .slice(-5);
+  const recent6 = chrono
+    .filter(e => !e._running && e.status !== "running" && !msIds.has(e.id))
+    .slice(-6);
+
+  // Queued (#65): queued experiments aren't in allExperiments — surface them
+  // from ideas flagged `has_queued` (one yellow square per pending idea). Also
+  // fold in any pending/queued experiment rows if the backend ever sends them.
+  const queuedExpIdeaIds = new Set(
+    chrono.filter(e => e.status === "queued" || e.status === "pending").map(e => e.idea_id),
+  );
+  const queuedIdeas = Object.values(ideas).filter(
+    i => (i.has_queued || queuedExpIdeaIds.has(i.id)) && i.status !== "concluded" && i.status !== "abandoned",
+  );
+
   const hasMilestones = ms.length > 0;
   const hasRunning = running.length > 0;
-  const shownCount = running.length + ms.length + recent.length;
+  const hasQueued = queuedIdeas.length > 0;
+  const summaryCount = ms.length + recent5.length + queuedIdeas.length;
+  const shownDetail = running.length + ms.length + recent6.length;
 
-  // a tile section (running / milestones / recent), each with its own caption
-  const Section = ({ label, items, kind }: { label: string; items: typeof chrono; kind: string }) =>
+  // a column-header group: a tidy eyebrow ABOVE the group of squares/chips
+  const SqGroup = ({ label, kind, items, queuedNodes }: {
+    label: string; kind: string;
+    items?: typeof chrono;
+    queuedNodes?: import("./lib/types").IdeaNode[];
+  }) => {
+    const count = (items?.length ?? 0) + (queuedNodes?.length ?? 0);
+    if (count === 0) return null;
+    return (
+      <div class={`tl-group tl-group--${kind}`}>
+        <span class="tl-group-label">{label} <b>{count}</b></span>
+        <div class="tl-squares">
+          {items?.map(e => (
+            <TimelineSquare key={e.id} exp={e} ideas={ideas} metric={metric}
+              isMilestone={kind === "records"} recNo={msRecNo.get(e.id)} />
+          ))}
+          {queuedNodes?.map(n => (
+            <Tooltip key={`q${n.id}`} content={
+              <>
+                <span class="ui-tip-title">idea #{n.id} · queued</span>
+                {n.description && <span class="ui-tip-dim">{(n.description.split("\n")[0]).slice(0, 64)}</span>}
+                <span class="ui-tip-dim">has experiments waiting to run</span>
+              </>
+            }>
+              <span class="tl-sq sq-queued" onClick={() => navigateToIdea(n.id)} />
+            </Tooltip>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  const ChipGroup = ({ label, kind, items }: { label: string; kind: string; items: typeof chrono }) =>
     items.length === 0 ? null : (
-      <div class={`tl-section tl-section--${kind}`}>
-        <span class="tl-section-label">{label}</span>
+      <div class={`tl-group tl-group--${kind}`}>
+        <span class="tl-group-label">{label} <b>{items.length}</b></span>
         <div class="tl-tiles">
           {items.map(e => (
-            <TimelineTile key={e.id} exp={e} ideaCol={ideaColor[e.idea_id]} ideas={ideas}
+            <TimelineChip key={e.id} exp={e} ideaCol={ideaColor[e.idea_id]} ideas={ideas}
               metric={metric} isMilestone={msIds.has(e.id)} recNo={msRecNo.get(e.id)} />
           ))}
         </div>
@@ -1618,39 +1708,34 @@ function ExperimentGrid({ experiments, successRate, milestoneIds, ideas, metric 
       <div class="exp-grid-caption">
         <span class="emr-label">experiment timeline</span>
         <span class="exp-grid-caption-sub">
-          showing {shownCount} of {total} — records, running &amp; recent · colored by idea
+          {view === "summary"
+            ? <>records, recent &amp; queued — {summaryCount} of {total}</>
+            : <>showing {shownDetail} of {total} — records, running &amp; recent</>}
         </span>
-        {successRate !== null && (() => {
-          const r = 7, sw = 2.5, size = 18;
-          const c = 2 * Math.PI * r;
-          const fill = (successRate / 100) * c;
-          const arcColor = successRate < 10 ? "var(--red)" : successRate < 20 ? "var(--yellow)" : "var(--green)";
-          return (
-            <span class="exp-grid-success" title={`${successRate}% of experiments scored above zero`}>
-              <svg width={size} height={size} style={{ display: "block", opacity: 0.8 }}>
-                <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="var(--border-soft)" strokeWidth={sw} />
-                <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={arcColor} strokeWidth={sw}
-                  strokeDasharray={`${fill} ${c - fill}`} strokeDashoffset={c / 4} strokeLinecap="round"
-                  transform={`rotate(-90 ${size/2} ${size/2})`} />
-              </svg>
-              <span style={{ fontSize: "var(--text-xs)", color: arcColor, fontFamily: "var(--font-mono)" }}>{successRate}% scored</span>
-            </span>
-          );
-        })()}
+        {/* summary ⇄ detail switch — same .ui-toggle language as the disclosures */}
+        <span class="review-disclosure-switch tl-switch" role="presentation">
+          <button type="button" class={`rds-opt${view === "summary" ? " is-on" : ""}`} onClick={() => setView("summary")}>summary</button>
+          <button type="button" class={`rds-opt${view === "detail" ? " is-on" : ""}`} onClick={() => setView("detail")}>detail</button>
+        </span>
       </div>
 
-      <div class="tl-strip">
-        <Section label="running" items={running} kind="running" />
-        <Section label={`records (★ ${ms.length})`} items={ms} kind="milestone" />
-        <Section label="recent" items={recent} kind="recent" />
-      </div>
+      {/* (#65) grouped into records / recent / queued, each with a column-header
+          eyebrow above its squares — no inline per-square labels. */}
+      {view === "summary" ? (
+        <div class="tl-groups">
+          {hasMilestones && <SqGroup label="records" kind="records" items={ms} />}
+          {recent5.length > 0 && <SqGroup label="recent" kind="recent" items={recent5} />}
+          {hasQueued && <SqGroup label="queued" kind="queued" queuedNodes={queuedIdeas} />}
+        </div>
+      ) : (
+        <div class="tl-groups">
+          {hasRunning && <ChipGroup label="running" kind="running" items={running} />}
+          {hasMilestones && <ChipGroup label="records" kind="records" items={ms} />}
+          <ChipGroup label="recent" kind="recent" items={recent6} />
+        </div>
+      )}
 
-      <div class="exp-grid-legend">
-        {hasRunning && <span class="sq-legend sq-running">running</span>}
-        {hasMilestones && <span class="sq-legend sq-milestone">★ record / new best</span>}
-        <span class="sq-legend sq-done">recent done</span>
-        <span class="exp-grid-legend-note">hover a tile for detail · click to open the idea</span>
-      </div>
+      <div class="exp-grid-legend-note">hover for detail · click to open the idea</div>
     </div>
   );
 }
@@ -1760,12 +1845,12 @@ function ScoreDistBar({ experiments, metric, lower }: {
       >
         <div class="score-dist-bar">
           {counts.map((c, i) => {
-            const frac = lower ? 1 - i / (BUCKETS - 1) : i / (BUCKETS - 1);
             const h = c > 0 ? Math.max(4, Math.round((c / maxC) * 36)) : 1;
-            const clr = `hsl(${Math.round(120 * frac)},70%,52%)`;
+            // muted by default (#58): filled bars use --text-muted, empties a
+            // whisper of --border-soft. Color is reserved for hover (CSS).
             return (
-              <span key={i} class="score-dist-tick"
-                style={{ height: `${h}px`, background: c > 0 ? clr : "var(--border-soft)", opacity: c > 0 ? 0.85 : 0.25 }}
+              <span key={i} class={`score-dist-tick${c > 0 ? "" : " is-empty"}`}
+                style={{ height: `${h}px` }}
                 title={`${c} exp @ ${(lo + i * size).toFixed(1)}–${(lo + (i+1) * size).toFixed(1)}`}
               />
             );
@@ -1846,12 +1931,12 @@ function MilestonesTable({ experiments, metric, lower, ideas }: {
         </span>
       </div>
       <div class="review-mst-table">
+        {/* order (#59): ★ · exp · idea# · what-it-tried · {metric} · Δ · when */}
         <div class="review-mst-row review-mst-head" role="row">
-          <span class="review-mst-c-rank" role="columnheader">#</span>
-          <span class="review-mst-c-exp" role="columnheader">experiment</span>
-          <span class="review-mst-c-exptext" role="columnheader">what it tried</span>
+          <span class="review-mst-c-rank" role="columnheader">★</span>
+          <span class="review-mst-c-exp" role="columnheader">exp</span>
           <span class="review-mst-c-idea" role="columnheader">idea</span>
-          <span class="review-mst-c-ideatext" role="columnheader">idea text</span>
+          <span class="review-mst-c-exptext" role="columnheader">what it tried</span>
           <span class="review-mst-c-val" role="columnheader">{fmtMetricName(metric)}</span>
           <span class="review-mst-c-delta" role="columnheader">Δ</span>
           <span class="review-mst-c-when" role="columnheader">when</span>
@@ -1861,7 +1946,7 @@ function MilestonesTable({ experiments, metric, lower, ideas }: {
           const isLatest = i === 0;
           const idea = ideas[r.exp.idea_id];
           const ideaText = idea?.description?.split("\n")[0] ?? "";
-          const expText = (r.exp.description ?? "").split("\n")[0];
+          const expText = (r.exp.description ?? "").split("\n")[0] || ideaText;
           return (
             <div
               key={r.exp.id}
@@ -1877,16 +1962,15 @@ function MilestonesTable({ experiments, metric, lower, ideas }: {
                 <span class="review-mst-star">★</span>{recNo}
               </span>
               <code class="review-mst-c-exp" role="cell">exp/{r.exp.label ?? r.exp.id}</code>
-              <span class="review-mst-c-exptext" role="cell">{expText || "—"}</span>
               <span class="review-mst-c-idea" role="cell">#{r.exp.idea_id}</span>
-              <span class="review-mst-c-ideatext" role="cell">{ideaText || "—"}</span>
+              <span class="review-mst-c-exptext" role="cell">{expText || "—"}</span>
               <span class="review-mst-c-val" role="cell">{fmtV(r.val)}</span>
               <span class="review-mst-c-delta" role="cell">
                 {r.delta == null
                   ? <span class="review-mst-first">first</span>
                   : <>{lower ? "−" : "+"}{fmtV(r.delta)}</>}
               </span>
-              <span class="review-mst-c-when" role="cell">{whenAgo(r.exp.finished_at || r.exp.created_at)} ago</span>
+              <span class="review-mst-c-when" role="cell">{whenAgo(r.exp.finished_at || r.exp.created_at)}</span>
             </div>
           );
         })}
@@ -2017,33 +2101,53 @@ function ReviewSearchFilter({ experiments, ideas }: {
     }
   }, [applied]);
 
-  function suggest(query: string): FilterItem[] {
+  // (#76) When `category` is set (via a category prefix in the field), return
+  // EVERY matching item in that category — including all of them when `query`
+  // is empty. When unset, behave as before: a mixed, capped set. The per-
+  // category cap is lifted in single-category mode so the user can browse all.
+  function suggest(query: string, category?: string): FilterItem[] {
     const q = query.toLowerCase();
     const out: FilterItem[] = [];
-    // ideas — by #id and description
     const ideaArr = Object.values(ideas);
-    for (const idea of ideaArr) {
-      const desc = (idea.description ?? "").split("\n")[0];
-      const hay = `#${idea.id} ${desc}`.toLowerCase();
-      if (hay.includes(q)) {
-        out.push({ id: `idea:${idea.id}`, category: "idea", label: `#${idea.id} ${desc.slice(0, 48)}`.trim(), value: String(idea.id) });
+    const wantIdeas = !category || category === "idea";
+    const wantTags = !category || category === "tag";
+    const wantExps = !category || category === "experiment";
+    const cap = category ? Infinity : 8; // no per-category cap when scoped
+
+    // ideas — by #id and description
+    if (wantIdeas) {
+      let n = 0;
+      for (const idea of ideaArr) {
+        const desc = (idea.description ?? "").split("\n")[0];
+        const hay = `#${idea.id} ${desc}`.toLowerCase();
+        if (!q || hay.includes(q)) {
+          out.push({ id: `idea:${idea.id}`, category: "idea", label: `#${idea.id} ${desc.slice(0, 48)}`.trim(), value: String(idea.id) });
+          if (++n >= cap) break;
+        }
       }
-      if (out.filter(o => o.category === "idea").length >= 8) break;
     }
     // tags — campaign tag set (same source as the existing tag filter)
-    const tagSet = new Set<string>();
-    for (const e of experiments) if (e.tags) for (const t of e.tags) tagSet.add(t);
-    for (const idea of ideaArr) { const it = (idea as any).tags as string[] | undefined; if (it) for (const t of it) tagSet.add(t); }
-    for (const t of [...tagSet].sort()) {
-      if (t.toLowerCase().includes(q)) out.push({ id: `tag:${t}`, category: "tag", label: t, value: t });
+    if (wantTags) {
+      const tagSet = new Set<string>();
+      for (const e of experiments) if (e.tags) for (const t of e.tags) tagSet.add(t);
+      for (const idea of ideaArr) { const it = (idea as any).tags as string[] | undefined; if (it) for (const t of it) tagSet.add(t); }
+      let n = 0;
+      for (const t of [...tagSet].sort()) {
+        if (!q || t.toLowerCase().includes(q)) {
+          out.push({ id: `tag:${t}`, category: "tag", label: t, value: t });
+          if (++n >= cap) break;
+        }
+      }
     }
     // experiments — by label; value carries the idea_id for navigation
-    let nExp = 0;
-    for (const e of experiments) {
-      const lab = e.label ?? String(e.id);
-      if (lab.toLowerCase().includes(q)) {
-        out.push({ id: `experiment:${e.id}`, category: "experiment", label: `exp/${lab}`, value: String(e.idea_id) });
-        if (++nExp >= 8) break;
+    if (wantExps) {
+      let n = 0;
+      for (const e of experiments) {
+        const lab = e.label ?? String(e.id);
+        if (!q || lab.toLowerCase().includes(q)) {
+          out.push({ id: `experiment:${e.id}`, category: "experiment", label: `exp/${lab}`, value: String(e.idea_id) });
+          if (++n >= cap) break;
+        }
       }
     }
     return out;
@@ -2086,28 +2190,26 @@ function ReviewSearchFilter({ experiments, ideas }: {
   );
 }
 
-// ── Review metric selector (#36) — prominent, on-brand <select> driving the
-// single review chart's metric. Lives just above the chart so the choice is
-// obvious instead of buried in the chart toolbar.
+// ── Review metric selector (#36, #45) — prominent, on-brand <select> driving
+// the single review chart's metric. Lives in the top row, left of the search.
 function ReviewMetricSelect({ experiments }: { experiments: import("./lib/types").Experiment[] }) {
   const metric = selectedMetric.value;
   const grouped = collectChartKeys(experiments);
   const allKeys = [...grouped.metrics, ...grouped.nested, ...grouped.timing, ...grouped.meta];
-  if (allKeys.length === 0) return null;
+  if (allKeys.length === 0) {
+    return <span class="review-metric-select-input is-empty">no metrics yet</span>;
+  }
   return (
-    <label class="review-metric-select" title="Choose the metric charted below and summarized above">
-      <span class="ui-eyebrow review-metric-select-label">metric</span>
-      <select
-        class="review-metric-select-input"
-        value={metric}
-        onChange={(e) => { selectedMetric.value = (e.target as HTMLSelectElement).value; }}
-      >
-        {grouped.metrics.length > 0 && <optgroup label="Metrics">{grouped.metrics.map((k) => <option key={k} value={k}>{fmtMetricName(k)}</option>)}</optgroup>}
-        {grouped.nested.length > 0 && <optgroup label="Nested">{grouped.nested.map((k) => <option key={k} value={k}>{fmtMetricName(k)}</option>)}</optgroup>}
-        {grouped.timing.length > 0 && <optgroup label="Timing">{grouped.timing.map((k) => <option key={k} value={k}>{fmtMetricName(k)}</option>)}</optgroup>}
-        {grouped.meta.length > 0 && <optgroup label="Meta">{grouped.meta.map((k) => <option key={k} value={k}>{fmtMetricName(k)}</option>)}</optgroup>}
-      </select>
-    </label>
+    <select
+      class="review-metric-select-input"
+      value={metric}
+      onChange={(e) => { selectedMetric.value = (e.target as HTMLSelectElement).value; }}
+    >
+      {grouped.metrics.length > 0 && <optgroup label="Metrics">{grouped.metrics.map((k) => <option key={k} value={k}>{fmtMetricName(k)}</option>)}</optgroup>}
+      {grouped.nested.length > 0 && <optgroup label="Nested">{grouped.nested.map((k) => <option key={k} value={k}>{fmtMetricName(k)}</option>)}</optgroup>}
+      {grouped.timing.length > 0 && <optgroup label="Timing">{grouped.timing.map((k) => <option key={k} value={k}>{fmtMetricName(k)}</option>)}</optgroup>}
+      {grouped.meta.length > 0 && <optgroup label="Meta">{grouped.meta.map((k) => <option key={k} value={k}>{fmtMetricName(k)}</option>)}</optgroup>}
+    </select>
   );
 }
 
@@ -2122,19 +2224,13 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
   const activeIdeas = ideaListForCount.length > 0
     ? ideaListForCount.filter(i => i.status !== "concluded" && i.status !== "abandoned").length
     : (data?.active_ideas.length ?? 0);
-  const totalRunning = data?.total_running ?? 0;
-  const branch = data?.current_branch ?? "…";
   const done = experiments.filter((e) => !e._running && e.status !== "running");
   const finished = done.length;
   const running = experiments.filter((e) => e._running || e.status === "running").length;
   const queued = data?.total_pending ?? 0;
   const failed = experiments.filter((e) => e.status === "failed").length;
-  const activeRuns = experiments.filter((e) => e._running || e.status === "running");
   const selected = selectedIdea.value;
   const metric = selectedMetric.value || "metric";
-  const avgProgress = activeRuns.length
-    ? Math.round(activeRuns.reduce((sum, e) => sum + (progress[e.label || String(e.id)] ?? 0), 0) / activeRuns.length)
-    : 0;
 
   // Compute best score for the selected metric
   const lower = isLowerBetter(metric);
@@ -2145,26 +2241,6 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
     if (!bestExp || (lower ? v < bestExp.metrics![metric]! : v > bestExp.metrics![metric]!)) bestExp = e;
   }
   const bestVal = bestExp?.metrics?.[metric];
-
-  const liveCount = totalRunning || running;
-  const isLive = liveCount > 0;
-
-  // Last-activity: most recent finished experiment
-  const lastFinishedExp = done.reduce<typeof done[0] | null>((latest, e) => {
-    if (!e.finished_at) return latest;
-    return !latest || e.finished_at > latest.finished_at! ? e : latest;
-  }, null);
-  const lastFinishedAt = lastFinishedExp?.finished_at ?? null;
-  function timeAgo(iso: string | null): string {
-    if (!iso) return "";
-    const sec = Math.max(0, Math.floor((Date.now() - Date.parse(iso)) / 1000));
-    if (sec < 60) return `${sec}s ago`;
-    const min = Math.floor(sec / 60);
-    if (min < 60) return `${min}m ago`;
-    const hr = Math.floor(min / 60);
-    if (hr < 48) return `${hr}h ago`;
-    return `${Math.floor(hr / 24)}d ago`;
-  }
 
   // Experiments run since last breakthrough (new global best)
   const expsSinceBest = (() => {
@@ -2272,47 +2348,25 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
 
   return (
     <div class="review-page">
-      {/* ── Search / filter (#34) — full width, top of the review content.
-          Active pills drive the global filter signals so the whole page
-          (chart, tables, graph) filters in sync. */}
-      <ReviewSearchFilter experiments={experiments} ideas={ideas} />
+      {/* ── Top row (#45): metric selector (left) + search/filter (right),
+          one tidy row with eyebrow labels. The metric drives the single
+          review chart; the search pills drive the global filter signals so
+          the whole page (chart, tables, graph) filters in sync. */}
+      <div class="review-topbar">
+        <label class="review-topbar-field review-topbar-metric" title="Choose the metric charted below and summarized above">
+          <span class="ui-eyebrow review-topbar-eyebrow">metric</span>
+          <ReviewMetricSelect experiments={experiments} />
+        </label>
+        <div class="review-topbar-field review-topbar-search">
+          <span class="ui-eyebrow review-topbar-eyebrow">filter</span>
+          <ReviewSearchFilter experiments={experiments} ideas={ideas} />
+        </div>
+      </div>
 
       {/* ══ Header — one calm instrument cluster ════════════════════════
-          A single status line + a hairline KPI grid + the experiment grid.
-          Replaces the old status-strip / jump-nav / best-bar / snapshot /
-          milestone-timeline pile-up. Color is reserved for status + the
-          single purple "best" accent. */}
-
-      {/* ── Status line — one dot, the live/idle sentence, branch, action ── */}
-      <div class="review-statusline">
-        <span class={`review-status-dot ${isLive ? "live" : "idle"}${expsSinceBest != null && expsSinceBest > 50 ? " stagnant" : ""}`}
-          title={expsSinceBest != null && expsSinceBest > 50 ? `Stagnant: ${expsSinceBest} experiments since last record` : undefined}
-        />
-        <span class="review-statusline-text">
-          {isLive ? (
-            <>
-              <strong>{liveCount}</strong> running{avgProgress > 0 ? ` · ${avgProgress}%` : ""}
-              {queued > 0 && <span class="review-statusline-dim"> · {queued} queued</span>}
-              {activeRuns[0]?.started_at && (() => {
-                const mins = Math.floor((Date.now() - Date.parse(activeRuns[0].started_at!)) / 60000);
-                return mins > 0 ? <span class="review-statusline-dim"> · {mins}m elapsed</span> : null;
-              })()}
-            </>
-          ) : (
-            <>
-              idle
-              {lastFinishedAt && <span class="review-statusline-dim"> · last record {timeAgo(lastFinishedAt)}</span>}
-              {queued > 0 && <span class="review-statusline-dim"> · {queued} queued</span>}
-              {expsSinceBest != null && expsSinceBest > 50 && (
-                <span class="review-statusline-warn" title={`${expsSinceBest} experiments since the last new best — consider a new approach`}>
-                  {" · "}stuck {expsSinceBest}
-                </span>
-              )}
-            </>
-          )}
-        </span>
-        <code class="review-statusline-branch" style={branch === "…" ? { opacity: 0.4 } : undefined}>{branch}</code>
-      </div>
+          A hairline KPI grid + the experiment grid. The old live status
+          sentence (#40) was removed; the KPI cluster + timeline carry the
+          state. Color is reserved for status + the single purple "best". */}
 
       {/* ── KPI cluster — confident mono Stats on a hairline grid ──────── */}
       <div class="review-kpis ui-hairline-grid">
@@ -2328,12 +2382,6 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
           </span>
           <span class="ui-stat-sub">
             {lower ? "↓ lower better" : "↑ higher better"}
-            {expsSinceBest != null && expsSinceBest > 5 && (
-              <span style={{ color: expsSinceBest > 50 ? "var(--red)" : expsSinceBest > 20 ? "var(--yellow)" : "var(--text-faint)", marginLeft: 6 }}
-                title={`${expsSinceBest} experiments since the last new best`}>
-                +{expsSinceBest} since ★
-              </span>
-            )}
           </span>
         </div>
 
@@ -2348,11 +2396,27 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
           </span>
         </div>
 
-        {successRate !== null && (
+        {/* (#64) Dry streak — experiments since the most recent record. */}
+        {expsSinceBest != null && (
           <div class="review-kpi">
-            <span class="ui-stat-label">success</span>
-            <span class={`ui-stat-value${successRate < 15 ? " ui-stat-value--warn" : successRate > 50 ? " ui-stat-value--good" : ""}`}>{successRate}%</span>
-            <span class="ui-stat-sub">scored above zero</span>
+            <span class="ui-stat-label">dry streak</span>
+            <Tooltip
+              content={
+                <>
+                  <span class="ui-tip-title">dry streak</span>
+                  <span class="ui-tip-row">runs since best <b>{expsSinceBest}</b></span>
+                  {bestExp && <span class="ui-tip-row">last record <b>exp/{bestExp.label ?? bestExp.id}</b></span>}
+                  <span class="ui-tip-dim">experiments completed since the most recent new global best</span>
+                </>
+              }
+            >
+              <span class={`ui-stat-value${expsSinceBest > 50 ? " ui-stat-value--warn" : expsSinceBest === 0 ? " ui-stat-value--good" : ""}`}>
+                {expsSinceBest === 0 ? "0" : `${expsSinceBest}`}
+              </span>
+            </Tooltip>
+            <span class="ui-stat-sub">
+              {expsSinceBest === 0 ? "just set a record ★" : "runs since ★"}
+            </span>
           </div>
         )}
 
@@ -2384,12 +2448,11 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
       </div>
 
       {/* ── Experiment grid — glanceable per-experiment status tiles ───── */}
-      <ExperimentGrid experiments={experiments} successRate={successRate} milestoneIds={milestoneIdsSet} ideas={ideas} metric={metric} />
+      <ExperimentGrid experiments={experiments} milestoneIds={milestoneIdsSet} ideas={ideas} metric={metric} />
 
-      {/* ── Metric selector (#36) — prominent, just above the single chart ── */}
+      {/* ── Chart caption (metric selector moved up to the top row, #45) ── */}
       <div class="review-chart-head">
-        <span class="ui-eyebrow">progress over experiments</span>
-        <ReviewMetricSelect experiments={experiments} />
+        <span class="ui-eyebrow">progress over experiments · {fmtMetricName(metric)}</span>
       </div>
 
       {/* ── Chart — collapses to compact empty state when no metric selected ── */}
@@ -2464,10 +2527,11 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
                               const barH = v > 0 ? Math.max(2, (v / maxV) * (H - 2)) : 2;
                               const x = i * (W / vals.length);
                               const isRecent = i >= vals.length - 5;
+                              // muted by default (#58): newest 5 stay slightly brighter
+                              // (still a neutral token), accent comes in on hover (CSS).
                               return (
                                 <rect key={i} x={x} y={H - barH} width={barW} height={barH}
-                                  fill={v > 0 ? (isRecent ? "var(--green)" : "var(--accent)") : "var(--border-soft)"}
-                                  opacity={v > 0 ? (isRecent ? 0.9 : 0.6) : 0.4}
+                                  class={`rmb${isRecent ? " rmb--recent" : ""}${v > 0 ? "" : " rmb--zero"}`}
                                   rx={1}
                                 />
                               );
@@ -2478,7 +2542,7 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
                       </Tooltip>
                       <div class="review-mini-cap">
                         <span>{fmtMetricName(metric)} · last {recent30.length} runs</span>
-                        <span class="review-mini-cap-end" style={{ color: "var(--green)" }}>● newest 5</span>
+                        <span class="review-mini-cap-end">newest 5 brighter</span>
                       </div>
                     </div>
                   );
@@ -2497,7 +2561,7 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
                       }
                     >
                       <div class="review-mini-meter">
-                        <span style={{ width: `${successRate}%`, background: successRate > 30 ? "var(--green)" : successRate > 10 ? "var(--yellow)" : "var(--red)" }} />
+                        <span style={{ width: `${successRate}%` }} />
                       </div>
                     </Tooltip>
                     <div class="review-mini-cap">
@@ -2545,25 +2609,29 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
           })()}
           preview={
             <div class="emr-preview emr-preview--ideas">
-              {/* Redesigned (#7): a labeled segmented portfolio bar + legend —
-                  a glance shows active / concluded / abandoned / untested. */}
-              <IdeaPortfolio
-                active={ideasActive}
-                concluded={ideasConcluded}
-                abandoned={ideasAbandoned}
-                untested={(() => {
-                  if (experiments.length <= 20) return 0;
-                  const counts: Record<number, number> = {};
-                  for (const e of experiments) { if (!e._running) counts[e.idea_id] = (counts[e.idea_id] || 0) + 1; }
-                  return Object.values(ideas).filter(i => i.status !== "concluded" && i.status !== "abandoned" && (counts[i.id] ?? 0) === 0).length;
-                })()}
-              />
+              {/* Unified layout (#47): primary table on the left, a fixed
+                  supporting column on the right — mirrors the Experiments
+                  summary (milestones table | minis) so both panes read alike. */}
               <IdeaMiniLeaderboard
                 experiments={experiments}
                 ideas={ideas}
                 metric={metric}
                 lower={lower}
               />
+              <div class="review-mini-col">
+                {/* Redesigned (#7): labeled segmented portfolio bar + legend. */}
+                <IdeaPortfolio
+                  active={ideasActive}
+                  concluded={ideasConcluded}
+                  abandoned={ideasAbandoned}
+                  untested={(() => {
+                    if (experiments.length <= 20) return 0;
+                    const counts: Record<number, number> = {};
+                    for (const e of experiments) { if (!e._running) counts[e.idea_id] = (counts[e.idea_id] || 0) + 1; }
+                    return Object.values(ideas).filter(i => i.status !== "concluded" && i.status !== "abandoned" && (counts[i.id] ?? 0) === 0).length;
+                  })()}
+                />
+              </div>
             </div>
           }
         >
@@ -2694,13 +2762,19 @@ function ReviewDisclosure({
   autoOpen?: boolean;
   accent?: "live" | "warn";
 }) {
-  // Use a ref so we can imperatively open/close without re-rendering
+  // Use a ref so we can imperatively open/close without re-rendering.
+  // Persist (#49): initial open state comes from reviewOpenSections[id]
+  // (falling back to autoOpen), and toggles are written back so summary/detail
+  // choices survive reloads.
   const ref = (el: HTMLDetailsElement | null) => {
     if (!el) return;
-    if (autoOpen !== undefined) el.open = autoOpen;
-    // Dispatch resize when details opens so inner canvas-based components re-render
+    const persisted = reviewOpenSections.value[id];
+    if (persisted !== undefined) el.open = persisted;
+    else if (autoOpen !== undefined) el.open = autoOpen;
     el.addEventListener("toggle", () => {
+      // Dispatch resize when details opens so inner canvas-based components re-render
       if (el.open) window.dispatchEvent(new Event("resize"));
+      reviewOpenSections.value = { ...reviewOpenSections.value, [id]: el.open };
     }, { once: false });
   };
   return (
