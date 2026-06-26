@@ -205,6 +205,11 @@ export function TablePanel() {
         cmp = da.localeCompare(db);
       } else if (sortKey === "status") {
         cmp = (a.idea_status || "active").localeCompare(b.idea_status || "active");
+      } else if (sortKey === "milestone") {
+        // Milestones first, then by label
+        const ma = milestoneIds.has(a.id) ? 1 : 0;
+        const mb = milestoneIds.has(b.id) ? 1 : 0;
+        cmp = mb - ma;
       } else {
         // Metric column
         const va = resolveNumericValue(a, sortKey);
@@ -256,7 +261,12 @@ export function TablePanel() {
           <thead>
             <tr>
               <th style="width: 16px"></th>
-              <th style="width: 14px; padding: 4px 2px; text-align: center;" title="New global best at the time it ran">★</th>
+              <th
+                style="width: 14px; padding: 4px 2px; text-align: center; cursor: pointer;"
+                title="New global best at time it ran — click to sort"
+                class={thClass("milestone", false)}
+                onClick={() => handleSort("milestone")}
+              >★{sortArrow("milestone")}</th>
               <th
                 class={thClass("label")}
                 onClick={() => handleSort("label")}
