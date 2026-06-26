@@ -2008,7 +2008,7 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
                 ? (Math.abs(lastScore) >= 1 ? lastScore.toFixed(2) : lastScore.toFixed(3))
                 : null;
               const lastIdea = lastFinishedExp ? ideas[lastFinishedExp.idea_id] : null;
-              const lastIdeaDesc = lastIdea?.description?.split("\n")[0].slice(0, 28);
+              const lastIdeaDesc = lastIdea?.description?.split("\n")[0].slice(0, 35);
               parts.push(
                 <span>
                   idle {timeAgo(lastFinishedAt)}
@@ -2127,7 +2127,7 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
               .slice(0, 1);
             if (untestedList.length === 0) return null;
             const u = untestedList[0];
-            const title = u.description?.split("\n")[0].slice(0, 28) ?? `idea #${u.id}`;
+            const title = u.description?.split("\n")[0].slice(0, 35) ?? `idea #${u.id}`;
             return (
               <span style={{ fontSize: "var(--text-xs)", color: "var(--text-faint)", marginLeft: 4 }}>
                 · or try{" "}
@@ -2317,7 +2317,10 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
             const hasLoadedExps = experiments.length > 20; // only trust counts when data has loaded
             const neverTested = hasLoadedExps ? activeList.filter(i => (ideaExpCountsAll[i.id] ?? 0) === 0).length : 0;
             const underExplored = activeList.filter(i => (ideaExpCounts[i.id] ?? 0) < 5).length;
-            const base = `${activeIdeas} active · ${ideasConcluded} concluded${ideasAbandoned > 0 ? ` · ${ideasAbandoned} abandoned` : ""}`;
+            // Fall back to ring data when backlogData not loaded yet (shows 0 active from backlog)
+            const displayActive = activeIdeas > 0 ? activeIdeas : ideasActive;
+            const displayConcluded = ideasConcluded;
+            const base = `${displayActive} active · ${displayConcluded} concluded${ideasAbandoned > 0 ? ` · ${ideasAbandoned} abandoned` : ""}`;
             const parts = [base];
             if (neverTested > 0) parts.push(`${neverTested} untested`);
             else if (underExplored > 0 && hasLoadedExps) parts.push(`${underExplored} under-explored`);
