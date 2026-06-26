@@ -1169,31 +1169,35 @@ function IdeaMiniLeaderboard({ experiments, ideas, metric, lower }: {
   metric: string;
   lower: boolean;
 }) {
-  // When no metric data yet (metric not loaded / "metric" fallback): show by experiment count
+  // When no metric data yet: show most recently active ideas (last experiment ran)
   const hasMetricData = experiments.some(e => !e._running && typeof e.metrics?.[metric] === "number");
   if (!hasMetricData) {
-    const ideaExpCount: Record<number, number> = {};
+    const ideaLastRun: Record<number, { count: number; lastId: number }> = {};
     for (const e of experiments) {
       if (e._running) continue;
-      ideaExpCount[e.idea_id] = (ideaExpCount[e.idea_id] ?? 0) + 1;
+      const cur = ideaLastRun[e.idea_id];
+      if (!cur) ideaLastRun[e.idea_id] = { count: 1, lastId: e.id };
+      else { cur.count++; if (e.id > cur.lastId) cur.lastId = e.id; }
     }
-    const top5 = Object.entries(ideaExpCount)
-      .sort((a, b) => b[1] - a[1]).slice(0, 5);
+    const top5 = Object.entries(ideaLastRun)
+      .sort((a, b) => b[1].lastId - a[1].lastId).slice(0, 5);  // most recently active first
     if (top5.length === 0) return null;
     return (
       <div class="emr-section">
         <span class="emr-label">top ideas</span>
         <div class="emr-rows">
-          {top5.map(([id, count], i) => {
+          {top5.map(([id, data], i) => {
             const idea = ideas[Number(id)];
             const title = idea?.description?.split("\n")[0].slice(0, 40) ?? `idea #${id}`;
+            const isActive = idea?.status !== "concluded" && idea?.status !== "abandoned";
             return (
               <div key={id} class={`emr-row${i === 0 ? " emr-milestone" : ""}`} style={{ cursor: "pointer" }}
                 onClick={() => navigateToIdea(Number(id))} title={title}>
                 <span class="emr-rank">{i + 1}</span>
                 <span class="emr-idea">#{id}</span>
-                <span class="emr-exp" style={{ color: "var(--text-muted)", maxWidth: 100, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</span>
-                <span class="emr-count" style={{ color: "var(--text-faint)" }}>{count}</span>
+                <span style={{ fontSize: "7px", opacity: 0.7, flexShrink: 0, color: isActive ? "var(--green)" : "var(--accent)" }}>●</span>
+                <span class="emr-exp" style={{ color: "var(--text-muted)", maxWidth: 95, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{title}</span>
+                <span class="emr-count" style={{ color: "var(--text-faint)", fontSize: "7px" }}>{data.count}×</span>
               </div>
             );
           })}
