@@ -2068,7 +2068,12 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
             const title = u.description?.split("\n")[0].slice(0, 28) ?? `idea #${u.id}`;
             return (
               <span style={{ fontSize: "var(--text-xs)", color: "var(--text-faint)", marginLeft: 4 }}>
-                · or try <span style={{ color: "var(--yellow)", fontWeight: 600 }}>#{u.id}</span> (never tried)
+                · or try{" "}
+                <span style={{ color: "var(--yellow)", fontWeight: 600, cursor: "pointer", textDecoration: "underline" }}
+                  onClick={() => { navigateToIdea(u.id); const el = document.getElementById("review-ideas") as HTMLDetailsElement | null; if (el) { el.open = true; el.scrollIntoView({ behavior: "smooth" }); } }}
+                  title={`Navigate to idea #${u.id}: ${u.description?.split("\n")[0]}`}>
+                  #{u.id}
+                </span>{" "}(never tried)
               </span>
             );
           })()}
@@ -2109,8 +2114,8 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
                     return (
                       <span key={e.id}>
                         <span class={`rmt-dot${isLast ? " rmt-dot--best" : ""}`} style={{ left: `${pct.toFixed(1)}%` }} title={`${e.label ?? `exp/${e.id}`}: ${vStr}`} />
-                        {isLast && vStr && (
-                          <span style={{ position: "absolute", left: `${pct.toFixed(1)}%`, transform: "translateX(-50%)", top: "-15px", fontSize: "9px", color: "var(--purple)", fontFamily: "var(--font-mono)", fontWeight: 700, whiteSpace: "nowrap", letterSpacing: "-0.02em" }}>
+                        {vStr && (
+                          <span style={{ position: "absolute", left: `${pct.toFixed(1)}%`, transform: "translateX(-50%)", top: isLast ? "-15px" : "-12px", fontSize: isLast ? "9px" : "7px", color: isLast ? "var(--purple)" : "var(--text-faint)", fontFamily: "var(--font-mono)", fontWeight: isLast ? 700 : 500, whiteSpace: "nowrap", letterSpacing: "-0.02em", opacity: isLast ? 1 : 0.75 }}>
                             {vStr}
                           </span>
                         )}
