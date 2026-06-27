@@ -844,6 +844,24 @@ def main():
             _last_sample = _dt.datetime.now(_dt.timezone.utc)
             _SAMPLE_INTERVAL = 1.0  # seconds between screen samples
 
+            def _safe_display():
+                """`_screen.display`, tolerant of pyte's empty wide-char stub cells.
+
+                pyte's renderer runs ``wcwidth(char[0])`` on every cell and raises
+                ``IndexError: string index out of range`` when a cell's data is the
+                empty string (the stub that trails a wide CJK/emoji glyph, if it
+                isn't skipped). That used to kill this whole sampler thread. On
+                failure, render manually and drop the empty stubs so spacing holds.
+                """
+                try:
+                    return _screen.display
+                except Exception:
+                    buf = _screen.buffer
+                    return [
+                        "".join(d for d in (buf[y][x].data for x in range(_screen.columns)) if d)
+                        for y in range(_screen.lines)
+                    ]
+
             def _sample_screen():
                 """Diff the virtual screen against prev state; log changed rows."""
                 nonlocal _last_sample
@@ -851,7 +869,7 @@ def main():
                 _last_sample = now
                 ts = now.strftime("%H:%M:%S")
                 epoch = now.timestamp()
-                for idx, row in enumerate(_screen.display):
+                for idx, row in enumerate(_safe_display()):
                     text = row.rstrip()
                     if not text:
                         # Row cleared — drop from prev so it's fresh if content returns
