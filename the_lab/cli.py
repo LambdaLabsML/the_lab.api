@@ -503,6 +503,11 @@ def _client_api(args):
     url = getattr(args, "url", None)
     if url:
         base = url.rstrip("/")
+        # Foot-gun guard: a base URL without the /api/v1 prefix (e.g. the
+        # dashboard root) lands on the SPA and returns HTML, which surfaces as a
+        # cryptic "Expecting value: line 1 column 1" JSON error.
+        if not base.endswith("/api/v1"):
+            base += "/api/v1"
         scheme = "https" if base.startswith("https://") else "http"
     else:
         if getattr(args, "https", False) or insecure_env:
@@ -519,6 +524,28 @@ def _client_api(args):
         ctx.check_hostname = False
         ctx.verify_mode = _ssl.CERT_NONE
     return base, ctx
+
+
+def _api_get_json(url: str, headers: dict, ctx, timeout: float = 15):
+    """GET `url` and parse JSON, with a clear error when the body isn't JSON —
+    HTML from the dashboard SPA (base URL missing /api/v1), an empty body, etc.
+    — instead of a bare 'Expecting value: line 1 column 1'."""
+    import urllib.request as _u, json as _j
+    req = _u.Request(url, headers=headers)
+    with _u.urlopen(req, timeout=timeout, context=ctx) as r:
+        raw = r.read()
+        ctype = (r.headers.get("Content-Type") or "")
+    try:
+        return _j.loads(raw)
+    except _j.JSONDecodeError:
+        body = raw[:160].decode("utf-8", "replace").replace("\n", " ").strip()
+        if raw[:1] == b"<" or "html" in ctype.lower():
+            hint = "got the dashboard HTML — the API base URL is probably missing the /api/v1 prefix"
+        elif not raw:
+            hint = "empty response body"
+        else:
+            hint = "response was not JSON"
+        raise RuntimeError(f"{hint} (url={url}, content-type={ctype or '?'}, body[:160]={body!r})")
 
 
 def cmd_wait():
@@ -561,9 +588,7 @@ def cmd_wait():
         ).decode()
 
     def _get(url: str, timeout: float = 15) -> dict:
-        req = _urlreq.Request(url, headers=headers)
-        with _urlreq.urlopen(req, timeout=timeout, context=_ssl_ctx) as r:
-            return _json.loads(r.read())
+        return _api_get_json(url, headers, _ssl_ctx, timeout)
 
     # Resolve the experiment label → global ID via the API
     try:
@@ -633,9 +658,7 @@ def cmd_messages():
         ).decode()
 
     def _get(url: str) -> dict:
-        req = _urlreq.Request(url, headers=headers)
-        with _urlreq.urlopen(req, timeout=15, context=_ssl_ctx) as r:
-            return _json.loads(r.read())
+        return _api_get_json(url, headers, _ssl_ctx)
 
     deadline = _time.monotonic() + args.timeout
     while True:
