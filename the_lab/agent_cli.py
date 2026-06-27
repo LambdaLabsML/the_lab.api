@@ -449,6 +449,11 @@ def main():
     )
 
     env = dict(os.environ)
+    # Let `the-lab messages`/`wait` (and anything else the child agent runs)
+    # reach a self-signed https server: surface the skip-verify hint so they
+    # talk HTTPS and don't choke on the cert.
+    if _api_insecure:
+        env["THE_LAB_API_INSECURE"] = "1"
 
     # Isolated mode (default): register a per-agent worktree with the API
     # server and run the agent inside it. The X-Agent-Id is propagated to

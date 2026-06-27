@@ -474,6 +474,53 @@ def _ensure_self_signed_cert(repo_dir: Path) -> tuple[str, str]:
     return str(cert_file), str(key_file)
 
 
+def _detect_api_scheme(start: Path) -> str:
+    """Read the api_scheme the server recorded in runtime.json, found by walking
+    up from `start` to the repo root. Falls back to http."""
+    try:
+        from .sandbox import load_runtime_info
+        cur = start.resolve()
+        for cand in (cur, *cur.parents):
+            if (cand / ".git").exists():
+                return load_runtime_info(cand).get("api_scheme", "http")
+    except Exception:
+        pass
+    return "http"
+
+
+def _client_api(args):
+    """Resolve (api_base, ssl_ctx) for the lightweight CLI clients (wait/messages).
+
+    Scheme precedence: --url > --https > THE_LAB_API_INSECURE env (set by the
+    agent launcher for a self-signed localhost server) > api_scheme in the
+    server's runtime.json (walked up from CWD) > http. A localhost self-signed
+    https endpoint gets an unverified SSL context; remote https keeps normal
+    verification (ssl_ctx stays None).
+    """
+    import ssl as _ssl, urllib.parse as _uparse
+
+    insecure_env = os.environ.get("THE_LAB_API_INSECURE", "").strip() in ("1", "true", "yes")
+    url = getattr(args, "url", None)
+    if url:
+        base = url.rstrip("/")
+        scheme = "https" if base.startswith("https://") else "http"
+    else:
+        if getattr(args, "https", False) or insecure_env:
+            scheme = "https"
+        else:
+            scheme = _detect_api_scheme(Path.cwd())
+        base = f"{scheme}://localhost:{args.port}/api/v1"
+
+    host = _uparse.urlparse(base).hostname or "localhost"
+    insecure = insecure_env or (scheme == "https" and host in ("localhost", "127.0.0.1", "0.0.0.0"))
+    ctx = None
+    if insecure:
+        ctx = _ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = _ssl.CERT_NONE
+    return base, ctx
+
+
 def cmd_wait():
     """the-lab wait <experiment_label> [--port N] [--timeout N] [--url URL]
 
@@ -494,9 +541,10 @@ def cmd_wait():
     p.add_argument("--port", type=int, default=8000)
     p.add_argument("--timeout", type=float, default=3600, help="Max seconds to wait (default 3600)")
     p.add_argument("--url", default=None, help="Override API base URL (e.g. http://host:9009/api/v1)")
+    p.add_argument("--https", action="store_true", help="Talk to the API over HTTPS (auto-detected when launched by the agent).")
     args = p.parse_args(sys.argv[2:])
 
-    api_base = args.url or f"http://localhost:{args.port}/api/v1"
+    api_base, _ssl_ctx = _client_api(args)
 
     # Build headers the same way the MCP bridge does — pick up agent ID and
     # Basic auth from environment so auth-gated servers work transparently.
@@ -514,7 +562,7 @@ def cmd_wait():
 
     def _get(url: str, timeout: float = 15) -> dict:
         req = _urlreq.Request(url, headers=headers)
-        with _urlreq.urlopen(req, timeout=timeout) as r:
+        with _urlreq.urlopen(req, timeout=timeout, context=_ssl_ctx) as r:
             return _json.loads(r.read())
 
     # Resolve the experiment label → global ID via the API
@@ -568,9 +616,10 @@ def cmd_messages():
     p.add_argument("--timeout", type=float, default=300, help="Max seconds to wait (default 300)")
     p.add_argument("--poll", type=float, default=3, help="Polling interval in seconds (default 3)")
     p.add_argument("--url", default=None, help="Override API base URL")
+    p.add_argument("--https", action="store_true", help="Talk to the API over HTTPS (auto-detected when launched by the agent).")
     args = p.parse_args(sys.argv[2:])
 
-    api_base = args.url or f"http://localhost:{args.port}/api/v1"
+    api_base, _ssl_ctx = _client_api(args)
 
     headers: dict[str, str] = {}
     agent_id = os.environ.get("THE_LAB_AGENT_ID", "").strip()
@@ -585,7 +634,7 @@ def cmd_messages():
 
     def _get(url: str) -> dict:
         req = _urlreq.Request(url, headers=headers)
-        with _urlreq.urlopen(req, timeout=15) as r:
+        with _urlreq.urlopen(req, timeout=15, context=_ssl_ctx) as r:
             return _json.loads(r.read())
 
     deadline = _time.monotonic() + args.timeout
