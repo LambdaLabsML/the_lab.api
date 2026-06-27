@@ -57,6 +57,13 @@ def _enrich(entry: dict) -> dict:
         out["unread_messages"] = len(unread)
     except Exception:
         out["unread_messages"] = 0
+    # Is the agent actively waiting on `the-lab messages` right now?
+    try:
+        lp = agents_mod.read_listening(REPO_DIR).get(entry.get("agent_id"))
+        out["last_message_poll"] = lp
+        out["listening"] = agents_mod.is_listening(lp)
+    except Exception:
+        out["listening"] = False
     return out
 
 

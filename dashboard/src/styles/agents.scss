@@ -326,6 +326,30 @@
   letter-spacing: 0.04em;
 }
 
+.messages-listening {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+  font-size: var(--text-xs);
+}
+.messages-listening-label {
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.messages-listening-chip {
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid currentColor;     // color set inline per agent
+  background: none;
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+.messages-listening-chip:hover { background: var(--bg-elev); }
+
 .messages-perspective-note {
   font-size: var(--text-sm);
   color: var(--text-muted);

@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,6 +30,12 @@ from . import git_ops
 
 _ID_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789"
 AGENTID_FILE = ".the_lab.agentid"
+
+# An agent is "listening" if it polled its own inbox (the-lab messages, which
+# hits GET /messages?for_me=1) within this many seconds. The CLI default poll
+# interval is ~3s, so this tolerates a few missed polls / a slower --poll.
+LISTENING_WINDOW_SEC = 20
+_listening_lock = threading.Lock()
 
 
 def _agents_dir(repo_dir: Path) -> Path:
@@ -142,6 +149,53 @@ def lookup_agent(repo_dir: Path, agent_id: str) -> dict | None:
 
 def list_agents(repo_dir: Path) -> list[dict]:
     return list(_read_registry(Path(repo_dir).resolve()).values())
+
+
+# ── "Actively listening" tracking ───────────────────────────────────────────
+# Recorded in a separate file from the registry so the high-frequency poll
+# writes never race with register/unregister.
+
+def _listening_path(repo_dir: Path) -> Path:
+    return _agents_dir(repo_dir) / "listening.json"
+
+
+def note_message_poll(repo_dir: Path, agent_id: str) -> None:
+    """Record that *agent_id* just polled its own inbox (the-lab messages loop)."""
+    if not agent_id:
+        return
+    path = _listening_path(Path(repo_dir).resolve())
+    with _listening_lock:
+        try:
+            data = json.loads(path.read_text()) if path.exists() else {}
+        except (json.JSONDecodeError, OSError):
+            data = {}
+        data[agent_id] = datetime.now(timezone.utc).isoformat()
+        try:
+            path.write_text(json.dumps(data, indent=2))
+        except OSError:
+            pass
+
+
+def read_listening(repo_dir: Path) -> dict:
+    """Map of agent_id -> last inbox-poll ISO timestamp."""
+    path = _listening_path(Path(repo_dir).resolve())
+    try:
+        return json.loads(path.read_text()) if path.exists() else {}
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def is_listening(last_poll_iso: str | None, window_sec: int = LISTENING_WINDOW_SEC) -> bool:
+    """True if a recorded poll timestamp falls within the listening window."""
+    if not last_poll_iso:
+        return False
+    try:
+        t = datetime.fromisoformat(last_poll_iso)
+    except (ValueError, TypeError):
+        return False
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - t).total_seconds() <= window_sec
 
 
 _HISTORY_FILE = "history.json"

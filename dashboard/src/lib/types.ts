@@ -211,6 +211,10 @@ export interface AgentEntry {
   current_idea?: { id: number; description: string; status: string };
   /** Count of unread messages addressed to this agent. */
   unread_messages?: number;
+  /** True when the agent recently polled its inbox (running `the-lab messages`). */
+  listening?: boolean;
+  /** ISO timestamp of the agent's last inbox poll (null if never). */
+  last_message_poll?: string | null;
 }
 
 export interface SandboxState {

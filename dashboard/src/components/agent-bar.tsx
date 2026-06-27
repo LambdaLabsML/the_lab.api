@@ -9,6 +9,7 @@ import { navigateToIdea } from "../lib/navigate";
 import { ideaTitle } from "../lib/format";
 import { allIdeas, backlogData } from "../state/signals";
 import { Tooltip } from "./ui";
+import { agentColor } from "../lib/colors";
 import type { AgentEntry } from "../lib/types";
 
 function branchIdeaId(branch: string): number | null {
@@ -72,7 +73,7 @@ export function AgentBar() {
               placement="bottom"
               content={
                 <>
-                  <span class="ui-tip-title">{a.role || a.agent_id}</span>
+                  <span class="ui-tip-title" style={{ color: agentColor(a.agent_id) }}>{a.role || a.agent_id}</span>
                   <span class="ui-tip-row"><span>agent</span><b>{a.agent_id}</b></span>
                   {idea ? (
                     <>
@@ -82,6 +83,10 @@ export function AgentBar() {
                   ) : (
                     <span class="ui-tip-dim">no idea checked out</span>
                   )}
+                  <span class="ui-tip-row">
+                    <span>messages</span>
+                    <b>{a.listening ? "🎧 listening now" : "not listening"}</b>
+                  </span>
                 </>
               }
             >
@@ -91,7 +96,10 @@ export function AgentBar() {
                 onClick={() => { if (idea) navigateToIdea(idea.id); }}
                 disabled={!idea}
               >
-                <span class="agent-bar-dot" />
+                <span
+                  class={`agent-bar-dot${a.listening ? " is-listening" : ""}`}
+                  style={{ background: agentColor(a.agent_id) }}
+                />
                 <span class="agent-bar-role">{a.role || a.agent_id}</span>
                 <span class="agent-bar-idea">{idea ? `idea/${idea.id}` : "idle"}</span>
               </button>

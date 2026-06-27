@@ -94,6 +94,13 @@ def list_messages(
             400,
             "for_me / unread require X-Agent-Id; the server can't infer the recipient.",
         )
+    # A for_me/unread poll means this agent is actively waiting for messages
+    # (the `the-lab messages` loop). Record it so the UI can flag "listening".
+    if (for_me or unread) and agent_id:
+        try:
+            agents_mod.note_message_poll(REPO_DIR, agent_id)
+        except Exception:
+            pass
     if unread:
         msgs = messages_mod.unread_for(REPO_DIR, agent_id=agent_id, role=role, limit=None)
         total = len(msgs)

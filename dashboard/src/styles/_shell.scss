@@ -364,7 +364,14 @@
 }
 .agent-bar-dot {
   width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
-  background: var(--green); box-shadow: 0 0 5px var(--green);
+  background: var(--green);   // per-agent color set inline; this is a fallback
+}
+/* Pulsing ring while the agent is actively waiting on `the-lab messages`. */
+.agent-bar-dot.is-listening { animation: agentListenPulse 1.6s ease-out infinite; }
+@keyframes agentListenPulse {
+  0%   { box-shadow: 0 0 0 0 rgba(140, 140, 140, 0.55); }
+  70%  { box-shadow: 0 0 0 5px rgba(140, 140, 140, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(140, 140, 140, 0); }
 }
 .agent-bar-role { color: var(--text); }
 .agent-bar-idea { color: var(--accent); }

@@ -168,6 +168,7 @@ export function MessagesView() {
 
   const relevantMsgs = messages.filter(relevant);
   const unreadCount = relevantMsgs.filter((m) => !readStateOf(m)).length;
+  const listeningAgents = agents.filter((a) => a.listening);
   const who = inPerspective ? viewAs : "you";
   const countLabel = !loaded
     ? "…"
@@ -219,7 +220,7 @@ export function MessagesView() {
           >
             <option value="">you (the dashboard)</option>
             {agents.map((a) => (
-              <option key={a.agent_id} value={a.agent_id}>{labelAgent(a.agent_id)}</option>
+              <option key={a.agent_id} value={a.agent_id}>{labelAgent(a.agent_id)}{a.listening ? " · 🎧" : ""}</option>
             ))}
           </select>
         </label>
@@ -231,7 +232,7 @@ export function MessagesView() {
         >
           <option value="">All agents</option>
           {agents.map((a) => (
-            <option key={a.agent_id} value={a.agent_id}>{labelAgent(a.agent_id)}</option>
+            <option key={a.agent_id} value={a.agent_id}>{labelAgent(a.agent_id)}{a.listening ? " · 🎧" : ""}</option>
           ))}
         </select>
         <select
@@ -255,6 +256,23 @@ export function MessagesView() {
           <option value="oldest">Oldest first</option>
         </select>
       </div>
+
+      {listeningAgents.length > 0 && (
+        <div class="messages-listening">
+          <span class="messages-listening-label">🎧 listening now</span>
+          {listeningAgents.map((a) => (
+            <button
+              key={a.agent_id}
+              class="messages-listening-chip"
+              style={{ color: agentColor(a.agent_id), borderColor: agentColor(a.agent_id) }}
+              title={`Actively running the-lab messages — click to view ${a.agent_id}'s inbox`}
+              onClick={() => setViewAs(a.agent_id)}
+            >
+              {labelAgent(a.agent_id)}
+            </button>
+          ))}
+        </div>
+      )}
 
       {inPerspective && (
         <div class="messages-perspective-note">
