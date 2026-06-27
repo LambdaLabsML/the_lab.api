@@ -642,6 +642,8 @@ def cmd_messages():
     p.add_argument("--poll", type=float, default=3, help="Polling interval in seconds (default 3)")
     p.add_argument("--url", default=None, help="Override API base URL")
     p.add_argument("--https", action="store_true", help="Talk to the API over HTTPS (auto-detected when launched by the agent).")
+    p.add_argument("--peek", action="store_true",
+                   help="Show the messages but leave them unread (don't mark them read).")
     args = p.parse_args(sys.argv[2:])
 
     api_base, _ssl_ctx = _client_api(args)
@@ -660,15 +662,39 @@ def cmd_messages():
     def _get(url: str) -> dict:
         return _api_get_json(url, headers, _ssl_ctx)
 
+    def _mark_read(ids: list) -> None:
+        # Consume the inbox so the same messages aren't re-delivered on the next
+        # poll. Safe to auto-do here *because the full message is printed above*
+        # — never mark read when only a snippet is shown. Needs X-Agent-Id;
+        # best-effort, never fail delivery if marking fails.
+        if args.peek or not agent_id:
+            return
+        for mid in ids:
+            try:
+                req = _urlreq.Request(f"{api_base}/messages/{mid}/read",
+                                      data=b"", method="POST", headers=headers)
+                with _urlreq.urlopen(req, timeout=10, context=_ssl_ctx) as r:
+                    r.read()
+            except Exception:
+                pass
+
     deadline = _time.monotonic() + args.timeout
     while True:
         try:
             qs = "limit=50&for_me=1" if agent_id else "limit=50"
             data = _get(f"{api_base}/messages?{qs}")
             msgs = data.get("messages", [])
-            unread = [m for m in msgs if not m.get("read_by")]
+            # "Unread for me" = my id isn't in read_by. This is version-robust
+            # (works whether the server's for_me already filters read or not) and
+            # correct for broadcasts another agent has read but I haven't. Without
+            # an id, fall back to "nobody has read it yet" as the proxy.
+            if agent_id:
+                unread = [m for m in msgs if agent_id not in (m.get("read_by") or [])]
+            else:
+                unread = [m for m in msgs if not m.get("read_by")]
             if unread:
-                print(_json.dumps(unread))
+                print(_json.dumps(unread))          # full content, then consume
+                _mark_read([m["id"] for m in unread if "id" in m])
                 sys.exit(0)
         except _urlerr.URLError as e:
             print(_json.dumps({"error": str(e)}))
