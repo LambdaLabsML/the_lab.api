@@ -58,6 +58,22 @@ export const IDEA_PALETTE: string[] = [
   '#a5d6ff', '#7ee787', '#e078f0', '#ffa198', '#d8b4fe',
 ];
 
+/** Stable per-agent color: hash the agent id into the shared palette so an
+ *  agent keeps the same color across renders and components. */
+export function agentColor(id: string | null | undefined): string {
+  if (!id) return 'var(--text-faint)';
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+  return IDEA_PALETTE[h % IDEA_PALETTE.length];
+}
+
+/** 1–2 char initials for an agent avatar. */
+export function agentInitials(id: string | null | undefined): string {
+  if (!id) return '··';
+  const clean = id.replace(/[^a-zA-Z0-9]/g, '');
+  return (clean || id).slice(0, 2).toUpperCase();
+}
+
 /** Ordering used when sorting lanes by "worst" status. */
 export const STATUS_ORDER: Record<string, number> = {
   concluded: 0,

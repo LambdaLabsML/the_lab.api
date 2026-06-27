@@ -287,61 +287,7 @@
   line-height: 1.4;
 }
 
-// ── Personal (UI-user) read state on each message (#2) ──────────────────────
-.agents-message.is-newme {
-  box-shadow: inset 2px 0 0 var(--accent);   // left accent = new to you
-}
-
-.agents-message.is-readme {
-  opacity: 0.6;
-}
-
-.messages-readdot {
-  flex-shrink: 0;
-  width: 9px;
-  height: 9px;
-  padding: 0;
-  border: none;
-  border-radius: 50%;
-  cursor: pointer;
-  background: var(--accent);                  // filled = unread by you
-}
-
-.messages-readdot.is-read {
-  background: transparent;
-  box-shadow: inset 0 0 0 1.5px var(--border-soft);  // hollow = read by you
-}
-
-.messages-readdot:hover {
-  box-shadow: 0 0 0 2px var(--border-soft);
-}
-
-// ── Which agents have read this message (#1) ────────────────────────────────
-.agents-message-readers {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin-top: 6px;
-  font-size: var(--text-xs);
-  color: var(--text-faint);
-}
-
-.agents-message-readers-label {
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.agents-message-reader {
-  padding: 1px 6px;
-  border-radius: var(--radius-sm);
-  background: var(--bg-hi);
-  box-shadow: inset 0 0 0 1px var(--border-soft);
-  color: var(--text-muted);
-  white-space: nowrap;
-}
-
-// ── Sort + filter bar (#3) ──────────────────────────────────────────────────
+// ── Sort + filter bar ───────────────────────────────────────────────────────
 .messages-filterbar {
   display: flex;
   align-items: center;
@@ -350,10 +296,7 @@
   margin: 8px 0 12px;
 }
 
-.messages-search {
-  flex: 1 1 180px;
-  min-width: 140px;
-}
+.messages-search { flex: 1 1 180px; min-width: 140px; }
 
 .messages-search,
 .messages-select {
@@ -371,6 +314,135 @@
 .messages-select:focus {
   outline: none;
   box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.messages-viewas {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.messages-perspective-note {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  background: var(--bg-elev);
+  box-shadow: inset 0 0 0 1px var(--border-soft);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  margin-bottom: 10px;
+}
+
+// ── Messaging-app layout ────────────────────────────────────────────────────
+.msg-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.msg {
+  display: flex;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  transition: background 0.12s ease;
+}
+.msg:hover { background: var(--bg-elev); }
+.msg.is-new { box-shadow: inset 2px 0 0 var(--accent); }  // new to the viewer
+.msg.is-read { opacity: 0.62; }
+
+.msg-avatar {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--text-xs);
+  font-weight: 700;
+  color: #0b0f14;
+  letter-spacing: 0.02em;
+}
+
+.msg-main { flex: 1; min-width: 0; }
+
+.msg-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+.msg-from { font-weight: 600; }
+.msg-arrow { color: var(--text-faint); }
+.msg-to { font-weight: 500; }
+.msg-time { margin-left: auto; color: var(--text-faint); font-size: var(--text-xs); }
+
+.msg-readdot {
+  flex-shrink: 0;
+  width: 9px;
+  height: 9px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  background: var(--accent);                 // filled = unread / unseen
+}
+.msg-readdot.is-read { background: transparent; box-shadow: inset 0 0 0 1.5px var(--border-soft); }
+.msg-readdot.is-static { cursor: default; }
+.msg-readdot:not(.is-static):hover { box-shadow: 0 0 0 2px var(--border-soft); }
+
+.msg-body {
+  color: var(--text);
+  font-size: var(--text-base);
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.45;
+  margin-top: 2px;
+}
+.msg-body.is-clamped {
+  max-height: 7.4em;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(180deg, #000 62%, transparent);
+  mask-image: linear-gradient(180deg, #000 62%, transparent);
+}
+
+.msg-expand {
+  margin-top: 2px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+.msg-expand:hover { text-decoration: underline; }
+
+.msg-readers {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+}
+.msg-readers-label { text-transform: uppercase; letter-spacing: 0.04em; }
+.msg-reader {
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid currentColor;   // color set inline per agent
+  white-space: nowrap;
+  line-height: 1.5;
 }
 
 // ── Past / recent agents ────────────────────────────────────────────────────
