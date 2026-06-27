@@ -187,6 +187,10 @@ export const reviewOpenSections = useSetting<Record<string, boolean>>("reviewOpe
 /** Slight hacker-noise ambient texture behind the UI. Applied as data-texture. */
 export const uiTexture = useSetting("uiTexture", true);
 
+/** Message ids the UI user has personally marked read. Client-side only (per
+ *  browser) — kept separate from each message's agent `read_by` list. */
+export const messagesReadByMe = useSetting<Record<string, boolean>>("messagesReadByMe", {});
+
 // ---------------------------------------------------------------------------
 // One-time default migrations
 //
