@@ -184,10 +184,14 @@ def list_messages(
 
 
 def is_for(msg: dict, *, agent_id: str | None, role: str | None) -> bool:
-    """True if *msg* is addressed to this agent (directly, by role, or 'all')."""
+    """True if *msg* is addressed to this agent (directly, by role, or 'all').
+
+    'all' means every *other* agent — a broadcast never counts as addressed to
+    its own sender.
+    """
     to = msg.get("to") or ""
     if to == "all":
-        return True
+        return not (agent_id and msg.get("from_agent") == agent_id)
     if agent_id and to == f"agent:{agent_id}":
         return True
     if role and to == f"role:{role}":
