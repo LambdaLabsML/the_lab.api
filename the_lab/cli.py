@@ -682,6 +682,8 @@ def cmd_messages():
     while True:
         try:
             qs = "limit=50&for_me=1" if agent_id else "limit=50"
+            if agent_id and args.peek:
+                qs += "&peek=1"   # don't let the server mark them read on fetch
             data = _get(f"{api_base}/messages?{qs}")
             msgs = data.get("messages", [])
             # "Unread for me" = my id isn't in read_by. This is version-robust

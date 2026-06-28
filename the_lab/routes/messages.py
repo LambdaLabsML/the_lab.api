@@ -79,6 +79,7 @@ def list_messages(
     unread: bool = False,
     limit: int = 20,
     offset: int = 0,
+    peek: bool = False,
 ):
     """List messages, newest first.
 
@@ -105,14 +106,35 @@ def list_messages(
         msgs = messages_mod.unread_for(REPO_DIR, agent_id=agent_id, role=role, limit=None)
         total = len(msgs)
         page = msgs[offset: offset + limit]
-        return {"messages": page, "total": total, "limit": limit, "offset": offset}
-    if for_me:
+    elif for_me:
         all_msgs, _ = messages_mod.list_messages(REPO_DIR, limit=None)
         msgs = [m for m in all_msgs if messages_mod.is_for(m, agent_id=agent_id, role=role)]
         total = len(msgs)
         page = msgs[offset: offset + limit]
-        return {"messages": page, "total": total, "limit": limit, "offset": offset}
-    page, total = messages_mod.list_messages(REPO_DIR, limit=limit, offset=offset)
+    else:
+        page, total = messages_mod.list_messages(REPO_DIR, limit=limit, offset=offset)
+
+    # The agent has now been shown these messages' full text, so mark its own
+    # inbox items read (unless explicitly peeking). This is what keeps read
+    # state honest: agents read via this endpoint but rarely POST /read, so
+    # messages they clearly consumed used to linger as unread forever.
+    if agent_id and not peek:
+        to_mark = [
+            m["id"] for m in page
+            if messages_mod.is_for(m, agent_id=agent_id, role=role)
+            and agent_id not in (m.get("read_by") or [])
+        ]
+        if to_mark:
+            try:
+                messages_mod.mark_read_many(REPO_DIR, to_mark, agent_id)
+                # reflect the change in the returned payload
+                marked = set(to_mark)
+                for m in page:
+                    if m["id"] in marked:
+                        m.setdefault("read_by", []).append(agent_id)
+            except Exception:
+                pass
+
     return {"messages": page, "total": total, "limit": limit, "offset": offset}
 
 

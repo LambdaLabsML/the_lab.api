@@ -251,10 +251,13 @@ def build_notifications(request) -> list[dict]:
             unread = messages_mod.unread_for(
                 REPO_DIR, agent_id=agent_id, role=role, limit=20,
             )
+            fully_shown: list[int] = []
             for m in unread:
                 origin = m.get("from_role") or m.get("from_agent") or "system"
-                snippet = (m.get("text") or "")[:60].rstrip()
-                preview = (snippet + "…") if len(m.get("text") or "") > 60 else snippet
+                text = m.get("text") or ""
+                truncated = len(text) > 60
+                snippet = text[:60].rstrip()
+                preview = (snippet + "…") if truncated else snippet
                 notifications.append({
                     "type": "message",
                     "priority": "high",
@@ -264,6 +267,17 @@ def build_notifications(request) -> list[dict]:
                     "message": f"new message from {origin}: {preview}",
                     "action": f"GET /api/v1/messages (read full text), then POST /api/v1/messages/{m['id']}/read",
                 })
+                if not truncated:
+                    fully_shown.append(m["id"])
+            # A short message is delivered in full right here, so mark it read —
+            # otherwise it lingers as unread even after the agent has clearly
+            # seen (and answered) it. Long messages keep a preview and are marked
+            # read when the agent fetches their full text via GET /messages.
+            if fully_shown:
+                try:
+                    messages_mod.mark_read_many(REPO_DIR, fully_shown, agent_id)
+                except Exception:
+                    pass
         except Exception:
             pass
     # Mild nudge when a git-touching route ran in the main repo because no

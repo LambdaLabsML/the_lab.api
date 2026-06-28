@@ -242,6 +242,25 @@ def mark_read(repo_dir: Path, msg_id: int, agent_id: str) -> dict | None:
     return None
 
 
+def mark_read_many(repo_dir: Path, ids, agent_id: str) -> int:
+    """Mark several messages read by *agent_id* in one read/write. Returns count."""
+    want = {i for i in ids}
+    if not want or not agent_id:
+        return 0
+    n = 0
+    with _lock:
+        data = _read(repo_dir)
+        for m in data["messages"]:
+            if m["id"] in want:
+                rb = m.setdefault("read_by", [])
+                if agent_id not in rb:
+                    rb.append(agent_id)
+                    n += 1
+        if n:
+            _write(repo_dir, data)
+    return n
+
+
 def mark_all_read(repo_dir: Path, agent_id: str, role: str | None) -> int:
     """Mark every currently-unread message for this recipient as read. Returns count."""
     n = 0
