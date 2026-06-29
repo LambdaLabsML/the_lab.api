@@ -128,6 +128,19 @@ const TOOL_VIEWS: Record<ToolView, () => preact.JSX.Element> = {
   suggest: () => <SuggestPanel />, task: () => <TaskBanner />,
 };
 
+type ExperimentLike = import("./lib/types").Experiment;
+
+function experimentChronoMs(e: ExperimentLike): number {
+  const raw = e.finished_at || e.started_at || e.created_at || "";
+  const parsed = Date.parse(raw);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function compareExperimentsChronological(a: ExperimentLike, b: ExperimentLike): number {
+  const dt = experimentChronoMs(a) - experimentChronoMs(b);
+  return dt !== 0 ? dt : a.id - b.id;
+}
+
 // URL hash ⇄ nav selection (deep-linkable). `#section` or `#tools/<tool>`.
 const NAV_SECTIONS = ["review", "activity", "queue", "workbench", "tools"];
 function parseNavHash(): { section: NavSection; tool: ToolView } {
@@ -1414,7 +1427,7 @@ function IdeaMiniLeaderboard({ experiments, ideas, metric, lower, maxRows = 5 }:
 
   // Compute chronological score history per idea (for sparklines)
   const ideaHistory: Record<number, number[]> = {};
-  for (const e of experiments.slice().sort((a, b) => a.id - b.id)) {
+  for (const e of experiments.slice().sort(compareExperimentsChronological)) {
     if (e._running) continue;
     if (typeof e.metrics?.[metric] !== "number") continue;
     const v = e.metrics![metric] as number;
@@ -1673,7 +1686,7 @@ function ExperimentGrid({ experiments, milestoneIds, ideas, metric, queueCapacit
   if (experiments.length === 0) return null;
 
   const lower = isLowerBetter(metric);
-  const chrono = experiments.slice().sort((a, b) => a.id - b.id);
+  const chrono = experiments.slice().sort(compareExperimentsChronological);
   const total = experiments.length;
 
   // idea → stable palette color (by first appearance)
@@ -1862,7 +1875,7 @@ function BestSparkline({ experiments, metric, lower }: {
   const W = 72, H = 26;
   const vals: number[] = [];
   let best: number | null = null;
-  const sorted = experiments.slice().sort((a, b) => a.id - b.id);
+  const sorted = experiments.slice().sort(compareExperimentsChronological);
   for (const e of sorted) {
     const v = e.metrics?.[metric];
     if (typeof v !== "number" || !isFinite(v)) continue;
@@ -1993,7 +2006,7 @@ function MilestonesTable({ experiments, metric, lower, ideas, maxRows = 6 }: {
   const done = experiments
     .filter((e) => !e._running && typeof e.metrics?.[metric] === "number" && isFinite(e.metrics![metric] as number))
     .slice()
-    .sort((a, b) => a.id - b.id);
+    .sort(compareExperimentsChronological);
 
   type Row = { exp: import("./lib/types").Experiment; val: number; delta: number | null; prev: number | null };
   const rows: Row[] = [];
@@ -2395,21 +2408,26 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
   const failed = experiments.filter((e) => e.status === "failed").length;
   const selected = selectedIdea.value;
   const metric = selectedMetric.value || "metric";
+  const chronologicalDone = done.slice().sort(compareExperimentsChronological);
 
-  // Compute best score for the selected metric
+  // Compute the selected metric's record path in true run chronology.
   const lower = isLowerBetter(metric);
   let bestExp: typeof experiments[0] | null = null;
-  for (const e of done) {
+  let bestVal: number | undefined;
+  for (const e of chronologicalDone) {
     const v = e.metrics?.[metric];
     if (typeof v !== "number") continue;
-    if (!bestExp || (lower ? v < bestExp.metrics![metric]! : v > bestExp.metrics![metric]!)) bestExp = e;
+    if (bestVal === undefined || (lower ? v < bestVal : v > bestVal)) {
+      bestVal = v;
+      bestExp = e;
+    }
   }
-  const bestVal = bestExp?.metrics?.[metric];
 
-  // Experiments run since last breakthrough (new global best)
+  // Experiments completed since the most recent breakthrough (new global best).
   const expsSinceBest = (() => {
     if (!bestExp) return null;
-    return done.filter(e => e.id > bestExp!.id).length;
+    const bestIdx = chronologicalDone.indexOf(bestExp);
+    return bestIdx >= 0 ? chronologicalDone.length - bestIdx - 1 : null;
   })();
 
   // Campaign age: days since first experiment created
@@ -2443,9 +2461,8 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
 
   // Trend: compare last-10 avg vs overall avg — ↑ improving, → flat, ↓ declining
   const scoreTrend = (() => {
-    if (!metric || !bestVal || typeof bestVal !== "number") return null;
-    const withMetric = done.filter(e => typeof e.metrics?.[metric] === "number")
-      .slice().sort((a, b) => a.id - b.id);
+    if (!metric || typeof bestVal !== "number") return null;
+    const withMetric = chronologicalDone.filter(e => typeof e.metrics?.[metric] === "number");
     if (withMetric.length < 20) return null;
     const all = withMetric.map(e => e.metrics![metric] as number);
     const recent10 = all.slice(-10);
@@ -2469,8 +2486,7 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
   // Milestone set AND count (new global bests, chronologically)
   const milestoneIdsSet = (() => {
     if (!metric) return new Set<number>();
-    const sorted = done.filter(e => e.metrics && typeof e.metrics[metric] === "number")
-      .slice().sort((a, b) => a.id - b.id);
+    const sorted = chronologicalDone.filter(e => e.metrics && typeof e.metrics[metric] === "number");
     let best: number | null = null;
     const set = new Set<number>();
     for (const e of sorted) {
@@ -2481,23 +2497,12 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
   })();
 
   // Count milestone experiments (new global bests, chronologically)
-  const milestonesCount = (() => {
-    if (!metric) return 0;
-    const sorted = done.filter(e => e.metrics && typeof e.metrics[metric] === "number")
-      .slice().sort((a, b) => a.id - b.id);
-    let best: number | null = null;
-    let count = 0;
-    for (const e of sorted) {
-      const v = e.metrics![metric] as number;
-      if (best === null || (lower ? v < best : v > best)) { best = v; count++; }
-    }
-    return count;
-  })();
+  const milestonesCount = milestoneIdsSet.size;
 
   // Stagnation: if last 10 experiments all score <= 20% of best, flag it
   const isStagnant = (() => {
-    if (!metric || !bestVal || typeof bestVal !== "number" || bestVal <= 0) return false;
-    const recent10 = done.filter(e => typeof e.metrics?.[metric] === "number")
+    if (!metric || typeof bestVal !== "number" || bestVal <= 0) return false;
+    const recent10 = chronologicalDone.filter(e => typeof e.metrics?.[metric] === "number")
       .slice(-10).map(e => e.metrics![metric] as number);
     if (recent10.length < 3) return false;
     const recentMax = lower ? Math.min(...recent10) : Math.max(...recent10);
