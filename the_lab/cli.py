@@ -725,15 +725,15 @@ def cmd_messages():
 
         Bash("the-lab messages --port 9009", run_in_background=True)
 
-    While this command is connected the server knows EXACTLY that this agent is
-    listening and SUPPRESSES the piggy-backed ``_notifications`` on the agent's
-    other API responses — they arrive here over the socket instead, saving
-    tokens and avoiding double-delivery.
+    N1: messages delivered over this socket are CLAIMED on delivery, so the same
+    message is never also piggybacked on the agent's other API responses (no
+    blanket suppression — an unread socket can't starve the agent).
 
     Output: one JSON object per line (NDJSON). Each line is one of::
 
         {"messages": [...]}          # unread messages addressed to this agent
         {"notifications": [...]}     # non-message notifications (failures, ...)
+        {"experiment": {...}}        # experiment lifecycle event (M3 fold-in)
 
     the first line is the initial snapshot of current unread + notifications.
 
@@ -884,6 +884,18 @@ def cmd_messages():
                         if notifs:
                             _emit({"notifications": notifs})
                     continue
+
+                # M3 fold-in: experiment lifecycle frames. Emit the payload
+                # (minus the frame envelope) as its own NDJSON line. These are a
+                # distinct stream, so --no-notifications does not suppress them.
+                if etype == "experiment":
+                    _emit({"experiment": {
+                        k: v for k, v in event.items() if k != "type"
+                    }})
+                    continue
+
+                # Unknown frame type — ignore it (forward-compat, don't choke).
+                continue
             return True
         finally:
             try:

@@ -228,6 +228,53 @@ def unread_for(
     return out
 
 
+def claim_unread_for(
+    repo_dir: Path,
+    *,
+    agent_id: str | None,
+    role: str | None,
+    limit: int | None = None,
+) -> list[dict]:
+    """Atomically select AND claim (mark-read) this agent's unread messages.
+
+    N1: cross-channel dedup rests on claim-on-delivery. Selecting the unread
+    set and marking it read happen inside ONE ``_lock`` acquisition, so two
+    channels (the WS listener vs. a piggybacked/polling reader) can never both
+    deliver the same message — whichever claims it first wins, the other sees
+    it already in ``read_by`` and skips it.
+
+    Selection predicate is identical to ``unread_for`` (is_for(agent) AND
+    agent_id not already in read_by AND not self-sent); returns the claimed
+    messages newest-first. ``agent_id`` is required to claim (a role-only
+    caller has no id to record in ``read_by``).
+    """
+    if not agent_id:
+        return []
+    out: list[dict] = []
+    with _lock:
+        data = _read(repo_dir)
+        changed = False
+        for m in reversed(data["messages"]):
+            # Same predicate as unread_for (kept in lock-step to avoid drift).
+            if not is_for(m, agent_id=agent_id, role=role):
+                continue
+            if m.get("from_agent") and m["from_agent"] == agent_id:
+                continue
+            rb = m.get("read_by") or []
+            if agent_id in rb:
+                continue
+            out.append(m)
+            # Claim it: append agent_id to read_by (same mark logic as mark_read).
+            rb = m.setdefault("read_by", [])
+            rb.append(agent_id)
+            changed = True
+            if limit is not None and len(out) >= limit:
+                break
+        if changed:
+            _write(repo_dir, data)
+    return out
+
+
 def mark_read(repo_dir: Path, msg_id: int, agent_id: str) -> dict | None:
     """Record that *agent_id* has read *msg_id*. Idempotent; returns the message."""
     with _lock:

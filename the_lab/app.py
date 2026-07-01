@@ -318,19 +318,12 @@ def build_notifications(request) -> list[dict]:
 
     agent_id = getattr(request.state, "agent_id", None)
 
-    # ── WS-presence suppression (authoritative) ──────────────────────────────
-    # If this agent currently holds an open /api/v1/messages/ws connection it is
-    # receiving messages + notifications live over that socket. Suppress ALL
-    # piggy-backed _notifications so we don't double-deliver (and don't burn
-    # tokens on every response). This takes precedence over the 20s
-    # agents.is_listening poll heuristic below, which stays as a fallback for
-    # callers that poll GET /messages instead of holding the WS open.
-    #
-    # Guarded by agent_id: the dashboard and /health send no X-Agent-Id, so they
-    # are never affected. WS presence is exact — an agent that never opened the
-    # socket (or whose socket closed) falls straight through to normal delivery.
-    if agent_id and _ws_mod.listening_agents.is_listening(agent_id):
-        return []
+    # N1: NO blanket WS-presence suppression. Piggybacked _notifications are
+    # always built; cross-channel dedup rests on read/seen state instead — the
+    # message-preview block below uses unread_for (previews stop the instant the
+    # WS claims a message via claim_unread_for), and the shown-once seen-store
+    # dedups failures/suggestions/lifecycle. This avoids starving an agent whose
+    # socket is open but not being read.
 
     # ── Shown-once notifications (failures / suggestions / agent lifecycle) ──
     # Each gets a STABLE key so the per-agent seen-store can deliver it exactly
@@ -816,7 +809,9 @@ class _NotifRequestShim:
 # Broadcast event types that should trigger a fresh notifications push to a
 # listening agent (idea/experiment/agent-lifecycle churn that build_notifications
 # derives its failure/suggestion/lifecycle items from). message_received is
-# handled separately (it drives the per-agent inbox).
+# handled separately (it drives the per-agent inbox); M3: experiment_* events
+# are additionally forwarded as their own "experiment" frame regardless of this
+# set (the set only gates the follow-up notifications re-derive).
 _NOTIF_TRIGGER_TYPES = frozenset({
     "experiment_finished",
     "experiment_cancelled",
@@ -831,10 +826,9 @@ _NOTIF_TRIGGER_TYPES = frozenset({
 async def messages_ws_endpoint(websocket: WebSocket):
     """Agent-scoped listening WebSocket for `the-lab messages`.
 
-    While an agent holds this socket open the server knows EXACTLY that it is
-    listening and SUPPRESSES the piggy-backed ``_notifications`` on that agent's
-    other API responses (see build_notifications) — messages and notifications
-    are delivered here instead.
+    N1: messages are delivered here by CLAIMING them (claim_unread_for) so a
+    message can't also arrive on the piggyback/poll channel — there is no
+    blanket suppression anymore; dedup rests on claim-on-delivery + read state.
 
     Connect with ``ws[s]://host/api/v1/messages/ws``. The agent is identified by
     the ``X-Agent-Id`` request header (our CLI sends it in the handshake), with a
@@ -843,12 +837,15 @@ async def messages_ws_endpoint(websocket: WebSocket):
     ``Authorization: Basic`` handshake header for parity).
 
     Frames (JSON):
-      * initial   — ``{"type":"init","messages":[...],"notifications":[...]}``
-      * message   — ``{"type":"message","messages":[<full msg>...]}`` as they arrive
-      * notify    — ``{"type":"notifications","notifications":[...]}`` on churn
-      * ping      — ``{"type":"ping","seq":-1}`` every 30 s keep-alive
+      * initial    — ``{"type":"init","messages":[...],"notifications":[...]}``
+      * message    — ``{"type":"message","messages":[<full msg>...]}`` as they arrive
+      * notify     — ``{"type":"notifications","notifications":[...]}`` on churn
+      * experiment — ``{"type":"experiment","event":"experiment_...", ...payload}``
+                     (M3 fold-in: experiment lifecycle events forwarded verbatim)
+      * ping       — ``{"type":"ping","seq":-1}`` every 30 s keep-alive
 
-    Pass ``?peek=1`` to leave delivered messages unread (mirrors GET /messages).
+    Pass ``?peek=1`` to leave delivered messages unread — then unread_for is used
+    (select without claiming) so previews still fall through the other channels.
     """
     import asyncio as _asyncio
 
@@ -888,23 +885,28 @@ async def messages_ws_endpoint(websocket: WebSocket):
     role = entry.get("role")
     shim = _NotifRequestShim(agent_id)
 
-    def _unread_ids(msgs: list[dict]) -> list[int]:
-        return [m["id"] for m in msgs if "id" in m]
+    def _fetch_deliver() -> list[dict]:
+        """Select this agent's unread messages for delivery.
 
-    def _mark_delivered(msgs: list[dict]) -> None:
-        """Mark delivered messages read for this agent (unless peeking)."""
-        if peek or not msgs:
-            return
+        N1: normally CLAIM them (select + mark read atomically) so the same
+        message can't also be delivered via the piggyback/poll channel. When
+        ?peek=1, select WITHOUT claiming (unread_for) so the caller sees them
+        but they remain deliverable elsewhere.
+        """
         try:
-            messages_mod.mark_read_many(REPO_DIR, _unread_ids(msgs), agent_id)
+            if peek:
+                return messages_mod.unread_for(
+                    REPO_DIR, agent_id=agent_id, role=role, limit=50,
+                )
+            return messages_mod.claim_unread_for(
+                REPO_DIR, agent_id=agent_id, role=role, limit=50,
+            )
         except Exception:
-            pass
+            return []
 
-    # Register as an authoritative live listener. From this point on,
-    # build_notifications suppresses this agent's piggy-backed notifications.
-    _ws_mod.listening_agents.add(agent_id)
-    # Also record the poll-heuristic timestamp so the dashboard "listening" flag
+    # Record the poll-heuristic timestamp so the dashboard "listening" flag
     # (agents.is_listening) lights up immediately, without waiting for a GET.
+    # (N1: no listening-registry suppression anymore — dedup is claim-based.)
     try:
         agents_mod.note_message_poll(REPO_DIR, agent_id)
     except Exception:
@@ -913,29 +915,16 @@ async def messages_ws_endpoint(websocket: WebSocket):
     q = None
     try:
         # ── Initial frame: current unread messages + current notifications ──
-        try:
-            init_unread = messages_mod.unread_for(
-                REPO_DIR, agent_id=agent_id, role=role, limit=50,
-            )
-        except Exception:
-            init_unread = []
-        # build_notifications suppresses when the agent is listening — and it is
-        # now registered. Temporarily read notifications as if NOT listening for
-        # the initial push, so the agent gets the current backlog exactly once
-        # over the socket. We do this by discarding+re-adding around the call.
-        _ws_mod.listening_agents.discard(agent_id)
+        init_unread = _fetch_deliver()
         try:
             init_notifs = build_notifications(shim)
         except Exception:
             init_notifs = []
-        finally:
-            _ws_mod.listening_agents.add(agent_id)
         await websocket.send_json({
             "type": "init",
             "messages": init_unread,
             "notifications": init_notifs,
         })
-        _mark_delivered(init_unread)
 
         # Subscribe AFTER the initial snapshot so we don't miss events that land
         # between the snapshot read and the subscribe (they'll be re-derived on
@@ -945,33 +934,46 @@ async def messages_ws_endpoint(websocket: WebSocket):
         async def _send_loop():
             while True:
                 event = await q.get()
-                etype = event.get("type")
+                etype = event.get("type") or ""
                 if etype == "message_received":
-                    # A directed message landed. Re-read this agent's unread and
+                    # A directed message landed. Claim this agent's unread and
                     # forward only what's addressed to it (is_for handles
-                    # agent/role/all + self-exclusion).
-                    try:
-                        unread = messages_mod.unread_for(
-                            REPO_DIR, agent_id=agent_id, role=role, limit=50,
-                        )
-                    except Exception:
-                        unread = []
+                    # agent/role/all + self-exclusion). N1: claiming here dedups
+                    # against the piggyback/poll channel.
+                    unread = _fetch_deliver()
                     if unread:
                         await websocket.send_json({
                             "type": "message",
                             "messages": unread,
                         })
-                        _mark_delivered(unread)
+                elif etype.startswith("experiment_"):
+                    # M3 fold-in: forward experiment lifecycle events to the
+                    # listener verbatim (payload carries experiment_id/label/
+                    # idea_id/status/status_msg). Always forwarded — these are
+                    # their own frame type, independent of --no-notifications.
+                    frame = {k: v for k, v in event.items() if k != "type"}
+                    frame["type"] = "experiment"
+                    frame["event"] = etype
+                    await websocket.send_json(frame)
+                    # Experiment churn may also produce new notifications for this
+                    # agent (failures/lifecycle) — re-derive and push any.
+                    if etype in _NOTIF_TRIGGER_TYPES:
+                        try:
+                            notifs = build_notifications(shim)
+                        except Exception:
+                            notifs = []
+                        if notifs:
+                            await websocket.send_json({
+                                "type": "notifications",
+                                "notifications": notifs,
+                            })
                 elif etype in _NOTIF_TRIGGER_TYPES:
-                    # System churn that may have produced new notifications for
-                    # this agent. Re-derive (as-if-not-listening) and push any.
-                    _ws_mod.listening_agents.discard(agent_id)
+                    # Non-experiment churn (idea_changed/note_added) that may have
+                    # produced new notifications for this agent. Re-derive + push.
                     try:
                         notifs = build_notifications(shim)
                     except Exception:
                         notifs = []
-                    finally:
-                        _ws_mod.listening_agents.add(agent_id)
                     if notifs:
                         await websocket.send_json({
                             "type": "notifications",
@@ -1018,8 +1020,7 @@ async def messages_ws_endpoint(websocket: WebSocket):
     except Exception:  # noqa: BLE001 — never let a listener crash the server.
         pass
     finally:
-        # ALWAYS unregister so suppression lifts the instant the socket drops.
-        _ws_mod.listening_agents.discard(agent_id)
+        # N1: no listening-registry to unregister — dedup is claim-based now.
         if q is not None:
             _ws_mod.broadcaster.unsubscribe(q)
 
