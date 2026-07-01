@@ -168,6 +168,8 @@ class ExperimentRunner:
                         exp["id"],
                         status="failed",
                         error="server restarted while experiment was running (process gone)",
+                        # M3 feedback: terminal-state reason line.
+                        status_msg="error: server restarted while experiment was running (process gone)",
                         pid=None,
                         finished_at=datetime.now(timezone.utc).isoformat(),
                     )
@@ -378,6 +380,8 @@ class ExperimentRunner:
                         label,
                         status="failed",
                         error=f"depends_on references unknown experiment '{dep_label}'",
+                        # M3 feedback: terminal-state reason line.
+                        status_msg=f"error: depends_on references unknown experiment '{dep_label}'",
                         finished_at=datetime.now(timezone.utc).isoformat(),
                     )
                     ready = False
@@ -390,6 +394,8 @@ class ExperimentRunner:
                         label,
                         status="cancelled",
                         error=f"parent experiment '{dep_label}' {dep['status']}",
+                        # M3 feedback: terminal-state reason line.
+                        status_msg=f"cancelled: parent experiment '{dep_label}' {dep['status']}",
                         finished_at=datetime.now(timezone.utc).isoformat(),
                     )
                     ready = False
@@ -460,6 +466,7 @@ class ExperimentRunner:
                     from . import ws as ws_mod
                     ws_mod.broadcaster.broadcast({
                         "type": "experiment_started",
+                        "experiment_id": exp.get("id"),  # M3 feedback
                         "label": label,
                         "idea_id": exp.get("idea_id"),
                         "assigned_resource": resource.name,
@@ -494,6 +501,11 @@ class ExperimentRunner:
         _label = exp.get("label") or str(exp_id)
         _idea_id = exp.get("idea_id")
         if result is not None:
+            # M3 cancel-bug fix: re-read status immediately before the terminal
+            # write. If a user cancelled while we reconciled, don't clobber it.
+            _cur = self._store.get_experiment(exp_id)
+            if _cur and _cur.get("status") == "cancelled":
+                return True
             metrics, result_meta = _metrics_from_result(result)
             meta = {**exp.get("meta", {}), **result_meta}
             self._store.update_experiment(
@@ -503,6 +515,7 @@ class ExperimentRunner:
                 meta=meta,
                 pid=None,
                 error=None,
+                status_msg=None,  # normal success
                 finished_at=now,
             )
             if result_idx is not None:
@@ -512,8 +525,9 @@ class ExperimentRunner:
             self.wake_scheduler()
             from . import ws as ws_mod
             ws_mod.broadcaster.broadcast_soon({"type": "experiment_finished", "label": _label,
+                                               "experiment_id": exp_id,
                                                "idea_id": _idea_id, "status": "completed",
-                                               "metrics": metrics})
+                                               "status_msg": None, "metrics": metrics})
             return True
 
         if progress_path.exists():
@@ -522,12 +536,18 @@ class ExperimentRunner:
             except json.JSONDecodeError:
                 progress = {}
             if progress.get("pipeline_status") == "done" or progress.get("status") == "done":
+                # M3 cancel-bug fix: re-read status before clobbering with a
+                # terminal write, so a concurrent cancel wins.
+                _cur = self._store.get_experiment(exp_id)
+                if _cur and _cur.get("status") == "cancelled":
+                    return True
                 self._store.update_experiment(
                     exp_id,
                     status="completed",
                     metrics=exp.get("metrics"),
                     pid=None,
                     error=None,
+                    status_msg=None,  # normal success
                     finished_at=now,
                 )
                 self._cleanup_worktree(exp)
@@ -535,7 +555,9 @@ class ExperimentRunner:
                 self.wake_scheduler()
                 from . import ws as ws_mod
                 ws_mod.broadcaster.broadcast_soon({"type": "experiment_finished", "label": _label,
+                                                   "experiment_id": exp_id,
                                                    "idea_id": _idea_id, "status": "completed",
+                                                   "status_msg": None,
                                                    "metrics": exp.get("metrics")})
                 return True
 
@@ -558,13 +580,21 @@ class ExperimentRunner:
         now = datetime.now(timezone.utc).isoformat()
         output = log_path.read_text() if log_path.exists() else ""
 
+        # M3 cancel-bug fix: re-read status before the terminal write so a
+        # cancel that landed while we polled the PID isn't clobbered.
+        _cur = self._store.get_experiment(exp_id)
+        if _cur and _cur.get("status") == "cancelled":
+            self._tasks.pop(exp_id, None)
+            self._finished_queue.put_nowait(exp_id)
+            return
+
         result, result_idx = self._extract_json(output)
         if result is not None:
             metrics, result_meta = _metrics_from_result(result)
             meta = {**exp.get("meta", {}), **result_meta}
             self._store.update_experiment(
                 exp_id, status="completed", metrics=metrics, meta=meta,
-                pid=None, finished_at=now,
+                pid=None, status_msg=None, finished_at=now,  # normal success
             )
             if result_idx is not None:
                 self._strip_result_line(log_path, result_idx)
@@ -572,7 +602,7 @@ class ExperimentRunner:
             # Metrics-optional: assume success if process was running normally
             self._store.update_experiment(
                 exp_id, status="completed", metrics=None,
-                pid=None, finished_at=now,
+                pid=None, status_msg=None, finished_at=now,  # normal success
             )
 
         # Clean up worktree
@@ -611,6 +641,8 @@ class ExperimentRunner:
             )
             self._store.update_experiment(
                 label, status="failed", error=msg,
+                # M3 feedback: terminal-state reason line.
+                status_msg="error: script not found",
                 finished_at=datetime.now(timezone.utc).isoformat(),
             )
             return {"status": "error", "reason": msg}
@@ -747,6 +779,16 @@ class ExperimentRunner:
             finished_at=None,
         )
 
+        # M3 feedback: lightweight started broadcast on the running transition.
+        # We're post-await here, so use broadcast (not broadcast_soon).
+        from . import ws as ws_mod
+        ws_mod.broadcaster.broadcast({
+            "type": "experiment_started",
+            "experiment_id": exp_id,
+            "label": exp.get("label") if exp else str(exp_id),
+            "idea_id": exp.get("idea_id") if exp else None,
+        })
+
         task = asyncio.create_task(
             self._monitor(exp_id, process, err_path, timeout=timeout, run_token=run_token)
         )
@@ -789,44 +831,79 @@ class ExperimentRunner:
         _label = exp.get("label") or str(exp_id)
         _idea_id = exp.get("idea_id")
 
+        # M3 cancel-bug fix: a user cancel may have landed between the guard
+        # above and the terminal write below (we awaited a log read + did work).
+        # Re-read right before writing; if cancelled, leave it alone. Extends
+        # the same pattern already used at the top of this method and in the
+        # slurm monitor (~1118).
+        def _cancelled_now() -> bool:
+            _cur = self._store.get_experiment(exp_id)
+            return bool(_cur and _cur.get("status") == "cancelled")
+
         if timed_out:
             error = f"killed: exceeded timeout of {timeout}s"
-            self._store.update_experiment(
-                exp_id, status="failed", error=error, pid=None, finished_at=now,
-            )
-            err_path.write_text(f"{error}\n\n{output[-2000:]}")
-            ws_mod.broadcaster.broadcast({"type": "experiment_finished", "label": _label,
-                                          "idea_id": _idea_id, "status": "failed", "metrics": None})
+            # M3 feedback: distinguish a hard SIGTERM/timeout kill from the case
+            # where the run cleanly abandoned after exhausting its budget/turns.
+            # Best-effort from the live progress snapshot the script maintains.
+            _msg = f"timeout: exceeded timeout of {timeout}s"
+            try:
+                _prog = exp.get("progress") or {}
+                _budget = _prog.get("budget_remaining_s")
+                if _budget is not None and float(_budget) <= 0:
+                    _msg = "cap_abandoned: budget_remaining_s exhausted"
+            except (TypeError, ValueError):
+                pass
+            if not _cancelled_now():
+                self._store.update_experiment(
+                    exp_id, status="failed", error=error,
+                    status_msg=_msg, pid=None, finished_at=now,
+                )
+                err_path.write_text(f"{error}\n\n{output[-2000:]}")
+                ws_mod.broadcaster.broadcast({"type": "experiment_finished", "label": _label,
+                                              "experiment_id": exp_id, "idea_id": _idea_id,
+                                              "status": "failed", "status_msg": _msg,
+                                              "metrics": None})
         elif process.returncode == 0:
             result, result_idx = self._extract_json(output)
             if result is not None:
                 metrics, result_meta = _metrics_from_result(result)
                 meta = {**exp.get("meta", {}), **result_meta}
-                self._store.update_experiment(
-                    exp_id, status="completed", metrics=metrics, meta=meta,
-                    pid=None, finished_at=now,
-                )
-                if result_idx is not None:
-                    self._strip_result_line(log_path, result_idx)
-                ws_mod.broadcaster.broadcast({"type": "experiment_finished", "label": _label,
-                                              "idea_id": _idea_id, "status": "completed",
-                                              "metrics": metrics})
+                if not _cancelled_now():
+                    self._store.update_experiment(
+                        exp_id, status="completed", metrics=metrics, meta=meta,
+                        pid=None, status_msg=None, finished_at=now,  # normal success
+                    )
+                    if result_idx is not None:
+                        self._strip_result_line(log_path, result_idx)
+                    ws_mod.broadcaster.broadcast({"type": "experiment_finished", "label": _label,
+                                                  "experiment_id": exp_id, "idea_id": _idea_id,
+                                                  "status": "completed", "status_msg": None,
+                                                  "metrics": metrics})
             else:
-                self._store.update_experiment(
-                    exp_id, status="completed", metrics=None,
-                    pid=None, finished_at=now,
-                )
-                ws_mod.broadcaster.broadcast({"type": "experiment_finished", "label": _label,
-                                              "idea_id": _idea_id, "status": "completed",
-                                              "metrics": None})
+                if not _cancelled_now():
+                    self._store.update_experiment(
+                        exp_id, status="completed", metrics=None,
+                        pid=None, status_msg=None, finished_at=now,  # normal success
+                    )
+                    ws_mod.broadcaster.broadcast({"type": "experiment_finished", "label": _label,
+                                                  "experiment_id": exp_id, "idea_id": _idea_id,
+                                                  "status": "completed", "status_msg": None,
+                                                  "metrics": None})
         else:
             error = f"exit code {process.returncode}"
-            self._store.update_experiment(
-                exp_id, status="failed", error=error, pid=None, finished_at=now,
-            )
-            err_path.write_text(f"{error}\n\n{output[-2000:]}")
-            ws_mod.broadcaster.broadcast({"type": "experiment_finished", "label": _label,
-                                          "idea_id": _idea_id, "status": "failed", "metrics": None})
+            # M3 feedback: best-effort reason line from the tail of the log.
+            _tail = next((ln.strip() for ln in reversed(output.splitlines()) if ln.strip()), "")
+            _msg = f"error: {_tail}" if _tail else f"error: {error}"
+            if not _cancelled_now():
+                self._store.update_experiment(
+                    exp_id, status="failed", error=error,
+                    status_msg=_msg, pid=None, finished_at=now,
+                )
+                err_path.write_text(f"{error}\n\n{output[-2000:]}")
+                ws_mod.broadcaster.broadcast({"type": "experiment_finished", "label": _label,
+                                              "experiment_id": exp_id, "idea_id": _idea_id,
+                                              "status": "failed", "status_msg": _msg,
+                                              "metrics": None})
 
         # Clean up worktree
         wt = (exp.get("meta") or {}).get("worktree")
@@ -901,6 +978,8 @@ class ExperimentRunner:
             )
             self._store.update_experiment(
                 label, status="failed", error=msg,
+                # M3 feedback: terminal-state reason line.
+                status_msg="error: script file missing",
                 finished_at=datetime.now(timezone.utc).isoformat(),
             )
             print(f"[the-lab] errored experiment {label}: {msg}")
@@ -1145,6 +1224,7 @@ class ExperimentRunner:
                         metrics=metrics,
                         meta=meta,
                         pid=None,
+                        status_msg=None,  # M3: normal success
                         finished_at=now,
                     )
                     # Overwrite the progress file with final state so GET /progress
@@ -1162,8 +1242,10 @@ class ExperimentRunner:
                     ws_mod.broadcaster.broadcast_soon({
                         "type": "experiment_finished",
                         "label": label,
+                        "experiment_id": exp_id,  # M3 feedback
                         "idea_id": exp.get("idea_id"),
                         "status": "completed",
+                        "status_msg": None,
                         "metrics": metrics,
                     })
                 else:
@@ -1176,18 +1258,24 @@ class ExperimentRunner:
                     _log_has_fatal = any(p in output for p in _fatal_patterns)
                     if _log_has_fatal:
                         _last_lines = "\n".join(output.splitlines()[-10:])
+                        # M3 feedback: best-effort reason from the last log line.
+                        _tail = next((ln.strip() for ln in reversed(output.splitlines()) if ln.strip()), "")
+                        _msg = f"error: {_tail}" if _tail else "error: fatal error detected in log (no metrics produced)"
                         self._store.update_experiment(
                             exp_id,
                             status="failed",
                             error=f"fatal error detected in log (no metrics produced):\n{_last_lines}",
+                            status_msg=_msg,
                             pid=None,
                             finished_at=now,
                         )
                         ws_mod.broadcaster.broadcast_soon({
                             "type": "experiment_finished",
                             "label": label,
+                            "experiment_id": exp_id,  # M3 feedback
                             "idea_id": exp.get("idea_id"),
                             "status": "failed",
+                            "status_msg": _msg,
                             "metrics": None,
                         })
                     else:
@@ -1196,13 +1284,16 @@ class ExperimentRunner:
                             status="completed",
                             metrics=None,
                             pid=None,
+                            status_msg=None,  # M3: normal success
                             finished_at=now,
                         )
                         ws_mod.broadcaster.broadcast_soon({
                             "type": "experiment_finished",
                             "label": label,
+                            "experiment_id": exp_id,  # M3 feedback
                             "idea_id": exp.get("idea_id"),
                             "status": "completed",
+                            "status_msg": None,
                             "metrics": None,
                         })
                 asyncio.get_event_loop().run_in_executor(None, lambda: executor.cleanup_remote(label, abs_bare_path=getattr(executor, "_resolved_bare_path", None)))
@@ -1236,6 +1327,7 @@ class ExperimentRunner:
                         metrics=metrics,
                         meta=meta,
                         pid=None,
+                        status_msg=None,  # M3: metrics present despite slurm kill
                         finished_at=now,
                     )
                     if result_idx is not None:
@@ -1243,8 +1335,10 @@ class ExperimentRunner:
                     ws_mod.broadcaster.broadcast_soon({
                         "type": "experiment_finished",
                         "label": label,
+                        "experiment_id": exp_id,  # M3 feedback
                         "idea_id": exp.get("idea_id"),
                         "status": "completed",
+                        "status_msg": None,
                         "metrics": metrics,
                     })
                 else:
@@ -1260,10 +1354,17 @@ class ExperimentRunner:
                         err_path.write_text(error)
                     except OSError:
                         pass
+                    # M3 feedback: slurm TIMEOUT gets a timeout: reason line;
+                    # every other terminal slurm state is a generic error:.
+                    if state == "TIMEOUT":
+                        _msg = f"timeout: slurm job {job_id} hit its time limit"
+                    else:
+                        _msg = f"error: slurm job {job_id} ended with state {state}"
                     self._store.update_experiment(
                         exp_id,
                         status="failed",
                         error=error,
+                        status_msg=_msg,
                         pid=None,
                         finished_at=now,
                     )
@@ -1271,8 +1372,10 @@ class ExperimentRunner:
                     ws_mod.broadcaster.broadcast_soon({
                         "type": "experiment_finished",
                         "label": label,
+                        "experiment_id": exp_id,  # M3 feedback
                         "idea_id": exp.get("idea_id"),
                         "status": "failed",
+                        "status_msg": _msg,
                         "metrics": None,
                     })
                 asyncio.get_event_loop().run_in_executor(None, lambda: executor.cleanup_remote(label, abs_bare_path=getattr(executor, "_resolved_bare_path", None)))
@@ -1368,6 +1471,7 @@ class ExperimentRunner:
             result = self._store.update_experiment(
                 exp_id,
                 status="cancelled",
+                status_msg="cancelled",  # M3: user cancelled before it ran
                 finished_at=datetime.now(timezone.utc).isoformat(),
             )
             ws_mod.broadcaster.broadcast({"type": "experiment_cancelled",
@@ -1407,6 +1511,8 @@ class ExperimentRunner:
         result = self._store.update_experiment(
             exp_id,
             status="cancelled",
+            # M3: SIGTERM/SIGKILL sent to a running process by user cancel.
+            status_msg="sigterm",
             pid=None,
             finished_at=datetime.now(timezone.utc).isoformat(),
         )

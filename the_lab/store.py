@@ -86,6 +86,11 @@ RENDERABLE_EXPERIMENT_FIELDS = {
     "conclusion",
     "progress",
     "runtime",
+    # M3 feedback: short human-readable terminal-state reason
+    # (timeout / budget-exhausted / cap-abandon / sigterm / error).
+    # Must be renderable so it serializes into aggregation endpoints and
+    # invalidates the cache when it changes.
+    "status_msg",
 }
 
 
