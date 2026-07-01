@@ -10,8 +10,10 @@ Layout::
 
     .the_lab/agents/
         registry.json                 -- {agent_id: {role, branch, pid, ...}}
+        archive/<agent_id>/           -- durable data kept after worktree removal
         <agent_id>/                   -- the worktree (git worktree add ...)
-            .the_lab.agentid          -- 5-char hex, gitignored
+            .the_lab.agentid          -- 5-char id, locally untracked
+            .the_lab.link -> ../../../.the_lab   -- read main-checkout logs
             .claude -> ../../../.claude
             .mcp.json -> ../../../.mcp.json
             (project source files at the chosen branch)
@@ -98,6 +100,61 @@ def _ensure_symlink(link: Path, target: Path) -> None:
         pass  # filesystem doesn't support symlinks; not fatal
 
 
+# Worktree-local scaffolding that must never participate in git tracking/merges.
+_WORKTREE_LOCAL_PATHS = (AGENTID_FILE, ".the_lab.link", ".claude", ".mcp.json")
+
+
+def _make_worktree_local_untracked(worktree: Path) -> None:
+    """Ensure our per-worktree scaffolding is git-ignored *locally* and untracked.
+
+    Feedback (.the_lab.agentid UU CONFLICT): AGENTID_FILE is committed/tracked in
+    the shared tree, so agents sharing lineage hit a guaranteed UU conflict on
+    every create_idea auto-checkout. We fix it per-worktree (no repo commit):
+
+      1. Append the scaffolding names to this worktree's own exclude file so a
+         fresh copy is never re-staged. A worktree has its *own* gitdir, so we
+         resolve the real path via ``git rev-parse --git-path info/exclude``
+         rather than assuming ``.git/info/exclude``.
+      2. If any name is already tracked, ``git rm --cached`` it in this worktree
+         so it stops causing merge conflicts (leaves the file on disk).
+
+    Fail-soft: any git/IO error is swallowed — this is best-effort hardening.
+    """
+    try:
+        result = git_ops._run(
+            ["rev-parse", "--git-path", "info/exclude"], cwd=worktree, check=False,
+        )
+        exclude_rel = result.stdout.strip() if result.returncode == 0 else ""
+    except Exception:
+        exclude_rel = ""
+    if exclude_rel:
+        try:
+            exclude_path = Path(exclude_rel)
+            if not exclude_path.is_absolute():
+                exclude_path = worktree / exclude_path
+            exclude_path.parent.mkdir(parents=True, exist_ok=True)
+            existing = exclude_path.read_text() if exclude_path.exists() else ""
+            have = set(existing.splitlines())
+            additions = [p for p in _WORKTREE_LOCAL_PATHS if p not in have]
+            if additions:
+                prefix = "" if (not existing or existing.endswith("\n")) else "\n"
+                with exclude_path.open("a") as fh:
+                    fh.write(prefix + "\n".join(additions) + "\n")
+        except OSError:
+            pass
+
+    # Drop any already-tracked copies from this worktree's index so shared
+    # lineage stops conflicting. --cached keeps the on-disk file intact.
+    for name in _WORKTREE_LOCAL_PATHS:
+        try:
+            git_ops._run(
+                ["rm", "--cached", "--quiet", "--ignore-unmatch", name],
+                cwd=worktree, check=False,
+            )
+        except Exception:
+            pass
+
+
 def register_agent(
     repo_dir: Path,
     store,
@@ -124,10 +181,23 @@ def register_agent(
     # Symlinks — let the agent's tooling find configs without absolute paths.
     _ensure_symlink(worktree / ".claude", Path("../../../.claude"))
     _ensure_symlink(worktree / ".mcp.json", Path("../../../.mcp.json"))
+    # Feedback (WORKTREE .the_lab LINK): a worktree is a checkout of an idea
+    # branch, so it can't see experiment logs / world-dumps that live only in
+    # the main checkout's .the_lab/. Link to it under a distinct name so tooling
+    # run inside the worktree can read them without clobbering a worktree-local
+    # .the_lab if the branch happens to commit one.
+    _ensure_symlink(worktree / ".the_lab.link", Path("../../../.the_lab"))
 
-    # The id file is gitignored (see init); useful for scripts running inside
+    # The id file is gitignored (see below); useful for scripts running inside
     # the worktree that need to look up the agent's id without an env var.
     (worktree / AGENTID_FILE).write_text(agent_id + "\n")
+
+    # Feedback (.the_lab.agentid UU CONFLICT): AGENTID_FILE is tracked in the
+    # committed tree, so sharing lineage across agents guarantees a UU conflict
+    # on every create_idea auto-checkout. Make our worktree-local scaffolding
+    # untracked *regardless of the repo's committed state*: add it to this
+    # worktree's own git exclude file, and drop it from the index if tracked.
+    _make_worktree_local_untracked(worktree)
 
     entry = {
         "agent_id": agent_id,
@@ -231,6 +301,83 @@ def list_past_agents(repo_dir: Path) -> list[dict]:
         return []
 
 
+def _claude_projects_dir_for(worktree: Path) -> Path:
+    """Path to the agent's Claude session-history dir under ~/.claude/projects.
+
+    Claude Code names the project dir by replacing every non-alphanumeric char
+    in the absolute worktree path with '-' — the same scheme agent_cli.py uses
+    to move sessions on resume. Kept in sync with that logic.
+    """
+    import re
+    name = re.sub(r"[^a-zA-Z0-9]", "-", str(Path(worktree).resolve()))
+    return Path.home() / ".claude" / "projects" / name
+
+
+def _archive_agent_data(repo_dir: Path, agent_id: str, entry: dict) -> None:
+    """Archive an agent's durable data before its worktree is deleted.
+
+    Feedback (PRESERVE FILES ON CLOSE): removing the worktree orphaned the
+    agent's Claude session history (~/.claude/projects/<hash>/*.jsonl, keyed off
+    the worktree path) and any agent-specific lab stats in the worktree's
+    .the_lab/. We keep the *data* — not the whole worktree checkout — under
+    ``.the_lab/agents/archive/<agent_id>/`` so it survives cleanup.
+
+    Fail-soft throughout: archiving must never block unregistration.
+    """
+    import shutil
+    try:
+        worktree = Path(entry.get("worktree", "")).resolve()
+        archive_dir = _agents_dir(repo_dir) / "archive" / agent_id
+        archive_dir.mkdir(parents=True, exist_ok=True)
+
+        # (a) Claude session history. Record its source path always, and copy the
+        # jsonl session files if the dir is still present.
+        proj_dir = _claude_projects_dir_for(worktree)
+        meta = {
+            "agent_id": agent_id,
+            "worktree": str(worktree),
+            "branch": entry.get("branch"),
+            "claude_projects_dir": str(proj_dir),
+            "archived_at": datetime.now(timezone.utc).isoformat(),
+        }
+        try:
+            if proj_dir.is_dir():
+                dst = archive_dir / "claude_projects"
+                dst.mkdir(parents=True, exist_ok=True)
+                copied = 0
+                for f in proj_dir.iterdir():
+                    if f.is_file():
+                        try:
+                            shutil.copy2(f, dst / f.name)
+                            copied += 1
+                        except OSError:
+                            pass
+                meta["claude_sessions_copied"] = copied
+        except OSError:
+            pass
+
+        # (b) Agent-specific lab stats living in the worktree's own .the_lab/
+        # (real dir, not the .the_lab.link symlink to the main checkout). Copy
+        # it wholesale — it's the branch-local per-agent state.
+        try:
+            wt_lab = worktree / ".the_lab"
+            if wt_lab.is_dir() and not wt_lab.is_symlink():
+                shutil.copytree(
+                    wt_lab, archive_dir / "the_lab",
+                    symlinks=True, dirs_exist_ok=True,
+                )
+                meta["worktree_the_lab_copied"] = True
+        except OSError:
+            pass
+
+        try:
+            (archive_dir / "meta.json").write_text(json.dumps(meta, indent=2) + "\n")
+        except OSError:
+            pass
+    except Exception:
+        pass  # archiving is best-effort; never block cleanup
+
+
 def unregister_agent(repo_dir: Path, agent_id: str, *, keep_branch: bool = True) -> bool:
     repo_dir = Path(repo_dir).resolve()
     registry = _read_registry(repo_dir)
@@ -238,6 +385,9 @@ def unregister_agent(repo_dir: Path, agent_id: str, *, keep_branch: bool = True)
     if entry is None:
         return False
     record_completed_agent(repo_dir, entry)
+    # Preserve durable data (Claude history + worktree lab stats) BEFORE the
+    # worktree checkout is deleted, otherwise it's orphaned/lost. See feedback.
+    _archive_agent_data(repo_dir, agent_id, entry)
     worktree = Path(entry["worktree"])
     git_ops.remove_worktree(worktree, cwd=repo_dir)
     git_ops.prune_worktrees(cwd=repo_dir)
