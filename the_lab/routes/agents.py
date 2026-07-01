@@ -104,9 +104,32 @@ def list_registered_agents():
 
 
 @router.get("/api/v1/agents/past")
-def list_past_agents_endpoint():
+def list_past_agents_endpoint(
+    page: int | None = Query(
+        default=None,
+        description="1-based page number. OPT-IN: omit for the existing bare-list "
+                    "shape (dashboard-safe); supply to get a paged envelope. "
+                    "History holds up to 200 entries.",
+    ),
+    page_size: int = Query(default=10, description="Items per page when paginating."),
+):
     """Return the 200 most recently completed agents."""
-    return agents_mod.list_past_agents(REPO_DIR)
+    past = agents_mod.list_past_agents(REPO_DIR)
+    # Pager feedback (OPT-IN): page is None -> unchanged bare list. list_past_agents
+    # is already newest-first; sort by completed_at desc to be explicit before slicing.
+    if page is not None:
+        import math
+        total = len(past)
+        ordered = sorted(past, key=lambda a: a.get("completed_at", ""), reverse=True)
+        start = max(page - 1, 0) * page_size
+        return {
+            "agents": ordered[start:start + page_size],
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+            "total_pages": math.ceil(total / page_size) if page_size > 0 else 0,
+        }
+    return past
 
 
 @router.get("/api/v1/agents/costs")
