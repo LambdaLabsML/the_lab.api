@@ -54,6 +54,8 @@ import { Eyebrow, Stat, Tooltip, experimentTipContent, ideaTipContent } from "./
 import { NavRail, SecondaryPanel, type NavSection } from "./components/nav-rail";
 import { ActivityPane } from "./components/activity/activity-pane";
 import { ActivityShortlog } from "./components/activity/activity-shortlog";
+import { AgentTree } from "./components/agent-activity/agent-tree";
+import { startAgentActivity } from "./state/agent-activity";
 import { SettingsPanel } from "./components/settings-panel";
 import {
   currentView, selectedIdea, selectedMetric, colorMode,
@@ -896,6 +898,7 @@ export function App() {
     window.addEventListener("popstate", readFiltersFromUrl);
     startPolling();
     startWs();
+    startAgentActivity();
     const dispose = effect(syncUrlFromSignals);
     return () => {
       window.removeEventListener("popstate", readFiltersFromUrl);
@@ -1116,6 +1119,10 @@ export function App() {
                       </button>
                     ))}
                   </nav>
+                  <div class="nav-secondary-segment">
+                    <div class="nav-secondary-head"><Eyebrow>Agents</Eyebrow></div>
+                    <AgentTree compact />
+                  </div>
                   <ActivityShortlog />
                 </>
               )}

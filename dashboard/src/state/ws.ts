@@ -61,6 +61,21 @@ interface WsEvent {
   [key: string]: unknown;
 }
 
+// ---------------------------------------------------------------------------
+// Raw event subscription — lets the live agent-activity view consume the full
+// event stream (experiment_*, message_received, note_added, agent_api_call, …)
+// in addition to the cache-invalidation refreshes below.
+// ---------------------------------------------------------------------------
+
+type WsSubscriber = (event: WsEvent) => void;
+const _subscribers = new Set<WsSubscriber>();
+
+/** Subscribe to every raw WS event. Returns an unsubscribe fn. */
+export function subscribeWsEvents(fn: WsSubscriber): () => void {
+  _subscribers.add(fn);
+  return () => { _subscribers.delete(fn); };
+}
+
 // Maps each server event type to a list of refresh functions to call.
 // Keep handlers fine-grained — only trigger the minimum required fetches.
 const HANDLERS: Record<string, Array<() => void>> = {
@@ -158,6 +173,12 @@ function connect(): void {
       for (const fn of handlers) {
         fn();
       }
+    }
+
+    // Fan out the raw event to activity subscribers (never let one throw break
+    // the socket or the other subscribers).
+    for (const sub of _subscribers) {
+      try { sub(event); } catch { /* ignore subscriber error */ }
     }
   };
 

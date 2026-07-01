@@ -17,6 +17,7 @@ import "./styles/api.scss";
 import "./styles/sandbox.scss";
 import "./styles/prompts.scss";
 import "./styles/agents.scss";
+import "./styles/agent-activity.scss";
 import "./styles/queue.scss";
 import "./styles/suggest.scss";
 import "./styles/tags.scss";
