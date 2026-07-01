@@ -7,7 +7,7 @@
  * display options.
  */
 import { agentStates, type AgentState, type ActivityEvent } from "../../state/agent-activity";
-import { agentColor, agentInitials } from "../../lib/colors";
+import { agentColor } from "../../lib/colors";
 import { navigateToIdea } from "../../lib/navigate";
 
 function ago(ts: number): string {
@@ -80,13 +80,11 @@ export function AgentTree({ compact = false, activeOnly = false, maxNested = com
                 class={`aa-dot${active ? " aa-pulse" : ""}`}
                 style={{ background: color }}
                 title={st.live ? "live" : "registered"}
-              >
-                <span class="aa-initials">{agentInitials(st.agentId)}</span>
-              </span>
+              />
               <span class="aa-id" style={{ color }}>{st.agentId}</span>
-              {!compact && <span class="aa-role">{st.role}</span>}
-              {st.listening && <span class="aa-listen" title="listening on the-lab messages">🎧</span>}
-              <span class={`aa-glyph aa-head-glyph aa-tone-${active ? (st.current?.tone ?? "accent") : "neutral"}`}>{h.glyph}</span>
+              <span class="aa-role">{st.role}</span>
+              {st.listening && <span class="aa-listen" title="listening (the-lab messages)" />}
+              <span class={`aa-glyph aa-tone-${active ? (st.current?.tone ?? "accent") : "neutral"}`}>{h.glyph}</span>
               <span class="aa-head-text">{h.text}</span>
               {st.lastActiveTs > 0 && <span class="aa-age">{ago(st.lastActiveTs)}</span>}
             </div>

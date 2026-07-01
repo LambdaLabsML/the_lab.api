@@ -4,7 +4,7 @@
  * New lines fade in. Used in the Agents tab.
  */
 import { activityFeed, type ActivityEvent } from "../../state/agent-activity";
-import { agentColor, agentInitials } from "../../lib/colors";
+import { agentColor } from "../../lib/colors";
 import { navigateToIdea } from "../../lib/navigate";
 
 function clock(ts: number): string {
@@ -44,9 +44,7 @@ export function ActivityFeed({ limit = 80 }: { limit?: number }) {
               role={ideaId != null ? "button" : undefined}
               onClick={ideaId != null ? () => navigateToIdea(ideaId) : undefined}
             >
-              <span class="aa-dot" style={{ background: color }}>
-                <span class="aa-initials">{agentInitials(g.agentId)}</span>
-              </span>
+              <span class="aa-dot" style={{ background: color }} />
               <span class="aa-id" style={{ color }}>{label}</span>
               <span class="aa-age">{clock(g.ts)}</span>
             </div>
