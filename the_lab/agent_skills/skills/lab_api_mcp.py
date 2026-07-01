@@ -34,6 +34,12 @@ def _build_ssl_ctx():
 
 _SSL_CTX = _build_ssl_ctx()
 
+# Resilience knobs (feedback: API restarts mid-session drop the bridge).
+# Retry connection-level failures a few times with linear backoff before
+# surfacing an error, so a brief server bounce doesn't fail a tool call.
+_MAX_RETRIES = 4
+_RETRY_BACKOFF = 0.75  # seconds; multiplied by attempt number
+
 # Only expose these paths as MCP tools (keeps system prompt lean).
 # Format: (method, path) → tool_name override (or None for auto-name).
 INCLUDE = {
@@ -49,6 +55,9 @@ INCLUDE = {
     ("post", "/api/v1/ideas/{idea_id}/conclude"):  "conclude_idea",
     ("post", "/api/v1/ideas/{idea_id}/abandon"):   "abandon_idea",
     ("post", "/api/v1/ideas/{idea_id}/adopt"):     "adopt_idea",
+    # Feedback: "reopening ideas is not supported" — the server has this route,
+    # it just wasn't in the allowlist. Expose it (body {reason} comes from spec).
+    ("post", "/api/v1/ideas/{idea_id}/reopen"):    "reopen_idea",
     ("post", "/api/v1/ideas/{idea_id}/note"):      "add_note",
     ("get",  "/api/v1/ideas/{idea_id}/notes"):     "list_notes",
     ("post", "/api/v1/ideas/{idea_id}/experiments"): "create_experiment",
@@ -76,14 +85,8 @@ INCLUDE = {
 # ── OpenAPI parsing ───────────────────────────────────────────────────────────
 
 def fetch_openapi_spec():
-    """Fetch /openapi.json from the Lab API."""
-    # Derive base URL (strip /api/v1 suffix)
-    base = API_BASE
-    for suffix in ("/api/v1", "/api/v1/"):
-        if base.endswith(suffix):
-            base = base[: -len(suffix)]
-            break
-    url = f"{base}/openapi.json"
+    """Fetch /openapi.json from the Lab API (with connection-error retries)."""
+    url = f"{_api_root()}/openapi.json"
     headers = {}
     _user = os.environ.get("THE_LAB_USER", "").strip()
     _pw   = os.environ.get("THE_LAB_PASSWORD", "").strip()
@@ -92,8 +95,53 @@ def fetch_openapi_spec():
             f"{_user}:{_pw}".encode()
         ).decode()
     req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req, timeout=15, context=_SSL_CTX) as resp:
-        return json.loads(resp.read())
+    # Retry transient connection failures (server restarting) with backoff.
+    import time
+    last_err = None
+    for attempt in range(_MAX_RETRIES):
+        try:
+            with urllib.request.urlopen(req, timeout=15, context=_SSL_CTX) as resp:
+                return json.loads(resp.read())
+        except (urllib.error.URLError, ConnectionError, _socket.timeout, OSError) as e:
+            last_err = e
+            if attempt < _MAX_RETRIES - 1:
+                time.sleep(_RETRY_BACKOFF * (attempt + 1))
+    raise last_err
+
+
+def _api_root():
+    """API base with the /api/v1 suffix stripped (shared by several helpers)."""
+    base = API_BASE
+    for suffix in ("/api/v1", "/api/v1/"):
+        if base.endswith(suffix):
+            return base[: -len(suffix)]
+    return base
+
+
+def probe_health():
+    """Lightweight liveness probe: is the server up enough to rebuild tools?
+
+    Prefers ``GET /api/v1/health`` (being added by another fixer) but tolerates
+    its absence on older servers — any HTTP *response* (even 404) proves the
+    server is answering, so we treat that as "alive" and let the caller proceed
+    to fetch the spec. Only a connection-level failure counts as "down".
+    """
+    url = f"{_api_root()}/api/v1/health"
+    headers = {}
+    _user = os.environ.get("THE_LAB_USER", "").strip()
+    _pw   = os.environ.get("THE_LAB_PASSWORD", "").strip()
+    if _user and _pw:
+        headers["Authorization"] = "Basic " + _base64.b64encode(
+            f"{_user}:{_pw}".encode()
+        ).decode()
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=5, context=_SSL_CTX):
+            return True
+    except urllib.error.HTTPError:
+        return True  # server answered (e.g. 404 on older servers) → alive
+    except Exception:
+        return False  # connection refused/reset/empty reply → down
 
 
 def resolve_ref(ref, spec):
@@ -223,9 +271,22 @@ def proxy_call(tool_name, arguments, tool_meta):
     method = meta["method"]
     path = meta["path_template"]
 
-    # Substitute path parameters
+    # Substitute path parameters.
+    # Feedback: cancel/rerun returned "405 Method Not Allowed". Root cause: a
+    # missing/empty path param (e.g. exp_ref) left a placeholder that resolved
+    # to an empty segment, so ``/experiments/{exp_ref}/cancel`` became
+    # ``/experiments//cancel`` → Starlette normalises the double slash to
+    # ``/experiments/cancel``, which matches the GET ``/experiments/{exp_ref}``
+    # route (exp_ref="cancel") and rejects POST with 405 (Allow: GET) — a
+    # misleading error. Fail fast with a clear message instead.
     for p in meta["path_params"]:
-        val = arguments.get(p, "")
+        val = arguments.get(p)
+        if val is None or str(val).strip() == "":
+            return json.dumps({
+                "error": "missing_path_parameter",
+                "detail": f"'{p}' is required and must be non-empty for tool "
+                          f"'{tool_name}'.",
+            })
         path = path.replace(f"{{{p}}}", str(val))
 
     # Build URL with query parameters
@@ -283,14 +344,28 @@ def proxy_call(tool_name, arguments, tool_meta):
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(url, data=body_data, headers=headers, method=method)
 
-    try:
-        with urllib.request.urlopen(req, timeout=300, context=_SSL_CTX) as resp:
-            return resp.read().decode()
-    except urllib.error.HTTPError as e:
-        body = e.read().decode() if e.fp else ""
-        return json.dumps({"error": e.code, "reason": e.reason, "detail": body})
-    except Exception as e:
-        return json.dumps({"error": str(e)})
+    # Feedback: "API restarts mid-session ... return empty replies (curl exit
+    # 52) — tools vanish." A transient connection error (empty reply / refused
+    # / reset) usually means the server is restarting; retry a few times with a
+    # short backoff before giving up. HTTP errors (4xx/5xx) are *responses* —
+    # they're returned as-is, not retried.
+    import time
+    last_err = None
+    for attempt in range(_MAX_RETRIES):
+        try:
+            with urllib.request.urlopen(req, timeout=300, context=_SSL_CTX) as resp:
+                return resp.read().decode()
+        except urllib.error.HTTPError as e:
+            body = e.read().decode() if e.fp else ""
+            return json.dumps({"error": e.code, "reason": e.reason, "detail": body})
+        except (urllib.error.URLError, ConnectionError, _socket.timeout, OSError) as e:
+            # Connection-level failure — server likely bouncing. Back off + retry.
+            last_err = e
+            if attempt < _MAX_RETRIES - 1:
+                time.sleep(_RETRY_BACKOFF * (attempt + 1))
+        except Exception as e:
+            return json.dumps({"error": str(e)})
+    return json.dumps({"error": str(last_err), "detail": "connection failed after retries"})
 
 
 # ── MCP JSON-RPC/stdio protocol ──────────────────────────────────────────────
@@ -605,14 +680,25 @@ def main():
             continue
 
         try:
-            # Lazy re-fetch spec if startup fetch failed and tools are still empty
+            # Lazy (re-)build of tools. Feedback: an API restart mid-session
+            # drops the bridge and "tools vanish until something pokes
+            # ToolSearch". If the startup fetch failed (server down at boot) or
+            # the tool set is empty, rebuild on the next tools/list or
+            # tools/call. We use a quick health/liveness probe first (handling a
+            # missing /health gracefully) so we only attempt a rebuild when the
+            # server is actually answering again.
             if not tools and method in ("tools/list", "tools/call"):
-                try:
-                    spec = fetch_openapi_spec()
-                    tools, tool_meta = build_tools(spec)
-                    print(f"Reconnected: loaded {len(tools)} tools", file=sys.stderr)
-                except Exception as e:
-                    print(f"Re-fetch failed: {e}", file=sys.stderr)
+                if probe_health():
+                    try:
+                        spec = fetch_openapi_spec()
+                        tools, tool_meta = build_tools(spec)
+                        print(f"Reconnected: loaded {len(tools)} tools", file=sys.stderr)
+                    except Exception as e:
+                        print(f"Re-fetch failed: {e}", file=sys.stderr)
+                else:
+                    print("Health probe: server still unavailable, "
+                          "keeping tools empty (will retry next call)",
+                          file=sys.stderr)
 
             if method == "initialize":
                 send({
