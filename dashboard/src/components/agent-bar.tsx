@@ -85,7 +85,9 @@ export function AgentBar() {
                   )}
                   <span class="ui-tip-row">
                     <span>messages</span>
-                    <b>{a.listening ? "🎧 listening now" : "not listening"}</b>
+                    <b>{a.listening
+                      ? <><span style={{ color: "var(--accent)" }}>●</span> listening now</>
+                      : "not listening"}</b>
                   </span>
                 </>
               }

@@ -118,3 +118,12 @@
   .aa-dot.aa-pulse { animation: none; }
   .aa-fade { animation: none; }
 }
+
+// ── Overview sidebar segment: align with the nav items (12px inset) ─────────
+.nav-secondary-segment {
+  margin-top: var(--space-1);
+  padding: 0 12px var(--space-2);          // matches .nav-secondary-btn horizontal inset
+  box-shadow: inset 0 1px var(--border-soft);   // top hairline separator, not a box
+}
+// the segment provides the 12px inset; its head only needs vertical padding
+.nav-secondary-segment .nav-secondary-head { padding: 11px 0 6px; }

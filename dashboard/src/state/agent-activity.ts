@@ -36,14 +36,22 @@ export interface AgentState {
   role: string;
   ideaId: number | null;
   listening: boolean;
-  live: boolean;            // pid != null
+  live: boolean;            // pid != null (registry — info only, not "active")
+  active: boolean;          // seen activity within ACTIVE_WINDOW_MS, or listening
   current: ActivityEvent | null;   // latest meaningful action
   recent: ActivityEvent[];  // newest-first, capped
-  lastActiveTs: number;     // epoch ms of most recent event (0 = none seen)
+  lastActiveTs: number;     // epoch ms of most recent activity (0 = none seen)
 }
 
-const FEED_MAX = 200;
+const FEED_MAX = 120;
 const PER_AGENT_MAX = 8;
+// "Active" = we've seen activity from the agent this recently. Purely
+// client-side (doesn't trust registry pid/pruning), so quiet/old agents drop
+// off both the sidebar and the feed on their own.
+const ACTIVE_WINDOW_MS = 120_000;
+// Events that prove an agent is working but aren't worth their own feed line —
+// they only refresh recency (progress heartbeats, log growth).
+const TOUCH_TYPES = new Set(["experiment_progress_updated", "experiment_log_updated"]);
 
 /** Global newest-first activity feed (structure B). */
 export const activityFeed = signal<ActivityEvent[]>([]);
@@ -53,9 +61,14 @@ export const agentStates = signal<Record<string, AgentState>>({});
 // --- internal indexes -------------------------------------------------------
 let _ideaToAgent: Record<number, string> = {};   // idea_id -> agent_id (live)
 let _agentMeta: Record<string, AgentEntry> = {};  // agent_id -> entry
+let _lastActive: Record<string, number> = {};     // agent_id -> epoch ms of last activity
 let _seq = 0;
 let _started = false;
 let _pollTimer: ReturnType<typeof setInterval> | null = null;
+
+function touch(agentId: string | null | undefined): void {
+  if (agentId) _lastActive[agentId] = Date.now();
+}
 
 function excerpt(s: unknown, n = 52): string {
   return String(s ?? "").replace(/\s+/g, " ").trim().slice(0, n);
@@ -113,39 +126,44 @@ function normalize(ev: Record<string, unknown>): ActivityEvent | null {
   }
 }
 
+function mkState(id: string): AgentState {
+  const entry = _agentMeta[id];
+  return {
+    agentId: id,
+    role: entry?.role || "agent",
+    ideaId: entry?.current_idea?.id ?? null,
+    listening: !!entry?.listening,
+    live: entry?.pid != null,
+    active: false,
+    current: null,
+    recent: [],
+    lastActiveTs: _lastActive[id] ?? 0,
+  };
+}
+
 function rebuildAgentStates(events: ActivityEvent[]): void {
+  const now = Date.now();
   const next: Record<string, AgentState> = {};
-  // Seed from the live/registered roster so idle agents still show.
-  for (const [id, entry] of Object.entries(_agentMeta)) {
-    next[id] = {
-      agentId: id,
-      role: entry.role || "agent",
-      ideaId: entry.current_idea?.id ?? null,
-      listening: !!entry.listening,
-      live: entry.pid != null,
-      current: null,
-      recent: [],
-      lastActiveTs: 0,
-    };
-  }
+  // Seed from the registered roster (so a listening/just-started agent shows
+  // even before its first feed event).
+  for (const id of Object.keys(_agentMeta)) next[id] = mkState(id);
   // Fold events (already newest-first) into their agent's trail.
   for (const e of events) {
     if (!e.agentId) continue;
-    const st = next[e.agentId] ??= {
-      agentId: e.agentId, role: _agentMeta[e.agentId]?.role || "agent",
-      ideaId: _agentMeta[e.agentId]?.current_idea?.id ?? null,
-      listening: !!_agentMeta[e.agentId]?.listening,
-      live: _agentMeta[e.agentId]?.pid != null,
-      current: null, recent: [], lastActiveTs: 0,
-    };
+    const st = next[e.agentId] ??= mkState(e.agentId);
     if (st.recent.length < PER_AGENT_MAX) st.recent.push(e);
-    if (!st.current) st.current = e;         // first (newest) = current action
-    if (e.ts > st.lastActiveTs) st.lastActiveTs = e.ts;
+    if (!st.current) st.current = e;          // first (newest) = current action
+  }
+  // Recency-based "active": trust observed activity, not the registry pid.
+  for (const st of Object.values(next)) {
+    st.lastActiveTs = _lastActive[st.agentId] ?? 0;
+    st.active = st.listening || (st.lastActiveTs > 0 && now - st.lastActiveTs < ACTIVE_WINDOW_MS);
   }
   agentStates.value = next;
 }
 
 function pushEvent(e: ActivityEvent): void {
+  touch(e.agentId);
   const feed = [e, ...activityFeed.value].slice(0, FEED_MAX);
   activityFeed.value = feed;
   rebuildAgentStates(feed);
@@ -172,11 +190,20 @@ async function pollAgents(): Promise<void> {
 export function startAgentActivity(): void {
   if (_started) return;
   _started = true;
-  subscribeWsEvents((ev) => {
-    const norm = normalize(ev as Record<string, unknown>);
-    if (norm) pushEvent(norm);
+  subscribeWsEvents((raw) => {
+    const ev = raw as Record<string, unknown>;
+    const norm = normalize(ev);
+    if (norm) { pushEvent(norm); return; }
+    // Touch-only events (progress/log heartbeats) keep a running agent "active"
+    // without adding feed noise.
+    if (TOUCH_TYPES.has(String(ev.type))) {
+      const idea = typeof ev.idea_id === "number" ? _ideaToAgent[ev.idea_id as number] : null;
+      if (idea) { touch(idea); rebuildAgentStates(activityFeed.value); }
+    }
   });
   pollAgents();
+  // Re-evaluate active flags periodically (poll refreshes roster AND lets the
+  // time-based `active` window expire for agents that went quiet).
   _pollTimer = setInterval(pollAgents, 5000);
 }
 

@@ -3,7 +3,7 @@
  * consecutive events from the same agent collapsed under one colored header.
  * New lines fade in. Used in the Agents tab.
  */
-import { activityFeed, type ActivityEvent } from "../../state/agent-activity";
+import { activityFeed, agentStates, type ActivityEvent } from "../../state/agent-activity";
 import { agentColor } from "../../lib/colors";
 import { navigateToIdea } from "../../lib/navigate";
 
@@ -25,10 +25,15 @@ function group(events: ActivityEvent[]): Group[] {
   return out;
 }
 
-export function ActivityFeed({ limit = 80 }: { limit?: number }) {
-  const feed = activityFeed.value.slice(0, limit);
+export function ActivityFeed({ limit = 30 }: { limit?: number }) {
+  // Only show events from currently-active agents — a "live" feed shouldn't be
+  // padded with lines from agents that have long since gone quiet.
+  const states = agentStates.value;
+  const feed = activityFeed.value
+    .filter((e) => e.agentId != null && states[e.agentId]?.active)
+    .slice(0, limit);
   if (feed.length === 0) {
-    return <div class="aa-empty">waiting for activity…</div>;
+    return <div class="aa-empty">no active agents</div>;
   }
   const groups = group(feed);
   return (

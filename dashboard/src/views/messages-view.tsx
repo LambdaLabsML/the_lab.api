@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { listAgents, listMessages } from "../state/api";
 import type { AgentEntry, MessageEntry } from "../lib/types";
 import { Badge, EmptyState, IconButton } from "../components/ui";
-import { agentColor, agentInitials } from "../lib/colors";
+import { agentColor } from "../lib/colors";
 import { messagesReadByMe } from "../state/settings";
 
 /** Format a created_at ISO timestamp as "Xs ago" / "Xm ago" / "Xh ago" / "Xd ago". */
@@ -220,7 +220,7 @@ export function MessagesView() {
           >
             <option value="">you (the dashboard)</option>
             {agents.map((a) => (
-              <option key={a.agent_id} value={a.agent_id}>{labelAgent(a.agent_id)}{a.listening ? " · 🎧" : ""}</option>
+              <option key={a.agent_id} value={a.agent_id}>{labelAgent(a.agent_id)}{a.listening ? " · live" : ""}</option>
             ))}
           </select>
         </label>
@@ -232,7 +232,7 @@ export function MessagesView() {
         >
           <option value="">All agents</option>
           {agents.map((a) => (
-            <option key={a.agent_id} value={a.agent_id}>{labelAgent(a.agent_id)}{a.listening ? " · 🎧" : ""}</option>
+            <option key={a.agent_id} value={a.agent_id}>{labelAgent(a.agent_id)}{a.listening ? " · live" : ""}</option>
           ))}
         </select>
         <select
@@ -259,7 +259,7 @@ export function MessagesView() {
 
       {listeningAgents.length > 0 && (
         <div class="messages-listening">
-          <span class="messages-listening-label">🎧 listening now</span>
+          <span class="messages-listening-label"><span class="messages-listening-dot" />listening now</span>
           {listeningAgents.map((a) => (
             <button
               key={a.agent_id}
@@ -276,7 +276,7 @@ export function MessagesView() {
 
       {inPerspective && (
         <div class="messages-perspective-note">
-          👁 Viewing <b style={{ color: agentColor(viewAs) }}>{labelAgent(viewAs)}</b>'s inbox — read-only;
+          Viewing <b style={{ color: agentColor(viewAs) }}>{labelAgent(viewAs)}</b>'s inbox — read-only;
           nothing is marked read for them.
         </div>
       )}
@@ -309,15 +309,9 @@ export function MessagesView() {
               const sColor = agentColor(m.from_agent);
               return (
                 <li class={`msg${read ? " is-read" : " is-new"}`} key={m.id}>
-                  <div
-                    class="msg-avatar"
-                    style={{ background: sColor }}
-                    title={`agent ${m.from_agent ?? "system"}`}
-                  >
-                    {agentInitials(m.from_agent)}
-                  </div>
                   <div class="msg-main">
                     <div class="msg-head">
+                      <span class="msg-dot" style={{ background: sColor }} title={`agent ${m.from_agent ?? "system"}`} />
                       <span class="msg-from" style={{ color: sColor }}>{describeSender(m)}</span>
                       <span class="msg-arrow">→</span>
                       <span class="msg-to" style={{ color: recipientColor(m.to) }}>{describeRecipient(m.to)}</span>

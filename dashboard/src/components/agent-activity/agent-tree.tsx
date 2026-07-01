@@ -18,21 +18,13 @@ function ago(ts: number): string {
   return `${Math.floor(s / 3600)}h`;
 }
 
-// "Active" = the agent's process is live (pid running). A live agent is working
-// even between events, so it must NOT flip to "idle" just because no event
-// arrived recently — we keep showing its current/last action. Only a
-// registered-but-not-live agent (process gone) reads as idle.
-function isActive(st: AgentState): boolean {
-  return st.live || (!!st.lastActiveTs && Date.now() - st.lastActiveTs < 45_000);
-}
-
+// `st.active` (recency-based) comes from the store. An active agent keeps
+// showing its current/last action (or its idea) rather than flipping to idle.
 function head(st: AgentState): { glyph: string; kind: string; text: string } {
-  const active = isActive(st);
-  if (st.current && active) {
+  if (st.current && st.active) {
     return { glyph: st.current.glyph, kind: st.current.kind, text: st.current.text };
   }
-  if (active) {
-    // Live but no recent event — still working; show its idea, not "idle".
+  if (st.active) {
     return { glyph: "●", kind: "active", text: st.ideaId != null ? `on idea/${st.ideaId}` : "working" };
   }
   return { glyph: "○", kind: "idle", text: "idle" };
@@ -54,13 +46,13 @@ export function AgentTree({ compact = false, activeOnly = false, maxNested = com
   maxNested?: number;
 }) {
   let states = Object.values(agentStates.value);
-  if (activeOnly) states = states.filter(isActive);
+  if (activeOnly) states = states.filter((s) => s.active);
   if (states.length === 0) {
     return <div class="aa-empty">{activeOnly ? "no active agents" : "no agents registered"}</div>;
   }
-  // Live + most-recently-active first.
+  // Active + most-recently-active first.
   states.sort((a, b) =>
-    (Number(b.live) - Number(a.live)) || (b.lastActiveTs - a.lastActiveTs));
+    (Number(b.active) - Number(a.active)) || (b.lastActiveTs - a.lastActiveTs));
 
   return (
     <div class={`aa-tree${compact ? " aa-compact" : ""}`}>
