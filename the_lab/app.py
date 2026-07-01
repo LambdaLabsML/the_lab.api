@@ -60,6 +60,72 @@ _START_TIME = _time_mod.monotonic()
 
 
 # ---------------------------------------------------------------------------
+# Live per-agent "API call" ticker  (dashboard: agent activity feed)
+#
+# Emit one lightweight ``agent_api_call`` WS event per routed request made by a
+# registered agent, so the dashboard can show a live ticker of what each agent
+# is calling. This fires in the response path (inject_notifications), so it must
+# be cheap and self-limiting — see _should_emit_api_call below.
+#
+# THROTTLE: coalesce per-agent to at most one event per _API_CALL_WINDOW_SEC.
+# We keep a plain dict {agent_id: last_emit_monotonic}. It's only touched from
+# the async HTTP middleware (single-threaded under asyncio), so no lock is
+# needed; a stray race would at worst emit one extra event, which is harmless.
+# ---------------------------------------------------------------------------
+_API_CALL_WINDOW_SEC = 1.0
+_api_call_last_emit: dict[str, float] = {}
+
+# Path prefixes whose traffic is polling/messaging plumbing (or would feed back
+# on itself). We want AGENT work calls, not this noise.
+_API_CALL_SKIP_PREFIXES = (
+    "/api/v1/messages",       # covers /messages and /messages/ws
+    "/api/v1/notifications",
+    "/api/v1/ws",
+    "/api/v1/health",
+)
+
+
+def _should_emit_api_call(method: str, path: str, status: int) -> bool:
+    """Denoise filter for the agent_api_call ticker.
+
+    Skip polling/messaging plumbing, GETs to /agents* (dashboard poll traffic),
+    and server errors. Only genuine agent work calls get through.
+    """
+    if status >= 500:
+        return False
+    for prefix in _API_CALL_SKIP_PREFIXES:
+        if path.startswith(prefix):
+            return False
+    # GETs to /agents* are dashboard/poll traffic; keep POST/DELETE (real work).
+    if method == "GET" and path.startswith("/api/v1/agents"):
+        return False
+    return True
+
+
+def _emit_agent_api_call(agent_id: str, method: str, path: str, status: int) -> None:
+    """Throttled per-agent broadcast of an agent_api_call event. Fail-soft.
+
+    Coalesces to at most one event per agent per _API_CALL_WINDOW_SEC; drops the
+    rest. Never raises — event emission must not break the response.
+    """
+    try:
+        now = _time_mod.monotonic()
+        last = _api_call_last_emit.get(agent_id)
+        if last is not None and (now - last) < _API_CALL_WINDOW_SEC:
+            return
+        _api_call_last_emit[agent_id] = now
+        _ws_mod.broadcaster.broadcast_soon({
+            "type": "agent_api_call",
+            "agent_id": agent_id,
+            "method": method,
+            "path": path,
+            "status": status,
+        })
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
 # Per-agent "seen notifications" store  (feedback: STUCK-NOTIFICATION NOISE)
 #
 # Notifications for failures / suggestions / agent-lifecycle events used to be
@@ -506,6 +572,17 @@ async def inject_notifications(request, call_next):
     """
     response = await call_next(request)
     path = request.url.path
+
+    # Live agent ticker: emit a throttled agent_api_call event for real work
+    # calls made by a registered agent. Placed here (we have both the resolved
+    # agent and the final status) rather than a new middleware so we don't
+    # re-wrap the response body a second time. Fully fail-soft.
+    agent_id = getattr(request.state, "agent_id", None)
+    if (agent_id
+            and not getattr(request.state, "agent_unknown", False)
+            and _should_emit_api_call(request.method, path, response.status_code)):
+        _emit_agent_api_call(agent_id, request.method, path, response.status_code)
+
     # Only enrich /api/v1/ JSON responses (skip openapi, docs, stats, dashboard).
     # Skip the dedicated /notifications endpoint to avoid self-reference.
     if (not path.startswith("/api/v1/")
