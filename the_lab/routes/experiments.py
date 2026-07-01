@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 
 import mimetypes
 
+import math
+
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 
@@ -59,7 +61,128 @@ def _truncate_soft(text: str | None, limit: int = 240) -> str | None:
     return cut.rstrip() + " …"
 
 
+# --- Paging + compaction (feedback A1) ---
+# Opt-in only: callers that pass `page` get a paged+compact response; without
+# `page` the legacy raw shape is preserved so the dashboard keeps working.
+
+def _exp_sort_key(exp: dict):
+    """Newest-first ordering key: prefer finished_at, then created_at, then id.
+
+    Returns a tuple sorted descending, so more-recent experiments come first.
+    """
+    return (
+        exp.get("finished_at") or "",
+        exp.get("created_at") or "",
+        str(exp.get("id") or ""),
+    )
+
+
+def _compact_experiment(exp: dict, ref: str) -> dict:
+    """Compact one experiment for a paged listing.
+
+    Keeps top-level SCALAR fields as-is; any nested dict/list value (metrics,
+    meta, config, rollout, …) is replaced with a placeholder that keeps the key,
+    signals structure exists, and says how to fetch the full value.
+    """
+    via = f"GET /api/v1/experiments/{ref}"
+    out: dict = {}
+    for key, value in exp.items():
+        if isinstance(value, (dict, list)):
+            out[key] = {
+                "_collapsed": True,
+                "_keys": len(value),
+                "_via": via,
+            }
+        else:
+            out[key] = value
+    return out
+
+
+def _paginate(exps: list[dict], page: int, page_size: int) -> dict:
+    """Sort newest-first, slice to *page*, compact, and wrap with pager meta."""
+    page = max(1, page)
+    page_size = max(1, page_size)
+    ordered = sorted(exps, key=_exp_sort_key, reverse=True)
+    total = len(ordered)
+    total_pages = math.ceil(total / page_size) if total else 0
+    start = (page - 1) * page_size
+    window = ordered[start:start + page_size]
+    compact = [
+        _compact_experiment(e, e.get("label") or str(e.get("id")))
+        for e in window
+    ]
+    return {
+        "experiments": compact,
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+        "total_pages": total_pages,
+    }
+
+
 # --- Experiments ---
+
+def _create_and_queue_experiment(
+    idea_id: int,
+    description: str,
+    meta: dict,
+    tags: list[str] | None,
+    script_content: str | None,
+) -> dict:
+    """Shared create+queue path used by single-create and batch-create.
+
+    Mirrors the exact store calls of the single-create handler so scoring and
+    queueing behave identically: create the record, optionally write the wrapped
+    script, flip to ``queued``, broadcast, and wake the scheduler. Returns the
+    (queued) experiment record.
+    """
+    exp = store.create_experiment(idea_id, description, meta=meta, tags=tags)
+
+    if script_content is not None:
+        script_path = REPO_DIR / exp["script"]
+        script_path.parent.mkdir(parents=True, exist_ok=True)
+        script_path.write_text(_wrap_script(script_content))
+        os.chmod(script_path, 0o755)
+
+    # The queue takes it from here. New experiments default to "queued";
+    # the scheduler will start them when capacity permits and dependencies
+    # have settled. The legacy `auto_start` flag is ignored — queueing is
+    # mandatory now.
+    label = exp.get("label") or str(exp["id"])
+    store.update_experiment(
+        label,
+        status="queued",
+        queued_at=datetime.now(timezone.utc).isoformat(),
+    )
+    exp = store.get_experiment(label) or exp
+    try:
+        from .. import ws as ws_mod
+        ws_mod.broadcaster.broadcast_soon({
+            "type": "experiment_queued",
+            "label": exp.get("label") or str(exp["id"]),
+            "idea_id": exp.get("idea_id"),
+        })
+    except Exception:
+        pass
+    runner.wake_scheduler()
+    return exp
+
+
+def _queue_position(exp: dict) -> int | None:
+    """Best-effort queue position for *exp* among queued/pending experiments."""
+    queue = [
+        e for e in store.list_all_experiments()
+        if e.get("status") in ("queued", "pending")
+    ]
+    queue.sort(key=lambda e: (
+        -int((e.get("meta") or {}).get("priority", 0) or 0),
+        e.get("created_at") or "",
+    ))
+    for i, qexp in enumerate(queue):
+        if qexp.get("id") == exp.get("id"):
+            return i + 1
+    return None
+
 
 @router.post("/ideas/{idea_id}/experiments", status_code=201)
 async def create_experiment(idea_id: int, req: NewExperimentRequest):
@@ -101,50 +224,13 @@ async def create_experiment(idea_id: int, req: NewExperimentRequest):
         extra_meta["depends_on_success"] = False
     merged_meta = {**(req.meta or {}), **extra_meta}
 
-    exp = store.create_experiment(idea_id, req.description, meta=merged_meta, tags=req.tags)
-
-    if req.script_content is not None:
-        script_path = REPO_DIR / exp["script"]
-        script_path.parent.mkdir(parents=True, exist_ok=True)
-        script_path.write_text(_wrap_script(req.script_content))
-        os.chmod(script_path, 0o755)
-
-    # The queue takes it from here. New experiments default to "queued";
-    # the scheduler will start them when capacity permits and dependencies
-    # have settled. The legacy `auto_start` flag is ignored — queueing is
-    # mandatory now.
-    store.update_experiment(
-        exp.get("label") or str(exp["id"]),
-        status="queued",
-        queued_at=datetime.now(timezone.utc).isoformat(),
+    exp = _create_and_queue_experiment(
+        idea_id, req.description, merged_meta, req.tags, req.script_content,
     )
-    exp = store.get_experiment(exp.get("label") or str(exp["id"])) or exp
-    try:
-        from .. import ws as ws_mod
-        ws_mod.broadcaster.broadcast_soon({
-            "type": "experiment_queued",
-            "label": exp.get("label") or str(exp["id"]),
-            "idea_id": exp.get("idea_id"),
-        })
-    except Exception:
-        pass
-    runner.wake_scheduler()
 
     # Surface the queue position so callers know roughly when to expect it
     # to start. Best-effort — doesn't account for resource capacity.
-    queue = [
-        e for e in store.list_all_experiments()
-        if e.get("status") in ("queued", "pending")
-    ]
-    queue.sort(key=lambda e: (
-        -int((e.get("meta") or {}).get("priority", 0) or 0),
-        e.get("created_at") or "",
-    ))
-    queue_position = None
-    for i, qexp in enumerate(queue):
-        if qexp.get("id") == exp.get("id"):
-            queue_position = i + 1
-            break
+    queue_position = _queue_position(exp)
 
     label = exp.get("label") or str(exp["id"])
     return {
@@ -158,18 +244,108 @@ async def create_experiment(idea_id: int, req: NewExperimentRequest):
     }
 
 
+@router.post("/ideas/{idea_id}/experiments/batch", status_code=201)
+async def batch_create_experiments(idea_id: int, request: Request):
+    """Batch-create queued experiments that share one script (feedback M1).
+
+    Creates one queued experiment per entry in ``metas``, each reusing the same
+    ``shared_script_content`` and the exact single-create store path (so
+    scoring/queueing behave identically). Body:
+
+        {"shared_script_content": "#!/bin/bash\\npython train.py",
+         "metas": [
+             {"label"?: str, "meta"?: {"lr": 0.01}, "tags"?: ["sweep"], "description"?: str},
+             {"meta": {"lr": 0.03}},
+             ...
+         ]}
+
+    ``label`` is advisory only (recorded on meta as ``requested_label``); the
+    store assigns the canonical ``<idea>.<seq>`` label. Returns a compact
+    summary. Fails 400 on empty/invalid ``metas``.
+
+    Example:
+        POST /api/v1/ideas/1/experiments/batch
+        -> {"created": [{"id": "1.4", "label": "1.4"}, {"id": "1.5", "label": "1.5"}], "count": 2}
+    """
+    idea = store.get_idea(idea_id)
+    if not idea:
+        raise HTTPException(404, "idea not found")
+    if idea["status"] != "active":
+        raise HTTPException(400, f"idea is {idea['status']}, cannot add experiments")
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "body must be valid JSON")
+    if not isinstance(body, dict):
+        raise HTTPException(400, "body must be a JSON object")
+
+    shared_script_content = body.get("shared_script_content")
+    if shared_script_content is not None and not isinstance(shared_script_content, str):
+        raise HTTPException(400, "shared_script_content must be a string")
+
+    metas = body.get("metas")
+    if not isinstance(metas, list) or not metas:
+        raise HTTPException(400, "metas must be a non-empty list")
+
+    # Validate every entry up front so we don't half-create the batch.
+    for i, m in enumerate(metas):
+        if not isinstance(m, dict):
+            raise HTTPException(400, f"metas[{i}] must be an object")
+        if "meta" in m and m["meta"] is not None and not isinstance(m["meta"], dict):
+            raise HTTPException(400, f"metas[{i}].meta must be an object")
+        if "tags" in m and m["tags"] is not None and not isinstance(m["tags"], list):
+            raise HTTPException(400, f"metas[{i}].tags must be a list")
+
+    created = []
+    for m in metas:
+        # Preserve an advisory label on meta (store assigns the real one).
+        merged_meta = dict(m.get("meta") or {})
+        if m.get("label"):
+            merged_meta.setdefault("requested_label", m["label"])
+        description = m.get("description") or "batch experiment"
+        exp = _create_and_queue_experiment(
+            idea_id,
+            description,
+            merged_meta,
+            m.get("tags"),
+            shared_script_content,
+        )
+        created.append({"id": exp["id"], "label": exp.get("label") or str(exp["id"])})
+
+    return {"created": created, "count": len(created)}
+
+
 @router.get("/ideas/{idea_id}/experiments")
-def list_experiments(idea_id: int):
+def list_experiments(
+    idea_id: int,
+    page: int | None = Query(default=None, description="1-based page number. OPT-IN: when set, returns a paged+compact shape; omit for the full raw list."),
+    page_size: int = Query(default=10, description="Page size when paging is enabled."),
+):
     """List all experiments belonging to an idea.
 
     Returns every experiment record for the given idea, regardless of status.
     Each record includes the experiment's description, status, metrics, meta,
     tags, and timing information. Failed experiments include a ``read_log`` URL.
 
+    Feedback A1 — opt-in paging: pass ``?page=N`` to receive a newest-first,
+    compacted page ``{"experiments": [...], "page", "page_size", "total",
+    "total_pages"}``. When ``page`` is omitted the legacy raw list is returned
+    UNCHANGED so the dashboard (which consumes this as ``Experiment[]``) keeps
+    working.
+
     Example:
         GET /api/v1/ideas/1/experiments
         -> [{"id": 4, "idea_id": 1, "status": "completed", "metrics": {"acc": 0.91}, ...}, ...]
+        GET /api/v1/ideas/1/experiments?page=1&page_size=10
+        -> {"experiments": [{"id": 4, ..., "metrics": {"_collapsed": true, ...}}], "page": 1, ...}
     """
+    # A1: paging is OPT-IN. Only switch to the paged+compact shape when `page`
+    # is provided; compact the full store records so placeholders point at real
+    # nested data reachable via GET /experiments/<ref>.
+    if page is not None:
+        return _paginate(store.list_experiments(idea_id), page, page_size)
+
     exps = store.list_experiments(idea_id)
     results = []
     for exp in exps:
@@ -199,6 +375,8 @@ def list_all_experiments(
     status: str | None = Query(default=None, description="Filter by status: completed, failed, running, pending"),
     tags: str | None = Query(default=None, description="Comma-separated tags — experiments must have ALL (AND filter)"),
     metric: str | None = Query(default=None, description="Only return experiments that have this metric"),
+    page: int | None = Query(default=None, description="1-based page number. OPT-IN: when set, returns a paged+compact shape; omit for the full raw list."),
+    page_size: int = Query(default=10, description="Page size when paging is enabled."),
 ):
     """List all experiments across all ideas.
 
@@ -211,15 +389,36 @@ def list_all_experiments(
     you know which metric you're optimising. Without ``?metric``, all metrics
     are returned for each experiment.
 
+    Feedback A1 — opt-in paging: pass ``?page=N`` to receive a newest-first,
+    compacted page ``{"experiments": [...], "page", "page_size", "total",
+    "total_pages"}``. Filters (status/tags/metric) still apply. When ``page`` is
+    omitted the legacy shape is returned UNCHANGED.
+
     Example:
         GET /api/v1/experiments
         GET /api/v1/experiments?status=completed&metric=score
         GET /api/v1/experiments?tags=baseline&metric=accuracy
+        GET /api/v1/experiments?status=completed&page=1&page_size=10
     """
     all_exps = store.list_all_experiments()
     idea_cache: dict[int, dict] = {}
 
     tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
+
+    # A1: apply the existing filters up front so they compose with paging. When
+    # paging is opt-in, paginate/compact the filtered FULL records so nested
+    # placeholders point at real data (GET /experiments/<ref>).
+    if page is not None:
+        filtered = []
+        for exp in all_exps:
+            if status and exp.get("status") != status:
+                continue
+            if tag_list and not all(t in (exp.get("tags") or []) for t in tag_list):
+                continue
+            if metric and metric not in (exp.get("metrics") or {}):
+                continue
+            filtered.append(exp)
+        return _paginate(filtered, page, page_size)
 
     results = []
     for exp in all_exps:
@@ -905,9 +1104,13 @@ async def cancel_experiment(exp_ref: str):
     sent to force termination. Pending experiments are marked ``cancelled``
     immediately.
 
+    Feedback A2: returns a SHORT object only (id/label/status/cancelled_at/
+    message), not the full experiment record.
+
     Example:
         POST /api/v1/experiments/4/cancel
-        -> {"id": 4, "status": "cancelled", ...}
+        -> {"id": 4, "label": "1.2", "status": "cancelled",
+            "cancelled_at": "2026-06-26T...Z", "message": "..."}
     """
     exp = _resolve_exp(exp_ref)
     try:
@@ -918,12 +1121,28 @@ async def cancel_experiment(exp_ref: str):
     # The cancel side effect may still have succeeded (process killed,
     # status updated by the watch task) — only return 404 if the
     # experiment really isn't in the store.
-    if result is None:
-        latest = store.get_experiment(exp["id"])
-        if latest is None:
-            raise HTTPException(404, "experiment not found")
-        return latest
-    return result
+    latest = result if result is not None else store.get_experiment(exp["id"])
+    if latest is None:
+        raise HTTPException(404, "experiment not found")
+
+    # A2: return a SHORT object reflecting the CURRENT status only. Do not fold
+    # in the full record. NOTE: there is a known separate bug where a cancelled
+    # run can later report status "completed"; that end-state correctness fix is
+    # deferred to a later batch — we simply report whatever status is set now.
+    status = latest.get("status")
+    label = latest.get("label") or exp.get("label") or str(exp["id"])
+    if status not in ("cancelled", "cancelling"):
+        # Flag the known race: cancel was requested but status isn't cancelled.
+        message = f"cancel requested; current status is '{status}' (may settle to cancelled shortly)"
+    else:
+        message = "experiment cancelled"
+    return {
+        "id": latest.get("id", exp["id"]),
+        "label": label,
+        "status": status,
+        "cancelled_at": datetime.now(timezone.utc).isoformat(),
+        "message": message,
+    }
 
 
 @router.get("/experiments/{exp_ref}/log")
