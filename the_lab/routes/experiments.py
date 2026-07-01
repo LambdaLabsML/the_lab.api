@@ -35,6 +35,30 @@ from ..schemas import (
 router = APIRouter(prefix="/api/v1")
 
 
+def _truncate_soft(text: str | None, limit: int = 240) -> str | None:
+    """Shorten *text* without cutting mid-sentence/mid-word.
+
+    Prefers a sentence boundary (``. `` / newline) at or before *limit*, else
+    falls back to the last whole word, always ending with an explicit ellipsis.
+    Fixes error/summary strings that were clipped mid-sentence.
+    """
+    if not text:
+        return text
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    window = text[:limit]
+    # Prefer the last sentence end within the window.
+    for sep in (". ", ".\n", "\n", "! ", "? "):
+        idx = window.rfind(sep)
+        if idx > 0:
+            return text[: idx + 1].rstrip()
+    # Otherwise back off to the last whole word.
+    sp = window.rfind(" ")
+    cut = window[:sp] if sp > 0 else window
+    return cut.rstrip() + " …"
+
+
 # --- Experiments ---
 
 @router.post("/ideas/{idea_id}/experiments", status_code=201)
@@ -228,7 +252,9 @@ def list_all_experiments(
             "description": _description_short(exp.get("description")) or None,
             "status":      exp.get("status"),
             "metrics":     shown_metrics,
-            "error":       _description_short(exp.get("error"), limit=120) or None,
+            # Truncate on a sentence/word boundary (not mid-sentence) so the
+            # error stays readable; full text via GET /experiments/{ref}.
+            "error":       _truncate_soft(exp.get("error"), limit=240) or None,
             "runtime":     exp.get("runtime"),
             "finished_at": exp.get("finished_at"),
         }
@@ -1017,6 +1043,71 @@ def get_experiment_output(exp_ref: str):
     )
 
 
+# --- Progress heartbeat tracking ---
+# The `.progress` file only holds the *latest* JSON body (it is overwritten on
+# every POST). To report heartbeat timing (last_at / avg interval / age) we
+# append one ISO-8601 timestamp per POST to a sibling `.heartbeats` file and
+# summarise it on GET. Fail-soft everywhere so heartbeat bookkeeping never
+# breaks the actual progress read/write.
+
+_HEARTBEAT_KEEP = 500  # bound the sidecar so it can't grow without limit
+
+
+def _heartbeat_path(script: str):
+    """Sidecar file (next to `.progress`) holding one ISO timestamp per beat."""
+    return REPO_DIR / script.replace(".sh", ".heartbeats")
+
+
+def _record_heartbeat(script: str) -> None:
+    """Append the current UTC timestamp to the experiment's heartbeat log."""
+    try:
+        path = _heartbeat_path(script)
+        lines: list[str] = []
+        if path.exists():
+            lines = path.read_text().splitlines()
+        lines.append(datetime.now(timezone.utc).isoformat())
+        # Keep only the most recent entries so the file stays bounded.
+        if len(lines) > _HEARTBEAT_KEEP:
+            lines = lines[-_HEARTBEAT_KEEP:]
+        path.write_text("\n".join(lines) + "\n")
+    except OSError:
+        pass  # heartbeat tracking is best-effort
+
+
+def _heartbeat_summary(script: str) -> dict:
+    """Summarise recorded heartbeats: last_at, avg interval, age, count.
+
+    avg_interval_sec is null when there are fewer than 2 heartbeats.
+    """
+    summary = {"last_at": None, "avg_interval_sec": None, "since_last_sec": None, "count": 0}
+    try:
+        path = _heartbeat_path(script)
+        if not path.exists():
+            return summary
+        stamps = []
+        for line in path.read_text().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                stamps.append(datetime.fromisoformat(line))
+            except ValueError:
+                continue
+        if not stamps:
+            return summary
+        summary["count"] = len(stamps)
+        last = stamps[-1]
+        summary["last_at"] = last.isoformat()
+        now = datetime.now(timezone.utc)
+        summary["since_last_sec"] = round((now - last).total_seconds(), 3)
+        if len(stamps) >= 2:
+            gaps = [(stamps[i] - stamps[i - 1]).total_seconds() for i in range(1, len(stamps))]
+            summary["avg_interval_sec"] = round(sum(gaps) / len(gaps), 3)
+    except (OSError, ValueError):
+        pass
+    return summary
+
+
 @router.get("/experiments/{exp_ref}/progress")
 def get_experiment_progress(exp_ref: str):
     """Read script-reported progress for an experiment.
@@ -1033,6 +1124,9 @@ def get_experiment_progress(exp_ref: str):
     exp = _resolve_exp(exp_ref)
     status = exp["status"]
     result: dict = {"status": status}
+
+    # Heartbeat timing: last beat, avg interval between beats, age since last.
+    result["heartbeat"] = _heartbeat_summary(exp["script"])
 
     # For terminal states return metrics as the final progress snapshot so the
     # UI never shows stale "starting" data from an earlier write.
@@ -1081,6 +1175,9 @@ async def post_experiment_progress(exp_ref: str, request: Request):
         progress_path.write_text(json.dumps(body))
     except OSError as exc:
         raise HTTPException(500, f"could not write progress file: {exc}")
+
+    # Record a heartbeat timestamp so GET /progress can report beat timing.
+    _record_heartbeat(exp["script"])
 
     # Broadcast immediately — no rsync lag.
     ws_mod.broadcaster.broadcast_soon({

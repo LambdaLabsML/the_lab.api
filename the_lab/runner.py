@@ -361,6 +361,10 @@ class ExperimentRunner:
         by_label: dict[str, dict] = {(e.get("label") or str(e["id"])): e for e in all_exps}
 
         for exp in queued:
+            # Compute a safe label up front so it is always defined before any
+            # code below can raise — fixes "local variable 'label' referenced
+            # before assignment" in the dispatch except handler.
+            label = exp.get("label") or str(exp.get("id") or "?")
             qm = _qmeta(exp)
             # Dependency check.
             deps = list(qm.get("depends_on") or [])
@@ -371,7 +375,7 @@ class ExperimentRunner:
                 if not dep:
                     # Missing dependency — fail the experiment with a clear reason.
                     self._store.update_experiment(
-                        (exp.get("label") or str(exp["id"])),
+                        label,
                         status="failed",
                         error=f"depends_on references unknown experiment '{dep_label}'",
                         finished_at=datetime.now(timezone.utc).isoformat(),
@@ -383,7 +387,7 @@ class ExperimentRunner:
                     break
                 if on_success and dep.get("status") in ("failed", "cancelled"):
                     self._store.update_experiment(
-                        (exp.get("label") or str(exp["id"])),
+                        label,
                         status="cancelled",
                         error=f"parent experiment '{dep_label}' {dep['status']}",
                         finished_at=datetime.now(timezone.utc).isoformat(),
@@ -399,7 +403,7 @@ class ExperimentRunner:
             if resource is None:
                 continue
             units_wanted = int(req.get("units") or resource.default_units_per_job)
-            label = exp.get("label") or str(exp["id"])
+            # (label already computed at the top of the loop)
             # Re-check status: it may have been cancelled while we awaited
             # the previous dispatch (the queued list is a snapshot from above).
             current = self._store.get_experiment(label)
