@@ -6,6 +6,9 @@ import json as _json
 import logging
 import os
 import secrets
+import threading
+import time as _time_mod
+from datetime import datetime, timezone
 from pathlib import Path
 
 import math
@@ -52,6 +55,100 @@ api_stats = ApiStats(REPO_DIR / ".the_lab" / "api_stats.json")
 # Initialise shared state so route modules can import from deps
 deps.init(store, runner, api_stats, REPO_DIR)
 
+# Module start time — used by the /health endpoint to report uptime.
+_START_TIME = _time_mod.monotonic()
+
+
+# ---------------------------------------------------------------------------
+# Per-agent "seen notifications" store  (feedback: STUCK-NOTIFICATION NOISE)
+#
+# Notifications for failures / suggestions / agent-lifecycle events used to be
+# re-emitted on EVERY API response — a permanent token tax for weeks-old
+# failures that can't be cleared. We now deliver each distinct event to a given
+# agent exactly ONCE by tracking the stable notification keys an agent has
+# already seen. Stored as .the_lab/agents/notif_seen.json:
+#     {"<agent_id>": ["failure:13.4", "suggestion:42", ...], ...}
+#
+# A freshly-registered agent (no entry yet) is BASELINED: all currently-existing
+# keys are marked seen up-front so it isn't spammed with the pre-existing
+# backlog — it only receives notifications for events that happen AFTER it
+# registered (feedback: NEW-ONLY-ON-REGISTER). Message previews are handled
+# separately (messages have their own read tracking) and are NOT routed here.
+#
+# File IO is fail-soft (a corrupt/missing store never breaks a response) and
+# guarded by a module-level lock, mirroring agents.py note_message_poll().
+# Store logic lives here because the feedback restricts edits to app.py.
+# ---------------------------------------------------------------------------
+_notif_seen_lock = threading.Lock()
+
+
+def _notif_seen_path() -> Path:
+    p = REPO_DIR / ".the_lab" / "agents"
+    p.mkdir(parents=True, exist_ok=True)
+    return p / "notif_seen.json"
+
+
+def _read_notif_seen() -> dict:
+    """agent_id -> set of seen notification keys. Fail-soft to {}."""
+    path = _notif_seen_path()
+    try:
+        if not path.exists():
+            return {}
+        data = _json.loads(path.read_text())
+        if not isinstance(data, dict):
+            return {}
+        return {k: set(v) for k, v in data.items() if isinstance(v, list)}
+    except (ValueError, TypeError, OSError):
+        return {}
+
+
+def _write_notif_seen(data: dict) -> None:
+    """Persist agent_id -> seen-key sets. Fail-soft: never raise."""
+    try:
+        serializable = {k: sorted(v) for k, v in data.items()}
+        _notif_seen_path().write_text(_json.dumps(serializable, indent=2) + "\n")
+    except (TypeError, OSError):
+        pass
+
+
+def _filter_and_mark_seen(agent_id: str, keyed: list[tuple[str, dict]],
+                          all_keys: set[str]) -> list[dict]:
+    """Return only the notifications this agent hasn't seen, marking them seen.
+
+    ``keyed`` is a list of (stable_key, notification) for the currently-emittable
+    failure/suggestion/lifecycle events. ``all_keys`` is every key that currently
+    exists — used to baseline a brand-new agent so it skips the backlog.
+
+    Under the lock we: baseline unknown agents to ``all_keys`` (emit nothing for
+    pre-existing events), else emit the unseen keys and add them to the seen set.
+    """
+    if not agent_id:
+        # Unidentified caller (dashboard) — can't track per-agent state, so
+        # fall back to emitting everything (unchanged behaviour for the UI).
+        return [n for _, n in keyed]
+    out: list[dict] = []
+    with _notif_seen_lock:
+        store_data = _read_notif_seen()
+        is_new_agent = agent_id not in store_data
+        seen = store_data.get(agent_id, set())
+        if is_new_agent:
+            # NEW-ONLY-ON-REGISTER: baseline this agent — treat every existing
+            # key as already-seen so no pre-registration backlog is delivered.
+            store_data[agent_id] = set(all_keys)
+            _write_notif_seen(store_data)
+            return out
+        changed = False
+        for key, notif in keyed:
+            if key in seen:
+                continue
+            out.append(notif)
+            seen.add(key)
+            changed = True
+        if changed:
+            store_data[agent_id] = seen
+            _write_notif_seen(store_data)
+    return out
+
 
 def _sanitize_floats(obj):
     """Replace NaN/Infinity with None so JSON serialization doesn't crash."""
@@ -92,6 +189,10 @@ async def basic_auth(request: Request, call_next):
     # Static assets are fetched by the browser after the page is authenticated;
     # they don't send credentials themselves, so exempt them.
     if request.url.path.startswith("/assets/"):
+        return await call_next(request)
+    # /health is an unauthenticated liveness probe so a monitor/bridge can hit
+    # it without credentials (feedback: /health ENDPOINT).
+    if request.url.path == "/api/v1/health":
         return await call_next(request)
     auth_header = request.headers.get("Authorization", "")
     if auth_header.startswith("Basic "):
@@ -215,35 +316,108 @@ def build_notifications(request) -> list[dict]:
     from . import messages as messages_mod
     from . import agents as agents_mod
 
-    notifications: list[dict] = []
+    agent_id = getattr(request.state, "agent_id", None)
+
+    # ── Shown-once notifications (failures / suggestions / agent lifecycle) ──
+    # Each gets a STABLE key so the per-agent seen-store can deliver it exactly
+    # once (feedback: STUCK-NOTIFICATION NOISE). We collect (key, notification)
+    # pairs plus the full set of currently-existing keys (for baselining a new
+    # agent — feedback: NEW-ONLY-ON-REGISTER), then filter through the store.
+    keyed: list[tuple[str, dict]] = []
+    all_keys: set[str] = set()
+
     # Suggestion queue — gives any caller a quick scan over pending ideas.
+    # Keyed per idea (suggestion:<idea_id>) so each suggestion fires once.
     try:
         suggested = store.list_ideas(status="suggested")
         for idea in suggested:
             p = idea.get("priority", "normal")
             desc = (idea.get("description") or "").split("\n")[0][:120]
-            notifications.append({
+            key = f"suggestion:{idea['id']}"
+            all_keys.add(key)
+            keyed.append((key, {
                 "type": "suggestion",
                 "priority": p,
                 "message": f"Suggested idea #{idea['id']}: {desc}",
                 "action": f"POST /api/v1/ideas/{idea['id']}/adopt" if p == "high"
                           else f"POST /api/v1/ideas/{idea['id']}/abandon",
-            })
+            }))
+    except Exception:
+        pass
+
+    # Failures — one notification per failed experiment id (failure:<exp_id>) so
+    # a given failure is delivered to a given agent exactly once, instead of the
+    # old "N experiment(s) failed" banner re-sent on every response.
+    try:
+        failed = store.list_experiments_by_status("failed")
+        for e in failed:
+            exp_id = e["id"]
+            label = e.get("label", str(exp_id))
+            key = f"failure:{exp_id}"
+            all_keys.add(key)
+            keyed.append((key, {
+                "type": "failure",
+                "message": f"experiment {label} failed",
+                "action": "GET /api/v1/experiments/log",
+            }))
+    except Exception:
+        pass
+
+    # ── Agent lifecycle (feedback: AGENT LIFECYCLE NOTIFICATIONS) ──
+    # Surface agents that registered / completed recently (last ~10 min).
+    # Keyed agent_registered:<id> / agent_done:<id> so the shown-once mechanism
+    # delivers each exactly once; the baseline rule keeps a new agent from
+    # seeing lifecycle events that predate its own registration.
+    _LIFECYCLE_WINDOW_SEC = 600
+
+    def _recent(iso: str | None) -> bool:
+        if not iso:
+            return False
+        try:
+            t = datetime.fromisoformat(iso)
+        except (ValueError, TypeError):
+            return False
+        if t.tzinfo is None:
+            t = t.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - t).total_seconds() <= _LIFECYCLE_WINDOW_SEC
+
+    try:
+        for a in agents_mod.list_agents(REPO_DIR):
+            aid = a.get("agent_id")
+            if not aid:
+                continue
+            key = f"agent_registered:{aid}"
+            all_keys.add(key)
+            if _recent(a.get("created_at")):
+                role = a.get("role") or "default"
+                keyed.append((key, {
+                    "type": "agent",
+                    "message": f"agent {aid} ({role}) registered",
+                    "action": "GET /api/v1/agents",
+                }))
     except Exception:
         pass
     try:
-        failed = store.list_experiments_by_status("failed")
-        if failed:
-            labels = [e.get("label", str(e["id"])) for e in failed[:3]]
-            notifications.append({
-                "type": "failure",
-                "message": f"{len(failed)} experiment(s) failed: {', '.join(labels)}",
-                "action": "GET /api/v1/experiments/log",
-            })
+        for a in agents_mod.list_past_agents(REPO_DIR):
+            aid = a.get("agent_id")
+            if not aid:
+                continue
+            key = f"agent_done:{aid}"
+            all_keys.add(key)
+            if _recent(a.get("completed_at")):
+                role = a.get("role") or "default"
+                keyed.append((key, {
+                    "type": "agent",
+                    "message": f"agent {aid} ({role}) completed",
+                    "action": "GET /api/v1/agents",
+                }))
     except Exception:
         pass
+
+    # Filter through the per-agent seen-store (shown-once + new-agent baseline).
+    notifications: list[dict] = _filter_and_mark_seen(agent_id, keyed, all_keys)
+
     # Per-agent inbox: unread directed messages.
-    agent_id = getattr(request.state, "agent_id", None)
     if agent_id:
         try:
             entry = agents_mod.lookup_agent(REPO_DIR, agent_id) or {}
@@ -252,13 +426,13 @@ def build_notifications(request) -> list[dict]:
                 REPO_DIR, agent_id=agent_id, role=role, limit=20,
             )
             fully_shown: list[int] = []
-            for m in unread:
+            for idx, m in enumerate(unread):
                 origin = m.get("from_role") or m.get("from_agent") or "system"
                 text = m.get("text") or ""
                 truncated = len(text) > 60
                 snippet = text[:60].rstrip()
                 preview = (snippet + "…") if truncated else snippet
-                notifications.append({
+                notif = {
                     "type": "message",
                     "priority": "high",
                     "message_id": m["id"],
@@ -266,7 +440,16 @@ def build_notifications(request) -> list[dict]:
                     "to": m.get("to"),
                     "message": f"new message from {origin}: {preview}",
                     "action": f"GET /api/v1/messages (read full text), then POST /api/v1/messages/{m['id']}/read",
-                })
+                }
+                # EXCERPT NOTE: hint once (on the first message) that the CLI
+                # message loop is best run as a background task — otherwise
+                # agents only see these 60-char previews piggy-backed on other
+                # responses. Kept to a single field to avoid per-message spam.
+                if idx == 0:
+                    notif["tip"] = (
+                        "run `the-lab messages` in the background to receive these"
+                    )
+                notifications.append(notif)
                 if not truncated:
                     fully_shown.append(m["id"])
             # A short message is delivered in full right here, so mark it read —
@@ -322,6 +505,7 @@ async def inject_notifications(request, call_next):
             or path in ("/api/v1/openapi.json", "/api/v1/docs", "/api/v1/redoc")
             or path.startswith("/api/v1/stats")
             or path == "/api/v1/notifications"
+            or path == "/api/v1/health"  # liveness probe — keep it minimal
             or response.status_code >= 400):
         return response
     content_type = response.headers.get("content-type", "")
@@ -376,6 +560,26 @@ def get_notifications(request: Request):
     The response shape is ``{"notifications": [...]}``.
     """
     return {"notifications": build_notifications(request)}
+
+
+@app.get("/api/v1/health")
+def health():
+    """Unauthenticated liveness probe (feedback: /health ENDPOINT).
+
+    Exempted from both basic_auth and the notifications middleware so a
+    monitor/bridge can poll it cheaply without credentials. Reports the live
+    agent count and process uptime; fail-soft on the registry read.
+    """
+    try:
+        from . import agents as agents_mod
+        agent_count = len(agents_mod.list_agents(REPO_DIR))
+    except Exception:
+        agent_count = 0
+    return {
+        "status": "ok",
+        "agents": agent_count,
+        "uptime_sec": int(_time_mod.monotonic() - _START_TIME),
+    }
 
 
 # GZip compression. Starlette's add_middleware() inserts at position 0 of the
