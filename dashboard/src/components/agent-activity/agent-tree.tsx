@@ -18,13 +18,24 @@ function ago(ts: number): string {
   return `${Math.floor(s / 3600)}h`;
 }
 
-// Idle if no activity for a while (agent registered but quiet).
-const IDLE_MS = 45_000;
+// "Active" = the agent's process is live (pid running). A live agent is working
+// even between events, so it must NOT flip to "idle" just because no event
+// arrived recently — we keep showing its current/last action. Only a
+// registered-but-not-live agent (process gone) reads as idle.
+function isActive(st: AgentState): boolean {
+  return st.live || (!!st.lastActiveTs && Date.now() - st.lastActiveTs < 45_000);
+}
 
-function headGlyph(st: AgentState): { glyph: string; kind: string } {
-  const fresh = st.lastActiveTs && Date.now() - st.lastActiveTs < IDLE_MS;
-  if (fresh && st.current) return { glyph: st.current.glyph, kind: st.current.kind };
-  return { glyph: "○", kind: "idle" };
+function head(st: AgentState): { glyph: string; kind: string; text: string } {
+  const active = isActive(st);
+  if (st.current && active) {
+    return { glyph: st.current.glyph, kind: st.current.kind, text: st.current.text };
+  }
+  if (active) {
+    // Live but no recent event — still working; show its idea, not "idle".
+    return { glyph: "●", kind: "active", text: st.ideaId != null ? `on idea/${st.ideaId}` : "working" };
+  }
+  return { glyph: "○", kind: "idle", text: "idle" };
 }
 
 function Line({ e }: { e: ActivityEvent }) {
@@ -37,13 +48,15 @@ function Line({ e }: { e: ActivityEvent }) {
   );
 }
 
-export function AgentTree({ compact = false, maxNested = compact ? 2 : 5 }: {
+export function AgentTree({ compact = false, activeOnly = false, maxNested = compact ? 2 : 5 }: {
   compact?: boolean;
+  activeOnly?: boolean;
   maxNested?: number;
 }) {
-  const states = Object.values(agentStates.value);
+  let states = Object.values(agentStates.value);
+  if (activeOnly) states = states.filter(isActive);
   if (states.length === 0) {
-    return <div class="aa-empty">no agents registered</div>;
+    return <div class="aa-empty">{activeOnly ? "no active agents" : "no agents registered"}</div>;
   }
   // Live + most-recently-active first.
   states.sort((a, b) =>
@@ -53,8 +66,8 @@ export function AgentTree({ compact = false, maxNested = compact ? 2 : 5 }: {
     <div class={`aa-tree${compact ? " aa-compact" : ""}`}>
       {states.map((st) => {
         const color = agentColor(st.agentId);
-        const { glyph, kind } = headGlyph(st);
-        const active = kind !== "idle";
+        const h = head(st);
+        const active = h.kind !== "idle";
         const nested = st.recent.slice(0, maxNested);
         return (
           <div class="aa-agent" key={st.agentId}>
@@ -73,10 +86,8 @@ export function AgentTree({ compact = false, maxNested = compact ? 2 : 5 }: {
               <span class="aa-id" style={{ color }}>{st.agentId}</span>
               {!compact && <span class="aa-role">{st.role}</span>}
               {st.listening && <span class="aa-listen" title="listening on the-lab messages">🎧</span>}
-              <span class={`aa-glyph aa-head-glyph aa-tone-${st.current?.tone ?? "neutral"}`}>{glyph}</span>
-              <span class="aa-head-text">
-                {active && st.current ? st.current.text : "idle"}
-              </span>
+              <span class={`aa-glyph aa-head-glyph aa-tone-${active ? (st.current?.tone ?? "accent") : "neutral"}`}>{h.glyph}</span>
+              <span class="aa-head-text">{h.text}</span>
               {st.lastActiveTs > 0 && <span class="aa-age">{ago(st.lastActiveTs)}</span>}
             </div>
             {nested.length > 0 && (

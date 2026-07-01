@@ -1,7 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { listAgents, unregisterAgent } from "../state/api";
-import { AgentTree } from "../components/agent-activity/agent-tree";
-import { ActivityFeed } from "../components/agent-activity/activity-feed";
 import type { AgentEntry } from "../lib/types";
 import { agentCostMap } from "../state/signals";
 import { useCopyToClipboard, useDisclosure, useEscape } from "../lib/hooks";
@@ -501,20 +499,6 @@ export function AgentsView() {
       )}
 
       {error && <div class="agents-error">{error}</div>}
-
-      {/* Live activity — current work per agent (tree) + interleaved feed */}
-      {agents.length > 0 && (
-        <div class="agents-live">
-          <div class="agents-live-col">
-            <div class="nav-secondary-head"><span class="ui-eyebrow">Working on</span></div>
-            <AgentTree />
-          </div>
-          <div class="agents-live-col">
-            <div class="nav-secondary-head"><span class="ui-eyebrow">Live activity</span></div>
-            <ActivityFeed />
-          </div>
-        </div>
-      )}
 
       {loaded && agents.length === 0 && !error ? (
         <EmptyState

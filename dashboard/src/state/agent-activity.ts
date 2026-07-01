@@ -95,8 +95,9 @@ function normalize(ev: Record<string, unknown>): ActivityEvent | null {
     case "message": {
       const from = (ev.from_agent as string) || (ev.from_role as string) || null;
       const to = ev.to === "all" ? "all" : String(ev.to ?? "").replace(/^agent:|^role:/, "");
+      const body = excerpt(ev.text, 40);
       return { ...base, agentId: from, kind: "message", glyph: "↔", tone: "accent",
-        text: `→ ${to || "?"}  "${excerpt(ev.text, 40)}"` };
+        text: body ? `→ ${to || "?"}  "${body}"` : `→ ${to || "?"}` };
     }
     case "note_added":
       return { ...base, agentId: byIdea, kind: "note", glyph: "✎", tone: "neutral",

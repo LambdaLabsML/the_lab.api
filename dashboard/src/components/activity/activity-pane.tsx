@@ -29,6 +29,8 @@ import {
 } from "../../state/signals";
 import { isLowerBetter } from "../../lib/colors";
 import { ideaTitle, fmtMetricName } from "../../lib/format";
+import { AgentTree } from "../agent-activity/agent-tree";
+import { ActivityFeed } from "../agent-activity/activity-feed";
 import { useSelection } from "../../lib/hooks";
 import type { AgentEntry, Experiment, MessageEntry } from "../../lib/types";
 import {
@@ -333,6 +335,20 @@ export function ActivityPane() {
         }
       />
       <PanelBody pad={false} class="activity-body">
+        {/* ── 0. WHAT AGENTS ARE DOING (live tree + interleaved feed) ─── */}
+        <section class="activity-section">
+          <div class="activity-section-head">
+            <Eyebrow>Working on</Eyebrow>
+          </div>
+          <AgentTree activeOnly />
+        </section>
+        <section class="activity-section">
+          <div class="activity-section-head">
+            <Eyebrow>Live activity</Eyebrow>
+          </div>
+          <ActivityFeed />
+        </section>
+
         {/* ── 1. NOW RUNNING ─────────────────────────────────────────── */}
         <section class="activity-section">
           <div class="activity-section-head">

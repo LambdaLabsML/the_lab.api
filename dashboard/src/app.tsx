@@ -1120,8 +1120,8 @@ export function App() {
                     ))}
                   </nav>
                   <div class="nav-secondary-segment">
-                    <div class="nav-secondary-head"><Eyebrow>Agents</Eyebrow></div>
-                    <AgentTree compact />
+                    <div class="nav-secondary-head"><Eyebrow>Active agents</Eyebrow></div>
+                    <AgentTree compact activeOnly />
                   </div>
                   <ActivityShortlog />
                 </>
