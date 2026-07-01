@@ -232,7 +232,9 @@ def cmd_init(target: str | None = None):
     lines = existing.splitlines()
 
     entries_to_add = []
-    for entry in [".the_lab/", ".claude/", ".mcp.json", "PROMPT.md", ".the_lab.agentid"]:
+    # .the_lab.link is the per-worktree symlink to the main .the_lab/ (added by
+    # a companion fix) — ignore it for new projects too.
+    for entry in [".the_lab/", ".claude/", ".mcp.json", "PROMPT.md", ".the_lab.agentid", ".the_lab.link"]:
         if not any(line.strip() == entry or line.strip() == entry.rstrip("/") for line in lines):
             entries_to_add.append(entry)
 
@@ -622,15 +624,22 @@ def cmd_wait():
 
 
 def cmd_messages():
-    """the-lab messages [--port N] [--timeout N] [--url URL] [--poll N]
+    """the-lab messages [--port N] [--timeout N] [--url URL] [--poll N] [--no-notifications]
 
-    Long-poll until at least one unread message is available, print them as
-    JSON, and exit.  Designed to be run in the background by Claude Code:
+    MEANT TO BE RUN AS A BACKGROUND TASK. Long-poll until there is at least one
+    unread message OR notification, print them as JSON, and exit. Designed to be
+    run in the background by Claude Code:
 
         Bash("the-lab messages --port 9009", run_in_background=True)
 
-    Claude Code is notified automatically when the command exits, then reads
-    the printed JSON array to get the messages.  Uses THE_LAB_AGENT_ID,
+    Claude Code is notified automatically when the command exits, then reads the
+    printed JSON to get the messages/notifications. Output shape is an object:
+
+        {"messages": [...], "notifications": [...]}
+
+    so agents also surface non-message notifications (agent register/unregister,
+    failures, suggestions, ...) — not just inter-agent messages. Either list may
+    be empty. Pass --no-notifications to poll messages only. Uses THE_LAB_AGENT_ID,
     THE_LAB_USER, and THE_LAB_PASSWORD from the environment when set.
     """
     import argparse as _ap, json as _json, time as _time
@@ -644,6 +653,9 @@ def cmd_messages():
     p.add_argument("--https", action="store_true", help="Talk to the API over HTTPS (auto-detected when launched by the agent).")
     p.add_argument("--peek", action="store_true",
                    help="Show the messages but leave them unread (don't mark them read).")
+    # Feedback: also surface non-message notifications by default; opt out here.
+    p.add_argument("--no-notifications", dest="notifications", action="store_false",
+                   help="Poll only inter-agent messages; skip the notifications feed.")
     args = p.parse_args(sys.argv[2:])
 
     api_base, _ssl_ctx = _client_api(args)
@@ -694,9 +706,22 @@ def cmd_messages():
                 unread = [m for m in msgs if agent_id not in (m.get("read_by") or [])]
             else:
                 unread = [m for m in msgs if not m.get("read_by")]
-            if unread:
-                print(_json.dumps(unread))          # full content, then consume
-                _mark_read([m["id"] for m in unread if "id" in m])
+
+            # Feedback: also surface non-message notifications (register/unregister,
+            # failures, suggestions, ...) so background agents see them too. Same
+            # headers/ssl ctx; best-effort — never let it break message delivery.
+            notifs = []
+            if args.notifications:
+                try:
+                    ndata = _get(f"{api_base}/notifications")
+                    notifs = ndata.get("notifications", []) or []
+                except Exception:
+                    notifs = []
+
+            # Exit as soon as there's at least one unread message OR notification.
+            if unread or notifs:
+                print(_json.dumps({"messages": unread, "notifications": notifs}))
+                _mark_read([m["id"] for m in unread if "id" in m])  # full content, then consume
                 sys.exit(0)
         except _urlerr.URLError as e:
             print(_json.dumps({"error": str(e)}))
@@ -706,7 +731,7 @@ def cmd_messages():
             sys.exit(1)
 
         if _time.monotonic() >= deadline:
-            print(_json.dumps([]))
+            print(_json.dumps({"messages": [], "notifications": []}))
             sys.exit(0)
 
         _time.sleep(args.poll)
