@@ -26,3 +26,6 @@ optimization/baseline_*.log
 optimization/tests/*/fixture/
 optimization/archive_labs
 .env
+
+# Local-only feedback scratch (kept on disk, never committed)
+feedback/
