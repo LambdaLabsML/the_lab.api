@@ -158,7 +158,9 @@ def add_message(
             "type": "message_received",
             "id": msg["id"],
             "to": to,
+            "from_agent": from_agent,
             "from_role": from_role,
+            "text": text[:80],
         })
     except Exception:  # noqa: BLE001
         pass

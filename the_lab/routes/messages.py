@@ -58,17 +58,9 @@ async def send_message(req: MessageRequest, request: Request):
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
-    # Broadcast from async context so the loop is guaranteed available.
-    try:
-        from .. import ws as ws_mod
-        ws_mod.broadcaster.broadcast({
-            "type": "message_received",
-            "id": msg["id"],
-            "to": msg["to"],
-            "from_role": msg.get("from_role"),
-        })
-    except Exception:
-        pass
+    # add_message already broadcasts an (enriched) message_received event via
+    # broadcast_soon (loop-safe). Re-broadcasting here caused duplicate feed
+    # lines, so we no longer do it.
     return msg
 
 
