@@ -36,6 +36,7 @@ export function experimentTipContent(o: {
   ideaId: number;
   ideaTitle?: string;
   status?: string;
+  statusMsg?: string | null;
   metricName?: string;
   value?: number | null;
   record?: boolean;
@@ -62,6 +63,7 @@ export function experimentTipContent(o: {
         <span class="ui-tip-idea-id">idea #{o.ideaId}</span>
         {tone && <span class={`ui-badge ui-badge--${tone}`}>{o.status}</span>}
       </span>
+      {o.statusMsg && <span class="ui-tip-desc">{excerpt(o.statusMsg, 140)}</span>}
       {o.ideaTitle && <span class="ui-tip-desc">{excerpt(o.ideaTitle)}</span>}
     </>
   );

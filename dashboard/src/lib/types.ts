@@ -52,6 +52,7 @@ export interface Experiment {
   label?: string;
   description: string;
   status: string;          // 'running' | 'completed' | 'failed' | 'cancelled' | 'pending'
+  status_msg?: string | null;  // terminal-reason detail (timeout/cap_abandoned/sigterm/error/…)
   idea_status?: string;
   idea_description?: string;
   metrics?: Record<string, number>;

@@ -1595,6 +1595,7 @@ function expTip(
     ideaId: exp.idea_id,
     ideaTitle: ideas[exp.idea_id]?.description?.split("\n")[0] ?? undefined,
     status,
+    statusMsg: exp.status_msg,
     metricName: fmtMetricName(metric),
     value: typeof score === "number" && isFinite(score) ? score : null,
     record: isMilestone,
