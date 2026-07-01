@@ -318,6 +318,20 @@ def build_notifications(request) -> list[dict]:
 
     agent_id = getattr(request.state, "agent_id", None)
 
+    # ── WS-presence suppression (authoritative) ──────────────────────────────
+    # If this agent currently holds an open /api/v1/messages/ws connection it is
+    # receiving messages + notifications live over that socket. Suppress ALL
+    # piggy-backed _notifications so we don't double-deliver (and don't burn
+    # tokens on every response). This takes precedence over the 20s
+    # agents.is_listening poll heuristic below, which stays as a fallback for
+    # callers that poll GET /messages instead of holding the WS open.
+    #
+    # Guarded by agent_id: the dashboard and /health send no X-Agent-Id, so they
+    # are never affected. WS presence is exact — an agent that never opened the
+    # socket (or whose socket closed) falls straight through to normal delivery.
+    if agent_id and _ws_mod.listening_agents.is_listening(agent_id):
+        return []
+
     # ── Shown-once notifications (failures / suggestions / agent lifecycle) ──
     # Each gets a STABLE key so the per-agent seen-store can deliver it exactly
     # once (feedback: STUCK-NOTIFICATION NOISE). We collect (key, notification)
@@ -775,6 +789,239 @@ async def ws_endpoint(websocket: WebSocket, since: int = 0, token: str = ""):
         pass
     finally:
         _ws_mod.broadcaster.unsubscribe(q)
+
+
+# --- Agent-scoped messages WebSocket ---
+
+class _NotifRequestShim:
+    """Minimal stand-in for a Starlette Request so build_notifications() can run
+    outside the HTTP path (from the messages WebSocket handler).
+
+    build_notifications only reads ``request.state.agent_id`` and a couple of
+    optional flags; we provide exactly those so the same single-source-of-truth
+    notification builder is reused verbatim.
+    """
+
+    class _State:
+        def __init__(self, agent_id):
+            self.agent_id = agent_id
+            self.agent_cwd = None
+            self.agent_unknown = False
+            self.git_no_agent_warning = False
+
+    def __init__(self, agent_id):
+        self.state = _NotifRequestShim._State(agent_id)
+
+
+# Broadcast event types that should trigger a fresh notifications push to a
+# listening agent (idea/experiment/agent-lifecycle churn that build_notifications
+# derives its failure/suggestion/lifecycle items from). message_received is
+# handled separately (it drives the per-agent inbox).
+_NOTIF_TRIGGER_TYPES = frozenset({
+    "experiment_finished",
+    "experiment_cancelled",
+    "experiment_queued",
+    "experiment_started",
+    "idea_changed",
+    "note_added",
+})
+
+
+@app.websocket("/api/v1/messages/ws")
+async def messages_ws_endpoint(websocket: WebSocket):
+    """Agent-scoped listening WebSocket for `the-lab messages`.
+
+    While an agent holds this socket open the server knows EXACTLY that it is
+    listening and SUPPRESSES the piggy-backed ``_notifications`` on that agent's
+    other API responses (see build_notifications) — messages and notifications
+    are delivered here instead.
+
+    Connect with ``ws[s]://host/api/v1/messages/ws``. The agent is identified by
+    the ``X-Agent-Id`` request header (our CLI sends it in the handshake), with a
+    ``?agent_id=`` query-string fallback. Auth mirrors ``/ws``: pass
+    ``?token=<base64 user:pass>`` when auth is enabled (also accepts the standard
+    ``Authorization: Basic`` handshake header for parity).
+
+    Frames (JSON):
+      * initial   — ``{"type":"init","messages":[...],"notifications":[...]}``
+      * message   — ``{"type":"message","messages":[<full msg>...]}`` as they arrive
+      * notify    — ``{"type":"notifications","notifications":[...]}`` on churn
+      * ping      — ``{"type":"ping","seq":-1}`` every 30 s keep-alive
+
+    Pass ``?peek=1`` to leave delivered messages unread (mirrors GET /messages).
+    """
+    import asyncio as _asyncio
+
+    # Handshake must complete before any WS-level frame (see /ws for rationale).
+    await websocket.accept()
+
+    # Query params: token (auth), agent_id (fallback), peek.
+    qp = websocket.query_params
+    token = qp.get("token", "") or ""
+    peek = qp.get("peek", "") in ("1", "true", "yes")
+
+    # Auth gate — mirror /ws (token query param) but also accept the standard
+    # Authorization: Basic handshake header the CLI sends for parity.
+    if _AUTH_ENABLED:
+        ok = bool(token) and secrets.compare_digest(token, _AUTH_EXPECTED)
+        if not ok:
+            auth_header = websocket.headers.get("authorization", "")
+            if auth_header.startswith("Basic "):
+                provided = auth_header[len("Basic "):].strip()
+                ok = secrets.compare_digest(provided, _AUTH_EXPECTED)
+        if not ok:
+            await websocket.close(code=1008)
+            return
+
+    # Identify the agent: X-Agent-Id header (CLI sends it), ?agent_id= fallback.
+    agent_id = websocket.headers.get("x-agent-id") or qp.get("agent_id") or None
+    if not agent_id:
+        # Nothing to scope to — a listener with no identity can't have messages
+        # suppressed or delivered. Close cleanly with a policy code.
+        await websocket.close(code=1008)
+        return
+
+    from . import messages as messages_mod
+    from . import agents as agents_mod
+
+    entry = agents_mod.lookup_agent(REPO_DIR, agent_id) or {}
+    role = entry.get("role")
+    shim = _NotifRequestShim(agent_id)
+
+    def _unread_ids(msgs: list[dict]) -> list[int]:
+        return [m["id"] for m in msgs if "id" in m]
+
+    def _mark_delivered(msgs: list[dict]) -> None:
+        """Mark delivered messages read for this agent (unless peeking)."""
+        if peek or not msgs:
+            return
+        try:
+            messages_mod.mark_read_many(REPO_DIR, _unread_ids(msgs), agent_id)
+        except Exception:
+            pass
+
+    # Register as an authoritative live listener. From this point on,
+    # build_notifications suppresses this agent's piggy-backed notifications.
+    _ws_mod.listening_agents.add(agent_id)
+    # Also record the poll-heuristic timestamp so the dashboard "listening" flag
+    # (agents.is_listening) lights up immediately, without waiting for a GET.
+    try:
+        agents_mod.note_message_poll(REPO_DIR, agent_id)
+    except Exception:
+        pass
+
+    q = None
+    try:
+        # ── Initial frame: current unread messages + current notifications ──
+        try:
+            init_unread = messages_mod.unread_for(
+                REPO_DIR, agent_id=agent_id, role=role, limit=50,
+            )
+        except Exception:
+            init_unread = []
+        # build_notifications suppresses when the agent is listening — and it is
+        # now registered. Temporarily read notifications as if NOT listening for
+        # the initial push, so the agent gets the current backlog exactly once
+        # over the socket. We do this by discarding+re-adding around the call.
+        _ws_mod.listening_agents.discard(agent_id)
+        try:
+            init_notifs = build_notifications(shim)
+        except Exception:
+            init_notifs = []
+        finally:
+            _ws_mod.listening_agents.add(agent_id)
+        await websocket.send_json({
+            "type": "init",
+            "messages": init_unread,
+            "notifications": init_notifs,
+        })
+        _mark_delivered(init_unread)
+
+        # Subscribe AFTER the initial snapshot so we don't miss events that land
+        # between the snapshot read and the subscribe (they'll be re-derived on
+        # the next relevant broadcast anyway).
+        q = _ws_mod.broadcaster.subscribe()
+
+        async def _send_loop():
+            while True:
+                event = await q.get()
+                etype = event.get("type")
+                if etype == "message_received":
+                    # A directed message landed. Re-read this agent's unread and
+                    # forward only what's addressed to it (is_for handles
+                    # agent/role/all + self-exclusion).
+                    try:
+                        unread = messages_mod.unread_for(
+                            REPO_DIR, agent_id=agent_id, role=role, limit=50,
+                        )
+                    except Exception:
+                        unread = []
+                    if unread:
+                        await websocket.send_json({
+                            "type": "message",
+                            "messages": unread,
+                        })
+                        _mark_delivered(unread)
+                elif etype in _NOTIF_TRIGGER_TYPES:
+                    # System churn that may have produced new notifications for
+                    # this agent. Re-derive (as-if-not-listening) and push any.
+                    _ws_mod.listening_agents.discard(agent_id)
+                    try:
+                        notifs = build_notifications(shim)
+                    except Exception:
+                        notifs = []
+                    finally:
+                        _ws_mod.listening_agents.add(agent_id)
+                    if notifs:
+                        await websocket.send_json({
+                            "type": "notifications",
+                            "notifications": notifs,
+                        })
+
+        async def _recv_loop():
+            # Refresh the poll heuristic on any client frame; discard content.
+            while True:
+                await websocket.receive_text()
+                try:
+                    agents_mod.note_message_poll(REPO_DIR, agent_id)
+                except Exception:
+                    pass
+
+        async def _ping_loop():
+            while True:
+                await _asyncio.sleep(30)
+                await websocket.send_json({"type": "ping", "seq": -1})
+                # Keep the poll-heuristic warm while the socket is held open.
+                try:
+                    agents_mod.note_message_poll(REPO_DIR, agent_id)
+                except Exception:
+                    pass
+
+        send_task = _asyncio.create_task(_send_loop())
+        recv_task = _asyncio.create_task(_recv_loop())
+        ping_task = _asyncio.create_task(_ping_loop())
+        try:
+            done, pending = await _asyncio.wait(
+                [send_task, recv_task, ping_task],
+                return_when=_asyncio.FIRST_EXCEPTION,
+            )
+        finally:
+            for t in (send_task, recv_task, ping_task):
+                t.cancel()
+            for t in (send_task, recv_task, ping_task):
+                try:
+                    await t
+                except (_asyncio.CancelledError, Exception):
+                    pass
+    except (WebSocketDisconnect, _asyncio.CancelledError):
+        pass
+    except Exception:  # noqa: BLE001 — never let a listener crash the server.
+        pass
+    finally:
+        # ALWAYS unregister so suppression lifts the instant the socket drops.
+        _ws_mod.listening_agents.discard(agent_id)
+        if q is not None:
+            _ws_mod.broadcaster.unsubscribe(q)
 
 
 # --- SPA Fallback (must be last) ---

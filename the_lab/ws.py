@@ -106,3 +106,70 @@ class Broadcaster:
 
 # Module-level singleton used by all callers.
 broadcaster = Broadcaster()
+
+
+# ---------------------------------------------------------------------------
+# Live "listening agents" registry
+#
+# Authoritative record of which agents currently hold an open
+# ``/api/v1/messages/ws`` connection. Distinct from the 20-second
+# ``agents.is_listening`` poll heuristic: this is exact, updated on
+# connect/disconnect, and used by ``build_notifications`` to SUPPRESS the
+# piggy-backed ``_notifications`` for an agent that is receiving them live over
+# its WebSocket instead.
+#
+# Concurrency: mutated only from the asyncio event loop (WS connect/disconnect
+# handlers) and read from ``build_notifications`` which also runs in the async
+# request path. asyncio is single-threaded so a plain set is race-free for
+# add/discard/membership. We still take a lock and copy on the (rare) full-read
+# path to stay correct if a future caller reads it from a threadpool worker —
+# membership tests and mutations stay allocation-free on the hot path.
+# ---------------------------------------------------------------------------
+
+import threading as _threading
+
+_listening: set[str] = set()
+_listening_lock = _threading.Lock()
+
+
+class _ListeningAgents:
+    """Set-like registry of agents with a live messages WebSocket open.
+
+    An agent may open more than one listener (reconnect races, multiple
+    windows), so we reference-count per agent id and only consider it "not
+    listening" once every connection has been discarded.
+    """
+
+    def __init__(self) -> None:
+        self._counts: dict[str, int] = {}
+        self._lock = _threading.Lock()
+
+    def add(self, agent_id: str) -> None:
+        if not agent_id:
+            return
+        with self._lock:
+            self._counts[agent_id] = self._counts.get(agent_id, 0) + 1
+
+    def discard(self, agent_id: str) -> None:
+        if not agent_id:
+            return
+        with self._lock:
+            n = self._counts.get(agent_id, 0) - 1
+            if n <= 0:
+                self._counts.pop(agent_id, None)
+            else:
+                self._counts[agent_id] = n
+
+    def is_listening(self, agent_id: str | None) -> bool:
+        if not agent_id:
+            return False
+        # dict membership is atomic under the GIL; no lock needed for a read.
+        return agent_id in self._counts
+
+    def ids(self) -> list[str]:
+        with self._lock:
+            return list(self._counts)
+
+
+# Module-level singleton: authoritative live-listener registry.
+listening_agents = _ListeningAgents()

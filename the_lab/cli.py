@@ -623,62 +623,299 @@ def cmd_wait():
     sys.exit(0 if status == "completed" else 1)
 
 
-def cmd_messages():
-    """the-lab messages [--port N] [--timeout N] [--url URL] [--poll N] [--no-notifications]
+# ---------------------------------------------------------------------------
+# Raw WebSocket client (stdlib only)
+#
+# Just enough of RFC 6455 for `the-lab messages` to hold the server's
+# agent-scoped listener socket open. Mirrors the technique in
+# agent_skills/skills/lab_api_mcp.py (do not import from there — it's a
+# standalone MCP bridge). Read-mostly: server→client frames are never masked;
+# our few client→server frames (pong) are masked as the spec requires.
+# ---------------------------------------------------------------------------
 
-    MEANT TO BE RUN AS A BACKGROUND TASK. Long-poll until there is at least one
-    unread message OR notification, print them as JSON, and exit. Designed to be
-    run in the background by Claude Code:
+def _ws_handshake(host, port, path_qs, use_ssl, ctx, extra_headers=None):
+    """Open a raw TCP (or TLS) socket and complete the WebSocket handshake.
+
+    Returns the connected socket with the upgrade confirmed, or raises on error.
+    ``extra_headers`` is a dict of additional request headers (X-Agent-Id,
+    Authorization) sent during the handshake.
+    """
+    import base64 as _b64, hashlib as _hashlib, os as _os
+    import socket as _socket, ssl as _ssl
+
+    key = _b64.b64encode(_os.urandom(16)).decode()
+    accept_expected = _b64.b64encode(
+        _hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()
+    ).decode()
+
+    sock = _socket.create_connection((host, port), timeout=10)
+    if use_ssl:
+        sctx = ctx or _ssl.create_default_context()
+        sock = sctx.wrap_socket(sock, server_hostname=host)
+    sock.settimeout(None)
+
+    lines = [
+        f"GET {path_qs} HTTP/1.1",
+        f"Host: {host}:{port}",
+        "Upgrade: websocket",
+        "Connection: Upgrade",
+        f"Sec-WebSocket-Key: {key}",
+        "Sec-WebSocket-Version: 13",
+    ]
+    for k, v in (extra_headers or {}).items():
+        lines.append(f"{k}: {v}")
+    req = "\r\n".join(lines) + "\r\n\r\n"
+    sock.sendall(req.encode())
+
+    buf = b""
+    while b"\r\n\r\n" not in buf:
+        chunk = sock.recv(4096)
+        if not chunk:
+            raise RuntimeError("server closed connection during WS handshake")
+        buf += chunk
+    head = buf.split(b"\r\n\r\n", 1)[0].decode(errors="replace")
+    if "101 Switching Protocols" not in head:
+        raise RuntimeError(f"WS upgrade rejected: {head[:120]}")
+    if accept_expected not in head:
+        raise RuntimeError("WS handshake: Sec-WebSocket-Accept mismatch")
+    return sock
+
+
+def _ws_recv_frame(sock):
+    """Read one WebSocket frame. Returns (opcode, payload_bytes)."""
+    import struct as _struct
+
+    def _read_exact(n):
+        b = b""
+        while len(b) < n:
+            chunk = sock.recv(n - len(b))
+            if not chunk:
+                raise ConnectionResetError("WebSocket closed by server")
+            b += chunk
+        return b
+
+    header = _read_exact(2)
+    opcode = header[0] & 0x0F
+    length = header[1] & 0x7F
+    if length == 126:
+        length = _struct.unpack("!H", _read_exact(2))[0]
+    elif length == 127:
+        length = _struct.unpack("!Q", _read_exact(8))[0]
+    payload = _read_exact(length)
+    return opcode, payload
+
+
+def _ws_send_pong(sock, payload=b""):
+    """Send a masked pong frame (client→server frames must be masked)."""
+    import os as _os
+    mask = _os.urandom(4)
+    masked = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+    frame = bytes([0x8A, 0x80 | len(payload)]) + mask + masked
+    sock.sendall(frame)
+
+
+def cmd_messages():
+    """the-lab messages [--port N] [--timeout N] [--url URL] [--once] [--no-notifications]
+
+    PERSISTENT BACKGROUND LISTENER. Connects to the server's agent-scoped
+    WebSocket (``/api/v1/messages/ws``) and stays connected, printing each
+    incoming inter-agent message and notification as one NDJSON line as it
+    arrives, until --timeout elapses or it's interrupted. Meant to be run in the
+    background:
 
         Bash("the-lab messages --port 9009", run_in_background=True)
 
-    Claude Code is notified automatically when the command exits, then reads the
-    printed JSON to get the messages/notifications. Output shape is an object:
+    While this command is connected the server knows EXACTLY that this agent is
+    listening and SUPPRESSES the piggy-backed ``_notifications`` on the agent's
+    other API responses — they arrive here over the socket instead, saving
+    tokens and avoiding double-delivery.
 
-        {"messages": [...], "notifications": [...]}
+    Output: one JSON object per line (NDJSON). Each line is one of::
 
-    so agents also surface non-message notifications (agent register/unregister,
-    failures, suggestions, ...) — not just inter-agent messages. Either list may
-    be empty. Pass --no-notifications to poll messages only. Uses THE_LAB_AGENT_ID,
-    THE_LAB_USER, and THE_LAB_PASSWORD from the environment when set.
+        {"messages": [...]}          # unread messages addressed to this agent
+        {"notifications": [...]}     # non-message notifications (failures, ...)
+
+    the first line is the initial snapshot of current unread + notifications.
+
+    Flags:
+      --once             restore the old behavior: print the first batch of
+                         unread/notifications, then exit (for callers that rely
+                         on exit-to-notify).
+      --peek             show messages but leave them unread (passed to server).
+      --no-notifications ignore the notifications stream (messages only).
+      --timeout N        max seconds to stay connected (default 300).
+      --poll N           polling interval used ONLY by the HTTP fallback.
+
+    If the WebSocket connect fails (older server without the endpoint, handshake
+    error), falls back to the legacy HTTP polling loop so it still works. Uses
+    THE_LAB_AGENT_ID, THE_LAB_USER, THE_LAB_PASSWORD from the environment.
     """
     import argparse as _ap, json as _json, time as _time
-    import urllib.request as _urlreq, urllib.error as _urlerr, base64 as _b64
+    import urllib.parse as _uparse, base64 as _b64
+    import socket as _socket_mod
+    _socket_timeout = getattr(_socket_mod, "timeout", TimeoutError)
 
     p = _ap.ArgumentParser(prog="the-lab messages")
     p.add_argument("--port", type=int, default=8000)
-    p.add_argument("--timeout", type=float, default=300, help="Max seconds to wait (default 300)")
-    p.add_argument("--poll", type=float, default=3, help="Polling interval in seconds (default 3)")
+    p.add_argument("--timeout", type=float, default=300, help="Max seconds to stay connected (default 300)")
+    p.add_argument("--poll", type=float, default=3, help="Polling interval for the HTTP fallback (default 3)")
     p.add_argument("--url", default=None, help="Override API base URL")
     p.add_argument("--https", action="store_true", help="Talk to the API over HTTPS (auto-detected when launched by the agent).")
     p.add_argument("--peek", action="store_true",
                    help="Show the messages but leave them unread (don't mark them read).")
-    # Feedback: also surface non-message notifications by default; opt out here.
+    p.add_argument("--once", action="store_true",
+                   help="Print the first batch of unread/notifications, then exit (legacy exit-to-notify mode).")
     p.add_argument("--no-notifications", dest="notifications", action="store_false",
-                   help="Poll only inter-agent messages; skip the notifications feed.")
+                   help="Ignore the notifications stream; surface inter-agent messages only.")
     args = p.parse_args(sys.argv[2:])
 
     api_base, _ssl_ctx = _client_api(args)
 
-    headers: dict[str, str] = {}
     agent_id = os.environ.get("THE_LAB_AGENT_ID", "").strip()
-    if agent_id:
-        headers["X-Agent-Id"] = agent_id
     _user = os.environ.get("THE_LAB_USER", "").strip()
     _pw   = os.environ.get("THE_LAB_PASSWORD", "").strip()
+    _basic = ""
     if _user and _pw:
-        headers["Authorization"] = "Basic " + _b64.b64encode(
-            f"{_user}:{_pw}".encode()
-        ).decode()
+        _basic = _b64.b64encode(f"{_user}:{_pw}".encode()).decode()
+
+    headers: dict[str, str] = {}
+    if agent_id:
+        headers["X-Agent-Id"] = agent_id
+    if _basic:
+        headers["Authorization"] = "Basic " + _basic
+
+    # ── Try the WebSocket listener first ────────────────────────────────────
+    # Derive scheme/host/port from the resolved api base.
+    parsed = _uparse.urlparse(api_base)  # api_base ends in /api/v1
+    use_ssl = parsed.scheme == "https"
+    host = parsed.hostname or "localhost"
+    port = parsed.port or (443 if use_ssl else 80)
+
+    def _emit(obj) -> None:
+        sys.stdout.write(_json.dumps(obj) + "\n")
+        sys.stdout.flush()
+
+    def _run_ws() -> bool:
+        """Connect and stream. Returns True on success (do not fall back),
+        False if the connection could not be established (fall back to poll)."""
+        # Build the WS path with token (parity with /ws) + agent_id fallback + peek.
+        qs = {}
+        if _basic:
+            qs["token"] = _basic
+        if agent_id:
+            qs["agent_id"] = agent_id
+        if args.peek:
+            qs["peek"] = "1"
+        path_qs = "/api/v1/messages/ws"
+        if qs:
+            path_qs += "?" + _uparse.urlencode(qs)
+
+        # Handshake headers: X-Agent-Id + Authorization (Basic) as the task
+        # requires; token is also on the query string for parity with /ws.
+        hs_headers = dict(headers)
+
+        try:
+            sock = _ws_handshake(host, port, path_qs, use_ssl, _ssl_ctx, hs_headers)
+        except Exception:
+            return False  # connect/handshake failed → caller falls back to poll
+
+        deadline = _time.monotonic() + args.timeout
+        got_first = False
+        try:
+            fragmented: list[bytes] = []
+            while True:
+                remaining = deadline - _time.monotonic()
+                if remaining <= 0:
+                    break
+                sock.settimeout(min(5.0, max(0.1, remaining)))
+                try:
+                    opcode, payload = _ws_recv_frame(sock)
+                except (TimeoutError, _socket_timeout):
+                    continue
+                except (ConnectionResetError, OSError):
+                    break
+
+                if opcode == 0x9:      # ping
+                    _ws_send_pong(sock, payload)
+                    continue
+                if opcode == 0x8:      # close
+                    break
+                if opcode in (0x1, 0x2):
+                    fragmented = [payload]
+                elif opcode == 0x0:
+                    fragmented.append(payload)
+                else:
+                    continue
+
+                try:
+                    event = _json.loads(b"".join(fragmented).decode())
+                except (ValueError, UnicodeDecodeError):
+                    continue
+
+                etype = event.get("type")
+                if etype == "ping":
+                    continue
+
+                # init frame: emit the initial snapshot (messages + notifications).
+                if etype == "init":
+                    msgs = event.get("messages") or []
+                    notifs = event.get("notifications") or []
+                    if msgs:
+                        _emit({"messages": msgs})
+                    if notifs and args.notifications:
+                        _emit({"notifications": notifs})
+                    got_first = got_first or bool(msgs or (notifs and args.notifications))
+                    if args.once:
+                        # Legacy exit-to-notify: emit combined batch and stop.
+                        if not (msgs or (notifs and args.notifications)):
+                            _emit({"messages": [], "notifications": []})
+                        return True
+                    continue
+
+                if etype == "message":
+                    msgs = event.get("messages") or []
+                    if msgs:
+                        _emit({"messages": msgs})
+                    continue
+
+                if etype == "notifications":
+                    if args.notifications:
+                        notifs = event.get("notifications") or []
+                        if notifs:
+                            _emit({"notifications": notifs})
+                    continue
+            return True
+        finally:
+            try:
+                sock.close()
+            except OSError:
+                pass
+
+    try:
+        if _run_ws():
+            sys.exit(0)
+    except KeyboardInterrupt:
+        sys.exit(0)
+    except Exception:
+        pass  # fall through to the HTTP polling fallback
+
+    # ── HTTP polling fallback (older server / no WS endpoint) ────────────────
+    _cmd_messages_poll(args, api_base, _ssl_ctx, agent_id, headers)
+
+
+def _cmd_messages_poll(args, api_base, _ssl_ctx, agent_id, headers):
+    """Legacy HTTP polling loop: long-poll GET /messages (+ /notifications)
+    until there is at least one unread message OR notification, print them as a
+    single JSON object, and exit. Kept as a fallback for servers without the
+    /api/v1/messages/ws endpoint.
+    """
+    import json as _json, time as _time
+    import urllib.request as _urlreq, urllib.error as _urlerr
 
     def _get(url: str) -> dict:
         return _api_get_json(url, headers, _ssl_ctx)
 
     def _mark_read(ids: list) -> None:
-        # Consume the inbox so the same messages aren't re-delivered on the next
-        # poll. Safe to auto-do here *because the full message is printed above*
-        # — never mark read when only a snippet is shown. Needs X-Agent-Id;
-        # best-effort, never fail delivery if marking fails.
         if args.peek or not agent_id:
             return
         for mid in ids:
@@ -695,21 +932,14 @@ def cmd_messages():
         try:
             qs = "limit=50&for_me=1" if agent_id else "limit=50"
             if agent_id and args.peek:
-                qs += "&peek=1"   # don't let the server mark them read on fetch
+                qs += "&peek=1"
             data = _get(f"{api_base}/messages?{qs}")
             msgs = data.get("messages", [])
-            # "Unread for me" = my id isn't in read_by. This is version-robust
-            # (works whether the server's for_me already filters read or not) and
-            # correct for broadcasts another agent has read but I haven't. Without
-            # an id, fall back to "nobody has read it yet" as the proxy.
             if agent_id:
                 unread = [m for m in msgs if agent_id not in (m.get("read_by") or [])]
             else:
                 unread = [m for m in msgs if not m.get("read_by")]
 
-            # Feedback: also surface non-message notifications (register/unregister,
-            # failures, suggestions, ...) so background agents see them too. Same
-            # headers/ssl ctx; best-effort — never let it break message delivery.
             notifs = []
             if args.notifications:
                 try:
@@ -718,10 +948,9 @@ def cmd_messages():
                 except Exception:
                     notifs = []
 
-            # Exit as soon as there's at least one unread message OR notification.
             if unread or notifs:
                 print(_json.dumps({"messages": unread, "notifications": notifs}))
-                _mark_read([m["id"] for m in unread if "id" in m])  # full content, then consume
+                _mark_read([m["id"] for m in unread if "id" in m])
                 sys.exit(0)
         except _urlerr.URLError as e:
             print(_json.dumps({"error": str(e)}))
