@@ -29,12 +29,19 @@ export interface ActivityEvent {
   text: string;           // one-line description
   tone?: string;          // ui tone: good | bad | warn | accent | neutral
   ideaId?: number;
+  expLabel?: string;      // experiment label for exp-* events (drives currentExp)
 }
 
 export interface ApiCall {
   method: string;
   path: string;    // /api/v1 prefix stripped
   status?: number;
+  ts: number;
+}
+
+/** A single mark on the minified real-time activity strip. */
+export interface Pulse {
+  kind: "api" | "msg" | "exp";
   ts: number;
 }
 
@@ -46,14 +53,17 @@ export interface AgentState {
   live: boolean;            // pid != null (registry — info only, not "active")
   active: boolean;          // seen activity within ACTIVE_WINDOW_MS, or listening
   current: ActivityEvent | null;   // latest meaningful action
+  currentExp: string | null;       // label of the running experiment (persists past other events)
   recent: ActivityEvent[];  // newest-first, capped
   apiCalls: ApiCall[];      // last few labapi/MCP endpoints, newest-first
+  pulses: Pulse[];          // recent api/msg/exp marks for the mini strip (newest-first)
   lastActiveTs: number;     // epoch ms of most recent activity (0 = none seen)
 }
 
 const FEED_MAX = 120;
 const PER_AGENT_MAX = 8;
 const API_KEEP = 3;   // last N labapi/MCP endpoints shown per agent
+const PULSE_KEEP = 16; // marks on the mini real-time strip
 // "Active" = we've seen activity from the agent this recently. Purely
 // client-side (doesn't trust registry pid/pruning), so quiet/old agents drop
 // off both the sidebar and the feed on their own.
@@ -72,12 +82,23 @@ let _ideaToAgent: Record<number, string> = {};   // idea_id -> agent_id (live)
 let _agentMeta: Record<string, AgentEntry> = {};  // agent_id -> entry
 let _lastActive: Record<string, number> = {};     // agent_id -> epoch ms of last activity
 let _apiByAgent: Record<string, ApiCall[]> = {};   // agent_id -> last API calls (newest-first)
+let _pulseByAgent: Record<string, Pulse[]> = {};   // agent_id -> mini-strip marks (newest-first)
+let _curExp: Record<string, string | null> = {};   // agent_id -> running experiment label
 let _seq = 0;
 let _started = false;
 let _pollTimer: ReturnType<typeof setInterval> | null = null;
 
 function touch(agentId: string | null | undefined): void {
   if (agentId) _lastActive[agentId] = Date.now();
+}
+
+function pulse(agentId: string | null | undefined, kind: Pulse["kind"]): void {
+  if (!agentId) return;
+  _pulseByAgent[agentId] = [{ kind, ts: Date.now() }, ...(_pulseByAgent[agentId] ?? [])].slice(0, PULSE_KEEP);
+}
+
+function agentForIdea(ideaId: unknown): string | null {
+  return typeof ideaId === "number" ? _ideaToAgent[ideaId] ?? null : null;
 }
 
 function excerpt(s: unknown, n = 52): string {
@@ -96,24 +117,25 @@ function normalize(ev: Record<string, unknown>): ActivityEvent | null {
   const byIdea = ideaId != null ? _ideaToAgent[ideaId] ?? null : null;
   const base = { key: nextKey(), ts: Date.now(), ideaId };
 
+  const expLabel = String(ev.label ?? ev.experiment_id ?? "") || undefined;
   switch (type) {
     case "experiment_started":
       return { ...base, agentId: byIdea, kind: "running", glyph: "▶", tone: "accent",
-        text: `started exp/${ev.label ?? ev.experiment_id ?? "?"}` };
+        expLabel, text: `started exp/${expLabel ?? "?"}` };
     case "experiment_finished": {
       const status = String(ev.status ?? "");
       const ok = status === "completed";
       const msg = ev.status_msg ? ` — ${excerpt(ev.status_msg, 40)}` : "";
       return { ...base, agentId: byIdea, kind: ok ? "done" : "failed",
         glyph: ok ? "✓" : "✗", tone: ok ? "good" : "bad",
-        text: `exp/${ev.label ?? ev.experiment_id ?? "?"} ${status || "finished"}${msg}` };
+        expLabel, text: `exp/${expLabel ?? "?"} ${status || "finished"}${msg}` };
     }
     case "experiment_cancelled":
       return { ...base, agentId: byIdea, kind: "cancelled", glyph: "✗", tone: "warn",
-        text: `cancelled exp/${ev.label ?? ev.experiment_id ?? "?"}` };
+        expLabel, text: `cancelled exp/${expLabel ?? "?"}` };
     case "experiment_queued":
       return { ...base, agentId: byIdea, kind: "queued", glyph: "◽", tone: "neutral",
-        text: `queued exp/${ev.label ?? ev.experiment_id ?? "?"}` };
+        expLabel, text: `queued exp/${expLabel ?? "?"}` };
     case "message_received":
     case "message": {
       const from = (ev.from_agent as string) || (ev.from_role as string) || null;
@@ -143,8 +165,10 @@ function mkState(id: string): AgentState {
     live: entry?.pid != null,
     active: false,
     current: null,
+    currentExp: _curExp[id] ?? null,
     recent: [],
     apiCalls: _apiByAgent[id] ?? [],
+    pulses: _pulseByAgent[id] ?? [],
     lastActiveTs: _lastActive[id] ?? 0,
   };
 }
@@ -162,6 +186,10 @@ function rebuildAgentStates(events: ActivityEvent[]): void {
     if (st.recent.length < PER_AGENT_MAX) st.recent.push(e);
     if (!st.current) st.current = e;                 // first (newest) = current action
   }
+  for (const st of Object.values(next)) {
+    st.currentExp = _curExp[st.agentId] ?? null;
+    st.pulses = _pulseByAgent[st.agentId] ?? [];
+  }
   // Recency-based "active": trust observed activity, not the registry pid.
   for (const st of Object.values(next)) {
     st.lastActiveTs = _lastActive[st.agentId] ?? 0;
@@ -170,8 +198,22 @@ function rebuildAgentStates(events: ActivityEvent[]): void {
   agentStates.value = next;
 }
 
+const EXP_KINDS = new Set(["running", "done", "failed", "queued", "cancelled"]);
+
 function pushEvent(e: ActivityEvent): void {
   touch(e.agentId);
+  // Feed the mini real-time strip + track the running experiment.
+  if (e.agentId) {
+    if (e.kind === "message") pulse(e.agentId, "msg");
+    else if (EXP_KINDS.has(e.kind)) {
+      pulse(e.agentId, "exp");
+      if (e.kind === "running" && e.expLabel) _curExp[e.agentId] = e.expLabel;
+      else if ((e.kind === "done" || e.kind === "failed" || e.kind === "cancelled")
+        && (!e.expLabel || _curExp[e.agentId] === e.expLabel)) {
+        _curExp[e.agentId] = null;
+      }
+    }
+  }
   const feed = [e, ...activityFeed.value].slice(0, FEED_MAX);
   activityFeed.value = feed;
   rebuildAgentStates(feed);
@@ -214,6 +256,7 @@ export function startAgentActivity(): void {
           ts: Date.now(),
         };
         _apiByAgent[aid] = [call, ...(_apiByAgent[aid] ?? [])].slice(0, API_KEEP);
+        pulse(aid, "api");
         touch(aid);
         rebuildAgentStates(activityFeed.value);
       }
@@ -225,7 +268,7 @@ export function startAgentActivity(): void {
     // Touch-only events (progress/log heartbeats) keep a running agent "active"
     // without adding feed noise.
     if (TOUCH_TYPES.has(type)) {
-      const idea = typeof ev.idea_id === "number" ? _ideaToAgent[ev.idea_id as number] : null;
+      const idea = agentForIdea(ev.idea_id);
       if (idea) { touch(idea); rebuildAgentStates(activityFeed.value); }
     }
   });

@@ -101,6 +101,22 @@
 .aa-tone-warn   .aa-glyph { color: var(--yellow); }
 .aa-tone-accent .aa-glyph { color: var(--accent); }
 
+// ── minified real-time strip (compact sidebar) ──────────────────────────────
+// ticks oldest→newest; msg = accent, api = muted, exp = green. Conveys "this
+// agent is calling the API / messaging" without any text.
+.aa-pulsestrip {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 9px;
+  padding-left: var(--space-2);
+  margin-top: 1px;
+}
+.aa-tick { width: 3px; height: 5px; border-radius: 1px; background: var(--text-faint); }
+.aa-tick-api { height: 5px; background: var(--text-muted); }
+.aa-tick-msg { height: 9px; background: var(--accent); }   // messages stand out
+.aa-tick-exp { height: 7px; background: var(--green); }
+
 // ── compact (Overview sidebar) — same language, tighter ─────────────────────
 .aa-tree.aa-compact { gap: var(--space-1); }
 .aa-tree.aa-compact .aa-head { font-size: var(--text-xs); }

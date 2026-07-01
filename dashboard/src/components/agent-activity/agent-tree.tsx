@@ -6,9 +6,29 @@
  * Data comes from the live agent-activity store; no props required beyond the
  * display options.
  */
-import { agentStates, type AgentState } from "../../state/agent-activity";
+import { agentStates, type AgentState, type Pulse } from "../../state/agent-activity";
 import { agentColor } from "../../lib/colors";
 import { navigateToIdea } from "../../lib/navigate";
+
+// Minified real-time strip: one tick per recent api/msg/exp mark, oldest→newest
+// (left→right), fading with age. Makes API traffic + inter-agent messages
+// visible at a glance without text.
+function MiniPulse({ pulses }: { pulses: Pulse[] }) {
+  if (pulses.length === 0) return null;
+  const now = Date.now();
+  const marks = pulses.slice(0, 16).reverse();
+  return (
+    <div class="aa-pulsestrip" aria-hidden="true">
+      {marks.map((p, i) => (
+        <span
+          key={`${p.ts}-${i}`}
+          class={`aa-tick aa-tick-${p.kind}`}
+          style={{ opacity: Math.max(0.25, 1 - (now - p.ts) / 120_000) }}
+        />
+      ))}
+    </div>
+  );
+}
 
 function ago(ts: number): string {
   if (!ts) return "";
@@ -60,8 +80,14 @@ export function AgentTree({ compact = false, activeOnly = false, maxNested = com
         const color = agentColor(st.agentId);
         const h = head(st);
         const active = h.kind !== "idle";
-        // Prefer the last labapi/MCP endpoints (what the agent is calling); fall
-        // back to the semantic event trail when no API calls have been seen.
+        // Head prefers the assigned/running experiment (persists past other
+        // events); otherwise the current action.
+        const showExp = active && st.currentExp;
+        const glyph = showExp ? "▶" : h.glyph;
+        const text = showExp ? `exp/${st.currentExp}` : h.text;
+        const tone = showExp ? "accent" : (active ? (st.current?.tone ?? "accent") : "neutral");
+        // Compact (sidebar): a minified real-time strip. Full: the last labapi/
+        // MCP endpoints (falling back to the event trail before any are seen).
         const apis = st.apiCalls.slice(0, maxNested);
         const events = apis.length === 0 ? st.recent.slice(0, maxNested) : [];
         return (
@@ -79,11 +105,13 @@ export function AgentTree({ compact = false, activeOnly = false, maxNested = com
               <span class="aa-id" style={{ color }}>{st.agentId}</span>
               <span class="aa-role">{st.role}</span>
               {st.listening && <span class="aa-listen" title="listening (the-lab messages)" />}
-              <span class={`aa-glyph aa-tone-${active ? (st.current?.tone ?? "accent") : "neutral"}`}>{h.glyph}</span>
-              <span class="aa-head-text">{h.text}</span>
+              <span class={`aa-glyph aa-tone-${tone}`}>{glyph}</span>
+              <span class="aa-head-text">{text}</span>
               {st.lastActiveTs > 0 && <span class="aa-age">{ago(st.lastActiveTs)}</span>}
             </div>
-            {(apis.length > 0 || events.length > 0) && (
+            {compact ? (
+              <MiniPulse pulses={st.pulses} />
+            ) : (apis.length > 0 || events.length > 0) && (
               <div class="aa-subs">
                 {apis.map((c, i) => (
                   <Line key={`api${i}`} glyph="⟳" tone="neutral"
