@@ -31,6 +31,13 @@ export interface ActivityEvent {
   ideaId?: number;
 }
 
+export interface ApiCall {
+  method: string;
+  path: string;    // /api/v1 prefix stripped
+  status?: number;
+  ts: number;
+}
+
 export interface AgentState {
   agentId: string;
   role: string;
@@ -40,11 +47,13 @@ export interface AgentState {
   active: boolean;          // seen activity within ACTIVE_WINDOW_MS, or listening
   current: ActivityEvent | null;   // latest meaningful action
   recent: ActivityEvent[];  // newest-first, capped
+  apiCalls: ApiCall[];      // last few labapi/MCP endpoints, newest-first
   lastActiveTs: number;     // epoch ms of most recent activity (0 = none seen)
 }
 
 const FEED_MAX = 120;
 const PER_AGENT_MAX = 8;
+const API_KEEP = 3;   // last N labapi/MCP endpoints shown per agent
 // "Active" = we've seen activity from the agent this recently. Purely
 // client-side (doesn't trust registry pid/pruning), so quiet/old agents drop
 // off both the sidebar and the feed on their own.
@@ -62,6 +71,7 @@ export const agentStates = signal<Record<string, AgentState>>({});
 let _ideaToAgent: Record<number, string> = {};   // idea_id -> agent_id (live)
 let _agentMeta: Record<string, AgentEntry> = {};  // agent_id -> entry
 let _lastActive: Record<string, number> = {};     // agent_id -> epoch ms of last activity
+let _apiByAgent: Record<string, ApiCall[]> = {};   // agent_id -> last API calls (newest-first)
 let _seq = 0;
 let _started = false;
 let _pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -118,11 +128,8 @@ function normalize(ev: Record<string, unknown>): ActivityEvent | null {
     case "idea_changed":
       return { ...base, agentId: byIdea, kind: "idea", glyph: "◆", tone: "neutral",
         text: `idea/${ideaId ?? "?"} ${ev.change ?? "updated"}` };
-    case "agent_api_call":
-      return { ...base, agentId: (ev.agent_id as string) ?? null, kind: "api", glyph: "⟳", tone: "neutral",
-        text: `${ev.method ?? "GET"} ${excerpt(ev.path, 46)}` };
     default:
-      return null;   // queue_changed / ping / notifications / init: not feed-worthy
+      return null;   // api_call (per-agent, below), queue_changed, ping, init: not feed lines
   }
 }
 
@@ -137,6 +144,7 @@ function mkState(id: string): AgentState {
     active: false,
     current: null,
     recent: [],
+    apiCalls: _apiByAgent[id] ?? [],
     lastActiveTs: _lastActive[id] ?? 0,
   };
 }
@@ -144,15 +152,15 @@ function mkState(id: string): AgentState {
 function rebuildAgentStates(events: ActivityEvent[]): void {
   const now = Date.now();
   const next: Record<string, AgentState> = {};
-  // Seed from the registered roster (so a listening/just-started agent shows
-  // even before its first feed event).
+  // Only REAL registered agents get a state — attribute events to them by their
+  // agent id. This drops phantom role-keyed entries (a pre-enrichment message
+  // event that only carried from_role) so we always show the real agent id.
   for (const id of Object.keys(_agentMeta)) next[id] = mkState(id);
-  // Fold events (already newest-first) into their agent's trail.
   for (const e of events) {
-    if (!e.agentId) continue;
-    const st = next[e.agentId] ??= mkState(e.agentId);
+    if (!e.agentId || !next[e.agentId]) continue;   // ignore non-agent / unknown
+    const st = next[e.agentId];
     if (st.recent.length < PER_AGENT_MAX) st.recent.push(e);
-    if (!st.current) st.current = e;          // first (newest) = current action
+    if (!st.current) st.current = e;                 // first (newest) = current action
   }
   // Recency-based "active": trust observed activity, not the registry pid.
   for (const st of Object.values(next)) {
@@ -192,11 +200,31 @@ export function startAgentActivity(): void {
   _started = true;
   subscribeWsEvents((raw) => {
     const ev = raw as Record<string, unknown>;
+    const type = String(ev.type);
+
+    // Per-agent API/MCP endpoint trail (last N). Not a feed line — shown nested
+    // under the agent in the tree.
+    if (type === "agent_api_call") {
+      const aid = ev.agent_id as string | undefined;
+      if (aid) {
+        const call: ApiCall = {
+          method: String(ev.method ?? "GET"),
+          path: String(ev.path ?? "").replace(/^\/api\/v1/, "") || "/",
+          status: typeof ev.status === "number" ? (ev.status as number) : undefined,
+          ts: Date.now(),
+        };
+        _apiByAgent[aid] = [call, ...(_apiByAgent[aid] ?? [])].slice(0, API_KEEP);
+        touch(aid);
+        rebuildAgentStates(activityFeed.value);
+      }
+      return;
+    }
+
     const norm = normalize(ev);
     if (norm) { pushEvent(norm); return; }
     // Touch-only events (progress/log heartbeats) keep a running agent "active"
     // without adding feed noise.
-    if (TOUCH_TYPES.has(String(ev.type))) {
+    if (TOUCH_TYPES.has(type)) {
       const idea = typeof ev.idea_id === "number" ? _ideaToAgent[ev.idea_id as number] : null;
       if (idea) { touch(idea); rebuildAgentStates(activityFeed.value); }
     }

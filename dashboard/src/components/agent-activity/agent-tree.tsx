@@ -6,7 +6,7 @@
  * Data comes from the live agent-activity store; no props required beyond the
  * display options.
  */
-import { agentStates, type AgentState, type ActivityEvent } from "../../state/agent-activity";
+import { agentStates, type AgentState } from "../../state/agent-activity";
 import { agentColor } from "../../lib/colors";
 import { navigateToIdea } from "../../lib/navigate";
 
@@ -30,17 +30,17 @@ function head(st: AgentState): { glyph: string; kind: string; text: string } {
   return { glyph: "○", kind: "idle", text: "idle" };
 }
 
-function Line({ e }: { e: ActivityEvent }) {
+function Line({ glyph, text, tone }: { glyph: string; text: string; tone?: string }) {
   return (
-    <div class={`aa-sub aa-tone-${e.tone ?? "neutral"}`}>
+    <div class={`aa-sub aa-tone-${tone ?? "neutral"}`}>
       <span class="aa-branch">⎿</span>
-      <span class="aa-glyph">{e.glyph}</span>
-      <span class="aa-sub-text">{e.text}</span>
+      <span class="aa-glyph">{glyph}</span>
+      <span class="aa-sub-text">{text}</span>
     </div>
   );
 }
 
-export function AgentTree({ compact = false, activeOnly = false, maxNested = compact ? 2 : 5 }: {
+export function AgentTree({ compact = false, activeOnly = false, maxNested = compact ? 3 : 5 }: {
   compact?: boolean;
   activeOnly?: boolean;
   maxNested?: number;
@@ -60,7 +60,10 @@ export function AgentTree({ compact = false, activeOnly = false, maxNested = com
         const color = agentColor(st.agentId);
         const h = head(st);
         const active = h.kind !== "idle";
-        const nested = st.recent.slice(0, maxNested);
+        // Prefer the last labapi/MCP endpoints (what the agent is calling); fall
+        // back to the semantic event trail when no API calls have been seen.
+        const apis = st.apiCalls.slice(0, maxNested);
+        const events = apis.length === 0 ? st.recent.slice(0, maxNested) : [];
         return (
           <div class="aa-agent" key={st.agentId}>
             <div
@@ -80,9 +83,13 @@ export function AgentTree({ compact = false, activeOnly = false, maxNested = com
               <span class="aa-head-text">{h.text}</span>
               {st.lastActiveTs > 0 && <span class="aa-age">{ago(st.lastActiveTs)}</span>}
             </div>
-            {nested.length > 0 && (
+            {(apis.length > 0 || events.length > 0) && (
               <div class="aa-subs">
-                {nested.map((e) => <Line key={e.key} e={e} />)}
+                {apis.map((c, i) => (
+                  <Line key={`api${i}`} glyph="⟳" tone="neutral"
+                    text={`${c.method} ${c.path}`} />
+                ))}
+                {events.map((e) => <Line key={e.key} glyph={e.glyph} tone={e.tone} text={e.text} />)}
               </div>
             )}
           </div>
