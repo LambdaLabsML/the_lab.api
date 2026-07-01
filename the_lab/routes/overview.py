@@ -24,6 +24,27 @@ from ..git_ops import get_current_branch
 router = APIRouter(prefix="/api/v1")
 
 
+# key_insights are returned as short EXCERPTS to keep the leaderboard/digest
+# cheap on tokens. The previous _description_short cut mid-word; this cuts on a
+# word boundary and, when clipped, points at the dedicated notes endpoint for
+# the full text instead of inlining the whole (potentially huge) note.
+_INSIGHT_EXCERPT_CHARS = 200
+
+
+def _insight_excerpt(text: str | None, idea_id: int) -> dict:
+    full = (text or "").strip()
+    if len(full) <= _INSIGHT_EXCERPT_CHARS:
+        return {"text": full}
+    head = full[:_INSIGHT_EXCERPT_CHARS]
+    cut = head.rfind(" ")
+    excerpt = (head[:cut] if cut > 0 else head).rstrip() + "…"
+    return {
+        "text": excerpt,
+        "truncated": True,
+        "full_text_via": f"GET /api/v1/ideas/{idea_id}/notes",
+    }
+
+
 # --- Leaderboard helper (used only by leaderboard + digest) ---
 
 def _build_leaderboard_response(
@@ -157,7 +178,7 @@ def _build_leaderboard_response(
         best_exp = by_value[0]
         idea = idea_by_id.get(best_exp["idea_id"])
         if idea:
-            insights = [_description_short(n["text"], limit=200) for n in store.get_notes(idea["id"], levels={"insight"})]
+            insights = [_insight_excerpt(n["text"], idea["id"]) for n in store.get_notes(idea["id"], levels={"insight"})]
             best_idea = {
                 "id": idea["id"],
                 "description": _description_short(idea["description"]),
@@ -198,7 +219,7 @@ def _build_leaderboard_response(
     for idea in all_ideas:
         for note in store.get_notes(idea["id"], levels={"insight"}):
             key_insights.append({
-                "text": _description_short(note["text"], limit=200),
+                **_insight_excerpt(note["text"], idea["id"]),
                 "idea_id": idea["id"],
                 "created_at": note.get("created_at"),
             })
