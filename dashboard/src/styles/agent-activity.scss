@@ -30,7 +30,10 @@
   min-width: 0;
   padding: 2px 0;
   border-radius: var(--radius-sm);
+  font-weight: 600;                 // the per-agent headline reads bold…
 }
+.aa-head .aa-age,
+.aa-head .aa-chev { font-weight: 400; }   // …but its meta stays light
 .aa-head[role="button"],
 .aa-feed-head[role="button"] { cursor: pointer; }
 .aa-head[role="button"]:hover,
