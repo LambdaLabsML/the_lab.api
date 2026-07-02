@@ -180,7 +180,7 @@ export function StatsView() {
       {hours != null && (
         <div class="stats-period-note">
           {(stats as { period_hours?: number | null }).period_hours != null
-            ? <>call counts use hourly buckets (recorded going forward) · patterns &amp; response sizes are all-time</>
+            ? <>call counts &amp; response sizes use hourly buckets (recorded going forward) · patterns are all-time</>
             : <>⚠ the running server predates period filtering — call counts shown are all-time (costs are period-filtered)</>}
         </div>
       )}

@@ -125,7 +125,7 @@ export function MessagePreviewOverlay() {
             <Row label="shape">{`{ ${call.respKeys.join(", ")} }`}</Row>
           )}
           {call.durationMs == null && call.respBytes == null && (
-            <Row label="detail">not recorded (server predates the ticker upgrade)</Row>
+            <Row label="detail">{call.status == null ? "in flight…" : "not recorded (pre-upgrade event)"}</Row>
           )}
         </div>
       </FloatCard>

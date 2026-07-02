@@ -69,6 +69,8 @@ class ApiStats:
         # Hourly per-endpoint buckets ("2026-07-02T14" -> {key: count}) so the
         # dashboard can filter statistics to a time period. Pruned to ~14 days.
         self._hourly: dict[str, dict[str, int]] = {}
+        # Same idea for response sizes: bucket -> {key: [total_b, count, max_b]}.
+        self._resp_hourly: dict[str, dict[str, list]] = {}
         self._last_flush = time.monotonic()
         self._dirty = False
         self._load()
@@ -88,8 +90,21 @@ class ApiStats:
                 self._resp_bytes_max   = defaultdict(int, data.get("resp_bytes_max", {}))
                 self._hourly = {k: dict(v) for k, v in data.get("hourly", {}).items()
                                 if isinstance(v, dict)}
+                self._resp_hourly = {k: dict(v) for k, v in data.get("resp_hourly", {}).items()
+                                     if isinstance(v, dict)}
             except (json.JSONDecodeError, OSError):
                 pass
+
+    @staticmethod
+    def _hour_bucket() -> str:
+        import datetime as _dt
+        return _dt.datetime.now(_dt.timezone.utc).isoformat()[:13]
+
+    @staticmethod
+    def _prune_buckets(buckets: dict, keep: int = 14 * 24) -> None:
+        if len(buckets) > keep + 2:
+            for old in sorted(buckets)[: len(buckets) - keep]:
+                del buckets[old]
 
     def record_response_size(self, method: str, path: str, size_bytes: int) -> None:
         """Track response size for an endpoint (call after the full response is built)."""
@@ -99,6 +114,14 @@ class ApiStats:
             self._resp_bytes_count[key] += 1
             if size_bytes > self._resp_bytes_max[key]:
                 self._resp_bytes_max[key] = size_bytes
+            # Hourly bucket for period filtering: [total_b, count, max_b].
+            hb = self._resp_hourly.setdefault(self._hour_bucket(), {})
+            cell = hb.setdefault(key, [0, 0, 0])
+            cell[0] += size_bytes
+            cell[1] += 1
+            if size_bytes > cell[2]:
+                cell[2] = size_bytes
+            self._prune_buckets(self._resp_hourly)
             self._dirty = True
 
     def flush(self):
@@ -113,6 +136,7 @@ class ApiStats:
             data["resp_bytes_count"] = dict(self._resp_bytes_count)
             data["resp_bytes_max"]   = dict(self._resp_bytes_max)
             data["hourly"] = {k: dict(v) for k, v in self._hourly.items()}
+            data["resp_hourly"] = {k: dict(v) for k, v in self._resp_hourly.items()}
             self._dirty = False
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
@@ -140,9 +164,7 @@ class ApiStats:
             bucket = entry["t"][:13]
             hb = self._hourly.setdefault(bucket, {})
             hb[key] = hb.get(key, 0) + 1
-            if len(self._hourly) > 14 * 24 + 2:
-                for old in sorted(self._hourly)[: len(self._hourly) - 14 * 24]:
-                    del self._hourly[old]
+            self._prune_buckets(self._hourly)
             # Maintain sliding window per client
             if client_ip not in self._history:
                 self._history[client_ip] = deque(maxlen=MAX_NGRAM)
@@ -166,10 +188,10 @@ class ApiStats:
     def get_stats(self, pattern_length: int = 2, since_hours: float | None = None) -> dict:
         """Return current stats for the API response.
 
-        ``since_hours`` filters the per-endpoint call counts to the last N hours
-        using the hourly buckets (available since the buckets were introduced —
-        older traffic only exists in the all-time aggregates). Patterns and
-        response sizes remain all-time; the response flags that.
+        ``since_hours`` filters the per-endpoint call counts AND the response
+        sizes to the last N hours using the hourly buckets (data exists from
+        the moment bucketing was deployed — older traffic only lives in the
+        all-time aggregates). Patterns remain all-time; the response flags that.
         """
         n = max(2, min(pattern_length, MAX_NGRAM))
         with self._lock:
@@ -182,12 +204,23 @@ class ApiStats:
                     if bucket >= cutoff:
                         for k, v in per_key.items():
                             calls[k] = calls.get(k, 0) + v
+                # Response sizes from the same window.
+                rb_total: dict[str, int] = {}
+                rb_count: dict[str, int] = {}
+                rb_max: dict[str, int] = {}
+                for bucket, per_key in self._resp_hourly.items():
+                    if bucket >= cutoff:
+                        for k, cell in per_key.items():
+                            rb_total[k] = rb_total.get(k, 0) + cell[0]
+                            rb_count[k] = rb_count.get(k, 0) + cell[1]
+                            if cell[2] > rb_max.get(k, 0):
+                                rb_max[k] = cell[2]
             else:
                 calls = dict(self._calls)
+                rb_total = dict(self._resp_bytes_total)
+                rb_count = dict(self._resp_bytes_count)
+                rb_max = dict(self._resp_bytes_max)
             patterns = dict(self._patterns.get(n, {}))
-            rb_total = dict(self._resp_bytes_total)
-            rb_count = dict(self._resp_bytes_count)
-            rb_max   = dict(self._resp_bytes_max)
         sorted_calls = sorted(calls.items(), key=lambda x: x[1], reverse=True)
         sorted_patterns = sorted(patterns.items(), key=lambda x: x[1], reverse=True)
         total = sum(calls.values())
@@ -216,7 +249,8 @@ class ApiStats:
             "mcp_calls": mcp_calls,
             "curl_calls": total - mcp_calls,
             "period_hours": since_hours,
-            # patterns + response sizes are all-time aggregates (not bucketed)
+            # patterns are all-time aggregates (not bucketed); call counts and
+            # response sizes honor since_hours via the hourly buckets.
             "patterns_scope": "all-time",
         }
         return result
