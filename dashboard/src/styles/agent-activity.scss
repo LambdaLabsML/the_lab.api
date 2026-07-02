@@ -318,13 +318,11 @@
   .aa-thinking-dots { animation: none; }
 }
 
-// ── message hover-preview (floats over the main area) ───────────────────────
-// Shown while a sidebar message row is hovered; fades in, disappears on leave.
-.msg-preview {
+// ── FloatCard (components/ui/float-card.tsx) — the floating preview shell ───
+// Positioned by the component: right of its anchor, vertically centered,
+// viewport-clamped. Hidden until measured; fades in once placed.
+.ui-floatcard {
   position: fixed;
-  top: 15%;
-  left: 50%;
-  transform: translateX(-40%);       // biased right of the sidebar
   z-index: 60;
   width: min(480px, 44vw);
   padding: var(--space-3) var(--space-4);
@@ -332,20 +330,15 @@
   border-radius: var(--radius-lg);
   box-shadow: 0 0 0 1px var(--border-soft), 0 16px 40px rgba(0, 0, 0, 0.5);
   font-family: var(--font-mono);
-  pointer-events: none;               // hover lives on the sidebar row
-  animation: msgPreviewIn 0.18s ease-out;
+  pointer-events: none;               // hover lives on the trigger row
 }
-@keyframes msgPreviewIn {
-  from { opacity: 0; transform: translateX(-40%) translateY(4px); }
-  to   { opacity: 1; transform: translateX(-40%) translateY(0); }
+.ui-floatcard.is-in { animation: floatCardIn 0.16s ease-out; }
+@keyframes floatCardIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
-.msg-preview-head {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  font-size: var(--text-sm);
-  margin-bottom: var(--space-2);
-}
+// layout-only additions on top of the shared .msg-head / .msg-body classes
+.msg-preview-head { margin-bottom: var(--space-2); }
 .msg-preview-icon { display: inline-flex; align-items: center; color: var(--accent); }
 .msg-preview-time {
   margin-left: auto;
@@ -354,11 +347,6 @@
   font-variant-numeric: tabular-nums;
 }
 .msg-preview-body {
-  color: var(--text);
-  font-size: var(--text-sm);
-  line-height: 1.55;
-  white-space: pre-wrap;
-  word-break: break-word;
   max-height: 50vh;
   overflow: hidden;
 }
@@ -368,7 +356,7 @@
   font-size: var(--text-xs);
 }
 @media (prefers-reduced-motion: reduce) {
-  .msg-preview { animation: none; }
+  .ui-floatcard.is-in { animation: none; }
 }
 
 // in-flight long-poll (wait_for_experiment …): blink the glyph until the

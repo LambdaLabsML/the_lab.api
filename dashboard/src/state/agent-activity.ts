@@ -48,6 +48,16 @@ export interface MessagePreview {
 /** Currently hover-previewed message (null = hidden). */
 export const messagePreview = signal<MessagePreview | null>(null);
 
+/** Viewport rect of the row that opened the preview — the card renders to its
+ *  right, vertically centered, clamped to the screen. */
+export const previewAnchor = signal<{ top: number; bottom: number; right: number } | null>(null);
+
+function setAnchor(el?: Element | null): void {
+  if (!el) { previewAnchor.value = null; return; }
+  const r = el.getBoundingClientRect();
+  previewAnchor.value = { top: r.top, bottom: r.bottom, right: r.right };
+}
+
 /** Message id the Messages tool should scroll to + expand (consumed there). */
 export const focusMessageId = signal<number | null>(null);
 
@@ -56,7 +66,8 @@ export const focusMessageId = signal<number | null>(null);
 const _fullMsgCache: Record<number, { from: string | null; to: string; text: string; ts: number }> = {};
 
 /** Show the preview for a message event; fetches the full text lazily. */
-export function showMessagePreview(ev: ActivityEvent): void {
+export function showMessagePreview(ev: ActivityEvent, anchorEl?: Element | null): void {
+  setAnchor(anchorEl);
   const id = ev.msgId ?? null;
   const base: MessagePreview = {
     id,
@@ -94,6 +105,7 @@ export function showMessagePreview(ev: ActivityEvent): void {
 
 export function hideMessagePreview(): void {
   messagePreview.value = null;
+  previewAnchor.value = null;
 }
 
 export interface ApiCall {
@@ -115,11 +127,13 @@ export interface CallPreview {
 /** Currently hover-previewed lab call (null = hidden). */
 export const callPreview = signal<CallPreview | null>(null);
 
-export function showCallPreview(agentId: string, call: ApiCall): void {
+export function showCallPreview(agentId: string, call: ApiCall, anchorEl?: Element | null): void {
+  setAnchor(anchorEl);
   callPreview.value = { agentId, call };
 }
 export function hideCallPreview(): void {
   callPreview.value = null;
+  previewAnchor.value = null;
 }
 
 export interface AgentState {

@@ -5,9 +5,10 @@
  * Fades in, lives for the duration of the hover. Mounted once in the shell.
  */
 import type { ComponentChildren } from "preact";
-import { messagePreview, callPreview } from "../../state/agent-activity";
+import { messagePreview, callPreview, previewAnchor } from "../../state/agent-activity";
 import { AgentPill } from "../agent-pill";
-import { MsgIcon, ApiIcon } from "./icons";
+import { FloatCard } from "../ui";
+import { ApiIcon } from "./icons";
 import { RichText, stripRouting } from "../rich-text";
 import { fnCall } from "./fn-call";
 
@@ -38,12 +39,14 @@ export function MessagePreviewOverlay() {
   const c = callPreview.value;
   if (!m && !c) return null;
 
+  const anchor = previewAnchor.value;
+
   // Lab-call card: when / took / status / size ≈ tokens / result shape.
   if (c) {
     const call = c.call;
     return (
-      <div class="msg-preview" role="presentation">
-        <div class="msg-preview-head">
+      <FloatCard anchor={anchor}>
+        <div class="msg-head msg-preview-head">
           <AgentPill id={c.agentId} />
           <span class="msg-preview-icon msg-preview-icon--call"><ApiIcon /></span>
           <span class="msg-preview-fn">{fnCall(call)}</span>
@@ -64,23 +67,25 @@ export function MessagePreviewOverlay() {
             <Row label="detail">not recorded (server predates the ticker upgrade)</Row>
           )}
         </div>
-      </div>
+      </FloatCard>
     );
   }
 
   const p = m!;
+  // Consolidated with the Messages tab: same classes (msg-head/arrow/time/body)
+  // + the shared AgentPill/RichText, so the card renders identically.
   return (
-    <div class="msg-preview" role="presentation">
-      <div class="msg-preview-head">
+    <FloatCard anchor={anchor}>
+      <div class="msg-head msg-preview-head">
         {p.from && <AgentPill id={p.from} />}
-        <span class="msg-preview-icon"><MsgIcon /></span>
+        <span class="msg-arrow">→</span>
         <AgentPill id={p.to} />
-        <span class="msg-preview-time">{clock(p.ts)}</span>
+        <span class="msg-time">{clock(p.ts)}</span>
       </div>
-      <div class="msg-preview-body">{p.body ? <RichText text={stripRouting(p.body)} /> : "…"}</div>
+      <div class="msg-body msg-preview-body">{p.body ? <RichText text={stripRouting(p.body)} /> : "…"}</div>
       <div class="msg-preview-hint">
         {p.full ? "click to open in Messages" : "loading full text…"}
       </div>
-    </div>
+    </FloatCard>
   );
 }

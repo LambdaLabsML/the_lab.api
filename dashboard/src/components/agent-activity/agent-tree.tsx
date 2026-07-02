@@ -77,9 +77,9 @@ function Line({ glyph, text, tone, age, onClick, pending, to, api, latest, fresh
   hoverCall?: { agentId: string; call: ApiCall };
 }) {
   const enter = hoverEv
-    ? () => showMessagePreview(hoverEv)
+    ? (e: MouseEvent) => showMessagePreview(hoverEv, e.currentTarget as Element)
     : hoverCall
-      ? () => showCallPreview(hoverCall.agentId, hoverCall.call)
+      ? (e: MouseEvent) => showCallPreview(hoverCall.agentId, hoverCall.call, e.currentTarget as Element)
       : undefined;
   const leave = hoverEv ? hideMessagePreview : hoverCall ? hideCallPreview : undefined;
   return (

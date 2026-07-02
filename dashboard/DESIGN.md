@@ -79,6 +79,9 @@ never read as failed/running/done by accident.
   `--bg-hi` on hover, `--accent` when active. No borders unless `outlined`.
 - **`<Separator>`** — a hairline (horizontal or vertical).
 - **`<EmptyState icon title body>`** — the one empty/zero-data treatment.
+- **`<FloatCard anchor>`** — the floating hover-preview shell: fixed, right of its
+  anchor rect and vertically centered, viewport-clamped, fade-in, non-interactive.
+  Compose card content inside (message preview, lab-call card, …).
 
 Equivalent CSS classes exist in `styles/_ui.scss` (`.ui-panel`, `.ui-eyebrow`,
 `.ui-stat`, `.ui-badge`, `.ui-btn`, `.ui-toggle`, `.ui-sep`, `.ui-empty`,
