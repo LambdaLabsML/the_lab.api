@@ -87,23 +87,21 @@ function apiFocus(c: ApiCall): { ideaId: number; expLabel?: string } | null {
   return null;
 }
 
-// `st.active` (recency-based) comes from the store. An active agent keeps
-// showing its current/last action (or its idea) rather than flipping to idle.
-// Messages are excluded here — they have their own sublist, and repeating the
-// last message in the head just duplicated the line below it.
-function head(st: AgentState): { glyph: string; kind: string; text: string } {
-  const cur = st.current?.kind === "message"
-    ? st.recent.find((e) => e.kind !== "message") ?? null
-    : st.current;
-  if (cur && st.active) {
-    return { glyph: cur.glyph, kind: cur.kind, text: cur.text };
+// Head state from recency (the store's `active` + lastActiveTs). Event texts
+// are NOT repeated here — they live in the detail rows below; the head answers
+// "what is it doing right now": running exp (caller) > thinking > on idea > idle.
+const THINKING_MS = 30_000;
+
+function head(st: AgentState): { kind: "thinking" | "active" | "idle"; text: string } {
+  if (st.active && st.lastActiveTs > 0 && Date.now() - st.lastActiveTs < THINKING_MS) {
+    // Something just happened (call/event/heartbeat) — the agent is working
+    // between tool calls right now.
+    return { kind: "thinking", text: "thinking" };
   }
   if (st.active) {
-    // No glyph — the state dot already says "working"; a second dot after the
-    // id read as clutter.
-    return { glyph: "", kind: "active", text: st.ideaId != null ? `on idea/${st.ideaId}` : "working" };
+    return { kind: "active", text: st.ideaId != null ? `on idea/${st.ideaId}` : "working" };
   }
-  return { glyph: "○", kind: "idle", text: "idle" };
+  return { kind: "idle", text: "idle" };
 }
 
 /** Mini agent pill — the top-bar badge language, smaller. "@all" broadcasts in
@@ -208,11 +206,8 @@ export function AgentTree({ compact = false, activeOnly = false, historyLimit = 
         const h = head(st);
         const active = h.kind !== "idle";
         // Head prefers the assigned/running experiment (persists past other
-        // events); otherwise the current action.
+        // events); then thinking… / on idea/N / idle.
         const showExp = active && st.currentExp;
-        const glyph = showExp ? "▶" : h.glyph;
-        const text = showExp ? `exp/${st.currentExp}` : h.text;
-        const tone = showExp ? "accent" : (active ? (st.current?.tone ?? "accent") : "neutral");
         // Detail rows: lab calls + events merged and sorted by recency (newest
         // first), so messaging and labapi activity intertwine chronologically.
         const rows: DetailRow[] = [
@@ -270,20 +265,28 @@ export function AgentTree({ compact = false, activeOnly = false, historyLimit = 
               />
               <AgentPill id={st.agentId} at={false} />
               <span class="aa-role">{st.role}</span>
-              {glyph && <span class={`aa-glyph aa-tone-${tone}`}>{glyph}</span>}
               {showExp ? (
                 // Shared experiment link: canonical styling + hover card +
                 // click-through to Overview (see components/exp-link.tsx).
-                <ExpLink label={st.currentExp!} ideaId={st.ideaId} class="aa-head-text" />
+                <>
+                  <span class="aa-glyph aa-tone-accent">▶</span>
+                  <ExpLink label={st.currentExp!} ideaId={st.ideaId} class="aa-head-text" />
+                </>
+              ) : h.kind === "thinking" ? (
+                // Fresh activity — the agent is working between tool calls.
+                <span class="aa-head-text aa-thinking">thinking<span class="aa-thinking-dots">…</span></span>
               ) : (
-                <span
-                  class={`aa-head-text${st.ideaId != null ? " is-link" : ""}`}
-                  onClick={st.ideaId != null
-                    ? (e) => { e.stopPropagation(); goOverview(st.ideaId!); }
-                    : undefined}
-                >
-                  {text}
-                </span>
+                <>
+                  {h.kind === "idle" && <span class="aa-glyph">○</span>}
+                  <span
+                    class={`aa-head-text${st.ideaId != null ? " is-link" : ""}`}
+                    onClick={st.ideaId != null
+                      ? (e) => { e.stopPropagation(); goOverview(st.ideaId!); }
+                      : undefined}
+                  >
+                    {h.text}
+                  </span>
+                </>
               )}
               {st.lastActiveTs > 0 && <span class="aa-age">{ago(st.lastActiveTs)}</span>}
               <span class="aa-chev" aria-hidden="true">{open ? "▾" : "▸"}</span>

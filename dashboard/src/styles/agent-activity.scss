@@ -140,12 +140,12 @@
 // dot + progress bar. Hovering a segment wakes its colors. The pills carry
 // inline identity colors, hence the contained !important overrides.
 .activity-sidebar-agents:not(:hover) {
-  // Inverted pills at rest: filled with the muted TEXT tone, label in the BG
-  // tone — token-driven, so it flips automatically with the theme.
+  // Pills at rest: normal (non-inverted) — regular text tone on the dark
+  // ground, soft outline; identity color arrives on hover.
   .aa-msg-pill {
-    color: var(--bg-elev) !important;
-    background: var(--text-muted) !important;
-    border-color: transparent !important;
+    color: var(--text) !important;
+    background: transparent !important;
+    border-color: var(--border-soft) !important;
   }
   .exp-link { color: var(--text-muted); }
   .aa-glyph { color: var(--text-faint); }
@@ -296,14 +296,27 @@
 }
 .idea-link:hover { color: var(--text); text-decoration: underline; }
 
-// shortlog Recent row columns: exp link fills, score right-aligned before time
+// shortlog Recent row columns: exp link fills, score is a LEFT-aligned purple
+// column (same style as the experiment tables' best scores), time flush right
 .shortlog-exp { flex: 1 1 auto; }
 .shortlog-score {
   flex-shrink: 0;
+  min-width: 3.6em;
+  text-align: left;
   font-family: var(--font-mono);
   font-size: var(--text-xs);
-  color: var(--text-muted);
+  color: var(--purple);            // = .tl-score--best
+  font-weight: 700;
   font-variant-numeric: tabular-nums;
+}
+.shortlog-row .shortlog-time { margin-left: 0; }   // score column does the spacing
+
+// "thinking…" — fresh activity: the agent is working between tool calls.
+// Yellow (the live color); the dots blink. Survives the quiet state.
+.aa-thinking { color: var(--yellow) !important; }
+.aa-thinking-dots { animation: ui-blink 1.4s steps(2, start) infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .aa-thinking-dots { animation: none; }
 }
 
 // in-flight long-poll (wait_for_experiment …): blink the glyph until the
