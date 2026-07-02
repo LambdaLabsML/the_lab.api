@@ -7,6 +7,7 @@ clients replay missed events via ?since=N.
 from __future__ import annotations
 
 import asyncio
+import time
 from collections import deque
 from typing import Iterator
 
@@ -45,7 +46,9 @@ class Broadcaster:
         the oldest item is dropped before enqueuing the new one.
         """
         self._seq += 1
-        event = {**event, "seq": self._seq}
+        # Stamp the REAL event time: reconnecting clients replay the ring
+        # buffer in one burst, so arrival time is meaningless for ages.
+        event = {**event, "seq": self._seq, "ts": time.time()}
         self._ring.append(event)
         # Cache the loop reference the first time broadcast() is called
         # from inside the loop (so broadcast_soon can use it later).
