@@ -62,7 +62,7 @@ export interface AgentState {
 
 const FEED_MAX = 120;
 const PER_AGENT_MAX = 8;
-const API_KEEP = 3;   // last N labapi/MCP endpoints shown per agent
+const API_KEEP = 6;   // labapi/MCP endpoints kept per agent (tree shows fewer collapsed)
 const PULSE_KEEP = 16; // marks on the mini real-time strip
 // "Active" = we've seen activity from the agent this recently. Purely
 // client-side (doesn't trust registry pid/pruning), so quiet/old agents drop

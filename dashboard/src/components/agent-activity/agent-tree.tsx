@@ -6,6 +6,7 @@
  * Data comes from the live agent-activity store; no props required beyond the
  * display options.
  */
+import { useState } from "preact/hooks";
 import { agentStates, type AgentState, type Pulse } from "../../state/agent-activity";
 import { agentColor } from "../../lib/colors";
 import { navigateToIdea } from "../../lib/navigate";
@@ -50,12 +51,13 @@ function head(st: AgentState): { glyph: string; kind: string; text: string } {
   return { glyph: "○", kind: "idle", text: "idle" };
 }
 
-function Line({ glyph, text, tone }: { glyph: string; text: string; tone?: string }) {
+function Line({ glyph, text, tone, age }: { glyph: string; text: string; tone?: string; age?: string }) {
   return (
     <div class={`aa-sub aa-tone-${tone ?? "neutral"}`}>
       <span class="aa-branch">⎿</span>
       <span class="aa-glyph">{glyph}</span>
       <span class="aa-sub-text">{text}</span>
+      {age && <span class="aa-sub-age">{age}</span>}
     </div>
   );
 }
@@ -70,6 +72,17 @@ export function AgentTree({ compact = false, activeOnly = false, maxNested = com
   activeOnly?: boolean;
   maxNested?: number;
 }) {
+  // Per-row disclosure: expanded rows show the agent's recent history (last
+  // labapi/MCP calls + experiment/message events, with ages).
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const toggle = (id: string) =>
+    setExpanded((prev) => {
+      const n = new Set(prev);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
+      return n;
+    });
+
   let states = Object.values(agentStates.value);
   if (activeOnly) {
     const now = Date.now();
@@ -108,26 +121,48 @@ export function AgentTree({ compact = false, activeOnly = false, maxNested = com
           : st.recent[0]
             ? { glyph: st.recent[0].glyph, tone: st.recent[0].tone, text: st.recent[0].text }
             : null;
+        const open = expanded.has(st.agentId);
         return (
           <div class={`aa-agent${active ? "" : " aa-quiet"}`} key={st.agentId}>
-            <div
-              class="aa-head"
-              role={st.ideaId != null ? "button" : undefined}
-              onClick={st.ideaId != null ? () => navigateToIdea(st.ideaId!) : undefined}
-            >
+            {/* Row click = expand/collapse history. Clicking the action text
+                still navigates to the idea. */}
+            <div class="aa-head" role="button" onClick={() => toggle(st.agentId)}>
+              {/* Status-language state dot: yellow = active/working, faint =
+                  quiet; filled = listening on the-lab messages, hollow = not.
+                  (Identity color lives on the agent id only.) */}
               <span
-                class={`aa-dot${active ? " aa-pulse" : ""}`}
-                style={{ background: color }}
-                title={st.live ? "live" : "registered"}
+                class={`aa-dot aa-dot--state${active ? " is-active" : ""}${st.listening ? " is-listening" : ""}${st.listening && active ? " aa-pulse" : ""}`}
+                title={`${st.listening ? "listening" : "not listening"} · ${active ? "working" : "quiet"}`}
               />
               <span class="aa-id" style={{ color }}>{st.agentId}</span>
               <span class="aa-role">{st.role}</span>
-              {st.listening && <span class="aa-listen" title="listening (the-lab messages)" />}
               <span class={`aa-glyph aa-tone-${tone}`}>{glyph}</span>
-              <span class="aa-head-text">{text}</span>
+              <span
+                class={`aa-head-text${st.ideaId != null ? " is-link" : ""}`}
+                onClick={st.ideaId != null
+                  ? (e) => { e.stopPropagation(); navigateToIdea(st.ideaId!); }
+                  : undefined}
+              >
+                {text}
+              </span>
               {st.lastActiveTs > 0 && <span class="aa-age">{ago(st.lastActiveTs)}</span>}
+              <span class="aa-chev" aria-hidden="true">{open ? "▾" : "▸"}</span>
             </div>
-            {compact ? (
+            {open ? (
+              // Expanded: recent history — API/MCP calls, then events, with ages.
+              <div class="aa-subs">
+                {st.apiCalls.map((c, i) => (
+                  <Line key={`api${i}`} glyph="⟳" tone="neutral"
+                    text={`${c.method} ${c.path}`} age={ago(c.ts)} />
+                ))}
+                {st.recent.map((e) => (
+                  <Line key={e.key} glyph={e.glyph} tone={e.tone} text={e.text} age={ago(e.ts)} />
+                ))}
+                {st.apiCalls.length === 0 && st.recent.length === 0 && (
+                  <div class="aa-sub"><span class="aa-branch">⎿</span><span class="aa-sub-text">no history yet</span></div>
+                )}
+              </div>
+            ) : compact ? (
               <>
                 {lastLine && <Line glyph={lastLine.glyph} tone={lastLine.tone} text={lastLine.text} />}
                 <MiniPulse pulses={st.pulses} />
