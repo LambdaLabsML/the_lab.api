@@ -637,3 +637,62 @@
   box-sizing: border-box;
   background: var(--bg);   // canvas — the message boxes carry the elevation
 }
+
+/* ── consolidated spend chart (Agents pane) ───────────────────────────────── */
+.spend-chart {
+  background: var(--bg);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+}
+.spend-chart-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  margin-bottom: var(--space-2);
+}
+.spend-chart-total {
+  font-family: var(--font-mono);
+  font-size: var(--text-lg);
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.spend-chart-controls { margin-left: auto; display: inline-flex; gap: var(--space-2); }
+.spend-chart-svg { display: block; width: 100%; height: auto; }
+.spend-chart-tick {
+  fill: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 9px;   /* svg-internal scale (viewBox units), not a --text token */
+}
+.spend-chart-legend {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  margin-top: var(--space-2);
+}
+.spend-chart-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  background: none;
+  padding: 1px 2px;
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.spend-chart-key:hover { color: var(--text); }
+.spend-chart-key.is-off { opacity: 0.4; text-decoration: line-through; }
+.spend-chart-key.is-static { cursor: default; }
+.spend-chart-key-val { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.spend-chart-swatch { width: 8px; height: 8px; border-radius: 2px; flex-shrink: 0; }
+.spend-chart-note { margin-left: auto; color: var(--text-faint); font-size: var(--text-xs); }
+
+.agents-card-cost {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
