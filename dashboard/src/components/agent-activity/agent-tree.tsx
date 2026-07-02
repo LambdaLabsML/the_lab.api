@@ -118,7 +118,7 @@ function LineGlyph({ glyph }: { glyph: string }) {
   return <>{glyph}</>;
 }
 
-function Line({ glyph, text, tone, age, onClick, pending, to, api, latest, hoverEv }: {
+function Line({ glyph, text, tone, age, onClick, pending, to, api, latest, fresh, hoverEv }: {
   glyph: string; text: string; tone?: string; age?: string;
   onClick?: () => void; pending?: boolean;
   /** Message recipient — rendered as a mini agent pill before the text. */
@@ -126,12 +126,14 @@ function Line({ glyph, text, tone, age, onClick, pending, to, api, latest, hover
   /** Lab-call row: yellow text; dimmed unless it's the newest (or hovered). */
   api?: boolean;
   latest?: boolean;
+  /** Newest of its kind AND used in the last 30s — keeps color in quiet mode. */
+  fresh?: boolean;
   /** Message event — hovering previews the full message in the main area. */
   hoverEv?: ActivityEvent;
 }) {
   return (
     <div
-      class={`aa-sub aa-tone-${tone ?? "neutral"}${onClick ? " is-click" : ""}${api ? " is-api" : ""}${api && !latest ? " is-dimmed" : ""}`}
+      class={`aa-sub aa-tone-${tone ?? "neutral"}${onClick ? " is-click" : ""}${api ? " is-api" : ""}${api && !latest ? " is-dimmed" : ""}${to != null ? " is-msg" : ""}${fresh ? " is-fresh" : ""}`}
       role={onClick ? "button" : undefined}
       onClick={onClick ? (e) => { e.stopPropagation(); onClick(); } : undefined}
       onMouseEnter={hoverEv ? () => showMessagePreview(hoverEv) : undefined}
@@ -247,11 +249,20 @@ export function AgentTree({ compact = false, activeOnly = false, historyLimit = 
         // Only the NEWEST lab call is fully yellow; older ones dim (hovering
         // the agent block restores them — see .aa-agent:hover in scss). A
         // pending long-poll counts as the newest.
+        // In the quiet (un-hovered) palette, only a RECENTLY-used latest call
+        // or message keeps its color — stale ones read gray like the rest.
+        const FRESH_MS = 30_000;
+        const now = Date.now();
         let seenApi = !!st.pendingCall;
+        let seenMsg = false;
         const shown = (open ? dedup : dedup.slice(0, historyLimit)).map((r) => {
           const latest = !!r.api && !seenApi;
           if (r.api) seenApi = true;
-          return { ...r, latest };
+          const isMsg = r.to != null;
+          const latestMsg = isMsg && !seenMsg;
+          if (isMsg) seenMsg = true;
+          const fresh = (latest || latestMsg) && now - r.ts < FRESH_MS;
+          return { ...r, latest, fresh };
         });
         return (
           <div class={`aa-agent${active ? "" : " aa-quiet"}`} key={st.agentId}>
@@ -300,12 +311,12 @@ export function AgentTree({ compact = false, activeOnly = false, historyLimit = 
               {/* In-flight long-poll (e.g. wait_for_experiment) pinned first,
                   blinking until its completion event clears it. */}
               {st.pendingCall && (
-                <Line glyph="⟳" tone="warn" pending api latest
+                <Line glyph="⟳" tone="warn" pending api latest fresh
                   text={`${fnCall(st.pendingCall)} …`} age={ago(st.pendingCall.ts)} />
               )}
               {shown.map((r) => (
                 <Line key={r.key} glyph={r.glyph} tone={r.tone} to={r.to} api={r.api} latest={r.latest}
-                  hoverEv={r.hoverEv}
+                  fresh={r.fresh} hoverEv={r.hoverEv}
                   text={r.n && r.n > 1 ? `${r.text} ×${r.n}` : r.text}
                   age={ago(r.ts)} onClick={r.onClick} />
               ))}

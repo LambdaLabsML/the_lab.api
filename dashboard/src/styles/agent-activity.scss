@@ -144,11 +144,13 @@
   // (pills are neutral by default now — nothing to mute)
   .exp-link { color: var(--text-muted); }
   .aa-glyph { color: var(--text-faint); }
-  .aa-sub.is-api.is-dimmed .aa-sub-text,
-  .aa-sub.is-api.is-dimmed .aa-glyph { color: var(--text-muted); opacity: 1; }
-  // exception: the newest lab call keeps its full yellow
-  .aa-sub.is-api:not(.is-dimmed) .aa-sub-text,
-  .aa-sub.is-api:not(.is-dimmed) .aa-glyph { color: var(--yellow); }
+  .aa-sub.is-api .aa-sub-text,
+  .aa-sub.is-api .aa-glyph { color: var(--text-muted); opacity: 1; }
+  // exception: only a FRESH latest call/message (used in the last 30s) keeps
+  // its color — a stale "latest" reads gray like everything else.
+  .aa-sub.is-api.is-fresh .aa-sub-text,
+  .aa-sub.is-api.is-fresh .aa-glyph { color: var(--yellow); }
+  .aa-sub.is-msg.is-fresh .aa-glyph { color: var(--accent); }
 }
 .shortlog-block:not(:hover) {
   .exp-link { color: var(--text-muted); }

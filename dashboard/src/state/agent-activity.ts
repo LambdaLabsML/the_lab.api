@@ -152,17 +152,25 @@ let _pollTimer: ReturnType<typeof setInterval> | null = null;
 
 let _lastWork: Record<string, number> = {};        // agent_id -> last OWN action
 
-function touch(agentId: string | null | undefined): void {
-  if (agentId) _lastActive[agentId] = Date.now();
+function touch(agentId: string | null | undefined, ts?: number): void {
+  if (agentId) _lastActive[agentId] = Math.max(_lastActive[agentId] ?? 0, ts ?? Date.now());
 }
 
-/** An agent's own action (call/message/event) — counts toward "thinking". */
-function work(agentId: string | null | undefined): void {
+/** An agent's own action (call/message/event) — counts toward "thinking".
+ *  Uses the EVENT time, so a replayed backlog on page load doesn't fake
+ *  freshness. */
+function work(agentId: string | null | undefined, ts?: number): void {
   if (agentId) {
-    const now = Date.now();
-    _lastActive[agentId] = now;
-    _lastWork[agentId] = now;
+    const t = ts ?? Date.now();
+    _lastActive[agentId] = Math.max(_lastActive[agentId] ?? 0, t);
+    _lastWork[agentId] = Math.max(_lastWork[agentId] ?? 0, t);
   }
+}
+
+/** Real event time: the broadcaster stamps ts (epoch seconds); reconnect
+ *  replays arrive in a burst, so arrival time is wrong for ages. */
+function evTime(ev: Record<string, unknown>): number {
+  return typeof ev.ts === "number" ? Math.round((ev.ts as number) * 1000) : Date.now();
 }
 
 function agentForIdea(ideaId: unknown): string | null {
@@ -183,7 +191,7 @@ function normalize(ev: Record<string, unknown>): ActivityEvent | null {
   const type = String(ev.type ?? "");
   const ideaId = typeof ev.idea_id === "number" ? (ev.idea_id as number) : undefined;
   const byIdea = ideaId != null ? _ideaToAgent[ideaId] ?? null : null;
-  const base = { key: nextKey(), ts: Date.now(), ideaId };
+  const base = { key: nextKey(), ts: evTime(ev), ideaId };
 
   const expLabel = String(ev.label ?? ev.experiment_id ?? "") || undefined;
   switch (type) {
@@ -288,7 +296,7 @@ function pushEvent(e: ActivityEvent): void {
     (p) => p.agentId === e.agentId && p.kind === e.kind && p.text === e.text && e.ts - p.ts < 10_000,
   );
   if (dup) return;
-  work(e.agentId);   // own action — counts toward "thinking"
+  work(e.agentId, e.ts);   // own action — counts toward "thinking"
   // Track the running experiment per agent.
   if (e.agentId) {
     if (EXP_KINDS.has(e.kind)) {
@@ -338,7 +346,7 @@ export function startAgentActivity(): void {
           method: String(ev.method ?? "GET"),
           path: String(ev.path ?? "").replace(/^\/api\/v1/, "") || "/",
           status: typeof ev.status === "number" ? (ev.status as number) : undefined,
-          ts: Date.now(),
+          ts: evTime(ev),
         };
         if (ev.pending) {
           // Long-poll started (e.g. /wait) — show it as in-flight until the
@@ -348,7 +356,7 @@ export function startAgentActivity(): void {
           if (_pendingByAgent[aid]?.path === call.path) delete _pendingByAgent[aid];
           _apiByAgent[aid] = [call, ...(_apiByAgent[aid] ?? [])].slice(0, API_KEEP);
         }
-        work(aid);   // own action — counts toward "thinking"
+        work(aid, call.ts);   // own action — counts toward "thinking"
         rebuildAgentStates(activityFeed.value);
       }
       return;
@@ -360,7 +368,7 @@ export function startAgentActivity(): void {
     // without adding feed noise.
     if (TOUCH_TYPES.has(type)) {
       const idea = agentForIdea(ev.idea_id);
-      if (idea) { touch(idea); rebuildAgentStates(activityFeed.value); }
+      if (idea) { touch(idea, evTime(ev)); rebuildAgentStates(activityFeed.value); }
     }
   });
   pollAgents();
