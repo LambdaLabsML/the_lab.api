@@ -5,6 +5,7 @@
  * global signals (no extra polling), clicking a row jumps to that idea.
  */
 import { allExperiments, allIdeas, runningProgress } from "../../state/signals";
+import { showRunPreview, hideRunPreview } from "../../state/agent-activity";
 import { selectedMetric } from "../../state/settings";
 import { navigateToIdea } from "../../lib/navigate";
 import { ideaTitle, fmtScoreShort } from "../../lib/format";
@@ -57,7 +58,11 @@ export function ActivityShortlog() {
                 <button
                   class="shortlog-row"
                   onClick={() => navigateToIdea(e.idea_id, label)}
-                  title={ideas[e.idea_id]?.description}
+                  onMouseEnter={(ev) => showRunPreview(
+                    { label, ideaId: e.idea_id, pct: typeof pct === "number" ? pct : undefined },
+                    ev.currentTarget as Element,
+                  )}
+                  onMouseLeave={hideRunPreview}
                 >
                   <span class="shortlog-dot is-running" />
                   <span class="shortlog-row-main">#{e.idea_id} {ideaTitle(ideas[e.idea_id]?.description ?? "")}</span>

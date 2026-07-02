@@ -136,6 +136,49 @@ export function hideCallPreview(): void {
   previewAnchor.value = null;
 }
 
+/** Hover preview of a RUNNING experiment: live counters + log tail. */
+export interface RunPreview {
+  label: string;
+  ideaId: number;
+  pct?: number;
+  progress?: Record<string, unknown> | null;
+  heartbeat?: Record<string, unknown> | null;
+  logTail?: string | null;
+  loaded: boolean;
+}
+
+export const runPreview = signal<RunPreview | null>(null);
+
+export function showRunPreview(
+  exp: { label: string; ideaId: number; pct?: number },
+  anchorEl?: Element | null,
+): void {
+  setAnchor(anchorEl);
+  runPreview.value = { ...exp, loaded: false };
+  const label = exp.label;
+  import("./api").then(({ getExperimentProgress, getExperimentLog }) =>
+    Promise.all([
+      getExperimentProgress(label).catch(() => null),
+      getExperimentLog(label, 12).catch(() => null),
+    ]),
+  ).then(([prog, log]) => {
+    // Only update if this run is still the one being hovered.
+    if (runPreview.value?.label !== label) return;
+    runPreview.value = {
+      ...runPreview.value,
+      progress: (prog?.progress as Record<string, unknown>) ?? null,
+      heartbeat: (prog?.heartbeat as Record<string, unknown>) ?? null,
+      logTail: log?.log ?? null,
+      loaded: true,
+    };
+  }).catch(() => { /* keep the shell */ });
+}
+
+export function hideRunPreview(): void {
+  runPreview.value = null;
+  previewAnchor.value = null;
+}
+
 export interface AgentState {
   agentId: string;
   role: string;

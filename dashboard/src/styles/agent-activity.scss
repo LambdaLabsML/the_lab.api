@@ -480,3 +480,24 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+// running-experiment hover card: pct + log tail
+.msg-preview-pct {
+  color: var(--yellow);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.msg-preview-log {
+  margin: var(--space-2) 0 0;
+  padding: var(--space-2);
+  max-height: 30vh;
+  overflow: hidden;
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+}

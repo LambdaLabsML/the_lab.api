@@ -5,7 +5,7 @@
  * Fades in, lives for the duration of the hover. Mounted once in the shell.
  */
 import type { ComponentChildren } from "preact";
-import { messagePreview, callPreview, previewAnchor } from "../../state/agent-activity";
+import { messagePreview, callPreview, runPreview, previewAnchor } from "../../state/agent-activity";
 import { AgentPill } from "../agent-pill";
 import { FloatCard } from "../ui";
 import { ApiIcon } from "./icons";
@@ -37,9 +37,38 @@ function Row({ label, children }: { label: string; children: ComponentChildren }
 export function MessagePreviewOverlay() {
   const m = messagePreview.value;
   const c = callPreview.value;
-  if (!m && !c) return null;
+  const r = runPreview.value;
+  if (!m && !c && !r) return null;
 
   const anchor = previewAnchor.value;
+
+  // Running-experiment card: live counters on top, log tail below.
+  if (r) {
+    const prog = r.progress ?? {};
+    const rows = Object.entries(prog)
+      .filter(([, v]) => typeof v === "number" || typeof v === "string")
+      .slice(0, 8);
+    return (
+      <FloatCard anchor={anchor}>
+        <div class="msg-head msg-preview-head">
+          <span class="shortlog-dot is-running" />
+          <span class="msg-preview-fn">exp/{r.label}</span>
+          {r.pct != null && <span class="msg-preview-pct">{Math.round(r.pct)}%</span>}
+          <span class="msg-time">idea/{r.ideaId}</span>
+        </div>
+        <div class="msg-preview-rows">
+          {rows.map(([k, v]) => (
+            <Row key={k} label={k.replace(/_/g, " ")}>{String(v)}</Row>
+          ))}
+          {r.loaded && rows.length === 0 && <Row label="metrics">none reported yet</Row>}
+          {!r.loaded && <Row label="metrics">loading…</Row>}
+        </div>
+        {r.logTail && (
+          <pre class="msg-preview-log">{r.logTail}</pre>
+        )}
+      </FloatCard>
+    );
+  }
 
   // Lab-call card: when / took / status / size ≈ tokens / result shape.
   if (c) {

@@ -145,6 +145,9 @@ export interface ChartDataResult {
 /** Response from GET /api/v1/experiments/:id/progress */
 export interface ProgressResponse {
   progress: Record<string, unknown> | null;
+  /** Heartbeat timing (M3): last_at / avg_interval_sec / since_last_sec / count. */
+  heartbeat?: Record<string, unknown> | null;
+  status?: string;
 }
 
 /** Request body for POST /api/v1/ideas/suggest */
