@@ -117,6 +117,15 @@ export async function getExperimentLog(
   return fetchJson<{ log: string }>(`/api/v1/experiments/${expRef}/log${qs}`);
 }
 
+/** GET /api/v1/agents/costs — per-agent cost/token records (completed = one
+ *  record at completion ts; live = a readings time-series). */
+export async function getAgentCosts(): Promise<Record<string, {
+  cost?: number; inTok?: number; outTok?: number; ts?: string; live?: boolean;
+  readings?: { ts: string; cost: number; inTok: number; outTok: number }[];
+}>> {
+  return fetchJson("/api/v1/agents/costs");
+}
+
 /** GET /api/v1/ideas/:ideaId/diff */
 export async function getIdeaDiff(
   ideaId: number,
@@ -187,8 +196,8 @@ export interface ApiStatsResponse {
 }
 
 /** GET /api/v1/stats */
-export async function getApiStats(patternLength = 2): Promise<ApiStatsResponse> {
-  return fetchJson<ApiStatsResponse>(`/api/v1/stats?pattern_length=${patternLength}`);
+export async function getApiStats(patternLength = 2, sinceHours?: number | null): Promise<ApiStatsResponse> {
+  return fetchJson<ApiStatsResponse>(`/api/v1/stats?pattern_length=${patternLength}${sinceHours ? `&since_hours=${sinceHours}` : ""}`);
 }
 
 // ---------------------------------------------------------------------------

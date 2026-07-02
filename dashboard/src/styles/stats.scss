@@ -170,3 +170,36 @@
   padding: 2px 6px;
 }
 .stats-clear-btn:hover { color: var(--red); background: var(--bg-hi); }
+
+/* ── period-filtered costs (Stats pane) ───────────────────────────────────── */
+.stats-costs {
+  margin: var(--space-2) 0;
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-elev);
+  border-radius: var(--radius-md);
+}
+.stats-costs-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: var(--space-2);
+}
+.stats-costs-total {
+  font-family: var(--font-mono);
+  font-size: var(--text-lg);
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.stats-costs-rows { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-4); }
+.stats-costs-row { display: inline-flex; align-items: center; gap: var(--space-2); font-size: var(--text-sm); }
+.stats-costs-val {
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.stats-period-note {
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+  margin-bottom: var(--space-2);
+}
