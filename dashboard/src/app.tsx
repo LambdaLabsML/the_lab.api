@@ -90,7 +90,7 @@ import {
 import { initTouchMoveMenu } from "./lib/touch-move-menu";
 import { getStatusColor, isLowerBetter } from "./lib/colors";
 import { navigateToIdea } from "./lib/navigate";
-import { fmtMetricName } from "./lib/format";
+import { fmtMetricName, fmtScoreShort } from "./lib/format";
 import { collectChartKeys } from "./lib/chart-data";
 
 // ---------------------------------------------------------------------------
@@ -1520,10 +1520,6 @@ const EXP_STATUS_WORD: Record<string, string> = {
   abandoned: "abandoned", concluded: "concluded", queued: "queued",
   pending: "queued", cancelled: "cancelled",
 };
-
-function fmtScoreShort(v: number) {
-  return Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(2) : v.toFixed(3);
-}
 
 /** (#84) Map a review experiment → the SHARED experiment tooltip content, so
    timeline squares/chips and milestone rows render identically to the chart. */

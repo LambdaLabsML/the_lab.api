@@ -250,6 +250,29 @@
 }
 .exp-link:hover { text-decoration: underline; }
 
+// the shared idea link (components/idea-link.tsx) — muted, wakes on hover
+.idea-link {
+  font: inherit;
+  font-family: var(--font-mono);
+  color: var(--text-faint);
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.idea-link:hover { color: var(--text); text-decoration: underline; }
+
+// shortlog Recent row columns: exp link fills, score right-aligned before time
+.shortlog-exp { flex: 1 1 auto; }
+.shortlog-score {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
 // in-flight long-poll (wait_for_experiment …): blink the glyph until the
 // completion event clears it — same treatment as the shortlog running dot
 .aa-glyph--pending { animation: ui-blink 1.4s steps(2, start) infinite; }
