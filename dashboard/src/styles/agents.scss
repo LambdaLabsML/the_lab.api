@@ -438,7 +438,7 @@
 .msg-readdot:not(.is-static):hover { box-shadow: 0 0 0 2px var(--border-soft); }
 
 .msg-body {
-  color: var(--text);
+  color: var(--text-muted);         // dimmed prose — links/numbers/chips pop
   font-size: var(--text-base);
   white-space: pre-wrap;
   word-break: break-word;

@@ -12,8 +12,9 @@ import { AgentPill } from "./agent-pill";
 import { allIdeas } from "../state/signals";
 import { agentStates } from "../state/agent-activity";
 
+// Order matters: entity refs first, then ENV vars, hashes, bare numbers.
 const TOKEN_RE =
-  /(exp\/\d+\.[\w.-]+|idea\/\d+|#\d+|@[a-z0-9]{3,12}\b|\b\d+\.\d+\b|\b[a-z][a-z0-9]{4}\b)/g;
+  /(exp\/\d+\.[\w.-]+|idea\/\d+|#\d+|@[a-z0-9]{3,12}\b|\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b|\b\d+\.\d+\b|\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,12}\b|\b[a-z][a-z0-9]{4}\b|\b\d+(?:\.\d+)?%?)\b/g;
 
 /** Strip an agent's own "[from → to]" routing prefix (the UI shows pills). */
 export function stripRouting(text: string): string {
@@ -42,14 +43,25 @@ export function RichText({ text }: { text: string }) {
     } else if (tok.startsWith("@")) {
       const id = tok.slice(1);
       if (id === "all" || agents[id]) node = <AgentPill key={`t${k++}`} id={id} />;
+    } else if (/^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$/.test(tok)) {
+      // SCREAMING_SNAKE_CASE — almost always an env var / config key.
+      node = <code key={`t${k++}`} class="rt-env">{tok}</code>;
     } else if (/^\d+\.\d+$/.test(tok)) {
       // Bare "129.5" is an experiment ref only when idea 129 exists — scores
-      // like 0.468 stay plain text.
+      // like 0.468 render as data instead.
       const ideaId = Number(tok.split(".")[0]);
-      if (ideas[ideaId]) node = <ExpLink key={`t${k++}`} label={tok} ideaId={ideaId} />;
-    } else if (agents[tok]) {
+      node = ideas[ideaId]
+        ? <ExpLink key={`t${k++}`} label={tok} ideaId={ideaId} />
+        : <span key={`t${k++}`} class="rt-num">{tok}</span>;
+    } else if (/^(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,12}$/.test(tok)) {
+      // Hex with both digits and letters at 7–12 chars — a commit-ish hash.
+      node = <code key={`t${k++}`} class="rt-env">{tok}</code>;
+    } else if (/^[a-z][a-z0-9]{4}$/.test(tok)) {
       // Bare 5-char word that IS a known agent id.
-      node = <AgentPill key={`t${k++}`} id={tok} />;
+      if (agents[tok]) node = <AgentPill key={`t${k++}`} id={tok} />;
+    } else if (/^\d+(?:\.\d+)?%?$/.test(tok)) {
+      // Plain numbers read slightly brighter than the (dimmed) prose.
+      node = <span key={`t${k++}`} class="rt-num">{tok}</span>;
     }
 
     if (node) {

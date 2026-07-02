@@ -439,3 +439,23 @@
 
 // "waiting" — listener armed, no fresh work (standing by for replies/results)
 .aa-waiting { color: var(--text-faint); }
+
+// ── RichText tokens (components/rich-text.tsx) ──────────────────────────────
+// ENV vars / commit hashes: neutral code chips. Numbers: slightly brighter
+// than the dimmed prose (they're the data), tabular. No color — color = status.
+.rt-env {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  background: var(--bg-hi);
+  padding: 0 4px;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  white-space: nowrap;
+}
+.rt-num {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+// inside sidebar rows, tokens inherit the row's color (yellow calls stay yellow)
+.aa-sub .rt-num { color: inherit; }
+.aa-sub .rt-env { background: transparent; padding: 0; color: inherit; }
