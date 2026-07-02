@@ -114,7 +114,7 @@ const ALL_PANEL_IDS = Object.keys(PANEL_NAMES);
 type ToolView = "agents" | "sandbox" | "prompts" | "stats" | "api" | "messages" | "suggest" | "task";
 const TOOL_GROUPS: { group: string; items: { id: ToolView; label: string }[] }[] = [
   { group: "Run",     items: [{ id: "agents", label: "Agents" }, { id: "sandbox", label: "Sandbox" }, { id: "prompts", label: "Prompts" }] },
-  { group: "Inspect", items: [{ id: "stats", label: "Stats" }, { id: "api", label: "API" }, { id: "messages", label: "Messages" }] },
+  { group: "Inspect", items: [{ id: "stats", label: "Stats" }, { id: "api", label: "API" }] },
   { group: "Plan",    items: [{ id: "suggest", label: "Suggest" }, { id: "task", label: "Task" }] },
 ];
 const TOOL_VIEWS: Record<ToolView, () => preact.JSX.Element> = {
@@ -137,7 +137,7 @@ function compareExperimentsChronological(a: ExperimentLike, b: ExperimentLike): 
 }
 
 // URL hash ⇄ nav selection (deep-linkable). `#section` or `#tools/<tool>`.
-const NAV_SECTIONS = ["review", "activity", "queue", "workbench", "tools"];
+const NAV_SECTIONS = ["review", "activity", "queue", "workbench", "tools", "messages"];
 function parseNavHash(): { section: NavSection; tool: ToolView } {
   const h = (location.hash || "").replace(/^#\/?/, "");
   const [sec, tool] = h.split("/");
@@ -1072,7 +1072,7 @@ export function App() {
 
   const focusPanelIds = availablePanels.value;
   const inFocusMode = isMaximized.value;
-  const showSecondary = settingsOpen || navSection === "review" || navSection === "activity" || navSection === "queue" || navSection === "workbench" || navSection === "tools";
+  const showSecondary = settingsOpen || navSection === "review" || navSection === "activity" || navSection === "queue" || navSection === "messages" || navSection === "workbench" || navSection === "tools";
   void layoutVersion; // re-read saved layouts after a save/delete
   const savedLayouts = getSavedLayouts();
   return (
@@ -1086,7 +1086,7 @@ export function App() {
 
       {showSecondary && (
         <SecondaryPanel
-          label={settingsOpen ? "Settings" : navSection === "workbench" ? "Workbench" : navSection === "queue" ? "Queue" : navSection === "tools" ? "Tools" : navSection === "activity" ? "Activity" : "Overview"}
+          label={settingsOpen ? "Settings" : navSection === "workbench" ? "Workbench" : navSection === "queue" ? "Queue" : navSection === "tools" ? "Tools" : navSection === "activity" ? "Activity" : navSection === "messages" ? "Messages" : "Overview"}
         >
           {settingsOpen ? (
             <SettingsPanel />
@@ -1094,7 +1094,7 @@ export function App() {
             <>
               {/* Overview / Activity / Queue share ONE sidebar: running+recent
                   on top, agents filling the rest, composer pinned at bottom. */}
-              {(navSection === "review" || navSection === "activity" || navSection === "queue") && (
+              {(navSection === "review" || navSection === "activity" || navSection === "queue" || navSection === "messages") && (
                 <ActivitySidebar />
               )}
               {navSection === "tools" && (
@@ -1198,6 +1198,13 @@ export function App() {
         <MessagePreviewOverlay />
         <div class="app-content">
           {navSection === "activity" && <ActivityPane />}
+          {navSection === "messages" && (
+            <div class="app-scroll">
+              <main class="dashboard-page">
+                <MessagesView />
+              </main>
+            </div>
+          )}
 
           {navSection === "review" && (
             <div class="app-scroll">

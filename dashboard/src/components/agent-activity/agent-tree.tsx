@@ -14,6 +14,7 @@ import {
 import { navigateToIdea } from "../../lib/navigate";
 import { ExpLink } from "../exp-link";
 import { AgentPill } from "../agent-pill";
+import { RichText } from "../rich-text";
 import { ApiIcon, MsgIcon } from "./icons";
 
 /** Experiments live on the Overview page — switch there before focusing. */
@@ -142,7 +143,7 @@ function Line({ glyph, text, tone, age, onClick, pending, to, api, latest, fresh
       <span class="aa-branch">└</span>
       <span class={`aa-glyph${pending ? " aa-glyph--pending" : ""}`}><LineGlyph glyph={glyph} /></span>
       {to && <AgentPill id={to} />}
-      <span class="aa-sub-text">{text}</span>
+      <span class="aa-sub-text"><RichText text={text} /></span>
       {age && <span class="aa-sub-age">{age}</span>}
     </div>
   );
@@ -168,7 +169,7 @@ const LINGER_MS = 5 * 60_000;
 
 /** Jump to the Messages tool (used by message rows). */
 function openMessages(): void {
-  window.location.hash = "#tools/messages";
+  window.location.hash = "#messages";
 }
 
 export function AgentTree({ compact = false, activeOnly = false, historyLimit = 6 }: {

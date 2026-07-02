@@ -6,6 +6,7 @@ import { agentColor } from "../lib/colors";
 import { messagesReadByMe } from "../state/settings";
 import { focusMessageId } from "../state/agent-activity";
 import { AgentPill } from "../components/agent-pill";
+import { RichText, stripRouting } from "../components/rich-text";
 
 /** Format a created_at ISO timestamp as "Xs ago" / "Xm ago" / "Xh ago" / "Xd ago". */
 function relativeTime(iso: string): string {
@@ -271,7 +272,6 @@ export function MessagesView() {
             <button
               key={a.agent_id}
               class="messages-listening-chip"
-              style={{ color: agentColor(a.agent_id), borderColor: agentColor(a.agent_id) }}
               title={`Actively running the-lab messages — click to view ${a.agent_id}'s inbox`}
               onClick={() => setViewAs(a.agent_id)}
             >
@@ -340,7 +340,9 @@ export function MessagesView() {
                       )}
                     </div>
 
-                    <div class={`msg-body${long && !open ? " is-clamped" : ""}`}>{m.text}</div>
+                    <div class={`msg-body${long && !open ? " is-clamped" : ""}`}>
+                      <RichText text={stripRouting(m.text)} />
+                    </div>
                     {long && (
                       <button class="msg-expand" onClick={() => toggleExpand(m.id)}>
                         {open ? "Show less" : "Show more"}
@@ -352,14 +354,7 @@ export function MessagesView() {
                         <>
                           <span class="msg-readers-label">read by</span>
                           {readers.map((rid) => (
-                            <span
-                              class="msg-reader"
-                              key={rid}
-                              title={`read by ${rid}`}
-                              style={{ color: agentColor(rid), borderColor: agentColor(rid) }}
-                            >
-                              {labelAgent(rid)}
-                            </span>
+                            <span key={rid} title={`read by ${rid}`}><AgentPill id={rid} /></span>
                           ))}
                         </>
                       ) : (

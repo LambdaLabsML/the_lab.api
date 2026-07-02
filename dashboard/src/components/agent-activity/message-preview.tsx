@@ -6,6 +6,7 @@
 import { messagePreview } from "../../state/agent-activity";
 import { AgentPill } from "../agent-pill";
 import { MsgIcon } from "./icons";
+import { RichText, stripRouting } from "../rich-text";
 
 function clock(ts: number): string {
   if (!ts) return "";
@@ -25,7 +26,7 @@ export function MessagePreviewOverlay() {
         <AgentPill id={p.to} />
         <span class="msg-preview-time">{clock(p.ts)}</span>
       </div>
-      <div class="msg-preview-body">{p.body || "…"}</div>
+      <div class="msg-preview-body">{p.body ? <RichText text={stripRouting(p.body)} /> : "…"}</div>
       <div class="msg-preview-hint">
         {p.full ? "click to open in Messages" : "loading full text…"}
       </div>

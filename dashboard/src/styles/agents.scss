@@ -350,13 +350,16 @@
 .messages-listening-chip {
   padding: 1px 7px;
   border-radius: 999px;
-  border: 1px solid currentColor;     // color set inline per agent
+  border: 1px solid var(--border-soft);   // neutral pill language
   background: none;
+  color: var(--text-muted);
   font: inherit;
+  font-family: var(--font-mono);
   font-size: var(--text-xs);
+  font-weight: 600;
   cursor: pointer;
 }
-.messages-listening-chip:hover { background: var(--bg-elev); }
+.messages-listening-chip:hover { background: var(--bg-elev); color: var(--text); }
 
 .messages-perspective-note {
   font-size: var(--text-sm);
@@ -372,7 +375,7 @@
 .msg-list {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-3);              // breathing room between messages
   list-style: none;
   margin: 0;
   padding: 0;
@@ -382,11 +385,12 @@
 // color); no avatar circles. Hairline hover, accent bar for new-to-viewer.
 .msg {
   display: flex;
-  padding: 6px 10px;
-  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  background: var(--bg-elev);       // muted box — quiet elevation, no border
   transition: background 0.12s ease;
 }
-.msg:hover { background: var(--bg-elev); }
+.msg:hover { background: var(--bg-hi); }
 .msg.is-new { box-shadow: inset 2px 0 0 var(--accent); }  // new to the viewer
 // deep-link target (sidebar click): flash ring while scrolled into view
 .msg.is-focus {
@@ -631,5 +635,5 @@
   height: 100%;
   overflow-y: auto;
   box-sizing: border-box;
-  background: var(--bg-elev);
+  background: var(--bg);   // canvas — the message boxes carry the elevation
 }

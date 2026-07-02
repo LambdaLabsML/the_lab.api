@@ -20,7 +20,7 @@ function relAgo(ms: number | null): string {
   return `${Math.floor(m / 60)}h ago`;
 }
 
-export type NavSection = "review" | "activity" | "queue" | "workbench" | "tools";
+export type NavSection = "review" | "activity" | "queue" | "workbench" | "tools" | "messages";
 
 interface RailItem { id: NavSection; label: string; icon: string }
 
@@ -30,6 +30,7 @@ const PRIMARY: RailItem[] = [
   { id: "queue",     label: "Queue",     icon: "≡" },
   { id: "workbench", label: "Workbench", icon: "⊞" },
   { id: "tools",     label: "Tools",     icon: "⚒" },
+  { id: "messages",  label: "Messages",  icon: "✉" },
 ];
 
 export function NavRail({
