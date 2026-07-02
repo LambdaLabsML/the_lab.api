@@ -101,6 +101,25 @@ export interface ApiCall {
   path: string;    // /api/v1 prefix stripped
   status?: number;
   ts: number;
+  durationMs?: number;   // server-side handler time
+  respBytes?: number;    // response body size (≈ tokens × 4)
+  respKeys?: string[];   // top-level keys of the JSON result
+}
+
+/** Hover preview of a lab call (the sidebar's ⟳ rows). */
+export interface CallPreview {
+  agentId: string;
+  call: ApiCall;
+}
+
+/** Currently hover-previewed lab call (null = hidden). */
+export const callPreview = signal<CallPreview | null>(null);
+
+export function showCallPreview(agentId: string, call: ApiCall): void {
+  callPreview.value = { agentId, call };
+}
+export function hideCallPreview(): void {
+  callPreview.value = null;
 }
 
 export interface AgentState {
@@ -347,6 +366,9 @@ export function startAgentActivity(): void {
           path: String(ev.path ?? "").replace(/^\/api\/v1/, "") || "/",
           status: typeof ev.status === "number" ? (ev.status as number) : undefined,
           ts: evTime(ev),
+          durationMs: typeof ev.duration_ms === "number" ? (ev.duration_ms as number) : undefined,
+          respBytes: typeof ev.resp_bytes === "number" ? (ev.resp_bytes as number) : undefined,
+          respKeys: Array.isArray(ev.resp_keys) ? (ev.resp_keys as string[]) : undefined,
         };
         if (ev.pending) {
           // Long-poll started (e.g. /wait) — show it as in-flight until the

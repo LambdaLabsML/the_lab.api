@@ -459,3 +459,36 @@
 // inside sidebar rows, tokens inherit the row's color (yellow calls stay yellow)
 .aa-sub .rt-num { color: inherit; }
 .aa-sub .rt-env { background: transparent; padding: 0; color: inherit; }
+
+// lab-call hover card rows (shared .msg-preview shell)
+.msg-preview-fn {
+  color: var(--yellow);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.msg-preview-icon--call { color: var(--yellow); }
+.msg-preview-rows { display: flex; flex-direction: column; gap: 3px; }
+.msg-preview-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  font-size: var(--text-sm);
+}
+.msg-preview-label {
+  flex: 0 0 4.5em;
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.msg-preview-value {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

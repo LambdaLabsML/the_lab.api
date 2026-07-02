@@ -9,6 +9,7 @@
 import { useState } from "preact/hooks";
 import {
   agentStates, focusMessageId, showMessagePreview, hideMessagePreview,
+  showCallPreview, hideCallPreview,
   type ActivityEvent, type AgentState, type ApiCall,
 } from "../../state/agent-activity";
 import { navigateToIdea } from "../../lib/navigate";
@@ -16,6 +17,7 @@ import { ExpLink } from "../exp-link";
 import { AgentPill } from "../agent-pill";
 import { RichText } from "../rich-text";
 import { ApiIcon, MsgIcon } from "./icons";
+import { fnCall, apiFocus } from "./fn-call";
 
 /** Experiments live on the Overview page — switch there before focusing. */
 function goOverview(ideaId: number, expLabel?: string): void {
@@ -29,66 +31,6 @@ function ago(ts: number): string {
   if (s < 60) return `${s}s`;
   if (s < 3600) return `${Math.floor(s / 60)}m`;
   return `${Math.floor(s / 3600)}h`;
-}
-
-// ── lab calls as compact function calls ──────────────────────────────────────
-// "POST /experiments/130.2/cancel" reads as cancel_experiment(130.2) — mirrors
-// the MCP bridge's tool naming so the UI and the agent's tools speak the same
-// vocabulary. Falls back to verb_segment(args) for unmapped routes.
-const FN_ROUTES: Array<[RegExp, string, (m: RegExpMatchArray, get: boolean) => string]> = [
-  [/^\/experiments\/log$/, "", () => "get_failed_logs"],
-  [/^\/experiments\/([^/]+)\/(progress|log|output|script|timeseries|cancel|rerun|start|tags)$/, "$1", (m) => ({
-    progress: "get_progress", log: "get_log", output: "get_output", script: "get_script",
-    timeseries: "get_timeseries", cancel: "cancel_experiment", rerun: "rerun_experiment",
-    start: "start_experiment", tags: "update_tags",
-  }[m[2]] as string)],
-  [/^\/experiments\/([^/]+)$/, "$1", () => "get_experiment"],
-  [/^\/experiments$/, "", () => "list_experiments"],
-  [/^\/ideas\/new$/, "", () => "create_idea"],
-  [/^\/ideas\/search$/, "", () => "search_ideas"],
-  [/^\/ideas\/(\d+)\/experiments\/batch$/, "$1", () => "create_experiments"],
-  [/^\/ideas\/(\d+)\/experiments$/, "$1", (_m, get) => (get ? "list_experiments" : "create_experiment")],
-  [/^\/ideas\/(\d+)\/(checkout|conclude|abandon|adopt|reopen|note|notes|diff|tree|parent)$/, "$1", (m) => ({
-    checkout: "checkout_idea", conclude: "conclude_idea", abandon: "abandon_idea",
-    adopt: "adopt_idea", reopen: "reopen_idea", note: "add_note", notes: "list_notes",
-    diff: "get_diff", tree: "get_tree", parent: "get_parent",
-  }[m[2]] as string)],
-  [/^\/ideas\/(\d+)$/, "$1", () => "get_idea"],
-  [/^\/ideas$/, "", () => "list_ideas"],
-  [/^\/leaderboard\/search$/, "", () => "leaderboard_search"],
-  [/^\/leaderboard$/, "", () => "leaderboard"],
-  [/^\/wait$/, "", () => "wait_for_experiment"],
-  [/^\/orient$/, "", () => "orient"],
-  [/^\/digest$/, "", () => "digest"],
-  [/^\/instructions$/, "", () => "get_instructions"],
-];
-
-function fnCall(c: ApiCall): string {
-  const path = c.path.split("?")[0].replace(/\/+$/, "") || "/";
-  const get = c.method.toUpperCase() === "GET";
-  for (const [re, argTpl, name] of FN_ROUTES) {
-    const m = path.match(re);
-    if (m) {
-      const arg = argTpl ? argTpl.replace(/\$(\d)/g, (_, i) => m[Number(i)] ?? "") : "";
-      return `${name(m, get)}(${arg})`;
-    }
-  }
-  // Fallback: verb from the last static segment, args from the dynamic ones.
-  const segs = path.split("/").filter(Boolean);
-  const args = segs.filter((s) => /\d/.test(s));
-  const last = [...segs].reverse().find((s) => !/\d/.test(s)) ?? segs[segs.length - 1] ?? "call";
-  return `${get ? "get" : "do"}_${last.replace(/-/g, "_")}(${args.join(", ")})`;
-}
-
-/** Best-effort focus target for a lab call: idea id from /ideas/N, or an
- *  "idea.seq" experiment ref whose prefix is the idea id. */
-function apiFocus(c: ApiCall): { ideaId: number; expLabel?: string } | null {
-  const path = c.path.split("?")[0];
-  const idea = path.match(/^\/ideas\/(\d+)/);
-  if (idea) return { ideaId: Number(idea[1]) };
-  const exp = path.match(/^\/experiments\/((\d+)\.[\w.-]+)/);
-  if (exp) return { ideaId: Number(exp[2]), expLabel: exp[1] };
-  return null;
 }
 
 // Head state. Event texts are NOT repeated here — they live in the detail rows;
@@ -119,7 +61,7 @@ function LineGlyph({ glyph }: { glyph: string }) {
   return <>{glyph}</>;
 }
 
-function Line({ glyph, text, tone, age, onClick, pending, to, api, latest, fresh, hoverEv }: {
+function Line({ glyph, text, tone, age, onClick, pending, to, api, latest, fresh, hoverEv, hoverCall }: {
   glyph: string; text: string; tone?: string; age?: string;
   onClick?: () => void; pending?: boolean;
   /** Message recipient — rendered as a mini agent pill before the text. */
@@ -131,14 +73,22 @@ function Line({ glyph, text, tone, age, onClick, pending, to, api, latest, fresh
   fresh?: boolean;
   /** Message event — hovering previews the full message in the main area. */
   hoverEv?: ActivityEvent;
+  /** Lab call — hovering previews when/duration/size/shape in the main area. */
+  hoverCall?: { agentId: string; call: ApiCall };
 }) {
+  const enter = hoverEv
+    ? () => showMessagePreview(hoverEv)
+    : hoverCall
+      ? () => showCallPreview(hoverCall.agentId, hoverCall.call)
+      : undefined;
+  const leave = hoverEv ? hideMessagePreview : hoverCall ? hideCallPreview : undefined;
   return (
     <div
       class={`aa-sub aa-tone-${tone ?? "neutral"}${onClick ? " is-click" : ""}${api ? " is-api" : ""}${api && !latest ? " is-dimmed" : ""}${to != null ? " is-msg" : ""}${fresh ? " is-fresh" : ""}`}
       role={onClick ? "button" : undefined}
       onClick={onClick ? (e) => { e.stopPropagation(); onClick(); } : undefined}
-      onMouseEnter={hoverEv ? () => showMessagePreview(hoverEv) : undefined}
-      onMouseLeave={hoverEv ? hideMessagePreview : undefined}
+      onMouseEnter={enter}
+      onMouseLeave={leave}
     >
       <span class="aa-branch">└</span>
       <span class={`aa-glyph${pending ? " aa-glyph--pending" : ""}`}><LineGlyph glyph={glyph} /></span>
@@ -159,6 +109,7 @@ interface DetailRow {
   to?: string;
   api?: boolean;
   hoverEv?: ActivityEvent;   // message rows: hover-preview source
+  hoverCall?: { agentId: string; call: ApiCall };  // lab-call rows: hover card
   onClick?: () => void;
 }
 
@@ -218,6 +169,7 @@ export function AgentTree({ compact = false, activeOnly = false, historyLimit = 
             const focus = apiFocus(c);
             return {
               key: `api-${c.ts}-${i}`, ts: c.ts, glyph: "⟳", tone: "warn", text: fnCall(c), api: true,
+              hoverCall: { agentId: st.agentId, call: c },
               onClick: focus ? () => goOverview(focus.ideaId, focus.expLabel) : undefined,
             };
           }),
@@ -313,11 +265,12 @@ export function AgentTree({ compact = false, activeOnly = false, historyLimit = 
                   blinking until its completion event clears it. */}
               {st.pendingCall && (
                 <Line glyph="⟳" tone="warn" pending api latest fresh
+                  hoverCall={{ agentId: st.agentId, call: st.pendingCall }}
                   text={`${fnCall(st.pendingCall)} …`} age={ago(st.pendingCall.ts)} />
               )}
               {shown.map((r) => (
                 <Line key={r.key} glyph={r.glyph} tone={r.tone} to={r.to} api={r.api} latest={r.latest}
-                  fresh={r.fresh} hoverEv={r.hoverEv}
+                  fresh={r.fresh} hoverEv={r.hoverEv} hoverCall={r.hoverCall}
                   text={r.n && r.n > 1 ? `${r.text} ×${r.n}` : r.text}
                   age={ago(r.ts)} onClick={r.onClick} />
               ))}
