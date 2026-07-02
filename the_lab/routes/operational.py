@@ -257,6 +257,7 @@ def update_sandbox_state(req: SandboxConfigRequest):
 @router.get("/api/v1/stats")
 def get_api_stats(
     pattern_length: int = Query(default=2, ge=2, le=5, description="Length of call patterns to return (2=pairs, 3=triples, etc.)"),
+    since_hours: float | None = Query(default=None, gt=0, description="Filter call counts to the last N hours (hourly-bucketed; patterns/sizes stay all-time)."),
 ):
     """Get API endpoint usage statistics.
 
@@ -270,7 +271,7 @@ def get_api_stats(
             "calls": [{"endpoint": "GET /api/v1/digest", "count": 420}, ...],
             "patterns": [{"sequence": "digest -> suggested -> new", "count": 80}, ...]}
     """
-    result = api_stats.get_stats(pattern_length=pattern_length)
+    result = api_stats.get_stats(pattern_length=pattern_length, since_hours=since_hours)
     result["history"] = api_stats.get_history(limit=100)
     return result
 

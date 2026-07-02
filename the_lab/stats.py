@@ -66,6 +66,9 @@ class ApiStats:
         self._history: dict[str, deque[str]] = {}
         # Recent call log (ring buffer)
         self._recent: deque[dict] = deque(maxlen=MAX_HISTORY)
+        # Hourly per-endpoint buckets ("2026-07-02T14" -> {key: count}) so the
+        # dashboard can filter statistics to a time period. Pruned to ~14 days.
+        self._hourly: dict[str, dict[str, int]] = {}
         self._last_flush = time.monotonic()
         self._dirty = False
         self._load()
@@ -83,6 +86,8 @@ class ApiStats:
                 self._resp_bytes_total = defaultdict(int, data.get("resp_bytes_total", {}))
                 self._resp_bytes_count = defaultdict(int, data.get("resp_bytes_count", {}))
                 self._resp_bytes_max   = defaultdict(int, data.get("resp_bytes_max", {}))
+                self._hourly = {k: dict(v) for k, v in data.get("hourly", {}).items()
+                                if isinstance(v, dict)}
             except (json.JSONDecodeError, OSError):
                 pass
 
@@ -107,6 +112,7 @@ class ApiStats:
             data["resp_bytes_total"] = dict(self._resp_bytes_total)
             data["resp_bytes_count"] = dict(self._resp_bytes_count)
             data["resp_bytes_max"]   = dict(self._resp_bytes_max)
+            data["hourly"] = {k: dict(v) for k, v in self._hourly.items()}
             self._dirty = False
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
@@ -130,6 +136,13 @@ class ApiStats:
         self._recent.append(entry)
         with self._lock:
             self._calls[key] += 1
+            # Hourly bucket for period filtering (pruned to ~14 days).
+            bucket = entry["t"][:13]
+            hb = self._hourly.setdefault(bucket, {})
+            hb[key] = hb.get(key, 0) + 1
+            if len(self._hourly) > 14 * 24 + 2:
+                for old in sorted(self._hourly)[: len(self._hourly) - 14 * 24]:
+                    del self._hourly[old]
             # Maintain sliding window per client
             if client_ip not in self._history:
                 self._history[client_ip] = deque(maxlen=MAX_NGRAM)
@@ -150,11 +163,27 @@ class ApiStats:
             self._last_flush = time.monotonic()
             self.flush()
 
-    def get_stats(self, pattern_length: int = 2) -> dict:
-        """Return current stats for the API response."""
+    def get_stats(self, pattern_length: int = 2, since_hours: float | None = None) -> dict:
+        """Return current stats for the API response.
+
+        ``since_hours`` filters the per-endpoint call counts to the last N hours
+        using the hourly buckets (available since the buckets were introduced —
+        older traffic only exists in the all-time aggregates). Patterns and
+        response sizes remain all-time; the response flags that.
+        """
         n = max(2, min(pattern_length, MAX_NGRAM))
         with self._lock:
-            calls = dict(self._calls)
+            if since_hours is not None and since_hours > 0:
+                import datetime as _dt
+                cutoff = (_dt.datetime.now(_dt.timezone.utc)
+                          - _dt.timedelta(hours=since_hours)).isoformat()[:13]
+                calls: dict[str, int] = {}
+                for bucket, per_key in self._hourly.items():
+                    if bucket >= cutoff:
+                        for k, v in per_key.items():
+                            calls[k] = calls.get(k, 0) + v
+            else:
+                calls = dict(self._calls)
             patterns = dict(self._patterns.get(n, {}))
             rb_total = dict(self._resp_bytes_total)
             rb_count = dict(self._resp_bytes_count)
@@ -186,6 +215,9 @@ class ApiStats:
             "total_calls": total,
             "mcp_calls": mcp_calls,
             "curl_calls": total - mcp_calls,
+            "period_hours": since_hours,
+            # patterns + response sizes are all-time aggregates (not bucketed)
+            "patterns_scope": "all-time",
         }
         return result
 
