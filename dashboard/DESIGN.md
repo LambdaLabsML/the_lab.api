@@ -62,7 +62,9 @@ follow this — keep them in sync):
 STATE dot in this language — yellow = working, faint = quiet; filled =
 listening on `the-lab messages`, hollow = not (pulses only when filled+working).
 The per-agent identity color goes on the agent id text only — never on the
-state dot, so status and identity can't be confused.
+state dot, so status and identity can't be confused. Identity colors come from
+`AGENT_PALETTE` (cool hues only — blues/cyans/violets/pink) so an agent id can
+never read as failed/running/done by accident.
 
 ## Components (use these — `components/ui/`)
 

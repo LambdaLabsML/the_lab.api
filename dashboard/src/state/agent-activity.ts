@@ -126,7 +126,10 @@ function normalize(ev: Record<string, unknown>): ActivityEvent | null {
     case "message": {
       const from = (ev.from_agent as string) || (ev.from_role as string) || null;
       const to = ev.to === "all" ? "all" : String(ev.to ?? "").replace(/^agent:|^role:/, "");
-      const body = excerpt(ev.text, 40);
+      // Agents often prefix their text with "[from → to]" — we already render
+      // the routing, so strip the prefix instead of saying it twice.
+      const raw = String(ev.text ?? "").replace(/^\s*\[[^\]]{0,60}\]\s*/, "");
+      const body = excerpt(raw, 40);
       return { ...base, agentId: from, kind: "message", glyph: "↔", tone: "accent",
         text: body ? `→ ${to || "?"}  "${body}"` : `→ ${to || "?"}` };
     }

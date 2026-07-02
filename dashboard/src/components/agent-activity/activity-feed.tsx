@@ -56,7 +56,7 @@ export function ActivityFeed({ limit = 30 }: { limit?: number }) {
             <div class="aa-subs">
               {g.events.map((e) => (
                 <div class={`aa-sub aa-fade aa-tone-${e.tone ?? "neutral"}`} key={e.key}>
-                  <span class="aa-branch">⎿</span>
+                  <span class="aa-branch">└</span>
                   <span class="aa-glyph">{e.glyph}</span>
                   <span class="aa-sub-text">{e.text}</span>
                 </div>

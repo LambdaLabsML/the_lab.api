@@ -1,6 +1,6 @@
 /**
  * AgentTree — structure A. Each live agent is a row: state dot (status color
- * language) + identity-colored id + current action, with nested (⎿) lines
+ * language) + identity-colored id + current action, with nested (└) lines
  * beneath. Rows expand (click) into recent history — lab calls + events.
  * Reused in the Overview sidebar (compact) and the Activity pane (full).
  *
@@ -81,12 +81,19 @@ function apiFocus(c: ApiCall): { ideaId: number; expLabel?: string } | null {
 
 // `st.active` (recency-based) comes from the store. An active agent keeps
 // showing its current/last action (or its idea) rather than flipping to idle.
+// Messages are excluded here — they have their own sublist, and repeating the
+// last message in the head just duplicated the line below it.
 function head(st: AgentState): { glyph: string; kind: string; text: string } {
-  if (st.current && st.active) {
-    return { glyph: st.current.glyph, kind: st.current.kind, text: st.current.text };
+  const cur = st.current?.kind === "message"
+    ? st.recent.find((e) => e.kind !== "message") ?? null
+    : st.current;
+  if (cur && st.active) {
+    return { glyph: cur.glyph, kind: cur.kind, text: cur.text };
   }
   if (st.active) {
-    return { glyph: "●", kind: "active", text: st.ideaId != null ? `on idea/${st.ideaId}` : "working" };
+    // No glyph — the state dot already says "working"; a second dot after the
+    // id read as clutter.
+    return { glyph: "", kind: "active", text: st.ideaId != null ? `on idea/${st.ideaId}` : "working" };
   }
   return { glyph: "○", kind: "idle", text: "idle" };
 }
@@ -100,7 +107,7 @@ function Line({ glyph, text, tone, age, onClick }: {
       role={onClick ? "button" : undefined}
       onClick={onClick ? (e) => { e.stopPropagation(); onClick(); } : undefined}
     >
-      <span class="aa-branch">⎿</span>
+      <span class="aa-branch">└</span>
       <span class="aa-glyph">{glyph}</span>
       <span class="aa-sub-text">{text}</span>
       {age && <span class="aa-sub-age">{age}</span>}
@@ -178,7 +185,7 @@ export function AgentTree({ compact = false, activeOnly = false, historyLimit = 
               />
               <span class="aa-id" style={{ color }}>{st.agentId}</span>
               <span class="aa-role">{st.role}</span>
-              <span class={`aa-glyph aa-tone-${tone}`}>{glyph}</span>
+              {glyph && <span class={`aa-glyph aa-tone-${tone}`}>{glyph}</span>}
               <span
                 class={`aa-head-text${st.ideaId != null ? " is-link" : ""}`}
                 onClick={st.ideaId != null
@@ -210,7 +217,7 @@ export function AgentTree({ compact = false, activeOnly = false, historyLimit = 
                         : undefined} />
                 ))}
                 {st.apiCalls.length === 0 && st.recent.length === 0 && (
-                  <div class="aa-sub"><span class="aa-branch">⎿</span><span class="aa-sub-text">no history yet</span></div>
+                  <div class="aa-sub"><span class="aa-branch">└</span><span class="aa-sub-text">no history yet</span></div>
                 )}
               </div>
             ) : (
