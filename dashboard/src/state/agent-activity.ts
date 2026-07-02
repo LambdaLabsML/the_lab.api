@@ -39,12 +39,6 @@ export interface ApiCall {
   ts: number;
 }
 
-/** A single mark on the minified real-time activity strip. */
-export interface Pulse {
-  kind: "api" | "msg" | "exp";
-  ts: number;
-}
-
 export interface AgentState {
   agentId: string;
   role: string;
@@ -55,15 +49,13 @@ export interface AgentState {
   current: ActivityEvent | null;   // latest meaningful action
   currentExp: string | null;       // label of the running experiment (persists past other events)
   recent: ActivityEvent[];  // newest-first, capped
-  apiCalls: ApiCall[];      // last few labapi/MCP endpoints, newest-first
-  pulses: Pulse[];          // recent api/msg/exp marks for the mini strip (newest-first)
+  apiCalls: ApiCall[];      // last labapi/MCP calls, newest-first
   lastActiveTs: number;     // epoch ms of most recent activity (0 = none seen)
 }
 
 const FEED_MAX = 120;
-const PER_AGENT_MAX = 8;
-const API_KEEP = 6;   // labapi/MCP endpoints kept per agent (tree shows fewer collapsed)
-const PULSE_KEEP = 16; // marks on the mini real-time strip
+const PER_AGENT_MAX = 12;  // events kept per agent (expanded rows page via the stepper)
+const API_KEEP = 12;       // labapi/MCP calls kept per agent
 // "Active" = we've seen activity from the agent this recently. Purely
 // client-side (doesn't trust registry pid/pruning), so quiet/old agents drop
 // off both the sidebar and the feed on their own.
@@ -82,7 +74,6 @@ let _ideaToAgent: Record<number, string> = {};   // idea_id -> agent_id (live)
 let _agentMeta: Record<string, AgentEntry> = {};  // agent_id -> entry
 let _lastActive: Record<string, number> = {};     // agent_id -> epoch ms of last activity
 let _apiByAgent: Record<string, ApiCall[]> = {};   // agent_id -> last API calls (newest-first)
-let _pulseByAgent: Record<string, Pulse[]> = {};   // agent_id -> mini-strip marks (newest-first)
 let _curExp: Record<string, string | null> = {};   // agent_id -> running experiment label
 let _seq = 0;
 let _started = false;
@@ -90,11 +81,6 @@ let _pollTimer: ReturnType<typeof setInterval> | null = null;
 
 function touch(agentId: string | null | undefined): void {
   if (agentId) _lastActive[agentId] = Date.now();
-}
-
-function pulse(agentId: string | null | undefined, kind: Pulse["kind"]): void {
-  if (!agentId) return;
-  _pulseByAgent[agentId] = [{ kind, ts: Date.now() }, ...(_pulseByAgent[agentId] ?? [])].slice(0, PULSE_KEEP);
 }
 
 function agentForIdea(ideaId: unknown): string | null {
@@ -168,7 +154,6 @@ function mkState(id: string): AgentState {
     currentExp: _curExp[id] ?? null,
     recent: [],
     apiCalls: _apiByAgent[id] ?? [],
-    pulses: _pulseByAgent[id] ?? [],
     lastActiveTs: _lastActive[id] ?? 0,
   };
 }
@@ -188,7 +173,6 @@ function rebuildAgentStates(events: ActivityEvent[]): void {
   }
   for (const st of Object.values(next)) {
     st.currentExp = _curExp[st.agentId] ?? null;
-    st.pulses = _pulseByAgent[st.agentId] ?? [];
   }
   // Recency-based "active": trust observed activity, not the registry pid.
   for (const st of Object.values(next)) {
@@ -202,11 +186,9 @@ const EXP_KINDS = new Set(["running", "done", "failed", "queued", "cancelled"]);
 
 function pushEvent(e: ActivityEvent): void {
   touch(e.agentId);
-  // Feed the mini real-time strip + track the running experiment.
+  // Track the running experiment per agent.
   if (e.agentId) {
-    if (e.kind === "message") pulse(e.agentId, "msg");
-    else if (EXP_KINDS.has(e.kind)) {
-      pulse(e.agentId, "exp");
+    if (EXP_KINDS.has(e.kind)) {
       if (e.kind === "running" && e.expLabel) _curExp[e.agentId] = e.expLabel;
       else if ((e.kind === "done" || e.kind === "failed" || e.kind === "cancelled")
         && (!e.expLabel || _curExp[e.agentId] === e.expLabel)) {
@@ -256,7 +238,6 @@ export function startAgentActivity(): void {
           ts: Date.now(),
         };
         _apiByAgent[aid] = [call, ...(_apiByAgent[aid] ?? [])].slice(0, API_KEEP);
-        pulse(aid, "api");
         touch(aid);
         rebuildAgentStates(activityFeed.value);
       }

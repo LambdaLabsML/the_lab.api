@@ -1,35 +1,15 @@
 /**
- * AgentTree — structure A. Each live agent is a colored bullet with its current
- * action + a few nested (⎿) trail lines beneath it. Reused in the Overview
- * sidebar (compact: 1–2 nested lines) and the Agents tab (full).
+ * AgentTree — structure A. Each live agent is a row: state dot (status color
+ * language) + identity-colored id + current action, with nested (⎿) lines
+ * beneath. Rows expand (click) into recent history — lab calls + events.
+ * Reused in the Overview sidebar (compact) and the Activity pane (full).
  *
- * Data comes from the live agent-activity store; no props required beyond the
- * display options.
+ * Data comes from the live agent-activity store.
  */
 import { useState } from "preact/hooks";
-import { agentStates, type AgentState, type Pulse } from "../../state/agent-activity";
+import { agentStates, type AgentState, type ApiCall } from "../../state/agent-activity";
 import { agentColor } from "../../lib/colors";
 import { navigateToIdea } from "../../lib/navigate";
-
-// Minified real-time strip: one tick per recent api/msg/exp mark, oldest→newest
-// (left→right), fading with age. Makes API traffic + inter-agent messages
-// visible at a glance without text.
-function MiniPulse({ pulses }: { pulses: Pulse[] }) {
-  if (pulses.length === 0) return null;
-  const now = Date.now();
-  const marks = pulses.slice(0, 16).reverse();
-  return (
-    <div class="aa-pulsestrip" aria-hidden="true">
-      {marks.map((p, i) => (
-        <span
-          key={`${p.ts}-${i}`}
-          class={`aa-tick aa-tick-${p.kind}`}
-          style={{ opacity: Math.max(0.25, 1 - (now - p.ts) / 120_000) }}
-        />
-      ))}
-    </div>
-  );
-}
 
 function ago(ts: number): string {
   if (!ts) return "";
@@ -37,6 +17,66 @@ function ago(ts: number): string {
   if (s < 60) return `${s}s`;
   if (s < 3600) return `${Math.floor(s / 60)}m`;
   return `${Math.floor(s / 3600)}h`;
+}
+
+// ── lab calls as compact function calls ──────────────────────────────────────
+// "POST /experiments/130.2/cancel" reads as cancel_experiment(130.2) — mirrors
+// the MCP bridge's tool naming so the UI and the agent's tools speak the same
+// vocabulary. Falls back to verb_segment(args) for unmapped routes.
+const FN_ROUTES: Array<[RegExp, string, (m: RegExpMatchArray, get: boolean) => string]> = [
+  [/^\/experiments\/log$/, "", () => "get_failed_logs"],
+  [/^\/experiments\/([^/]+)\/(progress|log|output|script|timeseries|cancel|rerun|start|tags)$/, "$1", (m) => ({
+    progress: "get_progress", log: "get_log", output: "get_output", script: "get_script",
+    timeseries: "get_timeseries", cancel: "cancel_experiment", rerun: "rerun_experiment",
+    start: "start_experiment", tags: "update_tags",
+  }[m[2]] as string)],
+  [/^\/experiments\/([^/]+)$/, "$1", () => "get_experiment"],
+  [/^\/experiments$/, "", () => "list_experiments"],
+  [/^\/ideas\/new$/, "", () => "create_idea"],
+  [/^\/ideas\/search$/, "", () => "search_ideas"],
+  [/^\/ideas\/(\d+)\/experiments\/batch$/, "$1", () => "create_experiments"],
+  [/^\/ideas\/(\d+)\/experiments$/, "$1", (_m, get) => (get ? "list_experiments" : "create_experiment")],
+  [/^\/ideas\/(\d+)\/(checkout|conclude|abandon|adopt|reopen|note|notes|diff|tree|parent)$/, "$1", (m) => ({
+    checkout: "checkout_idea", conclude: "conclude_idea", abandon: "abandon_idea",
+    adopt: "adopt_idea", reopen: "reopen_idea", note: "add_note", notes: "list_notes",
+    diff: "get_diff", tree: "get_tree", parent: "get_parent",
+  }[m[2]] as string)],
+  [/^\/ideas\/(\d+)$/, "$1", () => "get_idea"],
+  [/^\/ideas$/, "", () => "list_ideas"],
+  [/^\/leaderboard\/search$/, "", () => "leaderboard_search"],
+  [/^\/leaderboard$/, "", () => "leaderboard"],
+  [/^\/wait$/, "", () => "wait_for_experiment"],
+  [/^\/orient$/, "", () => "orient"],
+  [/^\/digest$/, "", () => "digest"],
+  [/^\/instructions$/, "", () => "get_instructions"],
+];
+
+function fnCall(c: ApiCall): string {
+  const path = c.path.split("?")[0].replace(/\/+$/, "") || "/";
+  const get = c.method.toUpperCase() === "GET";
+  for (const [re, argTpl, name] of FN_ROUTES) {
+    const m = path.match(re);
+    if (m) {
+      const arg = argTpl ? argTpl.replace(/\$(\d)/g, (_, i) => m[Number(i)] ?? "") : "";
+      return `${name(m, get)}(${arg})`;
+    }
+  }
+  // Fallback: verb from the last static segment, args from the dynamic ones.
+  const segs = path.split("/").filter(Boolean);
+  const args = segs.filter((s) => /\d/.test(s));
+  const last = [...segs].reverse().find((s) => !/\d/.test(s)) ?? segs[segs.length - 1] ?? "call";
+  return `${get ? "get" : "do"}_${last.replace(/-/g, "_")}(${args.join(", ")})`;
+}
+
+/** Best-effort focus target for a lab call: idea id from /ideas/N, or an
+ *  "idea.seq" experiment ref whose prefix is the idea id. */
+function apiFocus(c: ApiCall): { ideaId: number; expLabel?: string } | null {
+  const path = c.path.split("?")[0];
+  const idea = path.match(/^\/ideas\/(\d+)/);
+  if (idea) return { ideaId: Number(idea[1]) };
+  const exp = path.match(/^\/experiments\/((\d+)\.[\w.-]+)/);
+  if (exp) return { ideaId: Number(exp[2]), expLabel: exp[1] };
+  return null;
 }
 
 // `st.active` (recency-based) comes from the store. An active agent keeps
@@ -51,9 +91,15 @@ function head(st: AgentState): { glyph: string; kind: string; text: string } {
   return { glyph: "○", kind: "idle", text: "idle" };
 }
 
-function Line({ glyph, text, tone, age }: { glyph: string; text: string; tone?: string; age?: string }) {
+function Line({ glyph, text, tone, age, onClick }: {
+  glyph: string; text: string; tone?: string; age?: string; onClick?: () => void;
+}) {
   return (
-    <div class={`aa-sub aa-tone-${tone ?? "neutral"}`}>
+    <div
+      class={`aa-sub aa-tone-${tone ?? "neutral"}${onClick ? " is-click" : ""}`}
+      role={onClick ? "button" : undefined}
+      onClick={onClick ? (e) => { e.stopPropagation(); onClick(); } : undefined}
+    >
       <span class="aa-branch">⎿</span>
       <span class="aa-glyph">{glyph}</span>
       <span class="aa-sub-text">{text}</span>
@@ -67,13 +113,18 @@ function Line({ glyph, text, tone, age }: { glyph: string; text: string; tone?: 
 // boundary dims instead of flapping in and out of the sidebar.
 const LINGER_MS = 5 * 60_000;
 
-export function AgentTree({ compact = false, activeOnly = false, maxNested = compact ? 3 : 5 }: {
+/** Jump to the Messages tool (used by message rows). */
+function openMessages(): void {
+  window.location.hash = "#tools/messages";
+}
+
+export function AgentTree({ compact = false, activeOnly = false, historyLimit = 6 }: {
   compact?: boolean;
   activeOnly?: boolean;
-  maxNested?: number;
+  /** Lines per kind (calls / events) shown in an EXPANDED row. */
+  historyLimit?: number;
 }) {
-  // Per-row disclosure: expanded rows show the agent's recent history (last
-  // labapi/MCP calls + experiment/message events, with ages).
+  // Per-row disclosure: expanded rows show the agent's recent history.
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const toggle = (id: string) =>
     setExpanded((prev) => {
@@ -109,18 +160,9 @@ export function AgentTree({ compact = false, activeOnly = false, maxNested = com
         const glyph = showExp ? "▶" : h.glyph;
         const text = showExp ? `exp/${st.currentExp}` : h.text;
         const tone = showExp ? "accent" : (active ? (st.current?.tone ?? "accent") : "neutral");
-        // Compact (sidebar): a minified real-time strip. Full: the last labapi/
-        // MCP endpoints (falling back to the event trail before any are seen).
-        const apis = st.apiCalls.slice(0, maxNested);
-        const events = apis.length === 0 ? st.recent.slice(0, maxNested) : [];
-        // Compact: one line of "what it last did" — the most recent labapi/MCP
-        // call, falling back to the latest event when no call has been seen.
+        // Collapsed: latest lab call (as a function call) + recent messages.
         const lastApi = st.apiCalls[0];
-        const lastLine = lastApi
-          ? { glyph: "⟳", tone: "neutral", text: `${lastApi.method} ${lastApi.path}` }
-          : st.recent[0]
-            ? { glyph: st.recent[0].glyph, tone: st.recent[0].tone, text: st.recent[0].text }
-            : null;
+        const messages = st.recent.filter((e) => e.kind === "message").slice(0, 2);
         const open = expanded.has(st.agentId);
         return (
           <div class={`aa-agent${active ? "" : " aa-quiet"}`} key={st.agentId}>
@@ -149,31 +191,40 @@ export function AgentTree({ compact = false, activeOnly = false, maxNested = com
               <span class="aa-chev" aria-hidden="true">{open ? "▾" : "▸"}</span>
             </div>
             {open ? (
-              // Expanded: recent history — API/MCP calls, then events, with ages.
+              // Expanded: recent history — lab calls, then events, with ages.
+              // Every line focuses its subject elsewhere in the UI.
               <div class="aa-subs">
-                {st.apiCalls.map((c, i) => (
-                  <Line key={`api${i}`} glyph="⟳" tone="neutral"
-                    text={`${c.method} ${c.path}`} age={ago(c.ts)} />
-                ))}
-                {st.recent.map((e) => (
-                  <Line key={e.key} glyph={e.glyph} tone={e.tone} text={e.text} age={ago(e.ts)} />
+                {st.apiCalls.slice(0, historyLimit).map((c, i) => {
+                  const focus = apiFocus(c);
+                  return (
+                    <Line key={`api${i}`} glyph="⟳" tone="warn" text={fnCall(c)} age={ago(c.ts)}
+                      onClick={focus ? () => navigateToIdea(focus.ideaId, focus.expLabel) : undefined} />
+                  );
+                })}
+                {st.recent.slice(0, historyLimit).map((e) => (
+                  <Line key={e.key} glyph={e.glyph} tone={e.tone} text={e.text} age={ago(e.ts)}
+                    onClick={e.kind === "message"
+                      ? openMessages
+                      : e.ideaId != null
+                        ? () => navigateToIdea(e.ideaId!, e.expLabel)
+                        : undefined} />
                 ))}
                 {st.apiCalls.length === 0 && st.recent.length === 0 && (
                   <div class="aa-sub"><span class="aa-branch">⎿</span><span class="aa-sub-text">no history yet</span></div>
                 )}
               </div>
-            ) : compact ? (
-              <>
-                {lastLine && <Line glyph={lastLine.glyph} tone={lastLine.tone} text={lastLine.text} />}
-                <MiniPulse pulses={st.pulses} />
-              </>
-            ) : (apis.length > 0 || events.length > 0) && (
+            ) : (
               <div class="aa-subs">
-                {apis.map((c, i) => (
-                  <Line key={`api${i}`} glyph="⟳" tone="neutral"
-                    text={`${c.method} ${c.path}`} />
+                {lastApi && (
+                  <Line glyph="⟳" tone="warn" text={fnCall(lastApi)} age={ago(lastApi.ts)}
+                    onClick={apiFocus(lastApi)
+                      ? () => { const f = apiFocus(lastApi)!; navigateToIdea(f.ideaId, f.expLabel); }
+                      : undefined} />
+                )}
+                {messages.map((e) => (
+                  <Line key={e.key} glyph="↔" tone="accent" text={e.text} age={ago(e.ts)}
+                    onClick={openMessages} />
                 ))}
-                {events.map((e) => <Line key={e.key} glyph={e.glyph} tone={e.tone} text={e.text} />)}
               </div>
             )}
           </div>

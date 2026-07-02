@@ -50,11 +50,12 @@ import { MetricsChart } from "./components/chart-panel/metrics-chart";
 import { ScatterChart } from "./components/chart-panel/scatter-chart";
 import { FilterBar } from "./components/filter-bar";
 import { SearchFilter, type FilterItem } from "./components/search-filter/search-filter";
-import { Eyebrow, Stat, Tooltip, experimentTipContent, ideaTipContent } from "./components/ui";
+import { Eyebrow, Stat, Stepper, Tooltip, experimentTipContent, ideaTipContent } from "./components/ui";
 import { NavRail, SecondaryPanel, type NavSection } from "./components/nav-rail";
 import { ActivityPane } from "./components/activity/activity-pane";
 import { ActivityShortlog } from "./components/activity/activity-shortlog";
 import { AgentTree } from "./components/agent-activity/agent-tree";
+import { AgentQuickChat } from "./components/agent-activity/agent-chat";
 import { startAgentActivity } from "./state/agent-activity";
 import { SettingsPanel } from "./components/settings-panel";
 import {
@@ -69,6 +70,7 @@ import {
   reviewOpenSections,
   reviewChartHeight,
   reviewSectionHeights,
+  agentHistoryLimit,
 } from "./state/settings";
 import { startPolling, stopPolling } from "./state/polling";
 import { getQueue } from "./state/api";
@@ -1120,8 +1122,13 @@ export function App() {
                     ))}
                   </nav>
                   <div class="nav-secondary-segment">
-                    <div class="nav-secondary-head"><Eyebrow>Active agents</Eyebrow></div>
-                    <AgentTree compact activeOnly />
+                    <div class="nav-secondary-head nav-secondary-head--row">
+                      <Eyebrow>Active agents</Eyebrow>
+                      <Stepper size="s" value={agentHistoryLimit.value} min={3} max={12} step={1}
+                        what="history lines" onChange={(v) => { agentHistoryLimit.value = v; }} />
+                    </div>
+                    <AgentTree compact activeOnly historyLimit={agentHistoryLimit.value} />
+                    <AgentQuickChat />
                   </div>
                   <ActivityShortlog />
                 </>
@@ -1307,38 +1314,7 @@ function setSectionHeight(id: string, mode: "summary" | "detail", v: number) {
   if (mode === "detail") requestAnimationFrame(() => window.dispatchEvent(new Event("resize")));
 }
 
-/** A clean up/down chevron (10px polyline, currentColor stroke, no fill). */
-function Chevron({ dir }: { dir: "up" | "down" }) {
-  return (
-    <svg class="review-chev" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"
-      fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-      {dir === "up"
-        ? <polyline points="2,6.5 5,3.5 8,6.5" />
-        : <polyline points="2,3.5 5,6.5 8,3.5" />}
-    </svg>
-  );
-}
-
-/** A compact ghost stepper pair — chevron-up = smaller, chevron-down = bigger. */
-function HeightSteppers({ value, min, max, step, onChange, what }: {
-  value: number; min: number; max: number; step: number;
-  onChange: (next: number) => void; what: string;
-}) {
-  return (
-    <span class="review-steppers" role="group" aria-label={`${what} size`}>
-      <button type="button" class="ui-btn review-step"
-        title={`Fewer / shorter (${what})`} aria-label={`Fewer ${what}`} disabled={value <= min}
-        onClick={(e) => { e.preventDefault(); e.stopPropagation(); onChange(Math.max(min, value - step)); }}>
-        <Chevron dir="up" />
-      </button>
-      <button type="button" class="ui-btn review-step"
-        title={`More / taller (${what})`} aria-label={`More ${what}`} disabled={value >= max}
-        onClick={(e) => { e.preventDefault(); e.stopPropagation(); onChange(Math.min(max, value + step)); }}>
-        <Chevron dir="down" />
-      </button>
-    </span>
-  );
-}
+// Up/down steppers are the shared <Stepper> from components/ui (size m here).
 
 // ── Idea mini leaderboard ─────────────────────────────────────────────────────
 
@@ -2551,7 +2527,7 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
       : cfg.max;
     const value = Math.min(sectionHeight(id, mode), max);
     return (
-      <HeightSteppers
+      <Stepper
         value={value} min={cfg.min} max={max} step={cfg.step}
         what={open ? "panel height" : `${what} rows`}
         onChange={(v) => setSectionHeight(id, mode, v)}
@@ -2671,7 +2647,7 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
       <div class="review-chart-head">
         <span class="ui-eyebrow">progress over experiments · {fmtMetricName(metric)}</span>
         <span class="review-chart-steppers">
-          <HeightSteppers
+          <Stepper
             value={reviewChartHeight.value} min={220} max={760} step={60} what="chart height"
             onChange={(v) => { reviewChartHeight.value = v; requestAnimationFrame(() => window.dispatchEvent(new Event("resize"))); }}
           />

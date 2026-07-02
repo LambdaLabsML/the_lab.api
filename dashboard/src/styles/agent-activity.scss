@@ -114,26 +114,45 @@
 .aa-tone-warn   .aa-glyph { color: var(--yellow); }
 .aa-tone-accent .aa-glyph { color: var(--accent); }
 
-// ── minified real-time strip (compact sidebar) ──────────────────────────────
-// ticks oldest→newest; msg = accent, api = muted, exp = green. Conveys "this
-// agent is calling the API / messaging" without any text.
-.aa-pulsestrip {
-  display: flex;
-  align-items: flex-end;
-  gap: 2px;
-  height: 9px;
-  padding-left: var(--space-2);
-  margin-top: 1px;
-}
-.aa-tick { width: 3px; height: 5px; border-radius: 1px; background: var(--text-faint); }
-.aa-tick-api { height: 5px; background: var(--text-muted); }
-.aa-tick-msg { height: 9px; background: var(--accent); }   // messages stand out
-.aa-tick-exp { height: 7px; background: var(--green); }
-
 // Lingering row (recently active, now quiet): dim instead of disappearing, so
 // the list never flaps at the active-window boundary. Drops after LINGER_MS.
 .aa-agent.aa-quiet { opacity: 0.55; }
-.aa-agent.aa-quiet .aa-pulsestrip { display: none; }   // strip is a "live" signal
+
+// clickable nested lines focus their subject elsewhere in the UI
+.aa-sub.is-click { cursor: pointer; }
+.aa-sub.is-click:hover { background: var(--bg-hi); border-radius: var(--radius-sm); }
+
+// ── quick chat (sidebar, below the active agents) ────────────────────────────
+.aa-chat {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-top: var(--space-2);
+}
+.aa-chat-to,
+.aa-chat-input {
+  font: inherit;
+  font-size: var(--text-xs);
+  color: var(--text);
+  background: var(--bg-elev);
+  border: none;
+  box-shadow: inset 0 0 0 1px var(--border-soft);
+  border-radius: var(--radius-sm);
+  padding: 3px 6px;
+  min-width: 0;
+}
+.aa-chat-to { flex-shrink: 0; max-width: 8em; }
+.aa-chat-input { flex: 1 1 auto; }
+.aa-chat-to:focus,
+.aa-chat-input:focus { outline: none; box-shadow: inset 0 0 0 1px var(--accent); }
+.aa-chat-send {
+  flex-shrink: 0;
+  font-size: var(--text-xs);
+  color: var(--text-faint);
+  padding: 3px 6px;
+}
+.aa-chat-send:hover:not(:disabled) { color: var(--text); }
+.aa-chat-send:disabled { opacity: 0.4; cursor: default; }
 
 // ── compact (Overview sidebar) — same language, tighter ─────────────────────
 .aa-tree.aa-compact { gap: var(--space-1); }
@@ -161,3 +180,10 @@
 }
 // the segment provides the 12px inset; its head only needs vertical padding
 .nav-secondary-segment .nav-secondary-head { padding: 11px 0 6px; }
+// head row variant: eyebrow left, controls (stepper) right
+.nav-secondary-head--row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
