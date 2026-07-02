@@ -127,7 +127,7 @@
   display: flex;
   align-items: center;
   gap: var(--space-1);
-  margin-top: var(--space-3);     // separate the composer from the list
+  margin: var(--space-2) 12px 0;  // the segment is un-padded; match the row inset
   padding-top: var(--space-2);
   box-shadow: inset 0 1px var(--border-soft);   // hairline, not a box
 }
@@ -156,9 +156,22 @@
 .aa-chat-send:hover:not(:disabled) { color: var(--text); }
 .aa-chat-send:disabled { opacity: 0.4; cursor: default; }
 
-// ── compact (Overview sidebar) — same language, tighter ─────────────────────
+// in-flight long-poll (wait_for_experiment …): blink the glyph until the
+// completion event clears it — same treatment as the shortlog running dot
+.aa-glyph--pending { animation: ui-blink 1.4s steps(2, start) infinite; }
+
+// ── compact (Overview sidebar) — mirrors the shortlog's rhythm exactly:
+// full-width rows with a 12px inset (hover spans the rail), --text-sm heads,
+// --text-xs details. The segment container carries no horizontal padding.
 .aa-tree.aa-compact { gap: var(--space-2); }          // agent blocks need air
-.aa-tree.aa-compact .aa-head { font-size: var(--text-xs); }
+.aa-tree.aa-compact .aa-head {
+  font-size: var(--text-sm);
+  padding: 5px 12px;                                  // = .shortlog-row
+  border-radius: 0;                                   // full-bleed hover, like shortlog
+}
+.aa-tree.aa-compact .aa-sub {
+  padding: 2px 12px 2px 26px;                         // 12px inset + indent under the id
+}
 .aa-tree.aa-compact .aa-role { display: none; }       // drop role in the narrow rail
 
 // ── feed (structure B): group per agent, new lines fade in ──────────────────
@@ -174,14 +187,15 @@
   .aa-fade { animation: none; }
 }
 
-// ── Overview sidebar segment: align with the nav items (12px inset) ─────────
+// ── Overview sidebar segment ─────────────────────────────────────────────────
+// Rows carry their own 12px inset (shortlog-style full-bleed hover), so the
+// container itself has no horizontal padding.
 .nav-secondary-segment {
   margin-top: var(--space-1);
-  padding: 0 12px var(--space-2);          // matches .nav-secondary-btn horizontal inset
+  padding: 0 0 var(--space-2);
   box-shadow: inset 0 1px var(--border-soft);   // top hairline separator, not a box
 }
-// the segment provides the 12px inset; its head only needs vertical padding
-.nav-secondary-segment .nav-secondary-head { padding: 11px 0 6px; }
+.nav-secondary-segment .aa-empty { padding: 2px 12px 6px; }  // = .shortlog-idle
 // head row variant: eyebrow left, controls (stepper) right
 .nav-secondary-head--row {
   display: flex;

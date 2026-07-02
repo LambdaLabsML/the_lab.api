@@ -1124,8 +1124,8 @@ export function App() {
                   <div class="nav-secondary-segment">
                     <div class="nav-secondary-head nav-secondary-head--row">
                       <Eyebrow>Active agents</Eyebrow>
-                      <Stepper size="s" value={agentHistoryLimit.value} min={3} max={12} step={1}
-                        what="history lines" onChange={(v) => { agentHistoryLimit.value = v; }} />
+                      <Stepper size="s" value={agentHistoryLimit.value} min={1} max={8} step={1}
+                        what="detail rows" onChange={(v) => { agentHistoryLimit.value = v; }} />
                     </div>
                     <AgentTree compact activeOnly historyLimit={agentHistoryLimit.value} />
                     <AgentQuickChat />

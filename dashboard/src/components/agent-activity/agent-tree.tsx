@@ -98,8 +98,8 @@ function head(st: AgentState): { glyph: string; kind: string; text: string } {
   return { glyph: "○", kind: "idle", text: "idle" };
 }
 
-function Line({ glyph, text, tone, age, onClick }: {
-  glyph: string; text: string; tone?: string; age?: string; onClick?: () => void;
+function Line({ glyph, text, tone, age, onClick, pending }: {
+  glyph: string; text: string; tone?: string; age?: string; onClick?: () => void; pending?: boolean;
 }) {
   return (
     <div
@@ -108,11 +108,21 @@ function Line({ glyph, text, tone, age, onClick }: {
       onClick={onClick ? (e) => { e.stopPropagation(); onClick(); } : undefined}
     >
       <span class="aa-branch">└</span>
-      <span class="aa-glyph">{glyph}</span>
+      <span class={`aa-glyph${pending ? " aa-glyph--pending" : ""}`}>{glyph}</span>
       <span class="aa-sub-text">{text}</span>
       {age && <span class="aa-sub-age">{age}</span>}
     </div>
   );
+}
+
+/** One detail row: an api call or an event, unified for recency sorting. */
+interface DetailRow {
+  key: string;
+  ts: number;
+  glyph: string;
+  tone?: string;
+  text: string;
+  onClick?: () => void;
 }
 
 // Hysteresis for activeOnly listing: an agent ENTERS when active, but only
@@ -128,7 +138,8 @@ function openMessages(): void {
 export function AgentTree({ compact = false, activeOnly = false, historyLimit = 6 }: {
   compact?: boolean;
   activeOnly?: boolean;
-  /** Lines per kind (calls / events) shown in an EXPANDED row. */
+  /** Detail rows shown per agent (the ^/v stepper steers this). Expanding a
+   *  row shows everything kept (up to 12 calls + 12 events). */
   historyLimit?: number;
 }) {
   // Per-row disclosure: expanded rows show the agent's recent history.
@@ -167,10 +178,27 @@ export function AgentTree({ compact = false, activeOnly = false, historyLimit = 
         const glyph = showExp ? "▶" : h.glyph;
         const text = showExp ? `exp/${st.currentExp}` : h.text;
         const tone = showExp ? "accent" : (active ? (st.current?.tone ?? "accent") : "neutral");
-        // Collapsed: latest lab call (as a function call) + recent messages.
-        const lastApi = st.apiCalls[0];
-        const messages = st.recent.filter((e) => e.kind === "message").slice(0, 2);
+        // Detail rows: lab calls + events merged and sorted by recency (newest
+        // first), so messaging and labapi activity intertwine chronologically.
+        const rows: DetailRow[] = [
+          ...st.apiCalls.map((c, i): DetailRow => {
+            const focus = apiFocus(c);
+            return {
+              key: `api-${c.ts}-${i}`, ts: c.ts, glyph: "⟳", tone: "warn", text: fnCall(c),
+              onClick: focus ? () => navigateToIdea(focus.ideaId, focus.expLabel) : undefined,
+            };
+          }),
+          ...st.recent.map((e): DetailRow => ({
+            key: e.key, ts: e.ts, glyph: e.glyph, tone: e.tone, text: e.text,
+            onClick: e.kind === "message"
+              ? openMessages
+              : e.ideaId != null
+                ? () => navigateToIdea(e.ideaId!, e.expLabel)
+                : undefined,
+          })),
+        ].sort((a, b) => b.ts - a.ts);
         const open = expanded.has(st.agentId);
+        const shown = open ? rows : rows.slice(0, historyLimit);
         return (
           <div class={`aa-agent${active ? "" : " aa-quiet"}`} key={st.agentId}>
             {/* Row click = expand/collapse history. Clicking the action text
@@ -197,43 +225,21 @@ export function AgentTree({ compact = false, activeOnly = false, historyLimit = 
               {st.lastActiveTs > 0 && <span class="aa-age">{ago(st.lastActiveTs)}</span>}
               <span class="aa-chev" aria-hidden="true">{open ? "▾" : "▸"}</span>
             </div>
-            {open ? (
-              // Expanded: recent history — lab calls, then events, with ages.
-              // Every line focuses its subject elsewhere in the UI.
-              <div class="aa-subs">
-                {st.apiCalls.slice(0, historyLimit).map((c, i) => {
-                  const focus = apiFocus(c);
-                  return (
-                    <Line key={`api${i}`} glyph="⟳" tone="warn" text={fnCall(c)} age={ago(c.ts)}
-                      onClick={focus ? () => navigateToIdea(focus.ideaId, focus.expLabel) : undefined} />
-                  );
-                })}
-                {st.recent.slice(0, historyLimit).map((e) => (
-                  <Line key={e.key} glyph={e.glyph} tone={e.tone} text={e.text} age={ago(e.ts)}
-                    onClick={e.kind === "message"
-                      ? openMessages
-                      : e.ideaId != null
-                        ? () => navigateToIdea(e.ideaId!, e.expLabel)
-                        : undefined} />
-                ))}
-                {st.apiCalls.length === 0 && st.recent.length === 0 && (
-                  <div class="aa-sub"><span class="aa-branch">└</span><span class="aa-sub-text">no history yet</span></div>
-                )}
-              </div>
-            ) : (
-              <div class="aa-subs">
-                {lastApi && (
-                  <Line glyph="⟳" tone="warn" text={fnCall(lastApi)} age={ago(lastApi.ts)}
-                    onClick={apiFocus(lastApi)
-                      ? () => { const f = apiFocus(lastApi)!; navigateToIdea(f.ideaId, f.expLabel); }
-                      : undefined} />
-                )}
-                {messages.map((e) => (
-                  <Line key={e.key} glyph="↔" tone="accent" text={e.text} age={ago(e.ts)}
-                    onClick={openMessages} />
-                ))}
-              </div>
-            )}
+            <div class="aa-subs">
+              {/* In-flight long-poll (e.g. wait_for_experiment) pinned first,
+                  blinking until its completion event clears it. */}
+              {st.pendingCall && (
+                <Line glyph="⟳" tone="warn" pending
+                  text={`${fnCall(st.pendingCall)} …`} age={ago(st.pendingCall.ts)} />
+              )}
+              {shown.map((r) => (
+                <Line key={r.key} glyph={r.glyph} tone={r.tone} text={r.text}
+                  age={ago(r.ts)} onClick={r.onClick} />
+              ))}
+              {open && rows.length === 0 && !st.pendingCall && (
+                <div class="aa-sub"><span class="aa-branch">└</span><span class="aa-sub-text">no history yet</span></div>
+              )}
+            </div>
           </div>
         );
       })}

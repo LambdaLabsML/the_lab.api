@@ -191,8 +191,8 @@ export const uiTexture = useSetting("uiTexture", true);
  *  browser) — kept separate from each message's agent `read_by` list. */
 export const messagesReadByMe = useSetting<Record<string, boolean>>("messagesReadByMe", {});
 
-/** History lines shown per expanded agent row in the activity tree. */
-export const agentHistoryLimit = useSetting("agentHistoryLimit", 6);
+/** Detail rows shown per agent in the activity tree (stepper-adjustable). */
+export const agentHistoryLimit = useSetting("agentHistoryLimit", 3);
 
 // ---------------------------------------------------------------------------
 // One-time default migrations

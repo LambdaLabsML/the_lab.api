@@ -50,6 +50,7 @@ export interface AgentState {
   currentExp: string | null;       // label of the running experiment (persists past other events)
   recent: ActivityEvent[];  // newest-first, capped
   apiCalls: ApiCall[];      // last labapi/MCP calls, newest-first
+  pendingCall: ApiCall | null;  // long-poll call in flight right now (e.g. /wait)
   lastActiveTs: number;     // epoch ms of most recent activity (0 = none seen)
 }
 
@@ -74,6 +75,7 @@ let _ideaToAgent: Record<number, string> = {};   // idea_id -> agent_id (live)
 let _agentMeta: Record<string, AgentEntry> = {};  // agent_id -> entry
 let _lastActive: Record<string, number> = {};     // agent_id -> epoch ms of last activity
 let _apiByAgent: Record<string, ApiCall[]> = {};   // agent_id -> last API calls (newest-first)
+let _pendingByAgent: Record<string, ApiCall> = {}; // agent_id -> in-flight long-poll call
 let _curExp: Record<string, string | null> = {};   // agent_id -> running experiment label
 let _seq = 0;
 let _started = false;
@@ -127,11 +129,12 @@ function normalize(ev: Record<string, unknown>): ActivityEvent | null {
       const from = (ev.from_agent as string) || (ev.from_role as string) || null;
       const to = ev.to === "all" ? "all" : String(ev.to ?? "").replace(/^agent:|^role:/, "");
       // Agents often prefix their text with "[from → to]" — we already render
-      // the routing, so strip the prefix instead of saying it twice.
+      // the routing, so strip the prefix instead of saying it twice. The ↔
+      // glyph carries direction; "@to" avoids a second arrow symbol.
       const raw = String(ev.text ?? "").replace(/^\s*\[[^\]]{0,60}\]\s*/, "");
       const body = excerpt(raw, 40);
       return { ...base, agentId: from, kind: "message", glyph: "↔", tone: "accent",
-        text: body ? `→ ${to || "?"}  "${body}"` : `→ ${to || "?"}` };
+        text: body ? `@${to || "?"} "${body}"` : `@${to || "?"}` };
     }
     case "note_added":
       return { ...base, agentId: byIdea, kind: "note", glyph: "✎", tone: "neutral",
@@ -157,12 +160,18 @@ function mkState(id: string): AgentState {
     currentExp: _curExp[id] ?? null,
     recent: [],
     apiCalls: _apiByAgent[id] ?? [],
+    pendingCall: _pendingByAgent[id] ?? null,
     lastActiveTs: _lastActive[id] ?? 0,
   };
 }
 
 function rebuildAgentStates(events: ActivityEvent[]): void {
   const now = Date.now();
+  // A pending long-poll that never saw its completion (socket drop, agent
+  // gone) shouldn't spin forever — expire after 15min.
+  for (const [id, c] of Object.entries(_pendingByAgent)) {
+    if (now - c.ts > 15 * 60_000) delete _pendingByAgent[id];
+  }
   const next: Record<string, AgentState> = {};
   // Only REAL registered agents get a state — attribute events to them by their
   // agent id. This drops phantom role-keyed entries (a pre-enrichment message
@@ -188,6 +197,13 @@ function rebuildAgentStates(events: ActivityEvent[]): void {
 const EXP_KINDS = new Set(["running", "done", "failed", "queued", "cancelled"]);
 
 function pushEvent(e: ActivityEvent): void {
+  // Dedup guard: the backend has (had) double-emit paths (experiment_started
+  // from dispatch+start, message re-broadcasts) — an identical line from the
+  // same agent within 10s is the same event, not new activity.
+  const dup = activityFeed.value.slice(0, 8).some(
+    (p) => p.agentId === e.agentId && p.kind === e.kind && p.text === e.text && e.ts - p.ts < 10_000,
+  );
+  if (dup) return;
   touch(e.agentId);
   // Track the running experiment per agent.
   if (e.agentId) {
@@ -240,7 +256,14 @@ export function startAgentActivity(): void {
           status: typeof ev.status === "number" ? (ev.status as number) : undefined,
           ts: Date.now(),
         };
-        _apiByAgent[aid] = [call, ...(_apiByAgent[aid] ?? [])].slice(0, API_KEEP);
+        if (ev.pending) {
+          // Long-poll started (e.g. /wait) — show it as in-flight until the
+          // completion event for the same path arrives.
+          _pendingByAgent[aid] = call;
+        } else {
+          if (_pendingByAgent[aid]?.path === call.path) delete _pendingByAgent[aid];
+          _apiByAgent[aid] = [call, ...(_apiByAgent[aid] ?? [])].slice(0, API_KEEP);
+        }
         touch(aid);
         rebuildAgentStates(activityFeed.value);
       }
