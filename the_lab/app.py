@@ -102,7 +102,10 @@ def _should_emit_api_call(method: str, path: str, status: int) -> bool:
     return True
 
 
-def _emit_agent_api_call(agent_id: str, method: str, path: str, status: int) -> None:
+def _emit_agent_api_call(agent_id: str, method: str, path: str, status: int,
+                         duration_ms: int | None = None,
+                         resp_bytes: int | None = None,
+                         resp_keys: list | None = None) -> None:
     """Throttled per-agent broadcast of an agent_api_call event. Fail-soft.
 
     Coalesces to at most one event per agent per _API_CALL_WINDOW_SEC; drops the
@@ -117,13 +120,20 @@ def _emit_agent_api_call(agent_id: str, method: str, path: str, status: int) -> 
             if last is not None and (now - last) < _API_CALL_WINDOW_SEC:
                 return
         _api_call_last_emit[agent_id] = now
-        _ws_mod.broadcaster.broadcast_soon({
+        event = {
             "type": "agent_api_call",
             "agent_id": agent_id,
             "method": method,
             "path": path,
             "status": status,
-        })
+        }
+        if duration_ms is not None:
+            event["duration_ms"] = duration_ms
+        if resp_bytes is not None:
+            event["resp_bytes"] = resp_bytes
+        if resp_keys:
+            event["resp_keys"] = resp_keys
+        _ws_mod.broadcaster.broadcast_soon(event)
     except Exception:
         pass
 
@@ -592,18 +602,31 @@ async def inject_notifications(request, call_next):
             except Exception:
                 pass
 
+    _t0 = _time_mod.monotonic()
     response = await call_next(request)
+    _call_ms = int((_time_mod.monotonic() - _t0) * 1000)
     path = request.url.path
 
-    # Live agent ticker: emit a throttled agent_api_call event for real work
-    # calls made by a registered agent. Placed here (we have both the resolved
-    # agent and the final status) rather than a new middleware so we don't
-    # re-wrap the response body a second time. Fully fail-soft.
+    # Live agent ticker: a throttled agent_api_call event for real work calls
+    # made by a registered agent. Emission is deferred until we know the body
+    # (below) so the event can carry duration + response size + top-level keys
+    # for the sidebar hover card; early-return paths emit without body info.
     agent_id = getattr(request.state, "agent_id", None)
-    if (agent_id
-            and not getattr(request.state, "agent_unknown", False)
-            and _should_emit_api_call(request.method, path, response.status_code)):
-        _emit_agent_api_call(agent_id, request.method, path, response.status_code)
+    _want_call_emit = bool(
+        agent_id
+        and not getattr(request.state, "agent_unknown", False)
+        and _should_emit_api_call(request.method, path, response.status_code)
+    )
+
+    def _emit_call(resp_bytes=None, resp_keys=None):
+        nonlocal _want_call_emit
+        if not _want_call_emit:
+            return
+        _want_call_emit = False
+        _emit_agent_api_call(
+            agent_id, request.method, path, response.status_code,
+            duration_ms=_call_ms, resp_bytes=resp_bytes, resp_keys=resp_keys,
+        )
 
     # Only enrich /api/v1/ JSON responses (skip openapi, docs, stats, dashboard).
     # Skip the dedicated /notifications endpoint to avoid self-reference.
@@ -613,9 +636,11 @@ async def inject_notifications(request, call_next):
             or path == "/api/v1/notifications"
             or path == "/api/v1/health"  # liveness probe — keep it minimal
             or response.status_code >= 400):
+        _emit_call()
         return response
     content_type = response.headers.get("content-type", "")
     if "application/json" not in content_type:
+        _emit_call()
         return response
     body_parts = []
     async for chunk in response.body_iterator:
@@ -624,8 +649,13 @@ async def inject_notifications(request, call_next):
     try:
         data = _json.loads(body)
     except (ValueError, TypeError):
+        _emit_call(resp_bytes=len(body))
         return Response(content=body, status_code=response.status_code,
                         headers=dict(response.headers), media_type=response.media_type)
+    _emit_call(
+        resp_bytes=len(body),
+        resp_keys=list(data.keys())[:8] if isinstance(data, dict) else None,
+    )
     notifications = build_notifications(request)
     is_mcp_req = request.headers.get("x-mcp-proxy") == "true"
 
