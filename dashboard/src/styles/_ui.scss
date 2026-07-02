@@ -343,3 +343,11 @@
 }
 /* keep app chrome above the texture layer */
 #app > * { position: relative; z-index: 1; }
+
+/* ── Stepper sizes (components/ui/stepper.tsx) ─────────────────────────────
+   m = the Overview look (styles live on .review-steppers/.review-step in
+   global.scss); s/l only adjust padding + chevron size. */
+.ui-stepper--s .review-step { padding: 1px 3px; }
+.ui-stepper--s .ui-stepper-chev { width: 8px; height: 8px; }
+.ui-stepper--l .review-step { padding: 3px 8px; }
+.ui-stepper--l .ui-stepper-chev { width: 12px; height: 12px; }
