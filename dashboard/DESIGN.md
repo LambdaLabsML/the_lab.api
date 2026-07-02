@@ -39,11 +39,30 @@ flavor, not decoration. Never raise its opacity to where it competes with conten
 | Hairlines | `--border`, `--border-soft` | `--border` = visible 1px; `--border-soft` = whisper |
 | Text | `--text`, `--text-muted`, `--text-faint` | value → secondary → label/eyebrow |
 | Accent | `--accent`, `--accent-dim` | the one active/selected color |
-| Status | `--green`, `--yellow`, `--red`, `--purple` | done / running / failed / best-line |
+| Status | `--green`, `--yellow`, `--red`, `--purple` | see "Status color language" below |
 | Type | `--text-xs … --text-xl` | 8/9/10/12/15 at default. ALWAYS use these. |
 | Radius | `--radius-sm/md/lg` | 3 / 4 / 6 — sharp, hacker-clean. No big pills except true pills. |
 | Space | `--space-1 … --space-8` | 4/8/12/16/24/32 |
 | Font | `--font`, `--font-mono` | both mono by default |
+
+## Status color language
+
+One meaning per color, everywhere (STATUS_VAR_MAP / `sq-*` / badge tones all
+follow this — keep them in sync):
+
+- **`--purple`** — milestone / record / best-so-far. Nothing else is purple.
+- **`--accent`** (blue) — experiments and concluded ideas; also the single
+  interactive accent (selected thing, links). There is no separate `--blue`.
+- **`--yellow`** — running / in-flight / busy right now (running experiments,
+  queued-waiting, actively-working agents). The only color that pulses.
+- **`--red`** — failed / abandoned / worse-than-before.
+- **`--green`** — finished successfully / improved score / healthy-active idea.
+
+**Agent rows** (activity tree, sidebar): the dot before the agent name is a
+STATE dot in this language — yellow = working, faint = quiet; filled =
+listening on `the-lab messages`, hollow = not (pulses only when filled+working).
+The per-agent identity color goes on the agent id text only — never on the
+state dot, so status and identity can't be confused.
 
 ## Components (use these — `components/ui/`)
 
