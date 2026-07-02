@@ -119,16 +119,39 @@
 .aa-icon { display: block; }
 
 // lab-call rows: yellow function calls (in-flight color). Only the NEWEST is
-// full strength — older ones dim, and hovering the agent block restores them.
+// full strength — older ones dim; hovering the agents segment restores them.
 .aa-sub.is-api .aa-sub-text,
 .aa-sub.is-api .aa-glyph {
   color: var(--yellow);
-  transition: opacity var(--transition-fast);
+  transition: opacity var(--transition-fast), color var(--transition-fast);
 }
 .aa-sub.is-api.is-dimmed .aa-sub-text,
 .aa-sub.is-api.is-dimmed .aa-glyph { opacity: 0.45; }
-.aa-agent:hover .aa-sub.is-api.is-dimmed .aa-sub-text,
-.aa-agent:hover .aa-sub.is-api.is-dimmed .aa-glyph { opacity: 1; }
+.activity-sidebar-agents:hover .aa-sub.is-api.is-dimmed .aa-sub-text,
+.activity-sidebar-agents:hover .aa-sub.is-api.is-dimmed .aa-glyph { opacity: 1; }
+
+// ── quiet by default ─────────────────────────────────────────────────────────
+// Un-hovered, the sidebar reads gray: identity pills, links, message icons and
+// older calls all mute. Color survives ONLY for the three live signals — the
+// agent state dot, the NEWEST lab call (full yellow), and the running rows'
+// dot + progress bar. Hovering a segment wakes its colors. The pills carry
+// inline identity colors, hence the contained !important overrides.
+.activity-sidebar-agents:not(:hover) {
+  .aa-msg-pill { color: var(--text-muted) !important; border-color: var(--border-soft) !important; }
+  .exp-link { color: var(--text-muted); }
+  .aa-glyph { color: var(--text-faint); }
+  .aa-sub.is-api.is-dimmed .aa-sub-text,
+  .aa-sub.is-api.is-dimmed .aa-glyph { color: var(--text-muted); opacity: 1; }
+  // exception: the newest lab call keeps its full yellow
+  .aa-sub.is-api:not(.is-dimmed) .aa-sub-text,
+  .aa-sub.is-api:not(.is-dimmed) .aa-glyph { color: var(--yellow); }
+}
+.shortlog-block:not(:hover) {
+  .exp-link { color: var(--text-muted); }
+  .shortlog-dot.is-done,
+  .shortlog-dot.is-bad { background: var(--text-faint); }
+  // .is-running dot + .shortlog-progress stay yellow (live signal)
+}
 
 // the agent's own name pill in the head — same pill, head-scaled
 .aa-head .aa-msg-pill { font-size: inherit; font-weight: 600; }
@@ -227,7 +250,7 @@
   border: 1px solid var(--border-soft);
   border-radius: 999px;
   font-family: var(--font-mono);
-  font-size: var(--text-xs);
+  font-size: inherit;              // follows its row (unified type scale)
   color: var(--text-muted);
   line-height: 1.5;
   white-space: nowrap;
@@ -288,6 +311,7 @@
 }
 .aa-tree.aa-compact .aa-sub {
   padding: 2px 12px 2px 26px;                         // 12px inset + indent under the id
+  font-size: var(--text-sm);                          // unified with the head rows
 }
 .aa-tree.aa-compact .aa-role { display: none; }       // drop role in the narrow rail
 
