@@ -33,10 +33,12 @@ from . import git_ops
 _ID_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789"
 AGENTID_FILE = ".the_lab.agentid"
 
-# An agent is "listening" if it polled its own inbox (the-lab messages, which
-# hits GET /messages?for_me=1) within this many seconds. The CLI default poll
-# interval is ~3s, so this tolerates a few missed polls / a slower --poll.
-LISTENING_WINDOW_SEC = 20
+# An agent is "listening" if it polled its own inbox (the-lab messages) within
+# this many seconds. Warm sources: the ~3s HTTP poll loop, or the messages
+# WebSocket, whose keep-alive re-warms only every 30s — so the window must sit
+# comfortably ABOVE that ping cadence (2 pings + slack) or a WS-connected
+# agent's flag oscillates 20s-on/10s-off and the dashboard row flickers.
+LISTENING_WINDOW_SEC = 75
 _listening_lock = threading.Lock()
 
 
