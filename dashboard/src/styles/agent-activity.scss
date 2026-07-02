@@ -117,6 +117,11 @@
 .aa-tick-msg { height: 9px; background: var(--accent); }   // messages stand out
 .aa-tick-exp { height: 7px; background: var(--green); }
 
+// Lingering row (recently active, now quiet): dim instead of disappearing, so
+// the list never flaps at the active-window boundary. Drops after LINGER_MS.
+.aa-agent.aa-quiet { opacity: 0.55; }
+.aa-agent.aa-quiet .aa-pulsestrip { display: none; }   // strip is a "live" signal
+
 // ── compact (Overview sidebar) — same language, tighter ─────────────────────
 .aa-tree.aa-compact { gap: var(--space-1); }
 .aa-tree.aa-compact .aa-head { font-size: var(--text-xs); }

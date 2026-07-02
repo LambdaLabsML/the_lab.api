@@ -60,13 +60,23 @@ function Line({ glyph, text, tone }: { glyph: string; text: string; tone?: strin
   );
 }
 
+// Hysteresis for activeOnly listing: an agent ENTERS when active, but only
+// LEAVES after this much quiet — so a row hovering at the active-window
+// boundary dims instead of flapping in and out of the sidebar.
+const LINGER_MS = 5 * 60_000;
+
 export function AgentTree({ compact = false, activeOnly = false, maxNested = compact ? 3 : 5 }: {
   compact?: boolean;
   activeOnly?: boolean;
   maxNested?: number;
 }) {
   let states = Object.values(agentStates.value);
-  if (activeOnly) states = states.filter((s) => s.active);
+  if (activeOnly) {
+    const now = Date.now();
+    states = states.filter(
+      (s) => s.active || (s.lastActiveTs > 0 && now - s.lastActiveTs < LINGER_MS),
+    );
+  }
   if (states.length === 0) {
     return <div class="aa-empty">{activeOnly ? "no active agents" : "no agents registered"}</div>;
   }
@@ -90,8 +100,16 @@ export function AgentTree({ compact = false, activeOnly = false, maxNested = com
         // MCP endpoints (falling back to the event trail before any are seen).
         const apis = st.apiCalls.slice(0, maxNested);
         const events = apis.length === 0 ? st.recent.slice(0, maxNested) : [];
+        // Compact: one line of "what it last did" — the most recent labapi/MCP
+        // call, falling back to the latest event when no call has been seen.
+        const lastApi = st.apiCalls[0];
+        const lastLine = lastApi
+          ? { glyph: "⟳", tone: "neutral", text: `${lastApi.method} ${lastApi.path}` }
+          : st.recent[0]
+            ? { glyph: st.recent[0].glyph, tone: st.recent[0].tone, text: st.recent[0].text }
+            : null;
         return (
-          <div class="aa-agent" key={st.agentId}>
+          <div class={`aa-agent${active ? "" : " aa-quiet"}`} key={st.agentId}>
             <div
               class="aa-head"
               role={st.ideaId != null ? "button" : undefined}
@@ -110,7 +128,10 @@ export function AgentTree({ compact = false, activeOnly = false, maxNested = com
               {st.lastActiveTs > 0 && <span class="aa-age">{ago(st.lastActiveTs)}</span>}
             </div>
             {compact ? (
-              <MiniPulse pulses={st.pulses} />
+              <>
+                {lastLine && <Line glyph={lastLine.glyph} tone={lastLine.tone} text={lastLine.text} />}
+                <MiniPulse pulses={st.pulses} />
+              </>
             ) : (apis.length > 0 || events.length > 0) && (
               <div class="aa-subs">
                 {apis.map((c, i) => (
