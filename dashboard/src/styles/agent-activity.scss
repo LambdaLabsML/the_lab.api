@@ -501,3 +501,36 @@
   white-space: pre-wrap;
   word-break: break-all;
 }
+
+// running card: metrics as a compact stat grid (label over value)
+.msg-preview-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-2) var(--space-3);
+}
+.msg-preview-stat { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.msg-preview-stat-label {
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.msg-preview-stat-value {
+  color: var(--text);
+  font-size: var(--text-base);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+// the script's own one-line status summary (long string from progress)
+.msg-preview-note {
+  margin-top: var(--space-2);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
