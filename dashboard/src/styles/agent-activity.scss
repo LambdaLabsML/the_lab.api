@@ -122,39 +122,114 @@
 .aa-sub.is-click { cursor: pointer; }
 .aa-sub.is-click:hover { background: var(--bg-hi); border-radius: var(--radius-sm); }
 
-// ── quick chat (sidebar, below the active agents) ────────────────────────────
+// ── message composer (pinned at the sidebar bottom) ─────────────────────────
 .aa-chat {
+  flex-shrink: 0;
   display: flex;
-  align-items: center;
+  align-items: flex-end;                        // textarea grows upward
   gap: var(--space-1);
-  margin: var(--space-2) 12px 0;  // the segment is un-padded; match the row inset
-  padding-top: var(--space-2);
-  box-shadow: inset 0 1px var(--border-soft);   // hairline, not a box
-}
-.aa-chat-to,
-.aa-chat-input {
-  font: inherit;
-  font-size: var(--text-xs);
-  color: var(--text);
+  padding: var(--space-2) 12px;
+  box-shadow: inset 0 1px var(--border-soft);   // hairline above, not a box
   background: var(--bg-elev);
+}
+.aa-chat-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  resize: none;
+  overflow-y: auto;
+  max-height: 120px;
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  color: var(--text);
+  background: var(--bg);
   border: none;
   box-shadow: inset 0 0 0 1px var(--border-soft);
   border-radius: var(--radius-sm);
-  padding: 3px 6px;
-  min-width: 0;
+  padding: 5px 8px;
 }
-.aa-chat-to { flex-shrink: 0; max-width: 8em; }
-.aa-chat-input { flex: 1 1 auto; }
-.aa-chat-to:focus,
 .aa-chat-input:focus { outline: none; box-shadow: inset 0 0 0 1px var(--accent); }
-.aa-chat-send {
-  flex-shrink: 0;
-  font-size: var(--text-xs);
+
+// split send: [send] [▾] — @all by default, arrow picks a recipient
+.aa-chat-sendwrap { position: relative; display: flex; flex-shrink: 0; }
+.aa-chat-send,
+.aa-chat-arrow {
+  font-size: var(--text-sm);
   color: var(--text-faint);
-  padding: 3px 6px;
+  padding: 5px 7px;
 }
-.aa-chat-send:hover:not(:disabled) { color: var(--text); }
+.aa-chat-send { border-radius: var(--radius-sm) 0 0 var(--radius-sm); }
+.aa-chat-arrow {
+  padding: 5px 4px;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  box-shadow: inset 1px 0 var(--border-soft);   // hairline divider in the split
+}
+.aa-chat-send:hover:not(:disabled),
+.aa-chat-arrow:hover { color: var(--text); background: var(--bg-hi); }
 .aa-chat-send:disabled { opacity: 0.4; cursor: default; }
+
+// recipient menu — opens upward from the split button
+.aa-chat-menu {
+  position: absolute;
+  bottom: 100%;
+  right: 0;
+  margin-bottom: 4px;
+  min-width: 9em;
+  padding: 2px;
+  background: var(--bg-hi);
+  border-radius: var(--radius-md);
+  box-shadow: 0 0 0 1px var(--border-soft), 0 8px 22px rgba(0, 0, 0, 0.45);
+  z-index: 10;
+}
+.aa-chat-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  cursor: pointer;
+}
+.aa-chat-menu-item:hover { background: var(--bg-elev); }
+.aa-chat-menu-item.is-on { color: var(--text); background: var(--bg-elev); }
+
+// ── mini agent pill (message recipients — top-bar badge language, smaller) ──
+.aa-msg-pill {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 6px;
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+// the shared experiment link (components/exp-link.tsx)
+.exp-link {
+  font: inherit;
+  font-family: var(--font-mono);
+  color: var(--accent);
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  text-align: left;
+}
+.exp-link:hover { text-decoration: underline; }
 
 // in-flight long-poll (wait_for_experiment …): blink the glyph until the
 // completion event clears it — same treatment as the shortlog running dot
@@ -187,15 +262,32 @@
   .aa-fade { animation: none; }
 }
 
-// ── Overview sidebar segment ─────────────────────────────────────────────────
-// Rows carry their own 12px inset (shortlog-style full-bleed hover), so the
-// container itself has no horizontal padding.
-.nav-secondary-segment {
+// ── Shared activity sidebar (Overview / Activity / Queue) ────────────────────
+// Column: shortlog (running + recent) on top, agents fill remaining space and
+// scroll internally, composer pinned at the bottom. Rows carry their own 12px
+// inset (shortlog-style full-bleed hover); the containers have none.
+.activity-sidebar {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.activity-sidebar > .activity-shortlog { flex: 0 0 auto; }
+.activity-sidebar-agents {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   margin-top: var(--space-1);
-  padding: 0 0 var(--space-2);
   box-shadow: inset 0 1px var(--border-soft);   // top hairline separator, not a box
 }
-.nav-secondary-segment .aa-empty { padding: 2px 12px 6px; }  // = .shortlog-idle
+.activity-sidebar-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding-bottom: var(--space-2);
+}
+.activity-sidebar .aa-empty { padding: 2px 12px 6px; }  // = .shortlog-idle
 // head row variant: eyebrow left, controls (stepper) right
 .nav-secondary-head--row {
   display: flex;

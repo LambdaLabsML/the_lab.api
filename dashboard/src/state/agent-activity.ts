@@ -30,6 +30,8 @@ export interface ActivityEvent {
   tone?: string;          // ui tone: good | bad | warn | accent | neutral
   ideaId?: number;
   expLabel?: string;      // experiment label for exp-* events (drives currentExp)
+  msgTo?: string;         // message recipient ("all" or agent id) — styled as a pill
+  msgBody?: string;       // message excerpt without the routing
 }
 
 export interface ApiCall {
@@ -134,6 +136,7 @@ function normalize(ev: Record<string, unknown>): ActivityEvent | null {
       const raw = String(ev.text ?? "").replace(/^\s*\[[^\]]{0,60}\]\s*/, "");
       const body = excerpt(raw, 40);
       return { ...base, agentId: from, kind: "message", glyph: "↔", tone: "accent",
+        msgTo: to || "?", msgBody: body,
         text: body ? `@${to || "?"} "${body}"` : `@${to || "?"}` };
     }
     case "note_added":

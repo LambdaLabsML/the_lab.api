@@ -53,9 +53,7 @@ import { SearchFilter, type FilterItem } from "./components/search-filter/search
 import { Eyebrow, Stat, Stepper, Tooltip, experimentTipContent, ideaTipContent } from "./components/ui";
 import { NavRail, SecondaryPanel, type NavSection } from "./components/nav-rail";
 import { ActivityPane } from "./components/activity/activity-pane";
-import { ActivityShortlog } from "./components/activity/activity-shortlog";
-import { AgentTree } from "./components/agent-activity/agent-tree";
-import { AgentQuickChat } from "./components/agent-activity/agent-chat";
+import { ActivitySidebar } from "./components/activity/activity-sidebar";
 import { startAgentActivity } from "./state/agent-activity";
 import { SettingsPanel } from "./components/settings-panel";
 import {
@@ -70,7 +68,6 @@ import {
   reviewOpenSections,
   reviewChartHeight,
   reviewSectionHeights,
-  agentHistoryLimit,
 } from "./state/settings";
 import { startPolling, stopPolling } from "./state/polling";
 import { getQueue } from "./state/api";
@@ -112,13 +109,6 @@ const PANEL_NAMES: Record<string, string> = {
 const ALL_PANEL_IDS = Object.keys(PANEL_NAMES);
 
 // Review dashboard sections, surfaced as the left secondary-nav list.
-const REVIEW_SECTIONS: { id: string; label: string; icon: string }[] = [
-  { id: "review-runs",    label: "Experiments", icon: "◉" },
-  { id: "review-ideas",   label: "Ideas",       icon: "◈" },
-  { id: "review-compare", label: "Correlation", icon: "⊞" },
-  { id: "review-detail",  label: "Idea Detail", icon: "▸" },
-];
-
 // Tools surfaced from the rail (grouped), rendered in the center when active.
 type ToolView = "agents" | "sandbox" | "prompts" | "stats" | "api" | "messages" | "suggest" | "task";
 const TOOL_GROUPS: { group: string; items: { id: ToolView; label: string }[] }[] = [
@@ -1081,16 +1071,7 @@ export function App() {
 
   const focusPanelIds = availablePanels.value;
   const inFocusMode = isMaximized.value;
-  const openReviewSection = useCallback((id: string) => {
-    setNavSection("review");
-    requestAnimationFrame(() => {
-      const el = document.getElementById(id);
-      if (el instanceof HTMLDetailsElement) el.open = true;
-      el?.scrollIntoView({ behavior: "smooth", block: "start" });
-    });
-  }, []);
-
-  const showSecondary = settingsOpen || navSection === "review" || navSection === "queue" || navSection === "workbench" || navSection === "tools";
+  const showSecondary = settingsOpen || navSection === "review" || navSection === "activity" || navSection === "queue" || navSection === "workbench" || navSection === "tools";
   void layoutVersion; // re-read saved layouts after a save/delete
   const savedLayouts = getSavedLayouts();
   return (
@@ -1104,36 +1085,17 @@ export function App() {
 
       {showSecondary && (
         <SecondaryPanel
-          label={settingsOpen ? "Settings" : navSection === "workbench" ? "Workbench" : navSection === "queue" ? "Queue" : navSection === "tools" ? "Tools" : "Review sections"}
+          label={settingsOpen ? "Settings" : navSection === "workbench" ? "Workbench" : navSection === "queue" ? "Queue" : navSection === "tools" ? "Tools" : navSection === "activity" ? "Activity" : "Overview"}
         >
           {settingsOpen ? (
             <SettingsPanel />
           ) : (
             <>
-              {navSection === "review" && (
-                <>
-                  <nav class="nav-secondary-list">
-                    <div class="nav-secondary-head"><Eyebrow>Sections</Eyebrow></div>
-                    {REVIEW_SECTIONS.map((s) => (
-                      <button key={s.id} class="nav-secondary-btn" onClick={() => openReviewSection(s.id)}>
-                        <span class="nav-secondary-icon" aria-hidden="true">{s.icon}</span>
-                        {s.label}
-                      </button>
-                    ))}
-                  </nav>
-                  <div class="nav-secondary-segment">
-                    <div class="nav-secondary-head nav-secondary-head--row">
-                      <Eyebrow>Active agents</Eyebrow>
-                      <Stepper size="s" value={agentHistoryLimit.value} min={1} max={8} step={1}
-                        what="detail rows" onChange={(v) => { agentHistoryLimit.value = v; }} />
-                    </div>
-                    <AgentTree compact activeOnly historyLimit={agentHistoryLimit.value} />
-                    <AgentQuickChat />
-                  </div>
-                  <ActivityShortlog />
-                </>
+              {/* Overview / Activity / Queue share ONE sidebar: running+recent
+                  on top, agents filling the rest, composer pinned at bottom. */}
+              {(navSection === "review" || navSection === "activity" || navSection === "queue") && (
+                <ActivitySidebar />
               )}
-              {navSection === "queue" && <ActivityShortlog />}
               {navSection === "tools" && (
                 <nav class="nav-secondary-list">
                   {TOOL_GROUPS.map((g) => (

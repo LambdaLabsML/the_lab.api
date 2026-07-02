@@ -10,6 +10,13 @@ import { useState } from "preact/hooks";
 import { agentStates, type AgentState, type ApiCall } from "../../state/agent-activity";
 import { agentColor } from "../../lib/colors";
 import { navigateToIdea } from "../../lib/navigate";
+import { ExpLink } from "../exp-link";
+
+/** Experiments live on the Overview page — switch there before focusing. */
+function goOverview(ideaId: number, expLabel?: string): void {
+  window.location.hash = "#review";
+  navigateToIdea(ideaId, expLabel);
+}
 
 function ago(ts: number): string {
   if (!ts) return "";
@@ -98,8 +105,22 @@ function head(st: AgentState): { glyph: string; kind: string; text: string } {
   return { glyph: "○", kind: "idle", text: "idle" };
 }
 
-function Line({ glyph, text, tone, age, onClick, pending }: {
-  glyph: string; text: string; tone?: string; age?: string; onClick?: () => void; pending?: boolean;
+/** Mini agent pill — the top-bar badge language, smaller. "@all" is neutral;
+ *  a specific agent gets its identity color. */
+function AgentPill({ id }: { id: string }) {
+  const color = id === "all" ? undefined : agentColor(id);
+  return (
+    <span class="aa-msg-pill" style={color ? { color, borderColor: `color-mix(in srgb, ${color} 40%, transparent)` } : undefined}>
+      @{id}
+    </span>
+  );
+}
+
+function Line({ glyph, text, tone, age, onClick, pending, to }: {
+  glyph: string; text: string; tone?: string; age?: string;
+  onClick?: () => void; pending?: boolean;
+  /** Message recipient — rendered as a mini agent pill before the text. */
+  to?: string;
 }) {
   return (
     <div
@@ -109,6 +130,7 @@ function Line({ glyph, text, tone, age, onClick, pending }: {
     >
       <span class="aa-branch">└</span>
       <span class={`aa-glyph${pending ? " aa-glyph--pending" : ""}`}>{glyph}</span>
+      {to && <AgentPill id={to} />}
       <span class="aa-sub-text">{text}</span>
       {age && <span class="aa-sub-age">{age}</span>}
     </div>
@@ -122,6 +144,7 @@ interface DetailRow {
   glyph: string;
   tone?: string;
   text: string;
+  to?: string;
   onClick?: () => void;
 }
 
@@ -185,20 +208,34 @@ export function AgentTree({ compact = false, activeOnly = false, historyLimit = 
             const focus = apiFocus(c);
             return {
               key: `api-${c.ts}-${i}`, ts: c.ts, glyph: "⟳", tone: "warn", text: fnCall(c),
-              onClick: focus ? () => navigateToIdea(focus.ideaId, focus.expLabel) : undefined,
+              onClick: focus ? () => goOverview(focus.ideaId, focus.expLabel) : undefined,
             };
           }),
           ...st.recent.map((e): DetailRow => ({
-            key: e.key, ts: e.ts, glyph: e.glyph, tone: e.tone, text: e.text,
+            key: e.key, ts: e.ts, glyph: e.glyph, tone: e.tone,
+            // Messages: pill for the recipient + the bare excerpt.
+            text: e.kind === "message" ? (e.msgBody ? `"${e.msgBody}"` : "") : e.text,
+            to: e.kind === "message" ? e.msgTo : undefined,
             onClick: e.kind === "message"
               ? openMessages
               : e.ideaId != null
-                ? () => navigateToIdea(e.ideaId!, e.expLabel)
+                ? () => goOverview(e.ideaId!, e.expLabel)
                 : undefined,
           })),
         ].sort((a, b) => b.ts - a.ts);
+        // Collapse consecutive identical rows (an agent polling get_experiment
+        // shouldn't fill the list with copies) — keep the newest, count the rest.
+        const dedup: (DetailRow & { n?: number })[] = [];
+        for (const r of rows) {
+          const last = dedup[dedup.length - 1];
+          if (last && last.text === r.text && last.glyph === r.glyph && !last.to) {
+            last.n = (last.n ?? 1) + 1;
+          } else {
+            dedup.push({ ...r });
+          }
+        }
         const open = expanded.has(st.agentId);
-        const shown = open ? rows : rows.slice(0, historyLimit);
+        const shown = open ? dedup : dedup.slice(0, historyLimit);
         return (
           <div class={`aa-agent${active ? "" : " aa-quiet"}`} key={st.agentId}>
             {/* Row click = expand/collapse history. Clicking the action text
@@ -214,14 +251,20 @@ export function AgentTree({ compact = false, activeOnly = false, historyLimit = 
               <span class="aa-id" style={{ color }}>{st.agentId}</span>
               <span class="aa-role">{st.role}</span>
               {glyph && <span class={`aa-glyph aa-tone-${tone}`}>{glyph}</span>}
-              <span
-                class={`aa-head-text${st.ideaId != null ? " is-link" : ""}`}
-                onClick={st.ideaId != null
-                  ? (e) => { e.stopPropagation(); navigateToIdea(st.ideaId!); }
-                  : undefined}
-              >
-                {text}
-              </span>
+              {showExp ? (
+                // Shared experiment link: canonical styling + hover card +
+                // click-through to Overview (see components/exp-link.tsx).
+                <ExpLink label={st.currentExp!} ideaId={st.ideaId} class="aa-head-text" />
+              ) : (
+                <span
+                  class={`aa-head-text${st.ideaId != null ? " is-link" : ""}`}
+                  onClick={st.ideaId != null
+                    ? (e) => { e.stopPropagation(); goOverview(st.ideaId!); }
+                    : undefined}
+                >
+                  {text}
+                </span>
+              )}
               {st.lastActiveTs > 0 && <span class="aa-age">{ago(st.lastActiveTs)}</span>}
               <span class="aa-chev" aria-hidden="true">{open ? "▾" : "▸"}</span>
             </div>
@@ -233,7 +276,8 @@ export function AgentTree({ compact = false, activeOnly = false, historyLimit = 
                   text={`${fnCall(st.pendingCall)} …`} age={ago(st.pendingCall.ts)} />
               )}
               {shown.map((r) => (
-                <Line key={r.key} glyph={r.glyph} tone={r.tone} text={r.text}
+                <Line key={r.key} glyph={r.glyph} tone={r.tone} to={r.to}
+                  text={r.n && r.n > 1 ? `${r.text} ×${r.n}` : r.text}
                   age={ago(r.ts)} onClick={r.onClick} />
               ))}
               {open && rows.length === 0 && !st.pendingCall && (
