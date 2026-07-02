@@ -89,6 +89,15 @@ export function StatsView() {
   const [stats, setStats] = useState<StatsData | null>(null);
   const [patternLen, setPatternLen] = useState(1);
   const [period, setPeriod] = useState("all");
+  const [unit, setUnit] = useState<"kb" | "tok">("kb");
+  // kB → estimated tokens at ~4 bytes/token (same estimate as the call cards)
+  const kb2tok = (kb: number) => kb * 256;
+  const fmtUnit = (kb: number) =>
+    unit === "kb"
+      ? kb.toLocaleString()
+      : kb2tok(kb) >= 1_000_000 ? `${(kb2tok(kb) / 1_000_000).toFixed(1)}M`
+        : kb2tok(kb) >= 1000 ? `${(kb2tok(kb) / 1000).toFixed(0)}k`
+          : String(Math.round(kb2tok(kb)));
   const [costs, setCosts] = useState<Awaited<ReturnType<typeof getAgentCosts>> | null>(null);
   // single-select pattern row (click again to clear)
   const { selected, select, clear: clearSelected } = useSelection<string>();
@@ -148,6 +157,13 @@ export function StatsView() {
           {stats.total_calls.toLocaleString()} calls{hours != null ? ` · last ${period}` : ""}
         </span>
         <div class="pane-bar-actions">
+          {/* size unit: raw kB or estimated tokens (~4 B/tok) */}
+          <span class="review-disclosure-switch" role="group" aria-label="Size unit">
+            {(["kb", "tok"] as const).map((u) => (
+              <button key={u} type="button" class={`rds-opt${unit === u ? " is-on" : ""}`}
+                onClick={() => setUnit(u)}>{u === "kb" ? "kB" : "tok"}</button>
+            ))}
+          </span>
           {/* period filter — call counts come from hourly buckets; costs from
               the timestamped per-agent records */}
           <span class="review-disclosure-switch" role="group" aria-label="Period">
@@ -202,7 +218,9 @@ export function StatsView() {
             <Stat
               size="sm"
               tone="accent"
-              value={totalKB > 1000 ? `${(totalKB/1000).toFixed(0)}MB` : `${totalKB.toFixed(0)}KB`}
+              value={unit === "kb"
+                ? (totalKB > 1000 ? `${(totalKB / 1000).toFixed(0)}MB` : `${totalKB.toFixed(0)}KB`)
+                : `${(kb2tok(totalKB) / 1_000_000).toFixed(1)}M tok`}
               sub="total transferred"
             />
           </div>
@@ -213,13 +231,13 @@ export function StatsView() {
       {stats.response_sizes && stats.response_sizes.length > 0 && (
         <div class="stats-card stats-card-sizes">
           <div class="stats-card-title">
-            <span class="ui-eyebrow">Response sizes · MCP calls only (KB)</span>
+            <span class="ui-eyebrow">Response sizes · MCP calls only ({unit === "kb" ? "kB" : "≈ tokens"})</span>
           </div>
           <div class="stats-card-body stats-sizes-body">
             <table class="stats-size-table">
               <thead>
                 <tr>
-                  {["endpoint", "calls", "total KB", "avg KB", "max KB"].map((h) => (
+                  {["endpoint", "calls", `total ${unit === "kb" ? "KB" : "tok"}`, `avg ${unit === "kb" ? "KB" : "tok"}`, `max ${unit === "kb" ? "KB" : "tok"}`].map((h) => (
                     <th key={h} class={h === "endpoint" ? "" : "num"}>{h}</th>
                   ))}
                 </tr>
@@ -229,9 +247,9 @@ export function StatsView() {
                   <tr key={r.endpoint}>
                     <td class="stats-size-endpoint">{r.endpoint.replace(/^(GET|POST|PUT|PATCH|DELETE) /, "")}</td>
                     <td class="num muted">{r.calls}</td>
-                    <td class="num" style={{ color: r.total_kb > 1000 ? "var(--red)" : r.total_kb > 100 ? "var(--yellow)" : "var(--text)" }}>{r.total_kb.toLocaleString()}</td>
-                    <td class="num" style={{ color: r.avg_kb > 20 ? "var(--yellow)" : "var(--text-muted)" }}>{r.avg_kb}</td>
-                    <td class="num muted">{r.max_kb}</td>
+                    <td class="num" style={{ color: r.total_kb > 1000 ? "var(--red)" : r.total_kb > 100 ? "var(--yellow)" : "var(--text)" }}>{fmtUnit(r.total_kb)}</td>
+                    <td class="num" style={{ color: r.avg_kb > 20 ? "var(--yellow)" : "var(--text-muted)" }}>{fmtUnit(r.avg_kb)}</td>
+                    <td class="num muted">{fmtUnit(r.max_kb)}</td>
                   </tr>
                 ))}
               </tbody>
