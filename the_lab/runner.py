@@ -462,7 +462,10 @@ class ExperimentRunner:
                 if result.get("status") == "error":
                     # Release the units we held; the start failed.
                     self._allocator.release(label)
-                else:
+                elif resource.kind == "slurm":
+                    # Only the slurm path broadcasts here — start() (the local
+                    # path) already emits experiment_started itself, and
+                    # emitting from both sites doubled the activity-feed line.
                     from . import ws as ws_mod
                     ws_mod.broadcaster.broadcast({
                         "type": "experiment_started",

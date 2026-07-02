@@ -107,12 +107,15 @@ def _emit_agent_api_call(agent_id: str, method: str, path: str, status: int) -> 
 
     Coalesces to at most one event per agent per _API_CALL_WINDOW_SEC; drops the
     rest. Never raises — event emission must not break the response.
+    /wait completions bypass the throttle: they pair with a pending-start event
+    (see inject_notifications) and the UI needs the completion to clear it.
     """
     try:
         now = _time_mod.monotonic()
-        last = _api_call_last_emit.get(agent_id)
-        if last is not None and (now - last) < _API_CALL_WINDOW_SEC:
-            return
+        if path != "/api/v1/wait":
+            last = _api_call_last_emit.get(agent_id)
+            if last is not None and (now - last) < _API_CALL_WINDOW_SEC:
+                return
         _api_call_last_emit[agent_id] = now
         _ws_mod.broadcaster.broadcast_soon({
             "type": "agent_api_call",
@@ -570,6 +573,25 @@ async def inject_notifications(request, call_next):
     ``X-Notifications-Count`` header instead so agents know to fetch
     ``GET /api/v1/notifications`` for the full payload.
     """
+    # In-flight marker for the long-poll endpoint: /wait can block for minutes,
+    # so tell the activity view the call is being processed BEFORE it completes
+    # (pending: true; the completion event above clears it). resolve_agent runs
+    # inside this middleware, so read the header directly. Fail-soft.
+    if request.url.path == "/api/v1/wait":
+        _wid = (request.headers.get("x-agent-id") or "").strip()
+        if _wid:
+            try:
+                _ws_mod.broadcaster.broadcast_soon({
+                    "type": "agent_api_call",
+                    "agent_id": _wid,
+                    "method": request.method,
+                    "path": "/api/v1/wait",
+                    "status": None,
+                    "pending": True,
+                })
+            except Exception:
+                pass
+
     response = await call_next(request)
     path = request.url.path
 
