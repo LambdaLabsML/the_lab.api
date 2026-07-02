@@ -54,6 +54,7 @@ import { Eyebrow, Stat, Stepper, Tooltip, experimentTipContent, ideaTipContent }
 import { NavRail, SecondaryPanel, type NavSection } from "./components/nav-rail";
 import { ActivityPane } from "./components/activity/activity-pane";
 import { ActivitySidebar } from "./components/activity/activity-sidebar";
+import { MessagePreviewOverlay } from "./components/agent-activity/message-preview";
 import { startAgentActivity } from "./state/agent-activity";
 import { SettingsPanel } from "./components/settings-panel";
 import {
@@ -1193,6 +1194,8 @@ export function App() {
 
       <div class="app-main">
         <AgentBar />
+        {/* hover-preview of sidebar message rows, floating over the main area */}
+        <MessagePreviewOverlay />
         <div class="app-content">
           {navSection === "activity" && <ActivityPane />}
 

@@ -117,8 +117,9 @@
 .aa-tone-warn   .aa-glyph { color: var(--yellow); }
 .aa-tone-accent .aa-glyph { color: var(--accent); }
 
-// glyph slot: svg icons (ApiIcon/MsgIcon) center in the row
-.aa-glyph { display: inline-flex; align-items: center; align-self: center; }
+// glyph slot: svg icons (ApiIcon/MsgIcon) center in the row; fixed width so
+// call/message rows align regardless of icon
+.aa-glyph { display: inline-flex; align-items: center; align-self: center; width: 12px; justify-content: center; }
 .aa-icon { display: block; }
 
 // lab-call rows: yellow function calls (in-flight color). Only the NEWEST is
@@ -140,13 +141,7 @@
 // dot + progress bar. Hovering a segment wakes its colors. The pills carry
 // inline identity colors, hence the contained !important overrides.
 .activity-sidebar-agents:not(:hover) {
-  // Pills at rest: normal (non-inverted) — regular text tone on the dark
-  // ground, soft outline; identity color arrives on hover.
-  .aa-msg-pill {
-    color: var(--text) !important;
-    background: transparent !important;
-    border-color: var(--border-soft) !important;
-  }
+  // (pills are neutral by default now — nothing to mute)
   .exp-link { color: var(--text-muted); }
   .aa-glyph { color: var(--text-faint); }
   .aa-sub.is-api.is-dimmed .aa-sub-text,
@@ -250,7 +245,9 @@
 .aa-chat-menu-item:hover { background: var(--bg-elev); }
 .aa-chat-menu-item.is-on { color: var(--text); background: var(--bg-elev); }
 
-// ── mini agent pill (message recipients — top-bar badge language, smaller) ──
+// ── agent pill (components/agent-pill.tsx) — THE agent reference ────────────
+// Neutral by design: normal text tone on the dark ground, soft outline, bold.
+// Same pill for senders, recipients, and the agents' own names.
 .aa-msg-pill {
   flex-shrink: 0;
   display: inline-flex;
@@ -260,10 +257,10 @@
   border-radius: 999px;
   font-family: var(--font-mono);
   font-size: inherit;              // follows its row (unified type scale)
-  color: var(--text-muted);
+  font-weight: 600;
+  color: var(--text);
   line-height: 1.5;
   white-space: nowrap;
-  transition: color var(--transition-fast), background var(--transition-fast), border-color var(--transition-fast);
 }
 
 // the shared experiment link (components/exp-link.tsx)
@@ -317,6 +314,59 @@
 .aa-thinking-dots { animation: ui-blink 1.4s steps(2, start) infinite; }
 @media (prefers-reduced-motion: reduce) {
   .aa-thinking-dots { animation: none; }
+}
+
+// ── message hover-preview (floats over the main area) ───────────────────────
+// Shown while a sidebar message row is hovered; fades in, disappears on leave.
+.msg-preview {
+  position: fixed;
+  top: 15%;
+  left: 50%;
+  transform: translateX(-40%);       // biased right of the sidebar
+  z-index: 60;
+  width: min(480px, 44vw);
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-elev);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 0 0 1px var(--border-soft), 0 16px 40px rgba(0, 0, 0, 0.5);
+  font-family: var(--font-mono);
+  pointer-events: none;               // hover lives on the sidebar row
+  animation: msgPreviewIn 0.18s ease-out;
+}
+@keyframes msgPreviewIn {
+  from { opacity: 0; transform: translateX(-40%) translateY(4px); }
+  to   { opacity: 1; transform: translateX(-40%) translateY(0); }
+}
+.msg-preview-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  margin-bottom: var(--space-2);
+}
+.msg-preview-icon { display: inline-flex; align-items: center; color: var(--accent); }
+.msg-preview-time {
+  margin-left: auto;
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+.msg-preview-body {
+  color: var(--text);
+  font-size: var(--text-sm);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 50vh;
+  overflow: hidden;
+}
+.msg-preview-hint {
+  margin-top: var(--space-2);
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+}
+@media (prefers-reduced-motion: reduce) {
+  .msg-preview { animation: none; }
 }
 
 // in-flight long-poll (wait_for_experiment …): blink the glyph until the
@@ -384,3 +434,6 @@
   justify-content: space-between;
   gap: var(--space-2);
 }
+
+// "waiting" — listener armed, no fresh work (standing by for replies/results)
+.aa-waiting { color: var(--text-faint); }

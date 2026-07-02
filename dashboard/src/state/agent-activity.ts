@@ -32,6 +32,68 @@ export interface ActivityEvent {
   expLabel?: string;      // experiment label for exp-* events (drives currentExp)
   msgTo?: string;         // message recipient ("all" or agent id) — styled as a pill
   msgBody?: string;       // message excerpt without the routing
+  msgId?: number;         // inbox id (drives hover preview + click-to-focus)
+}
+
+/** Hover preview of a message, shown as an overlay in the main area. */
+export interface MessagePreview {
+  id: number | null;
+  from: string | null;
+  to: string;
+  body: string;          // best available text (excerpt until the fetch lands)
+  ts: number;
+  full: boolean;         // body is the complete message text
+}
+
+/** Currently hover-previewed message (null = hidden). */
+export const messagePreview = signal<MessagePreview | null>(null);
+
+/** Message id the Messages tool should scroll to + expand (consumed there). */
+export const focusMessageId = signal<number | null>(null);
+
+// Full message texts by id, fetched lazily on hover (WS events carry only an
+// 80-char excerpt).
+const _fullMsgCache: Record<number, { from: string | null; to: string; text: string; ts: number }> = {};
+
+/** Show the preview for a message event; fetches the full text lazily. */
+export function showMessagePreview(ev: ActivityEvent): void {
+  const id = ev.msgId ?? null;
+  const base: MessagePreview = {
+    id,
+    from: ev.agentId,
+    to: ev.msgTo ?? "?",
+    body: ev.msgBody ?? "",
+    ts: ev.ts,
+    full: false,
+  };
+  const cached = id != null ? _fullMsgCache[id] : undefined;
+  messagePreview.value = cached
+    ? { id, from: cached.from, to: base.to, body: cached.text, ts: cached.ts || ev.ts, full: true }
+    : base;
+  if (id != null && !cached) {
+    import("./api").then(({ listMessages }) => listMessages(100)).then((msgs) => {
+      for (const m of msgs) {
+        _fullMsgCache[m.id] = {
+          from: m.from_agent ?? m.from_role ?? null,
+          to: m.to === "all" ? "all" : m.to.replace(/^agent:|^role:/, ""),
+          text: m.text,
+          ts: Date.parse(m.created_at) || 0,
+        };
+      }
+      const hit = _fullMsgCache[id];
+      // Only update if this message is still the one being hovered.
+      if (hit && messagePreview.value?.id === id) {
+        messagePreview.value = {
+          id, from: hit.from, to: hit.to || base.to, body: hit.text,
+          ts: hit.ts || base.ts, full: true,
+        };
+      }
+    }).catch(() => { /* keep the excerpt */ });
+  }
+}
+
+export function hideMessagePreview(): void {
+  messagePreview.value = null;
 }
 
 export interface ApiCall {
@@ -54,6 +116,11 @@ export interface AgentState {
   apiCalls: ApiCall[];      // last labapi/MCP calls, newest-first
   pendingCall: ApiCall | null;  // long-poll call in flight right now (e.g. /wait)
   lastActiveTs: number;     // epoch ms of most recent activity (0 = none seen)
+  /** Most recent OWN action (api call / message / exp event) — drives the
+   *  "thinking…" state. Passive signals (experiment heartbeats) refresh
+   *  lastActiveTs but NOT this, so an agent waiting on a running experiment
+   *  doesn't read as perpetually thinking. */
+  lastWorkTs: number;
 }
 
 const FEED_MAX = 120;
@@ -83,8 +150,19 @@ let _seq = 0;
 let _started = false;
 let _pollTimer: ReturnType<typeof setInterval> | null = null;
 
+let _lastWork: Record<string, number> = {};        // agent_id -> last OWN action
+
 function touch(agentId: string | null | undefined): void {
   if (agentId) _lastActive[agentId] = Date.now();
+}
+
+/** An agent's own action (call/message/event) — counts toward "thinking". */
+function work(agentId: string | null | undefined): void {
+  if (agentId) {
+    const now = Date.now();
+    _lastActive[agentId] = now;
+    _lastWork[agentId] = now;
+  }
 }
 
 function agentForIdea(ideaId: unknown): string | null {
@@ -137,6 +215,7 @@ function normalize(ev: Record<string, unknown>): ActivityEvent | null {
       const body = excerpt(raw, 40);
       return { ...base, agentId: from, kind: "message", glyph: "↔", tone: "accent",
         msgTo: to || "?", msgBody: body,
+        msgId: typeof ev.id === "number" ? (ev.id as number) : undefined,
         text: body ? `@${to || "?"} "${body}"` : `@${to || "?"}` };
     }
     case "note_added":
@@ -165,6 +244,7 @@ function mkState(id: string): AgentState {
     apiCalls: _apiByAgent[id] ?? [],
     pendingCall: _pendingByAgent[id] ?? null,
     lastActiveTs: _lastActive[id] ?? 0,
+    lastWorkTs: _lastWork[id] ?? 0,
   };
 }
 
@@ -192,6 +272,7 @@ function rebuildAgentStates(events: ActivityEvent[]): void {
   // Recency-based "active": trust observed activity, not the registry pid.
   for (const st of Object.values(next)) {
     st.lastActiveTs = _lastActive[st.agentId] ?? 0;
+    st.lastWorkTs = _lastWork[st.agentId] ?? 0;
     st.active = st.listening || (st.lastActiveTs > 0 && now - st.lastActiveTs < ACTIVE_WINDOW_MS);
   }
   agentStates.value = next;
@@ -207,7 +288,7 @@ function pushEvent(e: ActivityEvent): void {
     (p) => p.agentId === e.agentId && p.kind === e.kind && p.text === e.text && e.ts - p.ts < 10_000,
   );
   if (dup) return;
-  touch(e.agentId);
+  work(e.agentId);   // own action — counts toward "thinking"
   // Track the running experiment per agent.
   if (e.agentId) {
     if (EXP_KINDS.has(e.kind)) {
@@ -267,7 +348,7 @@ export function startAgentActivity(): void {
           if (_pendingByAgent[aid]?.path === call.path) delete _pendingByAgent[aid];
           _apiByAgent[aid] = [call, ...(_apiByAgent[aid] ?? [])].slice(0, API_KEEP);
         }
-        touch(aid);
+        work(aid);   // own action — counts toward "thinking"
         rebuildAgentStates(activityFeed.value);
       }
       return;

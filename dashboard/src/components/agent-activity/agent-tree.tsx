@@ -7,10 +7,13 @@
  * Data comes from the live agent-activity store.
  */
 import { useState } from "preact/hooks";
-import { agentStates, type AgentState, type ApiCall } from "../../state/agent-activity";
-import { agentColor } from "../../lib/colors";
+import {
+  agentStates, focusMessageId, showMessagePreview, hideMessagePreview,
+  type ActivityEvent, type AgentState, type ApiCall,
+} from "../../state/agent-activity";
 import { navigateToIdea } from "../../lib/navigate";
 import { ExpLink } from "../exp-link";
+import { AgentPill } from "../agent-pill";
 import { ApiIcon, MsgIcon } from "./icons";
 
 /** Experiments live on the Overview page — switch there before focusing. */
@@ -87,33 +90,25 @@ function apiFocus(c: ApiCall): { ideaId: number; expLabel?: string } | null {
   return null;
 }
 
-// Head state from recency (the store's `active` + lastActiveTs). Event texts
-// are NOT repeated here — they live in the detail rows below; the head answers
-// "what is it doing right now": running exp (caller) > thinking > on idea > idle.
+// Head state. Event texts are NOT repeated here — they live in the detail rows;
+// the head answers "what is it doing right now":
+//   running exp (caller) > thinking (fresh OWN work) > waiting (listening, no
+//   fresh work — e.g. re-armed the listener for replies) > on idea/N > idle.
+// Note thinking keys off lastWorkTs, not lastActiveTs: experiment heartbeats
+// keep an agent active but must not read as the agent itself thinking.
 const THINKING_MS = 30_000;
 
-function head(st: AgentState): { kind: "thinking" | "active" | "idle"; text: string } {
-  if (st.active && st.lastActiveTs > 0 && Date.now() - st.lastActiveTs < THINKING_MS) {
-    // Something just happened (call/event/heartbeat) — the agent is working
-    // between tool calls right now.
+function head(st: AgentState): { kind: "thinking" | "waiting" | "active" | "idle"; text: string } {
+  if (st.active && st.lastWorkTs > 0 && Date.now() - st.lastWorkTs < THINKING_MS) {
     return { kind: "thinking", text: "thinking" };
+  }
+  if (st.listening) {
+    return { kind: "waiting", text: "waiting" };
   }
   if (st.active) {
     return { kind: "active", text: st.ideaId != null ? `on idea/${st.ideaId}` : "working" };
   }
   return { kind: "idle", text: "idle" };
-}
-
-/** Mini agent pill — the top-bar badge language, smaller. "@all" broadcasts in
- *  the accent; a specific agent gets its identity color. `at` controls the "@"
- *  prefix (recipients get it, the agent's own name in the head does not). */
-export function AgentPill({ id, at = true }: { id: string; at?: boolean }) {
-  const color = id === "all" ? "var(--accent)" : agentColor(id);
-  return (
-    <span class="aa-msg-pill" style={{ color, borderColor: `color-mix(in srgb, ${color} 40%, transparent)` }}>
-      {at ? `@${id}` : id}
-    </span>
-  );
 }
 
 /** Row glyph: ⟳ / ↔ get real SVG icons (stepper-chevron style); the rest stay text. */
@@ -123,7 +118,7 @@ function LineGlyph({ glyph }: { glyph: string }) {
   return <>{glyph}</>;
 }
 
-function Line({ glyph, text, tone, age, onClick, pending, to, api, latest }: {
+function Line({ glyph, text, tone, age, onClick, pending, to, api, latest, hoverEv }: {
   glyph: string; text: string; tone?: string; age?: string;
   onClick?: () => void; pending?: boolean;
   /** Message recipient — rendered as a mini agent pill before the text. */
@@ -131,12 +126,16 @@ function Line({ glyph, text, tone, age, onClick, pending, to, api, latest }: {
   /** Lab-call row: yellow text; dimmed unless it's the newest (or hovered). */
   api?: boolean;
   latest?: boolean;
+  /** Message event — hovering previews the full message in the main area. */
+  hoverEv?: ActivityEvent;
 }) {
   return (
     <div
       class={`aa-sub aa-tone-${tone ?? "neutral"}${onClick ? " is-click" : ""}${api ? " is-api" : ""}${api && !latest ? " is-dimmed" : ""}`}
       role={onClick ? "button" : undefined}
       onClick={onClick ? (e) => { e.stopPropagation(); onClick(); } : undefined}
+      onMouseEnter={hoverEv ? () => showMessagePreview(hoverEv) : undefined}
+      onMouseLeave={hoverEv ? hideMessagePreview : undefined}
     >
       <span class="aa-branch">└</span>
       <span class={`aa-glyph${pending ? " aa-glyph--pending" : ""}`}><LineGlyph glyph={glyph} /></span>
@@ -156,6 +155,7 @@ interface DetailRow {
   text: string;
   to?: string;
   api?: boolean;
+  hoverEv?: ActivityEvent;   // message rows: hover-preview source
   onClick?: () => void;
 }
 
@@ -220,11 +220,13 @@ export function AgentTree({ compact = false, activeOnly = false, historyLimit = 
           }),
           ...st.recent.map((e): DetailRow => ({
             key: e.key, ts: e.ts, glyph: e.glyph, tone: e.tone,
-            // Messages: pill for the recipient + the bare excerpt.
+            // Messages: pill for the recipient + the bare excerpt; hovering
+            // previews the full message, clicking focuses it in Messages.
             text: e.kind === "message" ? (e.msgBody ? `"${e.msgBody}"` : "") : e.text,
             to: e.kind === "message" ? e.msgTo : undefined,
+            hoverEv: e.kind === "message" ? e : undefined,
             onClick: e.kind === "message"
-              ? openMessages
+              ? () => { hideMessagePreview(); if (e.msgId != null) focusMessageId.value = e.msgId; openMessages(); }
               : e.ideaId != null
                 ? () => goOverview(e.ideaId!, e.expLabel)
                 : undefined,
@@ -263,7 +265,7 @@ export function AgentTree({ compact = false, activeOnly = false, historyLimit = 
                 class={`aa-dot aa-dot--state${active ? " is-active" : ""}${st.listening ? " is-listening" : ""}${st.listening && active ? " aa-pulse" : ""}`}
                 title={`${st.listening ? "listening" : "not listening"} · ${active ? "working" : "quiet"}`}
               />
-              <AgentPill id={st.agentId} at={false} />
+              <AgentPill id={st.agentId} />
               <span class="aa-role">{st.role}</span>
               {showExp ? (
                 // Shared experiment link: canonical styling + hover card +
@@ -273,8 +275,11 @@ export function AgentTree({ compact = false, activeOnly = false, historyLimit = 
                   <ExpLink label={st.currentExp!} ideaId={st.ideaId} class="aa-head-text" />
                 </>
               ) : h.kind === "thinking" ? (
-                // Fresh activity — the agent is working between tool calls.
+                // Fresh OWN work — the agent is working between tool calls.
                 <span class="aa-head-text aa-thinking">thinking<span class="aa-thinking-dots">…</span></span>
+              ) : h.kind === "waiting" ? (
+                // Listener armed, no fresh work — standing by for replies/results.
+                <span class="aa-head-text aa-waiting">waiting</span>
               ) : (
                 <>
                   {h.kind === "idle" && <span class="aa-glyph">○</span>}
@@ -300,6 +305,7 @@ export function AgentTree({ compact = false, activeOnly = false, historyLimit = 
               )}
               {shown.map((r) => (
                 <Line key={r.key} glyph={r.glyph} tone={r.tone} to={r.to} api={r.api} latest={r.latest}
+                  hoverEv={r.hoverEv}
                   text={r.n && r.n > 1 ? `${r.text} ×${r.n}` : r.text}
                   age={ago(r.ts)} onClick={r.onClick} />
               ))}

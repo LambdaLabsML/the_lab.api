@@ -14,13 +14,14 @@ export function ApiIcon() {
   );
 }
 
-/** Inter-agent message — a sent arrow (→); the pill names the recipient. */
+/** Inter-agent message — a double chevron (»): "send onward". Same family and
+ *  box as the call chevron, so the two icons share an identical width. */
 export function MsgIcon() {
   return (
     <svg class="aa-icon" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"
       fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-      <line x1="1.5" y1="5" x2="8" y2="5" />
-      <polyline points="5.5,2.5 8.5,5 5.5,7.5" />
+      <polyline points="2,2 5,5 2,8" />
+      <polyline points="5.5,2 8.5,5 5.5,8" />
     </svg>
   );
 }

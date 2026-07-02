@@ -388,6 +388,11 @@
 }
 .msg:hover { background: var(--bg-elev); }
 .msg.is-new { box-shadow: inset 2px 0 0 var(--accent); }  // new to the viewer
+// deep-link target (sidebar click): flash ring while scrolled into view
+.msg.is-focus {
+  background: var(--bg-hi);
+  box-shadow: inset 0 0 0 1px var(--yellow);
+}
 .msg.is-read { opacity: 0.62; }
 
 .msg-dot {

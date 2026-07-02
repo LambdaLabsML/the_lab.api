@@ -4,6 +4,8 @@ import type { AgentEntry, MessageEntry } from "../lib/types";
 import { Badge, EmptyState, IconButton } from "../components/ui";
 import { agentColor } from "../lib/colors";
 import { messagesReadByMe } from "../state/settings";
+import { focusMessageId } from "../state/agent-activity";
+import { AgentPill } from "../components/agent-pill";
 
 /** Format a created_at ISO timestamp as "Xs ago" / "Xm ago" / "Xh ago" / "Xd ago". */
 function relativeTime(iso: string): string {
@@ -99,6 +101,22 @@ export function MessagesView() {
     };
   }, []);
 
+  // Deep-link from the sidebar: expand + scroll to + flash the focused message.
+  const focusId = focusMessageId.value;
+  const [flashId, setFlashId] = useState<number | null>(null);
+  useEffect(() => {
+    if (focusId == null || !loaded) return;
+    if (!messages.some((m) => m.id === focusId)) return;
+    focusMessageId.value = null;                       // consume
+    setExpanded((prev) => { const n = new Set(prev); n.add(focusId); return n; });
+    setFlashId(focusId);
+    requestAnimationFrame(() => {
+      document.getElementById(`msg-${focusId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+    const t = window.setTimeout(() => setFlashId(null), 2500);
+    return () => window.clearTimeout(t);
+  }, [focusId, loaded, messages]);
+
   const roleByAgent = useMemo(() => {
     const map: Record<string, string> = {};
     for (const a of agents) map[a.agent_id] = a.role || "default";
@@ -114,17 +132,6 @@ export function MessagesView() {
     if (to.startsWith("agent:")) return labelAgent(to.slice(6));
     if (to.startsWith("role:")) return `role:${to.slice(5)}`;
     return to;
-  }
-  function recipientColor(to: string): string {
-    if (to.startsWith("agent:")) return agentColor(to.slice(6));
-    return "var(--accent)";
-  }
-  function describeSender(m: MessageEntry): string {
-    if (m.from_agent) {
-      const role = m.from_role || roleByAgent[m.from_agent];
-      return role ? `${m.from_agent} · ${role}` : m.from_agent;
-    }
-    return m.from_role || "system";
   }
 
   // Perspective: "me" uses local read state; an agent uses its server read_by.
@@ -307,14 +314,17 @@ export function MessagesView() {
               const long = isLong(m.text);
               const open = expanded.has(m.id);
               const sColor = agentColor(m.from_agent);
+              const toId = m.to === "all" ? "all" : m.to.replace(/^agent:|^role:/, "");
               return (
-                <li class={`msg${read ? " is-read" : " is-new"}`} key={m.id}>
+                <li class={`msg${read ? " is-read" : " is-new"}${flashId === m.id ? " is-focus" : ""}`}
+                  key={m.id} id={`msg-${m.id}`}>
                   <div class="msg-main">
                     <div class="msg-head">
                       <span class="msg-dot" style={{ background: sColor }} title={`agent ${m.from_agent ?? "system"}`} />
-                      <span class="msg-from" style={{ color: sColor }}>{describeSender(m)}</span>
+                      {/* shared AgentPill language (see DESIGN.md) */}
+                      <AgentPill id={m.from_agent ?? m.from_role ?? "system"} />
                       <span class="msg-arrow">→</span>
-                      <span class="msg-to" style={{ color: recipientColor(m.to) }}>{describeRecipient(m.to)}</span>
+                      <AgentPill id={toId} />
                       <span class="msg-time" title={m.created_at}>{relativeTime(m.created_at)}</span>
                       {inPerspective ? (
                         <span
