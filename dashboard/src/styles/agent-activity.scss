@@ -114,6 +114,25 @@
 .aa-tone-warn   .aa-glyph { color: var(--yellow); }
 .aa-tone-accent .aa-glyph { color: var(--accent); }
 
+// glyph slot: svg icons (ApiIcon/MsgIcon) center in the row
+.aa-glyph { display: inline-flex; align-items: center; align-self: center; }
+.aa-icon { display: block; }
+
+// lab-call rows: yellow function calls (in-flight color). Only the NEWEST is
+// full strength — older ones dim, and hovering the agent block restores them.
+.aa-sub.is-api .aa-sub-text,
+.aa-sub.is-api .aa-glyph {
+  color: var(--yellow);
+  transition: opacity var(--transition-fast);
+}
+.aa-sub.is-api.is-dimmed .aa-sub-text,
+.aa-sub.is-api.is-dimmed .aa-glyph { opacity: 0.45; }
+.aa-agent:hover .aa-sub.is-api.is-dimmed .aa-sub-text,
+.aa-agent:hover .aa-sub.is-api.is-dimmed .aa-glyph { opacity: 1; }
+
+// the agent's own name pill in the head — same pill, head-scaled
+.aa-head .aa-msg-pill { font-size: inherit; font-weight: 600; }
+
 // Lingering row (recently active, now quiet): dim instead of disappearing, so
 // the list never flaps at the active-window boundary. Drops after LINGER_MS.
 .aa-agent.aa-quiet { opacity: 0.55; }

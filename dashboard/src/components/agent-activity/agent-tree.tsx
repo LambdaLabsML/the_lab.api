@@ -11,6 +11,7 @@ import { agentStates, type AgentState, type ApiCall } from "../../state/agent-ac
 import { agentColor } from "../../lib/colors";
 import { navigateToIdea } from "../../lib/navigate";
 import { ExpLink } from "../exp-link";
+import { ApiIcon, MsgIcon } from "./icons";
 
 /** Experiments live on the Overview page — switch there before focusing. */
 function goOverview(ideaId: number, expLabel?: string): void {
@@ -105,31 +106,42 @@ function head(st: AgentState): { glyph: string; kind: string; text: string } {
   return { glyph: "○", kind: "idle", text: "idle" };
 }
 
-/** Mini agent pill — the top-bar badge language, smaller. "@all" is neutral;
- *  a specific agent gets its identity color. */
-function AgentPill({ id }: { id: string }) {
-  const color = id === "all" ? undefined : agentColor(id);
+/** Mini agent pill — the top-bar badge language, smaller. "@all" broadcasts in
+ *  the accent; a specific agent gets its identity color. `at` controls the "@"
+ *  prefix (recipients get it, the agent's own name in the head does not). */
+export function AgentPill({ id, at = true }: { id: string; at?: boolean }) {
+  const color = id === "all" ? "var(--accent)" : agentColor(id);
   return (
-    <span class="aa-msg-pill" style={color ? { color, borderColor: `color-mix(in srgb, ${color} 40%, transparent)` } : undefined}>
-      @{id}
+    <span class="aa-msg-pill" style={{ color, borderColor: `color-mix(in srgb, ${color} 40%, transparent)` }}>
+      {at ? `@${id}` : id}
     </span>
   );
 }
 
-function Line({ glyph, text, tone, age, onClick, pending, to }: {
+/** Row glyph: ⟳ / ↔ get real SVG icons (stepper-chevron style); the rest stay text. */
+function LineGlyph({ glyph }: { glyph: string }) {
+  if (glyph === "⟳") return <ApiIcon />;
+  if (glyph === "↔") return <MsgIcon />;
+  return <>{glyph}</>;
+}
+
+function Line({ glyph, text, tone, age, onClick, pending, to, api, latest }: {
   glyph: string; text: string; tone?: string; age?: string;
   onClick?: () => void; pending?: boolean;
   /** Message recipient — rendered as a mini agent pill before the text. */
   to?: string;
+  /** Lab-call row: yellow text; dimmed unless it's the newest (or hovered). */
+  api?: boolean;
+  latest?: boolean;
 }) {
   return (
     <div
-      class={`aa-sub aa-tone-${tone ?? "neutral"}${onClick ? " is-click" : ""}`}
+      class={`aa-sub aa-tone-${tone ?? "neutral"}${onClick ? " is-click" : ""}${api ? " is-api" : ""}${api && !latest ? " is-dimmed" : ""}`}
       role={onClick ? "button" : undefined}
       onClick={onClick ? (e) => { e.stopPropagation(); onClick(); } : undefined}
     >
       <span class="aa-branch">└</span>
-      <span class={`aa-glyph${pending ? " aa-glyph--pending" : ""}`}>{glyph}</span>
+      <span class={`aa-glyph${pending ? " aa-glyph--pending" : ""}`}><LineGlyph glyph={glyph} /></span>
       {to && <AgentPill id={to} />}
       <span class="aa-sub-text">{text}</span>
       {age && <span class="aa-sub-age">{age}</span>}
@@ -145,6 +157,7 @@ interface DetailRow {
   tone?: string;
   text: string;
   to?: string;
+  api?: boolean;
   onClick?: () => void;
 }
 
@@ -192,7 +205,6 @@ export function AgentTree({ compact = false, activeOnly = false, historyLimit = 
   return (
     <div class={`aa-tree${compact ? " aa-compact" : ""}`}>
       {states.map((st) => {
-        const color = agentColor(st.agentId);
         const h = head(st);
         const active = h.kind !== "idle";
         // Head prefers the assigned/running experiment (persists past other
@@ -207,7 +219,7 @@ export function AgentTree({ compact = false, activeOnly = false, historyLimit = 
           ...st.apiCalls.map((c, i): DetailRow => {
             const focus = apiFocus(c);
             return {
-              key: `api-${c.ts}-${i}`, ts: c.ts, glyph: "⟳", tone: "warn", text: fnCall(c),
+              key: `api-${c.ts}-${i}`, ts: c.ts, glyph: "⟳", tone: "warn", text: fnCall(c), api: true,
               onClick: focus ? () => goOverview(focus.ideaId, focus.expLabel) : undefined,
             };
           }),
@@ -235,7 +247,15 @@ export function AgentTree({ compact = false, activeOnly = false, historyLimit = 
           }
         }
         const open = expanded.has(st.agentId);
-        const shown = open ? dedup : dedup.slice(0, historyLimit);
+        // Only the NEWEST lab call is fully yellow; older ones dim (hovering
+        // the agent block restores them — see .aa-agent:hover in scss). A
+        // pending long-poll counts as the newest.
+        let seenApi = !!st.pendingCall;
+        const shown = (open ? dedup : dedup.slice(0, historyLimit)).map((r) => {
+          const latest = !!r.api && !seenApi;
+          if (r.api) seenApi = true;
+          return { ...r, latest };
+        });
         return (
           <div class={`aa-agent${active ? "" : " aa-quiet"}`} key={st.agentId}>
             {/* Row click = expand/collapse history. Clicking the action text
@@ -248,7 +268,7 @@ export function AgentTree({ compact = false, activeOnly = false, historyLimit = 
                 class={`aa-dot aa-dot--state${active ? " is-active" : ""}${st.listening ? " is-listening" : ""}${st.listening && active ? " aa-pulse" : ""}`}
                 title={`${st.listening ? "listening" : "not listening"} · ${active ? "working" : "quiet"}`}
               />
-              <span class="aa-id" style={{ color }}>{st.agentId}</span>
+              <AgentPill id={st.agentId} at={false} />
               <span class="aa-role">{st.role}</span>
               {glyph && <span class={`aa-glyph aa-tone-${tone}`}>{glyph}</span>}
               {showExp ? (
@@ -272,11 +292,11 @@ export function AgentTree({ compact = false, activeOnly = false, historyLimit = 
               {/* In-flight long-poll (e.g. wait_for_experiment) pinned first,
                   blinking until its completion event clears it. */}
               {st.pendingCall && (
-                <Line glyph="⟳" tone="warn" pending
+                <Line glyph="⟳" tone="warn" pending api latest
                   text={`${fnCall(st.pendingCall)} …`} age={ago(st.pendingCall.ts)} />
               )}
               {shown.map((r) => (
-                <Line key={r.key} glyph={r.glyph} tone={r.tone} to={r.to}
+                <Line key={r.key} glyph={r.glyph} tone={r.tone} to={r.to} api={r.api} latest={r.latest}
                   text={r.n && r.n > 1 ? `${r.text} ×${r.n}` : r.text}
                   age={ago(r.ts)} onClick={r.onClick} />
               ))}
