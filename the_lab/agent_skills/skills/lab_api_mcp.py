@@ -69,6 +69,7 @@ INCLUDE = {
     ("patch", "/api/v1/experiments/{exp_ref}/tags"): "update_experiment_tags",
     ("post", "/api/v1/experiments/tags/batch"):    "batch_update_tags",
     ("get",  "/api/v1/experiments/{exp_ref}"):     "get_experiment",
+    ("get",  "/api/v1/experiments/{exp_ref}/meta"): "get_meta",
     ("get",  "/api/v1/experiments/{exp_ref}/log"): "get_experiment_log",
     ("get",  "/api/v1/experiments/{exp_ref}/progress"): "get_progress",
     ("post", "/api/v1/experiments/{exp_ref}/start"):  "start_experiment",

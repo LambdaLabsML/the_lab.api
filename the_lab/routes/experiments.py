@@ -18,12 +18,10 @@ from ..deps import (
     runner,
     REPO_DIR,
     _resolve_exp,
-    _idea_context,
     _branch_diff_summary,
     _description_short,
     _wrap_script,
 )
-from ..git_ops import get_current_branch
 from ..schemas import (
     NewExperimentRequest,
     StartExperimentRequest,
@@ -77,47 +75,40 @@ def _exp_sort_key(exp: dict):
     )
 
 
-def _compact_experiment(exp: dict, ref: str) -> dict:
-    """Compact one experiment for a paged listing.
+def _list_row(exp: dict, idea_cache: dict[int, dict], metric: str | None,
+              tag_list: list[str]) -> dict:
+    """One trimmed listing row: short idea/description, metrics, soft error."""
+    label = exp.get("label", str(exp["id"]))
+    idea_id = exp["idea_id"]
+    if idea_id not in idea_cache:
+        idea_cache[idea_id] = store.get_idea(idea_id)
+    idea = idea_cache[idea_id]
 
-    Keeps top-level SCALAR fields as-is; any nested dict/list value (metrics,
-    meta, config, rollout, …) is replaced with a placeholder that keeps the key,
-    signals structure exists, and says how to fetch the full value.
-    """
-    via = f"GET /api/v1/experiments/{ref}"
-    out: dict = {}
-    for key, value in exp.items():
-        if isinstance(value, (dict, list)):
-            out[key] = {
-                "_collapsed": True,
-                "_keys": len(value),
-                "_via": via,
-            }
-        else:
-            out[key] = value
-    return out
+    # When ?metric=X is given, show only that value (the caller knows what
+    # they care about). Otherwise include all metrics — we don't know which
+    # metric the project optimises, so hardcoding names would be wrong.
+    all_metrics = exp.get("metrics") or {}
+    shown_metrics = {metric: all_metrics[metric]} if metric else all_metrics
 
-
-def _paginate(exps: list[dict], page: int, page_size: int) -> dict:
-    """Sort newest-first, slice to *page*, compact, and wrap with pager meta."""
-    page = max(1, page)
-    page_size = max(1, page_size)
-    ordered = sorted(exps, key=_exp_sort_key, reverse=True)
-    total = len(ordered)
-    total_pages = math.ceil(total / page_size) if total else 0
-    start = (page - 1) * page_size
-    window = ordered[start:start + page_size]
-    compact = [
-        _compact_experiment(e, e.get("label") or str(e.get("id")))
-        for e in window
-    ]
-    return {
-        "experiments": compact,
-        "page": page,
-        "page_size": page_size,
-        "total": total,
-        "total_pages": total_pages,
+    out = {
+        "id":          exp["id"],
+        "label":       label,
+        "idea_id":     idea_id,
+        "idea":        _description_short(idea["description"], limit=80) if idea else None,
+        "description": _description_short(exp.get("description")) or None,
+        "status":      exp.get("status"),
+        "metrics":     shown_metrics,
+        # Truncate on a sentence/word boundary (not mid-sentence) so the
+        # error stays readable; full text via GET /experiments/{ref}.
+        "error":       _truncate_soft(exp.get("error"), limit=240) or None,
+        "runtime":     exp.get("runtime"),
+        "finished_at": exp.get("finished_at"),
     }
+    if tag_list:
+        out["tags"] = exp.get("tags")
+    if exp.get("status") == "failed":
+        out["log"] = f"GET /api/v1/experiments/{label}/log?tail=50"
+    return out
 
 
 # --- Experiments ---
@@ -375,97 +366,72 @@ def list_all_experiments(
     status: str | None = Query(default=None, description="Filter by status: completed, failed, running, pending"),
     tags: str | None = Query(default=None, description="Comma-separated tags — experiments must have ALL (AND filter)"),
     metric: str | None = Query(default=None, description="Only return experiments that have this metric"),
-    page: int | None = Query(default=None, description="1-based page number. OPT-IN: when set, returns a paged+compact shape; omit for the full raw list."),
-    page_size: int = Query(default=10, description="Page size when paging is enabled."),
+    page: int = Query(default=1, ge=1, description="1-based page number (newest first). Paging is ALWAYS on; page 1 is returned when omitted."),
+    page_size: int = Query(default=10, ge=1, le=100, description="Rows per page (max 100)."),
+    show_all: bool = Query(default=False, alias="all", description="Escape hatch: return EVERY row unpaged. Expensive on large projects — prefer filters + paging."),
 ):
-    """List all experiments across all ideas.
+    """List experiments across all ideas — PAGED, newest first.
 
-    Returns every experiment with its metrics, tags, and parent idea description.
-    Use filters to narrow results. This is more efficient than fetching
-    experiments per-idea when you need data across the whole project.
+    Returns trimmed rows (metrics, status, short idea/description) with pager
+    meta ``{"experiments": [...], "page", "page_size", "total", "total_pages"}``.
+    Page 1 with 10 rows is the default; use ``?page=N`` / ``?page_size=M`` to
+    walk further. Filters (status/tags/metric) compose with paging.
 
     Pass ``?metric=X`` to filter to experiments that have metric X **and** show
     only that metric value in the response — useful for focused comparison when
     you know which metric you're optimising. Without ``?metric``, all metrics
     are returned for each experiment.
 
-    Feedback A1 — opt-in paging: pass ``?page=N`` to receive a newest-first,
-    compacted page ``{"experiments": [...], "page", "page_size", "total",
-    "total_pages"}``. Filters (status/tags/metric) still apply. When ``page`` is
-    omitted the legacy shape is returned UNCHANGED.
+    ``?all=true`` returns the full unpaged list (legacy shape with ``count``).
+    On large projects this is hundreds of kB — use it only when you truly need
+    every row; filters + paging cover almost every workflow.
 
     Example:
-        GET /api/v1/experiments
+        GET /api/v1/experiments                     (page 1, newest 10)
+        GET /api/v1/experiments?page=3&page_size=25
         GET /api/v1/experiments?status=completed&metric=score
-        GET /api/v1/experiments?tags=baseline&metric=accuracy
-        GET /api/v1/experiments?status=completed&page=1&page_size=10
+        GET /api/v1/experiments?tags=baseline&all=true
     """
     all_exps = store.list_all_experiments()
     idea_cache: dict[int, dict] = {}
 
     tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
 
-    # A1: apply the existing filters up front so they compose with paging. When
-    # paging is opt-in, paginate/compact the filtered FULL records so nested
-    # placeholders point at real data (GET /experiments/<ref>).
-    if page is not None:
-        filtered = []
-        for exp in all_exps:
-            if status and exp.get("status") != status:
-                continue
-            if tag_list and not all(t in (exp.get("tags") or []) for t in tag_list):
-                continue
-            if metric and metric not in (exp.get("metrics") or {}):
-                continue
-            filtered.append(exp)
-        return _paginate(filtered, page, page_size)
-
-    results = []
+    filtered = []
     for exp in all_exps:
         if status and exp.get("status") != status:
             continue
         if tag_list and not all(t in (exp.get("tags") or []) for t in tag_list):
             continue
-        all_metrics = exp.get("metrics") or {}
-        if metric and metric not in all_metrics:
+        if metric and metric not in (exp.get("metrics") or {}):
             continue
-        label = exp.get("label", str(exp["id"]))
-        idea_id = exp["idea_id"]
-        if idea_id not in idea_cache:
-            idea_cache[idea_id] = store.get_idea(idea_id)
-        idea = idea_cache[idea_id]
+        filtered.append(exp)
 
-        # When ?metric=X is given, show only that value (the caller knows what
-        # they care about). Otherwise include all metrics — we don't know which
-        # metric the project optimises, so hardcoding names would be wrong.
-        if metric:
-            shown_metrics = {metric: all_metrics[metric]}
-        else:
-            shown_metrics = all_metrics
+    tag_hint = (
+        None if tag_list else
+        "Tags hidden in bulk listing. Use GET /experiments/tags to list tags, then GET /experiments?tags=<tag> to filter by approach."
+    )
 
-        out = {
-            "id":          exp["id"],
-            "label":       label,
-            "idea_id":     idea_id,
-            "idea":        _description_short(idea["description"], limit=80) if idea else None,
-            "description": _description_short(exp.get("description")) or None,
-            "status":      exp.get("status"),
-            "metrics":     shown_metrics,
-            # Truncate on a sentence/word boundary (not mid-sentence) so the
-            # error stays readable; full text via GET /experiments/{ref}.
-            "error":       _truncate_soft(exp.get("error"), limit=240) or None,
-            "runtime":     exp.get("runtime"),
-            "finished_at": exp.get("finished_at"),
-        }
-        if tag_list:
-            out["tags"] = exp.get("tags")
-        if exp.get("status") == "failed":
-            out["log"] = f"GET /api/v1/experiments/{label}/log?tail=50"
-        results.append(out)
+    if show_all:
+        results = [_list_row(e, idea_cache, metric, tag_list) for e in filtered]
+        resp = {"experiments": results, "count": len(results)}
+        if tag_hint:
+            resp["tag_hint"] = tag_hint
+        return resp
 
-    resp = {"experiments": results, "count": len(results)}
-    if not tag_list:
-        resp["tag_hint"] = "Tags hidden in bulk listing. Use GET /experiments/tags to list tags, then GET /experiments?tags=<tag> to filter by approach."
+    ordered = sorted(filtered, key=_exp_sort_key, reverse=True)
+    total = len(ordered)
+    total_pages = math.ceil(total / page_size) if total else 0
+    window = ordered[(page - 1) * page_size:(page - 1) * page_size + page_size]
+    resp = {
+        "experiments": [_list_row(e, idea_cache, metric, tag_list) for e in window],
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+        "total_pages": total_pages,
+    }
+    if tag_hint:
+        resp["tag_hint"] = tag_hint
     return resp
 
 
@@ -865,14 +831,44 @@ def serve_repo_file(file_path: str):
 
 # --- Parameterized experiment routes (MUST come after literal paths) ---
 
+def _queue_position(exp_id) -> int | None:
+    """1-based position of *exp_id* in the scheduler's queued/pending order."""
+    queue = [
+        e for e in store.list_all_experiments()
+        if e.get("status") in ("queued", "pending")
+    ]
+    queue.sort(key=lambda e: (
+        -int((e.get("meta") or {}).get("priority", 0) or 0),
+        e.get("created_at") or "",
+    ))
+    for i, qexp in enumerate(queue):
+        if qexp.get("id") == exp_id:
+            return i + 1
+    return None
+
+
 _META_STRIP = frozenset({
     "slurm_run_token", "slurm_job_id", "slurm_attempts",
     "worktree", "git_commit", "git_branch", "assigned_units",
 })
 
 
+# Meta values bigger than this (as JSON) are result blobs accumulated during
+# the run (scorecards, per-environment results, …), not startup config — they
+# are collapsed in GET /experiments/{ref} and served whole by …/{ref}/meta.
+_META_INLINE_MAX_BYTES = 1500
+
+
+def _visible_meta(exp: dict) -> dict:
+    """Experiment meta minus internal infrastructure keys."""
+    return {k: v for k, v in (exp.get("meta") or {}).items() if k not in _META_STRIP}
+
+
 @router.get("/experiments/{exp_ref}")
-def get_experiment(exp_ref: str):
+def get_experiment(
+    exp_ref: str,
+    metric: str | None = Query(default=None, description="Surface this metric as `selected_score` at the top level."),
+):
     """Get detail for a single experiment.
 
     Accepts global ID (``4``) or label (``1.2`` = idea 1, experiment 2).
@@ -880,18 +876,70 @@ def get_experiment(exp_ref: str):
     are stripped. Use ``GET /api/v1/wait?compare=true`` for best-score
     comparison (requires a full experiment scan).
 
+    ``meta`` shows startup keys only: values that grew large during the run
+    (accumulated results such as scorecards) are collapsed to a placeholder.
+    The complete dict is at ``GET /api/v1/experiments/{ref}/meta``.
+
     Example:
-        GET /api/v1/experiments/1.2
-        -> {"id": 4, "label": "1.2", "status": "completed", "metrics": {...}, ...}
+        GET /api/v1/experiments/1.2?metric=score
+        -> {"id": 4, "label": "1.2", "status": "completed", "metrics": {...},
+            "selected_score": {"metric": "score", "value": 0.68}, ...}
+    """
+    # Shallow-copy the store record (and meta) — this handler trims fields,
+    # and the store hands out its live dict.
+    exp = dict(_resolve_exp(exp_ref))
+    label = exp.get("label", str(exp["id"]))
+    if exp.get("status") == "failed":
+        exp["read_log"] = f"GET /api/v1/experiments/{label}/log?tail=50"
+
+    # Startup meta only: strip internal keys, collapse accumulated result blobs.
+    meta: dict = {}
+    collapsed = []
+    for k, v in _visible_meta(exp).items():
+        try:
+            size = len(json.dumps(v, default=str))
+        except (TypeError, ValueError):
+            size = _META_INLINE_MAX_BYTES + 1
+        if isinstance(v, (dict, list)) and size > _META_INLINE_MAX_BYTES:
+            meta[k] = {"_collapsed": True, "_bytes": size,
+                       "_via": f"GET /api/v1/experiments/{label}/meta"}
+            collapsed.append(k)
+        else:
+            meta[k] = v
+    exp["meta"] = meta
+    if collapsed:
+        exp["_note"] = (
+            f"meta keys {collapsed} hold accumulated results and are collapsed "
+            f"here; the full meta dict is at GET /api/v1/experiments/{label}/meta"
+        )
+
+    if metric:
+        exp["selected_score"] = {
+            "metric": metric,
+            "value": (exp.get("metrics") or {}).get(metric),
+        }
+    return exp
+
+
+@router.get("/experiments/{exp_ref}/meta")
+def get_experiment_meta(exp_ref: str):
+    """Full meta dict for one experiment — accumulated results included.
+
+    The companion of ``GET /experiments/{ref}``, which collapses large meta
+    values (scorecards and other result blobs written during the run). This
+    endpoint returns every meta key uncollapsed; only internal infrastructure
+    fields (slurm tokens, worktree paths, git hashes) are stripped.
+
+    Example:
+        GET /api/v1/experiments/1.2/meta
+        -> {"id": 4, "label": "1.2", "meta": {"scorecard": {...}, ...}}
     """
     exp = _resolve_exp(exp_ref)
-    if exp.get("status") == "failed":
-        label = exp.get("label", str(exp["id"]))
-        exp["read_log"] = f"GET /api/v1/experiments/{label}/log?tail=50"
-    # Strip internal-only meta keys
-    meta = {k: v for k, v in (exp.get("meta") or {}).items() if k not in _META_STRIP}
-    exp["meta"] = meta
-    return exp
+    return {
+        "id": exp["id"],
+        "label": exp.get("label", str(exp["id"])),
+        "meta": _visible_meta(exp),
+    }
 
 
 @router.delete("/experiments/{exp_ref}")
@@ -934,10 +982,13 @@ async def start_experiment(exp_ref: str, req: StartExperimentRequest | None = No
     The ``timeout`` field on the request is recorded on the experiment's
     meta and applied by the scheduler when it eventually dispatches.
 
+    Returns a SHORT object (id/label/status/queue_position/message) — the
+    full record stays one ``GET /api/v1/experiments/{ref}`` away.
+
     Example:
         POST /api/v1/experiments/4/start {"timeout": 600}
-        -> {"status": "queued", "experiment": {"id": 4, ...},
-            "queue_position": 2, "current_branch": "idea/1", ...}
+        -> {"status": "queued", "id": 4, "label": "1.2", "idea_id": 1,
+            "queue_position": 2, "message": "..."}
     """
     # Resolve exp ref (global ID or label like '1.2')
     exp_check = _resolve_exp(exp_ref)
@@ -946,9 +997,13 @@ async def start_experiment(exp_ref: str, req: StartExperimentRequest | None = No
     if exp_check.get("status") == "running":
         return {
             "status": "already_running",
-            "experiment": exp_check,
-            "current_branch": get_current_branch(cwd=REPO_DIR),
-            **_idea_context(exp_check.get("idea_id")),
+            "id": exp_check["id"],
+            "label": label,
+            "idea_id": exp_check.get("idea_id"),
+            "message": (
+                f"already running — watch GET /api/v1/experiments/{label}/progress "
+                f"or GET /api/v1/wait"
+            ),
         }
     if exp_check.get("status") == "completed":
         raise HTTPException(
@@ -984,26 +1039,20 @@ async def start_experiment(exp_ref: str, req: StartExperimentRequest | None = No
         pass
     runner.wake_scheduler()
 
-    # Build the response in the same shape /rerun returns: include
-    # queue_position so the caller knows where they sit.
+    # SHORT response (same slimming as /cancel): id/label/queue_position,
+    # not the full record — that stays behind GET /experiments/{ref}.
     exp = store.get_experiment(label) or exp_check
-    queue = [
-        e for e in store.list_all_experiments()
-        if e.get("status") in ("queued", "pending")
-    ]
-    queue.sort(key=lambda e: (
-        -int((e.get("meta") or {}).get("priority", 0) or 0),
-        e.get("created_at") or "",
-    ))
-    for i, qexp in enumerate(queue):
-        if qexp.get("id") == exp.get("id"):
-            exp["queue_position"] = i + 1
-            break
-
-    result = {"status": "queued", "experiment": exp}
-    result["current_branch"] = get_current_branch(cwd=REPO_DIR)
-    result.update(_idea_context(exp.get("idea_id")))
-    return result
+    return {
+        "status": "queued",
+        "id": exp["id"],
+        "label": label,
+        "idea_id": exp.get("idea_id"),
+        "queue_position": _queue_position(exp.get("id")),
+        "message": (
+            f"queued — the scheduler dispatches when capacity frees. "
+            f"Watch GET /api/v1/experiments/{label}/progress or GET /api/v1/wait."
+        ),
+    }
 
 
 
@@ -1018,10 +1067,13 @@ async def rerun_experiment(exp_ref: str):
     create_experiment call. Works on experiments in any status; useful for
     re-running a completed experiment to check reproducibility.
 
+    Returns a SHORT object (id/label/status/queue_position/rerun_of/message)
+    — fetch the full new record via ``GET /api/v1/experiments/{label}``.
+
     Example:
         POST /api/v1/experiments/1.2/rerun
-        -> {"id": "1.3", "label": "1.3", "idea_id": 1, "status": "queued",
-            "queue_position": 2, "rerun_of": "1.2", ...}
+        -> {"status": "queued", "id": 7, "label": "1.3", "idea_id": 1,
+            "queue_position": 2, "rerun_of": "1.2", "message": "..."}
     """
     source = _resolve_exp(exp_ref)
     idea_id = source["idea_id"]
@@ -1077,22 +1129,20 @@ async def rerun_experiment(exp_ref: str):
         pass
     runner.wake_scheduler()
 
-    # Surface queue position so the caller sees where they sit.
-    queue = [
-        e for e in store.list_all_experiments()
-        if e.get("status") in ("queued", "pending")
-    ]
-    queue.sort(key=lambda e: (
-        -int((e.get("meta") or {}).get("priority", 0) or 0),
-        e.get("created_at") or "",
-    ))
-    for i, qexp in enumerate(queue):
-        if qexp.get("id") == new_exp.get("id"):
-            new_exp["queue_position"] = i + 1
-            break
-
-    new_exp["rerun_of"] = source.get("label", str(source["id"]))
-    return new_exp
+    # SHORT response (same slimming as /start and /cancel).
+    src_label = source.get("label", str(source["id"]))
+    return {
+        "status": "queued",
+        "id": new_exp["id"],
+        "label": label,
+        "idea_id": idea_id,
+        "queue_position": _queue_position(new_exp.get("id")),
+        "rerun_of": src_label,
+        "message": (
+            f"queued copy of {src_label} — full record: "
+            f"GET /api/v1/experiments/{label}"
+        ),
+    }
 
 
 @router.post("/experiments/{exp_ref}/cancel")
