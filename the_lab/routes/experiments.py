@@ -1522,7 +1522,7 @@ def get_experiment_via_idea(idea_id: int, exp_ref: str):
     Agents sometimes construct this URL pattern. This route serves the
     experiment data directly and includes a hint about the canonical URL.
     """
-    exp = _resolve_exp(exp_ref)
+    exp = dict(_resolve_exp(exp_ref))  # copy — never annotate the live record
     exp["_hint"] = f"Tip: use GET /api/v1/experiments/{exp_ref} directly next time"
     return exp
 

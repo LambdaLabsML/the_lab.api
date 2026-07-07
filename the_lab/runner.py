@@ -701,8 +701,7 @@ class ExperimentRunner:
             }
             if worktree_path:
                 meta["worktree"] = str(worktree_path)
-            self._store.update_experiment(exp_id, meta=meta)
-            exp["meta"] = meta
+            exp = self._store.update_experiment(exp_id, meta=meta) or exp
         except Exception:
             pass
 

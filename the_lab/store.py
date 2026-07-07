@@ -324,13 +324,17 @@ class Store:
         return self._ideas.get(idea_id)
 
     def update_idea(self, idea_id: int, **fields) -> dict | None:
-        idea = self.get_idea(idea_id)
-        if not idea:
-            return None
-        old_status = idea.get("status")
-        idea.update(fields)
-        _write_json(self._idea_dir(idea_id) / "idea.json", idea)
+        # Copy-on-write: build a NEW record and swap it in under the lock, so
+        # readers holding the old dict keep a stable snapshot (no read-during-
+        # write races between runner tasks and threadpool handlers). The disk
+        # write stays inside the lock so two concurrent updates can't publish
+        # memory in one order and disk in the other.
         with self._lock:
+            cur = self._ideas.get(idea_id)
+            if not cur:
+                return None
+            idea = {**cur, **fields}
+            _write_json(self._idea_dir(idea_id) / "idea.json", idea)
             self._ideas[idea_id] = idea
             self._version += 1
         # Determine change type for WebSocket emit.
@@ -380,8 +384,8 @@ class Store:
             note["resources"] = resources
         notes_path = self._idea_dir(idea_id) / "notes.json"
         with self._lock:
-            notes = self._notes.get(idea_id, [])
-            notes.append(note)
+            # Copy-on-write list: readers iterating the old list are unaffected.
+            notes = [*self._notes.get(idea_id, []), note]
             self._notes[idea_id] = notes
             _write_json(notes_path, notes)
             self._version += 1
@@ -480,23 +484,28 @@ class Store:
 
     def update_experiment(self, exp_ref, **fields) -> dict | None:
         label = str(exp_ref)
-        exp = self._experiments.get(label)
-        if not exp:
-            return None
-        # Diff renderable fields BEFORE mutating. Only fields that are actually
-        # serialized by the cached aggregation endpoints should invalidate the
-        # response cache — meta-only writes (e.g. worktree bookkeeping from the
-        # runner) must not bump _version, or the dashboard churns on every tick.
-        renderable_changed = any(
-            k in RENDERABLE_EXPERIMENT_FIELDS and exp.get(k) != v
-            for k, v in fields.items()
-        )
-        exp.update(fields)
-        exp = _enrich_experiment(exp)
-        json_path = self._exp_json_path(exp["idea_id"], exp["seq"])
-        json_path.parent.mkdir(parents=True, exist_ok=True)
-        _write_json(json_path, exp)
+        # Copy-on-write under the lock: the old record is never mutated, so
+        # any reader holding a reference (chart-data mid-serialization, a
+        # handler building a response) sees a stable snapshot. The disk write
+        # happens inside the lock so concurrent updates to the same label
+        # can't publish memory in one order and disk in the other.
         with self._lock:
+            cur = self._experiments.get(label)
+            if not cur:
+                return None
+            # Diff renderable fields BEFORE merging. Only fields that are
+            # actually serialized by the cached aggregation endpoints should
+            # invalidate the response cache — meta-only writes (e.g. worktree
+            # bookkeeping from the runner) must not bump _version, or the
+            # dashboard churns on every tick.
+            renderable_changed = any(
+                k in RENDERABLE_EXPERIMENT_FIELDS and cur.get(k) != v
+                for k, v in fields.items()
+            )
+            exp = _enrich_experiment({**cur, **fields})
+            json_path = self._exp_json_path(exp["idea_id"], exp["seq"])
+            json_path.parent.mkdir(parents=True, exist_ok=True)
+            _write_json(json_path, exp)
             self._experiments[label] = exp
             if renderable_changed:
                 self._version += 1

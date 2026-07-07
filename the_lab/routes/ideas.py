@@ -240,6 +240,7 @@ def list_ideas(
     requested = {f.strip() for f in (fields or "").split(",") if f.strip()}
     want_notes = not requested or "notes" in requested
     want_summary = not requested or "experiment_summary" in requested
+    ideas = [dict(i) for i in ideas]  # copies — never annotate live store records
     for idea in ideas:
         if want_notes:
             idea["notes"] = store.get_notes(idea["id"], levels=Store.LISTING_LEVELS)
@@ -616,10 +617,12 @@ def get_idea_tree(idea_id: int):
         visited.add(cid)
         child = store.get_idea(cid)
         if child:
+            child = dict(child)
             child["notes"] = store.get_notes(cid, levels=Store.LISTING_LEVELS)
             descendants.append(child)
             queue_ids.extend(i["id"] for i in all_ideas if cid in i.get("parent_ids", []))
 
+    idea = dict(idea)
     idea["experiments"] = store.list_experiments(idea_id)
     idea["notes"] = store.get_notes(idea_id, levels=Store.DETAIL_LEVELS)
     return {"idea": idea, "ancestors": ancestors, "descendants": descendants}
