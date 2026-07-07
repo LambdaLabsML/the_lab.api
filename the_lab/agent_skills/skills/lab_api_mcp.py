@@ -491,6 +491,55 @@ def _ws_path_qs(since: int = 0) -> str:
     return f"/api/v1/ws{qs}"
 
 
+def _events_longpoll(
+    types: list[str] | None,
+    keyword: str | None,
+    deadline: float,
+) -> dict:
+    """WS-less fallback: drain GET /api/v1/events (same stream, same
+    envelope) until a matching event arrives or the deadline passes. Used
+    when the WebSocket handshake keeps failing (proxy strips upgrades,
+    older server, restrictive network) — behaviour matches _watch()."""
+    import time
+    headers = {}
+    _user = os.environ.get("THE_LAB_USER", "").strip()
+    _pw   = os.environ.get("THE_LAB_PASSWORD", "").strip()
+    if _user and _pw:
+        headers["Authorization"] = "Basic " + _base64.b64encode(
+            f"{_user}:{_pw}".encode()
+        ).decode()
+    since = 0
+    first = True
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return {"timeout": True}
+        wait = 0 if first else min(25, max(1, int(remaining)))
+        first = False
+        qs = {"since": since, "timeout": wait}
+        if types:
+            qs["types"] = ",".join(types)
+        url = f"{_api_root()}/api/v1/events?" + urllib.parse.urlencode(qs)
+        req = urllib.request.Request(url, headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=wait + 30,
+                                        context=_SSL_CTX) as resp:
+                data = json.loads(resp.read())
+        except (urllib.error.URLError, ConnectionError,
+                _socket.timeout, OSError, ValueError):
+            time.sleep(min(5.0, max(0.5, remaining)))
+            continue
+        since = data.get("seq", since)
+        if since == 0 and data.get("events"):
+            since = data["events"][-1].get("seq", 0)
+        for event in data.get("events") or []:
+            if types and event.get("type") not in types:
+                continue
+            if keyword and keyword.lower() not in json.dumps(event).lower():
+                continue
+            return event
+
+
 def _watch(
     types: list[str] | None = None,
     keyword: str | None = None,
@@ -503,11 +552,14 @@ def _watch(
       keyword — any string value in the event dict must contain this substring
 
     Returns the first matching event dict, or ``{"timeout": true}`` if
-    *timeout* seconds elapse with no match.
+    *timeout* seconds elapse with no match. If the WebSocket handshake fails
+    repeatedly, falls back to long-polling GET /api/v1/events — same stream,
+    same envelope.
     """
     import time
     host, port, use_ssl = _ws_url_parts()
     deadline = time.monotonic() + timeout
+    ws_failures = 0
 
     while True:
         remaining = deadline - time.monotonic()
@@ -516,7 +568,12 @@ def _watch(
 
         try:
             sock = _ws_connect(host, port, _ws_path_qs(), use_ssl)
+            ws_failures = 0
         except Exception as e:
+            ws_failures += 1
+            if ws_failures >= 2:
+                # WS path is not viable here — switch to the HTTP drain.
+                return _events_longpoll(types, keyword, deadline)
             # Brief pause before retry so we don't spin-loop on a down server.
             time.sleep(min(5.0, remaining))
             continue
