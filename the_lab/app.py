@@ -782,6 +782,12 @@ async def startup():
     # events emitted from sync threads before the FIRST WebSocket subscriber
     # arrives are silently dropped (breaks /api/v1/events-only clients).
     _ws_mod.broadcaster.capture_loop()
+    # Persist events + continue seq across restarts (P4: the activity feed
+    # and ?since= replay survive deploys).
+    try:
+        _ws_mod.broadcaster.attach_journal(REPO_DIR / ".the_lab" / "events.jsonl")
+    except Exception as e:  # pragma: no cover
+        logger.warning("event journal unavailable: %s", e)
     await runner.reattach_running()
     # Reap agent worktrees whose registered PID is gone (a CLI wrapper that
     # crashed before unregistering). Safe to skip on errors.
@@ -891,8 +897,12 @@ async def ws_endpoint(websocket: WebSocket, since: int = 0, token: str = ""):
             await websocket.close(code=1008)
             return
 
-    # Replay any missed events.
-    for event in _ws_mod.broadcaster.replay_since(since):
+    # Replay any missed events — journal-aware (reads files), so run the
+    # collection off-loop.
+    _loop = __import__("asyncio").get_running_loop()
+    replay = await _loop.run_in_executor(
+        None, _ws_mod.broadcaster.replay_with_journal, since)
+    for event in replay:
         try:
             await websocket.send_json(event)
         except Exception:

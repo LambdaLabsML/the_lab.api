@@ -3,12 +3,24 @@
 Events flow: emitter (runner/store/messages) → broadcast() → per-subscriber queues → WebSocket.
 Each event has a monotonic seq number. A ring buffer of 500 events lets reconnecting
 clients replay missed events via ?since=N.
+
+Persistence: when a journal is attached (app startup), every event is also
+appended to ``.the_lab/events.jsonl`` by a background writer thread. The seq
+counter continues across restarts (loaded from the journal tail) and
+``replay_with_journal()`` serves ?since= values that predate the in-memory
+ring — so a dashboard that slept through a deploy catches up instead of
+resnapshotting, and the activity feed survives restarts.
 """
 from __future__ import annotations
 
 import asyncio
+import json as _json
+import os
+import queue as _queue
+import threading
 import time
 from collections import deque
+from pathlib import Path
 from typing import Iterator
 
 
@@ -22,12 +34,112 @@ class Broadcaster:
 
     _RING_SIZE = 500
     _QUEUE_MAX = 100
+    _JOURNAL_MAX_BYTES = 5 * 1024 * 1024  # rotate to .1 past this
 
     def __init__(self) -> None:
         self._seq = 0
         self._ring: deque[dict] = deque(maxlen=self._RING_SIZE)
         self._subscribers: list[asyncio.Queue] = []
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._journal_path: Path | None = None
+        self._journal_q: _queue.Queue | None = None
+
+    # ── Journal ────────────────────────────────────────────────────────────
+
+    def attach_journal(self, path: Path) -> None:
+        """Enable persistence: continue seq from the journal tail, preload
+        the ring with the most recent events, and start the writer thread.
+        Call once at app startup, before traffic."""
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._journal_path = path
+        last_events = self._journal_tail(self._RING_SIZE)
+        if last_events:
+            self._seq = max(self._seq, last_events[-1].get("seq", 0))
+            self._ring.extend(last_events)
+        self._journal_q = _queue.Queue()
+        threading.Thread(target=self._journal_writer, daemon=True,
+                         name="ws-journal").start()
+
+    def _journal_files(self) -> list[Path]:
+        """Journal files oldest-first (rotated .1 first, then current)."""
+        assert self._journal_path is not None
+        rotated = self._journal_path.with_suffix(".jsonl.1")
+        return [p for p in (rotated, self._journal_path) if p.exists()]
+
+    def _journal_tail(self, n: int) -> list[dict]:
+        """Last *n* events from the journal (oldest-first). Fail-soft."""
+        if self._journal_path is None:
+            return []
+        events: deque[dict] = deque(maxlen=n)
+        try:
+            for p in self._journal_files():
+                with p.open() as fh:
+                    for line in fh:
+                        try:
+                            ev = _json.loads(line)
+                            if isinstance(ev, dict) and ev.get("seq"):
+                                events.append(ev)
+                        except ValueError:
+                            continue
+        except OSError:
+            return []
+        return list(events)
+
+    def _journal_writer(self) -> None:
+        """Background thread: drain the queue, append lines, rotate."""
+        assert self._journal_path is not None and self._journal_q is not None
+        path = self._journal_path
+        fh = None
+        try:
+            while True:
+                event = self._journal_q.get()
+                try:
+                    if fh is None:
+                        fh = path.open("a")
+                    fh.write(_json.dumps(event, default=str) + "\n")
+                    fh.flush()
+                    if fh.tell() > self._JOURNAL_MAX_BYTES:
+                        fh.close()
+                        fh = None
+                        os.replace(path, path.with_suffix(".jsonl.1"))
+                except (OSError, ValueError):
+                    # Persistence is best-effort; never kill the writer.
+                    try:
+                        if fh is not None:
+                            fh.close()
+                    except OSError:
+                        pass
+                    fh = None
+        except Exception:
+            pass
+
+    def replay_with_journal(self, seq: int) -> list[dict]:
+        """Like replay_since, but falls back to reading the journal when the
+        requested seq predates the in-memory ring (e.g. across a restart).
+        Reads files — call from a thread, not the event loop."""
+        ring = list(self._ring)
+        if ring and seq >= ring[0].get("seq", 0) - 1:
+            return [e for e in ring if e.get("seq", 0) > seq]
+        if self._journal_path is None:
+            return [e for e in ring if e.get("seq", 0) > seq]
+        out: list[dict] = []
+        try:
+            for p in self._journal_files():
+                with p.open() as fh:
+                    for line in fh:
+                        try:
+                            ev = _json.loads(line)
+                        except ValueError:
+                            continue
+                        if isinstance(ev, dict) and ev.get("seq", 0) > seq:
+                            out.append(ev)
+        except OSError:
+            pass
+        # Ring may hold events newer than the last journaled line (writer lag).
+        last = out[-1]["seq"] if out else seq
+        out.extend(e for e in ring if e.get("seq", 0) > last)
+        return out
 
     def capture_loop(self) -> None:
         """Adopt the current running loop (call from app startup) so
@@ -59,6 +171,8 @@ class Broadcaster:
         # buffer in one burst, so arrival time is meaningless for ages.
         event = {**event, "seq": self._seq, "ts": time.time()}
         self._ring.append(event)
+        if self._journal_q is not None:
+            self._journal_q.put(event)  # persisted off-loop by the writer thread
         # Cache the loop reference the first time broadcast() is called
         # from inside the loop (so broadcast_soon can use it later).
         self._get_loop()

@@ -302,7 +302,9 @@ async def get_events(
     # queue instead of falling into the gap; dedupe by seq afterwards.
     q = broadcaster.subscribe()
     try:
-        events = _visible(broadcaster.replay_since(since))
+        replayed = await asyncio.get_event_loop().run_in_executor(
+            None, broadcaster.replay_with_journal, since)
+        events = _visible(replayed)
         last_seq = events[-1]["seq"] if events else since
         if events or timeout <= 0:
             return _envelope(events, last_seq)
