@@ -1560,14 +1560,34 @@ class ExperimentRunner:
                                       "label": label, "idea_id": idea_id})
         return result
 
+    @staticmethod
+    def _read_tail(path: Path, n_lines: int, block: int = 65536) -> str:
+        """Read only the last *n_lines* lines of *path* by seeking backwards
+        in blocks — a ?tail=25 poll on a multi-MB NFS log costs one or two
+        64kB reads instead of the whole file. Capped at 8MB as a guard
+        against pathological single-line files."""
+        with path.open("rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            pos = fh.tell()
+            data = b""
+            while pos > 0 and data.count(b"\n") <= n_lines and len(data) < 8 * 1024 * 1024:
+                step = min(block, pos)
+                pos -= step
+                fh.seek(pos)
+                data = fh.read(step) + data
+        text = data.decode("utf-8", errors="replace")
+        lines = text.split("\n")
+        return "\n".join(lines[-n_lines:]) if len(lines) > n_lines else text
+
     def get_log(self, exp_id: int, tail: int | None = None) -> str | None:
         """Read the .log file for an experiment, optionally tail N lines.
 
-        Trailing JSON-object lines (the script's final result dump) are
-        filtered out — the parsed metrics already live on the experiment
-        record and the raw blob clutters the "Show log" view. Newly-
-        completed runs have the line stripped from disk; this filter is
-        defense-in-depth for legacy logs.
+        Tail reads use a backwards seek (see _read_tail) and never load the
+        whole file. Trailing JSON-object lines (the script's final result
+        dump) are filtered out — the parsed metrics already live on the
+        experiment record and the raw blob clutters the "Show log" view.
+        Newly-completed runs have the line stripped from disk; this filter
+        is defense-in-depth for legacy logs.
         """
         exp = self._store.get_experiment(exp_id)
         if not exp:
@@ -1575,11 +1595,14 @@ class ExperimentRunner:
         log_path = self._store.repo_dir / exp["script"].replace(".sh", ".log")
         if not log_path.exists():
             return ""
-        content = self._strip_trailing_json_line(log_path.read_text())
         if tail is not None:
+            # Over-read a few lines so stripping the JSON result line still
+            # leaves a full *tail* lines (parity with the full-read path).
+            raw = self._read_tail(log_path, tail + 3)
+            content = self._strip_trailing_json_line(raw)
             lines = content.split("\n")
-            content = "\n".join(lines[-tail:])
-        return content
+            return "\n".join(lines[-tail:])
+        return self._strip_trailing_json_line(log_path.read_text())
 
     async def pull_results_for_label(self, label: str) -> bool:
         """Trigger an immediate rsync pull for a slurm experiment. Used by

@@ -1072,6 +1072,34 @@ def get_graph():
     return {"nodes": nodes, "edges": edges}
 
 
+# Progress files are re-read on every /chart-data call (one per running
+# experiment). mtime-keyed cache: the NFS read + JSON parse happens only when
+# the script actually wrote new progress. Pruned when it outgrows the set of
+# running experiments by a wide margin.
+_progress_read_cache: dict[str, tuple[int, dict | None]] = {}
+
+
+def _read_progress_cached(path) -> dict | None:
+    try:
+        mtime = path.stat().st_mtime_ns
+    except OSError:
+        return None
+    key = str(path)
+    hit = _progress_read_cache.get(key)
+    if hit is not None and hit[0] == mtime:
+        return hit[1]
+    try:
+        parsed = json.loads(path.read_text())
+        if not isinstance(parsed, (dict, list)):
+            parsed = None
+    except (json.JSONDecodeError, OSError):
+        parsed = None
+    if len(_progress_read_cache) > 256:
+        _progress_read_cache.clear()
+    _progress_read_cache[key] = (mtime, parsed)
+    return parsed
+
+
 @router.get("/chart-data")
 def get_chart_data():
     """Get all data for the dashboard metrics chart in one request.
@@ -1137,12 +1165,7 @@ def get_chart_data():
             completed_exps.append(base)
         elif exp.get("status") == "running":
             progress_path = REPO_DIR / exp["script"].replace(".sh", ".progress")
-            progress = None
-            if progress_path.exists():
-                try:
-                    progress = json.loads(progress_path.read_text())
-                except (json.JSONDecodeError, OSError):
-                    pass
+            progress = _read_progress_cached(progress_path)
             if progress and len(progress) > 0:
                 base["metrics"] = _numeric_metrics(progress) if isinstance(progress, dict) else progress
                 base["_running"] = True

@@ -1221,7 +1221,10 @@ def get_experiment_log(
         GET /api/v1/experiments/4/log?grep=error&above=2&below=5  # with context
     """
     exp = _resolve_exp(exp_ref)
-    raw = runner.get_log(exp["id"], tail=None)
+    # Fast path: a plain tail read never loads the whole log — grep/head/full
+    # still need the complete file.
+    want_full = bool(grep) or full or head is not None or not tail
+    raw = runner.get_log(exp["id"], tail=None if want_full else tail)
     if raw is None:
         raise HTTPException(404, "experiment log not found")
 
@@ -1241,8 +1244,9 @@ def get_experiment_log(
     elif head is not None:
         log = "\n".join(raw.splitlines()[:head])
     else:
-        effective_tail = tail if tail else None
-        log = "\n".join(raw.splitlines()[-effective_tail:]) if effective_tail else raw
+        # Tail was already applied by runner.get_log's seek-based fast path
+        # (raw IS the tail); tail=0 means the full log.
+        log = raw
     return {"log": log}
 
 
