@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { listAgents, listMessages } from "../state/api";
+import { useLiveRefresh } from "../lib/hooks";
 import type { AgentEntry, MessageEntry } from "../lib/types";
 import { Badge, EmptyState, IconButton } from "../components/ui";
 import { agentColor } from "../lib/colors";
@@ -90,15 +91,14 @@ export function MessagesView() {
     }
   }
 
+  useLiveRefresh(["message_received", "agent_changed"], refresh, 30_000);
   useEffect(() => {
     cancelledRef.current = false;
     refresh();
-    const poll = window.setInterval(refresh, 5000);
     const tickT = window.setInterval(() => setTick((n) => n + 1), 30000);
     return () => {
       cancelledRef.current = true;
-      window.clearInterval(poll);
-      window.clearInterval(tickT);
+      window.      window.clearInterval(tickT);
     };
   }, []);
 

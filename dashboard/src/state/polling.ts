@@ -11,11 +11,18 @@
 // same time) all piggy-back on one network request instead of
 // firing the API multiple times.
 //
-// Polling intervals (matching the original dashboard.html):
-//   Backlog   — every 10 s
-//   Graph     — every 15 s
-//   Chart     — every 30 s  (only when the chart panel is open)
-//   Log       — every 15 s  (only when the log view is active)
+// Polling is RECONCILIATION, not the data plane: WS events patch the
+// signals directly (see patchExperiment/patchIdea below and ws.ts), so
+// while the event stream is healthy the pollers stretch to slow
+// reconcile intervals; they tighten when the stream is down. All timers
+// pause while the tab is hidden and fire immediately on return.
+//
+//   poller    connected   disconnected
+//   backlog     60 s         10 s
+//   graph       90 s         15 s
+//   chart      120 s         30 s
+//   log         60 s         15 s
+//   costs       60 s         60 s   (pull-sampled server-side; no events)
 // ------------------------------------------------------------
 
 import { getBacklog, getGraph, getChartData, getAllIdeas, getExperimentProgress } from "./api";
@@ -41,11 +48,15 @@ import type { IdeaNode, Experiment, LogEntry, IdeaDetail } from "../lib/types";
 // Internal timer handles
 // ---------------------------------------------------------------------------
 
-let backlogTimer: ReturnType<typeof setInterval> | null = null;
-let graphTimer: ReturnType<typeof setInterval> | null = null;
-let chartTimer: ReturnType<typeof setInterval> | null = null;
-let logTimer: ReturnType<typeof setInterval> | null = null;
-let agentCostTimer: ReturnType<typeof setInterval> | null = null;
+type Poller = { fn: () => Promise<void>; fastMs: number; slowMs: number };
+let pollTimers: ReturnType<typeof setTimeout>[] = [];
+let pollersStarted = false;
+
+/** Live view of stream health, set by ws.ts (avoids an import cycle). */
+let streamHealthy = () => false;
+export function _setStreamHealthProbe(fn: () => boolean): void {
+  streamHealthy = fn;
+}
 
 // ---------------------------------------------------------------------------
 // In-flight promise guards — ensure overlapping callers share one request.
@@ -132,14 +143,7 @@ function pollChartData(): Promise<void> {
         _running: true,
       }));
       const merged = [...data.experiments, ...running];
-      // Sort: completed by finish time, running at end by start time.
-      merged.sort((a, b) => {
-        if (a._running && !b._running) return 1;
-        if (!a._running && b._running) return -1;
-        const ta = a.finished_at || a.started_at || "";
-        const tb = b.finished_at || b.started_at || "";
-        return ta.localeCompare(tb);
-      });
+      merged.sort(compareExps);
       resetGlobalBestBeforeCache();
       allExperiments.value = merged;
 
@@ -286,6 +290,105 @@ function pollAgentCosts(): Promise<void> {
   return agentCostInflight;
 }
 
+// Sort: completed by finish time, running at end by start time.
+function compareExps(a: Experiment, b: Experiment): number {
+  if (a._running && !b._running) return 1;
+  if (!a._running && b._running) return -1;
+  const ta = a.finished_at || a.started_at || "";
+  const tb = b.finished_at || b.started_at || "";
+  return ta.localeCompare(tb);
+}
+
+// ---------------------------------------------------------------------------
+// Event reducers — WS events carry the changed entity (P2.1), so the stream
+// can PATCH these signals directly instead of refetching /chart-data and
+// /graph wholesale on every doorbell. Pollers above remain the reconcile
+// path; each patcher mirrors the corresponding endpoint's row semantics.
+// ---------------------------------------------------------------------------
+
+/**
+ * Upsert/remove one experiment row from an event payload, mirroring
+ * /chart-data composition: running rows and completed-with-metrics rows are
+ * present; anything else (queued, failed, cancelled, metric-less) is absent.
+ * Returns false when the caller should fall back to a full refresh.
+ */
+export function patchExperiment(row: Partial<Experiment>): boolean {
+  if (!row || (!row.label && row.id == null)) return false;
+  const key = row.label ?? String(row.id);
+  const list = allExperiments.value;
+  const idx = list.findIndex((e) => (e.label || String(e.id)) === key);
+  const isRunning = row.status === "running";
+  const belongs = isRunning ||
+    (row.status === "completed" && row.metrics && Object.keys(row.metrics).length > 0);
+
+  if (!belongs) {
+    // Terminal-without-metrics / queued / failed / cancelled / deleted:
+    // absent from chart-data, so drop any stale row (e.g. it was running).
+    if (idx >= 0) {
+      const next = list.filter((_, i) => i !== idx);
+      resetGlobalBestBeforeCache();
+      allExperiments.value = next;
+    }
+    clearProgress(key);
+    return true;
+  }
+
+  const merged = {
+    ...(idx >= 0 ? list[idx] : null),
+    ...row,
+    _running: isRunning || undefined,
+  } as Experiment;
+  if (!isRunning) delete merged._running;
+  const next = idx >= 0 ? [...list] : [...list, merged];
+  if (idx >= 0) next[idx] = merged;
+  next.sort(compareExps);
+  resetGlobalBestBeforeCache();
+  allExperiments.value = next;
+  if (!isRunning) clearProgress(key);
+  return true;
+}
+
+/** Remove an experiment row entirely (experiment_deleted). */
+export function removeExperiment(key: string): void {
+  const list = allExperiments.value;
+  const next = list.filter((e) => (e.label || String(e.id)) !== key);
+  if (next.length !== list.length) {
+    resetGlobalBestBeforeCache();
+    allExperiments.value = next;
+  }
+  clearProgress(key);
+}
+
+/** Merge an idea payload into allIdeas + the graph node (idea_changed).
+ *  Returns false for unknown nodes — new ideas need a full graph fetch
+ *  (edges/layout). Computed graph flags (has_running, …) are preserved. */
+export function patchIdea(idea: Partial<IdeaNode> & { id: number }): boolean {
+  if (!idea || idea.id == null) return false;
+  const cur = allIdeas.value[idea.id];
+  allIdeas.value = { ...allIdeas.value, [idea.id]: { ...cur, ...idea } as IdeaNode };
+  const g = graphData.value;
+  const nidx = g ? g.nodes.findIndex((n) => n.id === idea.id) : -1;
+  if (!g || nidx < 0) return false;
+  const nodes = [...g.nodes];
+  nodes[nidx] = { ...nodes[nidx], ...idea };
+  graphData.value = { ...g, nodes };
+  return true;
+}
+
+/** Update one running experiment's pct from experiment_progress_updated. */
+export function patchProgress(label: string, pct: number): void {
+  if (!label || typeof pct !== "number") return;
+  runningProgress.value = { ...runningProgress.value, [label]: pct };
+}
+
+function clearProgress(label: string): void {
+  if (label in runningProgress.value) {
+    const p = { ...runningProgress.value };
+    delete p[label];
+    runningProgress.value = p;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Public: one-shot refresh (useful after mutations like tag rename)
 // ---------------------------------------------------------------------------
@@ -318,7 +421,8 @@ export function refreshBacklogData(): Promise<void> {
  * refresh once chart-data arrives).
  */
 export function startPolling(): void {
-  if (backlogTimer !== null) return; // already running
+  if (pollersStarted) return; // already running
+  pollersStarted = true;
 
   // Immediate initial fetches — run in parallel, then build log once chart
   // data is available so it can be joined against allExperiments.
@@ -328,22 +432,52 @@ export function startPolling(): void {
   chartPromise.then(() => pollLog());
   pollAgentCosts();
 
-  backlogTimer = setInterval(pollBacklog, 10_000);
-  graphTimer = setInterval(pollGraph, 15_000);
-  chartTimer = setInterval(pollChartData, 30_000);
-  // Log polling reuses the experiments already in `allExperiments` (kept
-  // fresh by chartTimer), so it only needs to re-fetch the ideas list.
-  logTimer = setInterval(pollLog, 15_000);
-  // Agent costs: poll every 60 s. Live agents re-fetch on every tick so the
-  // topbar/sparkline update as cost accumulates.
-  agentCostTimer = setInterval(pollAgentCosts, 60_000);
+  const pollers: Poller[] = [
+    { fn: pollBacklog,    fastMs: 10_000, slowMs: 60_000 },
+    { fn: pollGraph,      fastMs: 15_000, slowMs: 90_000 },
+    { fn: pollChartData,  fastMs: 30_000, slowMs: 120_000 },
+    // Log polling reuses the experiments already in `allExperiments`, so it
+    // only needs to re-fetch the ideas list.
+    { fn: pollLog,        fastMs: 15_000, slowMs: 60_000 },
+    // Agent costs are SAMPLED by the GET itself server-side — no push
+    // events exist, so this one keeps its cadence in both modes.
+    { fn: pollAgentCosts, fastMs: 60_000, slowMs: 60_000 },
+  ];
+
+  // Self-scheduling chains: each round re-reads stream health so the
+  // cadence adapts without restarting timers. Hidden tabs skip the fetch
+  // entirely (cheap re-check loop) — the visibilitychange handler below
+  // refreshes everything the moment the tab returns.
+  const schedule = (p: Poller): void => {
+    const delay = streamHealthy() ? p.slowMs : p.fastMs;
+    const t = setTimeout(async () => {
+      pollTimers = pollTimers.filter((x) => x !== t);
+      if (!document.hidden) {
+        try { await p.fn(); } catch { /* poller guards internally */ }
+      }
+      if (pollersStarted) schedule(p);
+    }, document.hidden ? Math.max(delay, 60_000) : delay);
+    pollTimers.push(t);
+  };
+  pollers.forEach(schedule);
+
+  document.addEventListener("visibilitychange", onVisibility);
+}
+
+function onVisibility(): void {
+  if (!document.hidden) {
+    // Tab is back — reconcile everything now rather than waiting a round.
+    pollBacklog();
+    pollGraph();
+    pollChartData().then(() => pollLog());
+    pollAgentCosts();
+  }
 }
 
 /** Stop all polling intervals. */
 export function stopPolling(): void {
-  if (backlogTimer !== null) { clearInterval(backlogTimer); backlogTimer = null; }
-  if (graphTimer !== null) { clearInterval(graphTimer); graphTimer = null; }
-  if (chartTimer !== null) { clearInterval(chartTimer); chartTimer = null; }
-  if (logTimer !== null) { clearInterval(logTimer); logTimer = null; }
-  if (agentCostTimer !== null) { clearInterval(agentCostTimer); agentCostTimer = null; }
+  pollersStarted = false;
+  for (const t of pollTimers) clearTimeout(t);
+  pollTimers = [];
+  document.removeEventListener("visibilitychange", onVisibility);
 }

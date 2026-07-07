@@ -5,6 +5,7 @@
  */
 import { useState, useEffect, useRef } from "preact/hooks";
 import { listMessages, sendMessage } from "../state/api";
+import { subscribeWsEvents } from "../state/ws";
 import type { MessageEntry } from "../lib/types";
 
 const FAB_SIZE = 44;
@@ -60,8 +61,9 @@ export function ChatPanel() {
     if (!open) return;
     const load = () => listMessages(30).then(setMessages).catch(() => {});
     load();
-    const t = window.setInterval(load, 5000);
-    return () => clearInterval(t);
+    const un = subscribeWsEvents((ev) => { if (ev.type === "message_received") load(); });
+    const t = window.setInterval(load, 30000);
+    return () => { clearInterval(t); un(); };
   }, [open]);
 
   useEffect(() => {

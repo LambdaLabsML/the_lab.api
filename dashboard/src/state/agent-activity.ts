@@ -16,7 +16,7 @@
 // ------------------------------------------------------------
 
 import { signal } from "@preact/signals";
-import { subscribeWsEvents } from "./ws";
+import { subscribeWsEvents, wsConnected } from "./ws";
 import { listAgents } from "./api";
 import type { AgentEntry } from "../lib/types";
 
@@ -441,6 +441,13 @@ export function startAgentActivity(): void {
       return;
     }
 
+    // Roster changes push now (P2.1): refetch the enriched roster right away
+    // instead of waiting for the reconcile tick.
+    if (type === "agent_changed") {
+      pollAgents();
+      return;
+    }
+
     const norm = normalize(ev);
     if (norm) { pushEvent(norm); return; }
     // Touch-only events (progress/log heartbeats) keep a running agent "active"
@@ -451,12 +458,19 @@ export function startAgentActivity(): void {
     }
   });
   pollAgents();
-  // Re-evaluate active flags periodically (poll refreshes roster AND lets the
-  // time-based `active` window expire for agents that went quiet).
-  _pollTimer = setInterval(pollAgents, 5000);
+  // Reconcile tick: refreshes the roster AND lets the time-based `active`
+  // window expire for agents that went quiet. agent_changed events cover
+  // the fast path, so this stays slow while the stream is healthy; state
+  // recompute between polls is driven by the events themselves.
+  const tick = () => {
+    _pollTimer = setTimeout(() => {
+      pollAgents().finally(tick);
+    }, wsConnected.value ? 30_000 : 5_000);
+  };
+  tick();
 }
 
 export function stopAgentActivity(): void {
-  if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
+  if (_pollTimer) { clearTimeout(_pollTimer); _pollTimer = null; }
   _started = false;
 }

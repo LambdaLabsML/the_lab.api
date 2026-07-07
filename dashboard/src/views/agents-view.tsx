@@ -3,7 +3,7 @@ import { listAgents, unregisterAgent } from "../state/api";
 import { AgentSpendChart } from "../components/agent-spend-chart";
 import type { AgentEntry } from "../lib/types";
 import { agentCostMap } from "../state/signals";
-import { useCopyToClipboard, useDisclosure, useEscape } from "../lib/hooks";
+import { useLiveRefresh, useCopyToClipboard, useDisclosure, useEscape } from "../lib/hooks";
 import { Badge, Stat, EmptyState, type BadgeTone } from "../components/ui";
 
 // Idea status → design-language Badge tone.
@@ -307,14 +307,13 @@ export function AgentsView() {
     }
   }
 
+  useLiveRefresh(["agent_changed"], refresh, 30_000);
   useEffect(() => {
     cancelledRef.current = false;
     refresh();
-    const poll = window.setInterval(refresh, 5000);
     const tickT = window.setInterval(() => setTick((n) => n + 1), 30000);
     return () => {
       cancelledRef.current = true;
-      window.clearInterval(poll);
       window.clearInterval(tickT);
     };
   }, []);

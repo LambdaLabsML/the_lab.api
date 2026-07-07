@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useState, useRef } from "preact/hooks";
 import { selectedIdea, selectedMetric, detailTimeline, detailSortNewest } from "../state/settings";
 import { scrollToExperiment, runningProgress, allExperiments } from "../state/signals";
 import { getIdea, getExperimentProgress, getExperimentLog, getExperimentScript, getExperimentOutput, getIdeaDiff } from "../state/api";
+import { subscribeWsEvents } from "../state/ws";
 import { formatTime, badgeHtml, escapeHtml } from "../lib/format";
 import { Lightbox } from "./lightbox";
 import { JsonView } from "./json-view";
@@ -153,8 +154,17 @@ export function DetailPanel({ embedded = false }: { embedded?: boolean } = {}) {
     }
 
     fetchData();
-    const timer = setInterval(fetchData, 10_000);
-    return () => clearInterval(timer);
+    // Push-driven: refetch when anything about THIS idea changes; keep a
+    // slow reconcile for computed fields events can't carry.
+    const un = subscribeWsEvents((ev) => {
+      if (ev.idea_id === ideaId &&
+          ["idea_changed", "note_added", "experiment_queued", "experiment_started",
+           "experiment_finished", "experiment_cancelled", "experiment_deleted"].includes(ev.type)) {
+        fetchData();
+      }
+    });
+    const timer = setInterval(fetchData, 30_000);
+    return () => { clearInterval(timer); un(); };
   }, [ideaId]);
 
   // Scroll-to-pane THEN highlight (#50). When `scrollToExperiment` fires we
@@ -283,8 +293,23 @@ export function DetailPanel({ embedded = false }: { embedded?: boolean } = {}) {
       });
     }
     pollProgress();
-    pollRef.current = window.setInterval(pollProgress, 3000);
-    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+    // experiment_progress_updated carries the full progress body — apply it
+    // directly; the poll drops to a slow reconcile.
+    const byLabel: Record<string, Experiment> = {};
+    running.forEach((exp) => { byLabel[exp.label || String(exp.id)] = exp; });
+    const un = subscribeWsEvents((ev) => {
+      if (ev.type !== "experiment_progress_updated") return;
+      const exp = byLabel[String(ev.label ?? "")];
+      const prog = ev.progress as Record<string, any> | null | undefined;
+      if (!exp || !prog) return;
+      setProgressData((prev) => ({ ...prev, [String(exp.id)]: prog }));
+      const pct = prog.pct_complete ?? prog.pct;
+      if (typeof pct === "number") {
+        runningProgress.value = { ...runningProgress.value, [ev.label as string]: pct };
+      }
+    });
+    pollRef.current = window.setInterval(pollProgress, 15_000);
+    return () => { if (pollRef.current) clearInterval(pollRef.current); un(); };
   }, [idea]);
 
   // --- Log ---
@@ -299,8 +324,18 @@ export function DetailPanel({ embedded = false }: { embedded?: boolean } = {}) {
   useEffect(() => {
     if (logPollRef.current) { clearInterval(logPollRef.current); logPollRef.current = null; }
     if (!logExp || logExp.status !== "running") return;
-    logPollRef.current = window.setInterval(() => fetchLogContent(logExp), 3000);
-    return () => { if (logPollRef.current) { clearInterval(logPollRef.current); logPollRef.current = null; } };
+    const label = logExp.label || String(logExp.id);
+    const un = subscribeWsEvents((ev) => {
+      if ((ev.type === "experiment_log_updated" || ev.type === "experiment_progress_updated")
+          && String(ev.label ?? "") === label) {
+        fetchLogContent(logExp);
+      }
+    });
+    logPollRef.current = window.setInterval(() => fetchLogContent(logExp), 15_000);
+    return () => {
+      un();
+      if (logPollRef.current) { clearInterval(logPollRef.current); logPollRef.current = null; }
+    };
   }, [logExp]);
 
   // Auto-scroll log when following and content updates
@@ -336,8 +371,17 @@ export function DetailPanel({ embedded = false }: { embedded?: boolean } = {}) {
   useEffect(() => {
     if (outputPollRef.current) { clearInterval(outputPollRef.current); outputPollRef.current = null; }
     if (!outputExp || outputExp.status !== "running") return;
-    outputPollRef.current = window.setInterval(() => fetchOutputContent(outputExp), 5000);
-    return () => { if (outputPollRef.current) { clearInterval(outputPollRef.current); outputPollRef.current = null; } };
+    const label = outputExp.label || String(outputExp.id);
+    const un = subscribeWsEvents((ev) => {
+      if (ev.type === "experiment_progress_updated" && String(ev.label ?? "") === label) {
+        fetchOutputContent(outputExp);
+      }
+    });
+    outputPollRef.current = window.setInterval(() => fetchOutputContent(outputExp), 15_000);
+    return () => {
+      un();
+      if (outputPollRef.current) { clearInterval(outputPollRef.current); outputPollRef.current = null; }
+    };
   }, [outputExp]);
 
   // Currently-displayed file: top of stack if any linked .md is open, else

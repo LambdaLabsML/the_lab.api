@@ -5,6 +5,7 @@
  */
 import { useEffect, useState } from "preact/hooks";
 import { listAgents } from "../state/api";
+import { useLiveRefresh } from "../lib/hooks";
 import { navigateToIdea } from "../lib/navigate";
 import { ideaTitle } from "../lib/format";
 import { allIdeas, backlogData } from "../state/signals";
@@ -23,13 +24,10 @@ export function AgentBar() {
   const ideas = allIdeas.value;
   const branch = backlogData.value?.current_branch ?? "";
 
-  useEffect(() => {
-    let dead = false;
-    const load = () => listAgents().then((l) => { if (!dead) setAgents(l); }).catch(() => {});
-    load();
-    const t = window.setInterval(load, 5000);
-    return () => { dead = true; window.clearInterval(t); };
-  }, []);
+  const load = () => listAgents().then(setAgents).catch(() => {});
+  useEffect(() => { load(); }, []);
+  // agent_changed events push roster changes; the hook keeps a slow reconcile.
+  useLiveRefresh(["agent_changed", "message_received"], load, 30_000);
 
   const live = agents.filter((a) => a.pid != null);
   if (live.length === 0 && !branch) return null;

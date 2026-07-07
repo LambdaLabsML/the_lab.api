@@ -21,6 +21,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { listAgents, listMessages, sendMessage } from "../../state/api";
+import { subscribeWsEvents } from "../../state/ws";
 import {
   allExperiments,
   allIdeas,
@@ -164,22 +165,25 @@ export function ActivityPane() {
         .then((list) => { if (!cancelled.current) { setAgents(list); setAgentsLoaded(true); } })
         .catch(() => { if (!cancelled.current) setAgentsLoaded(true); });
     load();
-    const poll = window.setInterval(load, 5000);
+    const un = subscribeWsEvents((ev) => { if (ev.type === "agent_changed") load(); });
+    const poll = window.setInterval(load, 30000);
     const tick = window.setInterval(() => setTick((n) => n + 1), 30000);
     return () => {
       cancelled.current = true;
+      un();
       window.clearInterval(poll);
       window.clearInterval(tick);
     };
   }, []);
 
-  // Messages poll ~5s (mirrors chat-panel cadence)
+  // Messages: pushed via message_received; slow reconcile tick.
   useEffect(() => {
     let dead = false;
     const load = () => listMessages(40).then((m) => { if (!dead) setMessages(m); }).catch(() => {});
     load();
-    const t = window.setInterval(load, 5000);
-    return () => { dead = true; window.clearInterval(t); };
+    const un = subscribeWsEvents((ev) => { if (ev.type === "message_received") load(); });
+    const t = window.setInterval(load, 30000);
+    return () => { dead = true; un(); window.clearInterval(t); };
   }, []);
 
   // When the selected recipient is an agent, mirror it into the composer `to`.

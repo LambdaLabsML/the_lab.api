@@ -72,7 +72,7 @@ import {
 } from "./state/settings";
 import { startPolling, stopPolling } from "./state/polling";
 import { getQueue } from "./state/api";
-import { startWs, stopWs } from "./state/ws";
+import { subscribeWsEvents, startWs, stopWs } from "./state/ws";
 import {
   allExperiments,
   allIdeas,
@@ -2339,8 +2339,9 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
       })
       .catch(() => { /* keep last known */ });
     load();
-    const t = window.setInterval(load, 15000);
-    return () => { dead = true; window.clearInterval(t); };
+    const un = subscribeWsEvents((ev) => { if (ev.type === "queue_changed") load(); });
+    const t = window.setInterval(load, 60000);
+    return () => { dead = true; un(); window.clearInterval(t); };
   }, []);
 
   const data = backlogData.value;
