@@ -98,8 +98,19 @@ def _default_local_resource() -> Resource:
     return Resource(name="local", kind="local", unit_kind="none", capacity=1)
 
 
+# The scheduler calls load_config every tick (default 2s) from the event
+# loop — cache the parsed config keyed on the file's mtime so the NFS read
+# + parse happens only when queue.json actually changed.
+_config_cache: tuple[int, list, QueueConfig] | None = None
+_config_cache_lock = threading.Lock()
+
+
 def load_config(repo_dir: Path) -> tuple[list[Resource], QueueConfig]:
-    """Load resources + queue config; auto-create on first run."""
+    """Load resources + queue config; auto-create on first run.
+
+    mtime-cached: re-reads only when queue.json changed on disk.
+    """
+    global _config_cache
     path = _config_path(repo_dir)
     if not path.exists():
         # First run: write a default with a single auto-detected resource.
@@ -107,12 +118,22 @@ def load_config(repo_dir: Path) -> tuple[list[Resource], QueueConfig]:
         save_config(repo_dir, [default], QueueConfig())
         return [default], QueueConfig()
     try:
+        mtime = path.stat().st_mtime_ns
+    except OSError:
+        mtime = -1
+    with _config_cache_lock:
+        if _config_cache is not None and _config_cache[0] == mtime:
+            _, resources, qc = _config_cache
+            return list(resources), qc
+    try:
         data = json.loads(path.read_text())
     except (json.JSONDecodeError, OSError):
         return [], QueueConfig()
     resources = [Resource(**r) for r in data.get("resources", [])]
     qc = QueueConfig(**data.get("queue", {}))
-    return resources, qc
+    with _config_cache_lock:
+        _config_cache = (mtime, resources, qc)
+    return list(resources), qc
 
 
 def save_config(repo_dir: Path, resources: list[Resource], qc: QueueConfig) -> None:

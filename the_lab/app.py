@@ -159,6 +159,10 @@ def _emit_agent_api_call(agent_id: str, method: str, path: str, status: int,
 # guarded by a module-level lock, mirroring agents.py note_message_poll().
 # Store logic lives here because the feedback restricts edits to app.py.
 # ---------------------------------------------------------------------------
+# Responses bigger than this skip _notifications injection entirely (see
+# inject_notifications) — parse/re-dump cost on the loop outweighs the value.
+_NOTIF_INJECT_MAX_BYTES = 512 * 1024
+
 _notif_seen_lock = threading.Lock()
 _notif_seen_cache: dict | None = None  # in-memory authority; loaded once
 
@@ -655,6 +659,14 @@ async def inject_notifications(request, call_next):
     async for chunk in response.body_iterator:
         body_parts.append(chunk if isinstance(chunk, bytes) else chunk.encode())
     body = b"".join(body_parts)
+    # Size guard: parsing + re-serializing a multi-MB body on the event loop
+    # just to append _notifications is a bad trade. Oversized responses pass
+    # through untouched — the caller gets its notifications on the next
+    # normal-sized call (or via GET /api/v1/notifications).
+    if len(body) > _NOTIF_INJECT_MAX_BYTES:
+        _emit_call(resp_bytes=len(body))
+        return Response(content=body, status_code=response.status_code,
+                        headers=dict(response.headers), media_type=response.media_type)
     try:
         data = _json.loads(body)
     except (ValueError, TypeError):

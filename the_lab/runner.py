@@ -190,6 +190,17 @@ class ExperimentRunner:
                 self._seen.add(exp["id"])
 
     @staticmethod
+    async def _read_text_off_loop(path: Path) -> str:
+        """Read a (possibly multi-MB, possibly NFS) file on the threadpool so
+        monitor/reconcile coroutines never stall the event loop on disk."""
+        loop = asyncio.get_running_loop()
+
+        def _read() -> str:
+            return path.read_text() if path.exists() else ""
+
+        return await loop.run_in_executor(None, _read)
+
+    @staticmethod
     def _pid_alive(pid: int) -> bool:
         """Check if a process is still running."""
         try:
@@ -582,7 +593,7 @@ class ExperimentRunner:
 
         # Process is done — read the log file (which the original bash process wrote to)
         now = datetime.now(timezone.utc).isoformat()
-        output = log_path.read_text() if log_path.exists() else ""
+        output = await self._read_text_off_loop(log_path)
 
         # M3 cancel-bug fix: re-read status before the terminal write so a
         # cancel that landed while we polled the PID isn't clobbered.
@@ -601,7 +612,8 @@ class ExperimentRunner:
                 pid=None, status_msg=None, finished_at=now,  # normal success
             )
             if result_idx is not None:
-                self._strip_result_line(log_path, result_idx)
+                await asyncio.get_running_loop().run_in_executor(
+                    None, self._strip_result_line, log_path, result_idx)
         else:
             # Metrics-optional: assume success if process was running normally
             self._store.update_experiment(
@@ -653,10 +665,17 @@ class ExperimentRunner:
 
         os.chmod(script_path, os.stat(script_path).st_mode | 0o755)
 
-        try:
+        loop = asyncio.get_running_loop()
+
+        def _auto_commit_sync():
             desc = exp.get("description", "")
-            label = exp.get("label", str(exp_id))
-            auto_commit(cwd=self._store.repo_dir, message=f"exp {label}: {desc}")
+            lbl = exp.get("label", str(exp_id))
+            auto_commit(cwd=self._store.repo_dir, message=f"exp {lbl}: {desc}")
+
+        try:
+            # Git subprocesses block — run off-loop so a slow NFS index scan
+            # can't stall the scheduler, WS pings, and every in-flight request.
+            await loop.run_in_executor(None, _auto_commit_sync)
         except Exception:
             pass
 
@@ -664,36 +683,52 @@ class ExperimentRunner:
         # this experiment runs in isolation (concurrent experiments don't
         # interfere with each other or the main checkout).
         idea = self._store.get_idea(exp["idea_id"])
-        branch = idea["branch"] if idea else get_current_branch(cwd=self._store.repo_dir)
         worktree_path = None
         worktree_commit = None  # the actual commit the experiment runs on
         run_cwd = str(self._store.repo_dir)  # fallback
 
-        try:
-            worktree_commit = resolve_branch_commit(branch, cwd=self._store.repo_dir)
-            worktree_path = self._worktree_dir / str(exp_id).replace(".", "_")
-            if worktree_path.exists():
-                remove_worktree(worktree_path, cwd=self._store.repo_dir)
-            if self._git_lock:
-                await self._git_lock.acquire()
-            try:
-                create_worktree(worktree_path, worktree_commit, cwd=self._store.repo_dir)
-            finally:
-                if self._git_lock:
-                    self._git_lock.release()
+        def _prepare_worktree_sync(branch: str):
+            """Blocking git + symlink work; runs on the threadpool."""
+            commit = resolve_branch_commit(branch, cwd=self._store.repo_dir)
+            wt_path = self._worktree_dir / str(exp_id).replace(".", "_")
+            if wt_path.exists():
+                remove_worktree(wt_path, cwd=self._store.repo_dir)
+            create_worktree(wt_path, commit, cwd=self._store.repo_dir)
             # Symlink .venv directories from the main repo into the worktree.
             # Worktrees only contain git-tracked files, but experiments often
             # need virtual environments which are in .gitignore.
-            self._symlink_venvs(worktree_path)
-            self._symlink_the_lab_files(worktree_path)
+            self._symlink_venvs(wt_path)
+            self._symlink_the_lab_files(wt_path)
+            return wt_path, commit
+
+        try:
+            branch = idea["branch"] if idea else await loop.run_in_executor(
+                None, lambda: get_current_branch(cwd=self._store.repo_dir))
+            if self._git_lock:
+                await self._git_lock.acquire()
+            try:
+                worktree_path, worktree_commit = await loop.run_in_executor(
+                    None, _prepare_worktree_sync, branch)
+            finally:
+                if self._git_lock:
+                    self._git_lock.release()
             run_cwd = str(worktree_path)
         except Exception:
             worktree_path = None  # fall back to main repo
+            if idea:
+                branch = idea["branch"]
+            else:
+                try:
+                    branch = await loop.run_in_executor(
+                        None, lambda: get_current_branch(cwd=self._store.repo_dir))
+                except Exception:
+                    branch = "main"
 
         try:
             # Log the commit the experiment actually runs on (the worktree's commit),
             # not the main checkout's HEAD which may differ.
-            actual_commit = worktree_commit if worktree_commit else get_head_commit(cwd=self._store.repo_dir)
+            actual_commit = worktree_commit if worktree_commit else await loop.run_in_executor(
+                None, lambda: get_head_commit(cwd=self._store.repo_dir))
             meta = {
                 **exp.get("meta", {}),
                 "git_branch": branch,
@@ -736,7 +771,7 @@ class ExperimentRunner:
 
         command = ["bash", str(command_script_path)]
         try:
-            uses_inner_arc_sandbox = "_sandboxed" in script_path.read_text()
+            uses_inner_arc_sandbox = "_sandboxed" in await self._read_text_off_loop(script_path)
         except Exception:
             uses_inner_arc_sandbox = False
 
@@ -827,7 +862,7 @@ class ExperimentRunner:
             return
 
         log_path = (self._store.repo_dir / exp["script"]).with_suffix(".log")
-        output = log_path.read_text() if log_path.exists() else ""
+        output = await self._read_text_off_loop(log_path)
         now = datetime.now(timezone.utc).isoformat()
 
         from . import ws as ws_mod
@@ -877,7 +912,8 @@ class ExperimentRunner:
                         pid=None, status_msg=None, finished_at=now,  # normal success
                     )
                     if result_idx is not None:
-                        self._strip_result_line(log_path, result_idx)
+                        await asyncio.get_running_loop().run_in_executor(
+                            None, self._strip_result_line, log_path, result_idx)
                     ws_mod.broadcaster.broadcast({"type": "experiment_finished", "label": _label,
                                                   "experiment_id": exp_id, "idea_id": _idea_id,
                                                   "status": "completed", "status_msg": None,
@@ -1137,7 +1173,7 @@ class ExperimentRunner:
                         _prog_path = local_exp_dir / "script.progress"
                         if _log_path.exists():
                             try:
-                                _lines = _log_path.read_text().splitlines()
+                                _lines = (await self._read_text_off_loop(_log_path)).splitlines()
                                 _snap = _parse_log_progress(_lines)
                                 if _snap:
                                     import json as _json
@@ -1206,7 +1242,7 @@ class ExperimentRunner:
                     return
                 now = datetime.now(timezone.utc).isoformat()
                 log_path = local_exp_dir / "script.log"
-                output = log_path.read_text() if log_path.exists() else ""
+                output = await self._read_text_off_loop(log_path)
                 result, result_idx = self._extract_json(output)
                 if result is not None:
                     metrics, result_meta = _metrics_from_result(result)
@@ -1240,7 +1276,8 @@ class ExperimentRunner:
                     except OSError:
                         pass
                     if result_idx is not None:
-                        self._strip_result_line(log_path, result_idx)
+                        await asyncio.get_running_loop().run_in_executor(
+                            None, self._strip_result_line, log_path, result_idx)
                     ws_mod.broadcaster.broadcast_soon({
                         "type": "experiment_finished",
                         "label": label,
@@ -1316,7 +1353,7 @@ class ExperimentRunner:
                     return
                 now = datetime.now(timezone.utc).isoformat()
                 log_path = local_exp_dir / "script.log"
-                output = log_path.read_text() if log_path.exists() else ""
+                output = await self._read_text_off_loop(log_path)
                 # Try to extract JSON metrics — the script may have completed
                 # successfully before Slurm killed/cancelled the wrapper.
                 result, result_idx = self._extract_json(output)
@@ -1333,7 +1370,8 @@ class ExperimentRunner:
                         finished_at=now,
                     )
                     if result_idx is not None:
-                        self._strip_result_line(log_path, result_idx)
+                        await asyncio.get_running_loop().run_in_executor(
+                            None, self._strip_result_line, log_path, result_idx)
                     ws_mod.broadcaster.broadcast_soon({
                         "type": "experiment_finished",
                         "label": label,
@@ -1616,7 +1654,10 @@ class ExperimentRunner:
             for exp in list(self._store.list_experiments_by_status("running")):
                 pid = exp.get("pid")
                 if pid is not None and not self._pid_alive(pid):
-                    self._reconcile_stale_running(exp)
+                    # Sync helper (also used at startup); its log read can be
+                    # multi-MB on NFS — run it off-loop.
+                    await asyncio.get_event_loop().run_in_executor(
+                        None, self._reconcile_stale_running, exp)
 
             # Check store for any finished experiments we haven't returned yet.
             # This catches results across server restarts and race conditions.

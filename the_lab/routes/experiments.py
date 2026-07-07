@@ -1,6 +1,7 @@
 """Experiment CRUD, start/cancel, timeseries, compare, and analyze endpoints."""
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -1446,15 +1447,19 @@ async def post_experiment_progress(exp_ref: str, request: Request):
     except Exception:
         raise HTTPException(400, "body must be valid JSON")
 
-    # Write to the local progress file so GET /progress still works.
+    # Write to the local progress file so GET /progress still works, and
+    # record a heartbeat for beat timing — both on the threadpool: this
+    # handler is async (for request.json()) and progress posts arrive every
+    # few seconds per running experiment, so NFS writes must not ride the
+    # event loop.
     progress_path = REPO_DIR / exp["script"].replace(".sh", ".progress")
+    loop = asyncio.get_running_loop()
     try:
-        jsonio.write_json(progress_path, body, indent=0)
+        await loop.run_in_executor(
+            None, lambda: jsonio.write_json(progress_path, body, indent=0))
     except OSError as exc:
         raise HTTPException(500, f"could not write progress file: {exc}")
-
-    # Record a heartbeat timestamp so GET /progress can report beat timing.
-    _record_heartbeat(exp["script"])
+    await loop.run_in_executor(None, _record_heartbeat, exp["script"])
 
     # Broadcast immediately — no rsync lag.
     ws_mod.broadcaster.broadcast_soon({

@@ -126,6 +126,12 @@ class ApiStats:
             self._prune_buckets(self._resp_hourly)
             self._dirty = True
 
+    def _flush_quiet(self):
+        try:
+            self.flush()
+        except Exception:
+            pass  # stats persistence is best-effort
+
     def flush(self):
         """Write stats to disk."""
         with self._lock:
@@ -181,10 +187,13 @@ class ApiStats:
                 pattern = " → ".join(ngram)
                 self._patterns[n][pattern] += 1
             self._dirty = True
-        # Periodic flush (every 30s)
+        # Periodic flush (every 30s) — on a background thread so the request
+        # path (and, via the stats middleware, the event loop) never waits on
+        # the api_stats.json NFS write.
         if time.monotonic() - self._last_flush > 30:
             self._last_flush = time.monotonic()
-            self.flush()
+            threading.Thread(target=self._flush_quiet, daemon=True,
+                             name="api-stats-flush").start()
 
     def get_stats(self, pattern_length: int = 2, since_hours: float | None = None) -> dict:
         """Return current stats for the API response.
