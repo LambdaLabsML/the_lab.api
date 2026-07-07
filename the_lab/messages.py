@@ -92,16 +92,31 @@ def _path(repo_dir: Path) -> Path:
     return p / _FILE_NAME
 
 
+# Single-slot in-memory cache: messages are consulted on every dict-shaped
+# API response (unread_for in the notifications middleware) and by every
+# /wait poll pass — reading messages.json from NFS each time was the single
+# hottest read in the process. Memory is authoritative; every mutation
+# writes through atomically via jsonio. All access happens under _lock.
+_cache: dict | None = None
+_cache_path: Path | None = None
+
+
 def _read(repo_dir: Path) -> dict:
+    """Return the live message store dict. Call while holding _lock."""
+    global _cache, _cache_path
     path = _path(repo_dir)
+    if _cache is not None and _cache_path == path:
+        return _cache
     if not path.exists():
-        return {"next_id": 1, "messages": []}
-    try:
-        data = json.loads(path.read_text())
-    except (json.JSONDecodeError, OSError):
-        return {"next_id": 1, "messages": []}
+        data = {"next_id": 1, "messages": []}
+    else:
+        try:
+            data = json.loads(path.read_text())
+        except (json.JSONDecodeError, OSError):
+            data = {"next_id": 1, "messages": []}
     data.setdefault("next_id", 1)
     data.setdefault("messages", [])
+    _cache, _cache_path = data, path
     return data
 
 
@@ -110,7 +125,10 @@ def _prune(data: dict) -> dict:
 
 
 def _write(repo_dir: Path, data: dict) -> None:
-    jsonio.write_json(_path(repo_dir), _prune(data))
+    """Persist and adopt *data* as the cache. Call while holding _lock."""
+    global _cache, _cache_path
+    _cache, _cache_path = data, _path(repo_dir)
+    jsonio.write_json(_cache_path, _prune(data))
 
 
 def _validate_to(to: str) -> None:

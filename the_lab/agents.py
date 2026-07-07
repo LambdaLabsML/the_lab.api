@@ -53,17 +53,35 @@ def _registry_path(repo_dir: Path) -> Path:
     return _agents_dir(repo_dir) / "registry.json"
 
 
+# In-memory single-slot caches (one repo per process). The notifications
+# middleware consults the registry, listening map, and history on every
+# dict-shaped API response — serving them from memory removes several NFS
+# reads per response. Disk stays the durable form (written atomically via
+# jsonio); memory is authoritative between writes.
+_registry_lock = threading.Lock()
+_registry_cache: dict | None = None
+_registry_cache_path: Path | None = None
+
+
 def _read_registry(repo_dir: Path) -> dict:
+    global _registry_cache, _registry_cache_path
     path = _registry_path(repo_dir)
-    if not path.exists():
-        return {}
-    try:
-        return json.loads(path.read_text())
-    except (json.JSONDecodeError, OSError):
-        return {}
+    with _registry_lock:
+        if _registry_cache is None or _registry_cache_path != path:
+            try:
+                loaded = json.loads(path.read_text()) if path.exists() else {}
+            except (json.JSONDecodeError, OSError):
+                loaded = {}
+            _registry_cache = loaded
+            _registry_cache_path = path
+        return _registry_cache
 
 
 def _write_registry(repo_dir: Path, data: dict) -> None:
+    global _registry_cache, _registry_cache_path
+    with _registry_lock:
+        _registry_cache = data
+        _registry_cache_path = _registry_path(repo_dir)
     jsonio.write_json(_registry_path(repo_dir), data)
 
 
@@ -228,34 +246,26 @@ def list_agents(repo_dir: Path) -> list[dict]:
 # Recorded in a separate file from the registry so the high-frequency poll
 # writes never race with register/unregister.
 
-def _listening_path(repo_dir: Path) -> Path:
-    return _agents_dir(repo_dir) / "listening.json"
+# Listening state is purely in-memory: it is pure recency data (an agent
+# counts as listening only if it polled within LISTENING_WINDOW_SEC), so
+# after a restart the map rebuilds itself within seconds from the poll/WS
+# traffic. The old listening.json write-per-poll was a full NFS write every
+# ~3s per listening agent for data that expires in 75s.
+_listening_state: dict[str, str] = {}
 
 
 def note_message_poll(repo_dir: Path, agent_id: str) -> None:
     """Record that *agent_id* just polled its own inbox (the-lab messages loop)."""
     if not agent_id:
         return
-    path = _listening_path(Path(repo_dir).resolve())
     with _listening_lock:
-        try:
-            data = json.loads(path.read_text()) if path.exists() else {}
-        except (json.JSONDecodeError, OSError):
-            data = {}
-        data[agent_id] = datetime.now(timezone.utc).isoformat()
-        try:
-            jsonio.write_json(path, data)
-        except OSError:
-            pass
+        _listening_state[agent_id] = datetime.now(timezone.utc).isoformat()
 
 
 def read_listening(repo_dir: Path) -> dict:
     """Map of agent_id -> last inbox-poll ISO timestamp."""
-    path = _listening_path(Path(repo_dir).resolve())
-    try:
-        return json.loads(path.read_text()) if path.exists() else {}
-    except (json.JSONDecodeError, OSError):
-        return {}
+    with _listening_lock:
+        return dict(_listening_state)
 
 
 def is_listening(last_poll_iso: str | None, window_sec: int = LISTENING_WINDOW_SEC) -> bool:
@@ -278,30 +288,37 @@ def _history_path(repo_dir: Path) -> Path:
     return _agents_dir(repo_dir) / _HISTORY_FILE
 
 
+_history_lock = threading.Lock()
+_history_cache: list | None = None
+
+
+def _load_history(repo_dir: Path) -> list:
+    global _history_cache
+    if _history_cache is None:
+        hist_path = _history_path(repo_dir)
+        try:
+            _history_cache = json.loads(hist_path.read_text()) if hist_path.exists() else []
+        except Exception:
+            _history_cache = []
+    return _history_cache
+
+
 def record_completed_agent(repo_dir: Path, entry: dict, completed_at: str | None = None) -> None:
     """Append a completed agent entry to the history log."""
-    hist_path = _history_path(repo_dir)
-    try:
-        history = json.loads(hist_path.read_text()) if hist_path.exists() else []
-    except Exception:
-        history = []
+    global _history_cache
     record = dict(entry)
     record["completed_at"] = completed_at or datetime.now(timezone.utc).isoformat()
-    # Keep last 200 entries
-    history = [record] + history
-    history = history[:200]
-    jsonio.write_json(hist_path, history)
+    with _history_lock:
+        history = [record] + _load_history(repo_dir)
+        history = history[:200]  # keep last 200 entries
+        _history_cache = history
+        jsonio.write_json(_history_path(repo_dir), history)
 
 
 def list_past_agents(repo_dir: Path) -> list[dict]:
     """Return the history of completed agents, newest first."""
-    hist_path = _history_path(repo_dir)
-    if not hist_path.exists():
-        return []
-    try:
-        return json.loads(hist_path.read_text())
-    except Exception:
-        return []
+    with _history_lock:
+        return list(_load_history(repo_dir))
 
 
 def _claude_projects_dir_for(worktree: Path) -> Path:

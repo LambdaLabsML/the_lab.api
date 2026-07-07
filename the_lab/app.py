@@ -160,6 +160,7 @@ def _emit_agent_api_call(agent_id: str, method: str, path: str, status: int,
 # Store logic lives here because the feedback restricts edits to app.py.
 # ---------------------------------------------------------------------------
 _notif_seen_lock = threading.Lock()
+_notif_seen_cache: dict | None = None  # in-memory authority; loaded once
 
 
 def _notif_seen_path() -> Path:
@@ -169,21 +170,28 @@ def _notif_seen_path() -> Path:
 
 
 def _read_notif_seen() -> dict:
-    """agent_id -> set of seen notification keys. Fail-soft to {}."""
-    path = _notif_seen_path()
-    try:
-        if not path.exists():
-            return {}
-        data = _json.loads(path.read_text())
-        if not isinstance(data, dict):
-            return {}
-        return {k: set(v) for k, v in data.items() if isinstance(v, list)}
-    except (ValueError, TypeError, OSError):
-        return {}
+    """agent_id -> set of seen notification keys, from the in-memory cache
+    (loaded from disk once). Fail-soft to {}. Call under _notif_seen_lock."""
+    global _notif_seen_cache
+    if _notif_seen_cache is None:
+        path = _notif_seen_path()
+        try:
+            data = _json.loads(path.read_text()) if path.exists() else {}
+            if not isinstance(data, dict):
+                data = {}
+            _notif_seen_cache = {
+                k: set(v) for k, v in data.items() if isinstance(v, list)
+            }
+        except (ValueError, TypeError, OSError):
+            _notif_seen_cache = {}
+    return _notif_seen_cache
 
 
 def _write_notif_seen(data: dict) -> None:
-    """Persist agent_id -> seen-key sets. Fail-soft: never raise."""
+    """Adopt *data* as the cache and persist it. Fail-soft: never raise.
+    Call under _notif_seen_lock."""
+    global _notif_seen_cache
+    _notif_seen_cache = data
     try:
         serializable = {k: sorted(v) for k, v in data.items()}
         jsonio.write_json(_notif_seen_path(), serializable)
