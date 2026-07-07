@@ -13,6 +13,7 @@ import math
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 
+from .. import jsonio
 from ..deps import (
     store,
     runner,
@@ -1441,7 +1442,7 @@ async def post_experiment_progress(exp_ref: str, request: Request):
     # Write to the local progress file so GET /progress still works.
     progress_path = REPO_DIR / exp["script"].replace(".sh", ".progress")
     try:
-        progress_path.write_text(json.dumps(body))
+        jsonio.write_json(progress_path, body, indent=0)
     except OSError as exc:
         raise HTTPException(500, f"could not write progress file: {exc}")
 

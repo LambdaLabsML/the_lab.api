@@ -31,6 +31,8 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
+from . import jsonio
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -59,13 +61,13 @@ def _enrich_experiment(exp: dict) -> dict:
 
 
 def _read_json(path: Path) -> dict | list:
-    if path.exists():
-        return json.loads(path.read_text())
-    return {}
+    return jsonio.read_json(path)
 
 
 def _write_json(path: Path, data):
-    path.write_text(json.dumps(data, indent=2) + "\n")
+    # Atomic (temp file + os.replace) — see jsonio.py. Readers sharing
+    # .the_lab/ over NFS never observe a torn file.
+    jsonio.write_json(path, data)
 
 
 # Fields whose values flow into the cached aggregation endpoints

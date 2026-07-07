@@ -26,6 +26,8 @@ import os
 import shutil
 import subprocess
 import threading
+
+from . import jsonio
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
@@ -120,7 +122,7 @@ def save_config(repo_dir: Path, resources: list[Resource], qc: QueueConfig) -> N
         "resources": [asdict(r) for r in resources],
         "queue": asdict(qc),
     }
-    path.write_text(json.dumps(payload, indent=2) + "\n")
+    jsonio.write_json(path, payload)
 
 
 # ---------------------------------------------------------------------------

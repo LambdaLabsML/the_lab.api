@@ -6,6 +6,7 @@ from pathlib import Path
 
 from fastapi import HTTPException
 
+from . import jsonio
 from .git_ops import branch_diff
 from .store import Store
 from .runner import ExperimentRunner
@@ -309,7 +310,7 @@ def _write_task(text: str) -> dict:
     from .store import _now
     task_path = REPO_DIR / ".the_lab" / "task.json"
     task = {"text": text, "updated_at": _now()}
-    task_path.write_text(json.dumps(task, indent=2) + "\n")
+    jsonio.write_json(task_path, task)
     # Bump store version so /ideas and /backlog caches (which embed the task
     # via _read_task) get invalidated on task changes.
     if store is not None:

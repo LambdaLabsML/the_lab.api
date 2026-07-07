@@ -9,6 +9,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import HTMLResponse, StreamingResponse
 
+from .. import jsonio
 from ..deps import (
     store,
     api_stats,
@@ -204,7 +205,7 @@ def set_metric_directions(directions: dict):
             raise HTTPException(400, f"Invalid direction '{v}' for key '{k}': must be 'minimize' or 'maximize'")
     path = REPO_DIR / ".the_lab" / "metric_directions.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(directions, indent=2) + "\n")
+    jsonio.write_json(path, directions)
     return directions
 
 

@@ -11,6 +11,7 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
 from .. import agents as agents_mod
+from .. import jsonio
 from .. import messages as messages_mod
 from ..deps import REPO_DIR, store
 from ..git_ops import get_current_branch
@@ -260,7 +261,7 @@ def get_agent_costs():
         with _costs_lock:
             try:
                 cache_path.parent.mkdir(parents=True, exist_ok=True)
-                cache_path.write_text(json.dumps(cache, indent=2))
+                jsonio.write_json(cache_path, cache)
             except Exception:
                 pass
 

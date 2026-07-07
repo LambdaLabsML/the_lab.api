@@ -29,6 +29,8 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+
+from . import jsonio
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -108,7 +110,7 @@ def _prune(data: dict) -> dict:
 
 
 def _write(repo_dir: Path, data: dict) -> None:
-    _path(repo_dir).write_text(json.dumps(_prune(data), indent=2) + "\n")
+    jsonio.write_json(_path(repo_dir), _prune(data))
 
 
 def _validate_to(to: str) -> None:

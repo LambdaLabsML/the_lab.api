@@ -9,6 +9,8 @@ import os
 import shutil
 import subprocess
 import sys
+
+from . import jsonio
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
@@ -82,8 +84,7 @@ def sandbox_runtime_path(repo_dir: Path) -> Path:
 
 
 def _write_json(path: Path, data) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2) + "\n")
+    jsonio.write_json(path, data)
 
 
 def _read_json(path: Path, default):

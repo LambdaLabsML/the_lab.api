@@ -9,6 +9,8 @@ import json
 import re
 import threading
 import time
+
+from . import jsonio
 from collections import defaultdict, deque
 from pathlib import Path
 
@@ -138,8 +140,7 @@ class ApiStats:
             data["hourly"] = {k: dict(v) for k, v in self._hourly.items()}
             data["resp_hourly"] = {k: dict(v) for k, v in self._resp_hourly.items()}
             self._dirty = False
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+        jsonio.write_json(self._path, data, sort_keys=True)
 
     def record(self, method: str, path: str, client_ip: str = "",
                query: str = "", body_preview: str = "", status_code: int = 0,

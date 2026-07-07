@@ -19,6 +19,7 @@ from .git_ops import (
     remove_worktree,
     resolve_branch_commit,
 )
+from . import jsonio
 from .queue import Allocator, load_config, match_resource
 from .sandbox import build_sandbox_command, load_sandbox_config, sandbox_capabilities
 from .store import Store
@@ -1141,7 +1142,7 @@ class ExperimentRunner:
                                 _snap = _parse_log_progress(_lines)
                                 if _snap:
                                     import json as _json
-                                    _prog_path.write_text(_json.dumps(_snap))
+                                    jsonio.write_json(_prog_path, _snap, indent=0)
                             except Exception:
                                 pass
                         ws_mod.broadcaster.broadcast_soon({
@@ -1234,10 +1235,9 @@ class ExperimentRunner:
                     # never returns stale intermediate data after completion.
                     _progress_path = local_exp_dir / "script.progress"
                     try:
-                        import json as _json
-                        _progress_path.write_text(_json.dumps({
+                        jsonio.write_json(_progress_path, {
                             "_final": True, "pct_complete": 100, **(metrics or {})
-                        }))
+                        }, indent=0)
                     except OSError:
                         pass
                     if result_idx is not None:

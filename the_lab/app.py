@@ -42,6 +42,7 @@ from .store import Store
 from .runner import ExperimentRunner
 from .stats import ApiStats, normalize_path as _normalize_path
 from . import deps
+from . import jsonio
 from . import perf_log
 from . import ws as _ws_mod
 
@@ -185,7 +186,7 @@ def _write_notif_seen(data: dict) -> None:
     """Persist agent_id -> seen-key sets. Fail-soft: never raise."""
     try:
         serializable = {k: sorted(v) for k, v in data.items()}
-        _notif_seen_path().write_text(_json.dumps(serializable, indent=2) + "\n")
+        jsonio.write_json(_notif_seen_path(), serializable)
     except (TypeError, OSError):
         pass
 

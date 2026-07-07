@@ -29,6 +29,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import git_ops
+from . import jsonio
 
 _ID_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789"
 AGENTID_FILE = ".the_lab.agentid"
@@ -63,7 +64,7 @@ def _read_registry(repo_dir: Path) -> dict:
 
 
 def _write_registry(repo_dir: Path, data: dict) -> None:
-    _registry_path(repo_dir).write_text(json.dumps(data, indent=2) + "\n")
+    jsonio.write_json(_registry_path(repo_dir), data)
 
 
 def _generate_agent_id(existing: set[str]) -> str:
@@ -243,7 +244,7 @@ def note_message_poll(repo_dir: Path, agent_id: str) -> None:
             data = {}
         data[agent_id] = datetime.now(timezone.utc).isoformat()
         try:
-            path.write_text(json.dumps(data, indent=2))
+            jsonio.write_json(path, data)
         except OSError:
             pass
 
@@ -289,7 +290,7 @@ def record_completed_agent(repo_dir: Path, entry: dict, completed_at: str | None
     # Keep last 200 entries
     history = [record] + history
     history = history[:200]
-    hist_path.write_text(json.dumps(history, indent=2))
+    jsonio.write_json(hist_path, history)
 
 
 def list_past_agents(repo_dir: Path) -> list[dict]:
@@ -373,7 +374,7 @@ def _archive_agent_data(repo_dir: Path, agent_id: str, entry: dict) -> None:
             pass
 
         try:
-            (archive_dir / "meta.json").write_text(json.dumps(meta, indent=2) + "\n")
+            jsonio.write_json(archive_dir / "meta.json", meta)
         except OSError:
             pass
     except Exception:
