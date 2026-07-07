@@ -29,6 +29,14 @@ class Broadcaster:
         self._subscribers: list[asyncio.Queue] = []
         self._loop: asyncio.AbstractEventLoop | None = None
 
+    def capture_loop(self) -> None:
+        """Adopt the current running loop (call from app startup) so
+        broadcast_soon() works before any WS subscriber has connected."""
+        try:
+            self._loop = asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+
     def _get_loop(self) -> asyncio.AbstractEventLoop | None:
         if self._loop is not None:
             return self._loop

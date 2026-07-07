@@ -1,9 +1,11 @@
 """Operational endpoints: task, config, sandbox, stats, chat, debug."""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
+import time as _time
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
@@ -254,6 +256,79 @@ def update_sandbox_state(req: SandboxConfigRequest):
 
 
 # --- API Stats ---
+
+@router.get("/api/v1/events")
+async def get_events(
+    since: int = Query(default=0, ge=0, description="Return only events with seq > since. 0 = everything still buffered."),
+    timeout: float = Query(default=25.0, ge=0, le=60, description="Long-poll: seconds to wait when no newer events exist yet. 0 = return immediately."),
+    types: str | None = Query(default=None, description="Comma-separated event types to include (e.g. experiment_finished,message_received). Others are filtered out."),
+):
+    """Drain the server event stream over plain HTTP — the WS fallback.
+
+    Same events, same ``seq``/``ts`` envelope, same ring buffer as
+    ``/api/v1/ws``: push and pull are two drains of one stream, so any
+    client that can't hold a WebSocket (proxy strips upgrades, older
+    runtime, curl) can long-poll this instead::
+
+        GET /api/v1/events?since=0            -> {"events":[...], "seq": 42, ...}
+        GET /api/v1/events?since=42&timeout=25  (blocks until something new)
+
+    Pass the returned ``seq`` as the next ``since``. ``oldest`` is the
+    oldest seq still buffered — if your ``since`` is older than that, you
+    missed events and should resnapshot via the REST endpoints.
+    """
+    from .. import ws as ws_mod
+
+    broadcaster = ws_mod.broadcaster
+    type_filter = None
+    if types:
+        type_filter = {t.strip() for t in types.split(",") if t.strip()}
+
+    def _visible(evs: list[dict]) -> list[dict]:
+        if type_filter is None:
+            return evs
+        return [e for e in evs if e.get("type") in type_filter]
+
+    def _envelope(events: list[dict], last_seq: int) -> dict:
+        ring = broadcaster.replay_since(0)
+        return {
+            "events": events,
+            "seq": last_seq,
+            "oldest": ring[0]["seq"] if ring else None,
+            "now": _time.time(),
+        }
+
+    # Subscribe BEFORE replaying so an event landing in between reaches the
+    # queue instead of falling into the gap; dedupe by seq afterwards.
+    q = broadcaster.subscribe()
+    try:
+        events = _visible(broadcaster.replay_since(since))
+        last_seq = events[-1]["seq"] if events else since
+        if events or timeout <= 0:
+            return _envelope(events, last_seq)
+
+        deadline = asyncio.get_event_loop().time() + timeout
+        while True:
+            remaining = deadline - asyncio.get_event_loop().time()
+            if remaining <= 0:
+                return _envelope([], since)
+            try:
+                ev = await asyncio.wait_for(q.get(), timeout=remaining)
+            except asyncio.TimeoutError:
+                return _envelope([], since)
+            batch = [ev]
+            while True:  # drain whatever arrived in the same burst
+                try:
+                    batch.append(q.get_nowait())
+                except asyncio.QueueEmpty:
+                    break
+            fresh = _visible([e for e in batch if e.get("seq", 0) > since])
+            if fresh:
+                return _envelope(fresh, fresh[-1]["seq"])
+            # everything was filtered out — keep waiting for a match
+    finally:
+        broadcaster.unsubscribe(q)
+
 
 @router.get("/api/v1/stats")
 def get_api_stats(

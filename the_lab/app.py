@@ -778,6 +778,10 @@ app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 @app.on_event("startup")
 async def startup():
+    # Capture the event loop for broadcast_soon() immediately — otherwise
+    # events emitted from sync threads before the FIRST WebSocket subscriber
+    # arrives are silently dropped (breaks /api/v1/events-only clients).
+    _ws_mod.broadcaster.capture_loop()
     await runner.reattach_running()
     # Reap agent worktrees whose registered PID is gone (a CLI wrapper that
     # crashed before unregistering). Safe to skip on errors.
