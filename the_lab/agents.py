@@ -255,11 +255,29 @@ _listening_state: dict[str, str] = {}
 
 
 def note_message_poll(repo_dir: Path, agent_id: str) -> None:
-    """Record that *agent_id* just polled its own inbox (the-lab messages loop)."""
+    """Record that *agent_id* just polled its own inbox (the-lab messages loop).
+
+    Emits an ``agent_changed`` event only on the silence→listening
+    transition, so WS clients can flip the listening dot without polling
+    the roster; steady-state polls stay silent.
+    """
     if not agent_id:
         return
+    now_iso = datetime.now(timezone.utc).isoformat()
     with _listening_lock:
-        _listening_state[agent_id] = datetime.now(timezone.utc).isoformat()
+        prev = _listening_state.get(agent_id)
+        _listening_state[agent_id] = now_iso
+    if prev is None or not is_listening(prev):
+        try:
+            from . import ws as ws_mod
+            ws_mod.broadcaster.broadcast_soon({
+                "type": "agent_changed",
+                "agent_id": agent_id,
+                "change": "listening",
+                "last_message_poll": now_iso,
+            })
+        except Exception:
+            pass
 
 
 def read_listening(repo_dir: Path) -> dict:

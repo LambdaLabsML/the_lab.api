@@ -92,9 +92,20 @@ def register_agent(req: RegisterAgentRequest):
     are cleared so the new agent starts with a clean inbox.
     """
     try:
-        return agents_mod.register_agent(REPO_DIR, store, role=req.role, pid=req.pid)
+        result = agents_mod.register_agent(REPO_DIR, store, role=req.role, pid=req.pid)
     except Exception as e:
         raise HTTPException(500, f"failed to register agent: {e}")
+    try:
+        from .. import ws as ws_mod
+        ws_mod.broadcaster.broadcast_soon({
+            "type": "agent_changed",
+            "agent_id": result.get("agent_id"),
+            "change": "registered",
+            "role": result.get("role"),
+        })
+    except Exception:
+        pass
+    return result
 
 
 @router.get("/api/v1/agents")
@@ -282,6 +293,15 @@ def unregister_agent(agent_id: str, keep_branch: bool = True):
     """Remove an agent's worktree (and optionally its branch)."""
     if not agents_mod.unregister_agent(REPO_DIR, agent_id, keep_branch=keep_branch):
         raise HTTPException(404, f"agent '{agent_id}' not registered")
+    try:
+        from .. import ws as ws_mod
+        ws_mod.broadcaster.broadcast_soon({
+            "type": "agent_changed",
+            "agent_id": agent_id,
+            "change": "removed",
+        })
+    except Exception:
+        pass
     return {"status": "unregistered", "agent_id": agent_id}
 
 

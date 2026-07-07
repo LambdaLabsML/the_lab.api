@@ -959,6 +959,16 @@ def delete_experiment(exp_ref: str):
     deleted = store.delete_experiment(exp_id)
     if deleted is None:
         raise HTTPException(404, "experiment not found")
+    try:
+        from .. import ws as ws_mod
+        ws_mod.broadcaster.broadcast_soon({
+            "type": "experiment_deleted",
+            "label": exp.get("label", str(exp_id)),
+            "experiment_id": exp_id,
+            "idea_id": deleted.get("idea_id"),
+        })
+    except Exception:
+        pass
     return {
         "deleted": True,
         "experiment_id": exp_id,

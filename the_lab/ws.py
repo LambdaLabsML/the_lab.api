@@ -45,6 +45,7 @@ class Broadcaster:
         Overflow protection: if a subscriber's queue exceeds _QUEUE_MAX,
         the oldest item is dropped before enqueuing the new one.
         """
+        event = _enrich(event)
         self._seq += 1
         # Stamp the REAL event time: reconnecting clients replay the ring
         # buffer in one burst, so arrival time is meaningless for ages.
@@ -105,6 +106,102 @@ class Broadcaster:
     def replay_since(self, seq: int) -> list[dict]:
         """Return all buffered events with seq > given value (in order)."""
         return [e for e in self._ring if e.get("seq", 0) > seq]
+
+
+# ── Event entity payloads ─────────────────────────────────────────────────────
+# Events carry the changed entity (trimmed) so clients can PATCH their state
+# instead of refetching whole collections on every doorbell. Shapes mirror the
+# corresponding REST rows; keep them small — every subscriber gets every event.
+
+def experiment_payload(exp: dict | None) -> dict | None:
+    """Trimmed experiment row for experiment_* events (chart-row shape)."""
+    if not exp:
+        return None
+    desc = exp.get("description") or ""
+    if len(desc) > 160:
+        desc = desc[:157] + "..."
+    metrics = exp.get("metrics")
+    if isinstance(metrics, dict):
+        metrics = {k: v for k, v in metrics.items()
+                   if isinstance(v, (int, float)) and not isinstance(v, bool)}
+    else:
+        metrics = {}
+    return {
+        "id": exp.get("id"),
+        "label": exp.get("label"),
+        "idea_id": exp.get("idea_id"),
+        "seq": exp.get("seq"),
+        "status": exp.get("status"),
+        "status_msg": exp.get("status_msg"),
+        "description": desc or None,
+        "metrics": metrics,
+        "tags": exp.get("tags") or [],
+        "created_at": exp.get("created_at"),
+        "started_at": exp.get("started_at"),
+        "finished_at": exp.get("finished_at"),
+        "runtime": exp.get("runtime"),
+    }
+
+
+def idea_payload(idea: dict | None) -> dict | None:
+    """Trimmed idea row for idea_changed events (graph-node shape)."""
+    if not idea:
+        return None
+    return {
+        "id": idea.get("id"),
+        "description": idea.get("description"),
+        "status": idea.get("status"),
+        "source": idea.get("source"),
+        "priority": idea.get("priority"),
+        "branch": idea.get("branch"),
+        "conclusion": idea.get("conclusion"),
+        "created_at": idea.get("created_at"),
+        "parent_ids": idea.get("parent_ids") or [],
+    }
+
+
+_EXP_EVENT_TYPES = frozenset({
+    "experiment_queued", "experiment_started",
+    "experiment_finished", "experiment_cancelled",
+})
+
+
+def _enrich(event: dict) -> dict:
+    """Attach the changed entity to known event types, centrally.
+
+    Every emit site (present and future) gets a patchable payload for free:
+    experiment_* events gain ``experiment`` (trimmed row), idea_changed gains
+    ``idea``, queue_changed gains queued/running counts. Lookups hit the
+    in-memory store dicts — no disk. Fail-soft: enrichment never blocks an
+    event. Runs on the event loop right before seq-stamping, so the payload
+    reflects the record AFTER the mutation that triggered the event.
+    """
+    etype = event.get("type")
+    try:
+        if etype in _EXP_EVENT_TYPES and "experiment" not in event:
+            from . import deps
+            store = getattr(deps, "store", None)
+            exp = store.get_experiment(event.get("label")) if store else None
+            if exp:
+                event = {**event, "experiment": experiment_payload(exp)}
+        elif etype == "idea_changed" and "idea" not in event:
+            from . import deps
+            store = getattr(deps, "store", None)
+            idea = store.get_idea(event.get("idea_id")) if store else None
+            if idea:
+                event = {**event, "idea": idea_payload(idea)}
+        elif etype == "queue_changed" and "queued" not in event:
+            from . import deps
+            store = getattr(deps, "store", None)
+            if store:
+                event = {
+                    **event,
+                    "queued": len(store.list_experiments_by_status("queued")),
+                    "running": len(store.list_experiments_by_status("running")),
+                }
+    except Exception:
+        pass
+    return event
 
 
 # Module-level singleton used by all callers.
