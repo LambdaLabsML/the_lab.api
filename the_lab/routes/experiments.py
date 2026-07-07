@@ -1329,17 +1329,24 @@ def _heartbeat_path(script: str):
 
 
 def _record_heartbeat(script: str) -> None:
-    """Append the current UTC timestamp to the experiment's heartbeat log."""
+    """Append the current UTC timestamp to the experiment's heartbeat log.
+
+    True O(1) append — the old read-all/rewrite-all per beat was two full
+    NFS passes per POST /progress. The file is compacted back down to
+    _HEARTBEAT_KEEP lines only when it grows past twice that.
+    """
     try:
         path = _heartbeat_path(script)
-        lines: list[str] = []
-        if path.exists():
-            lines = path.read_text().splitlines()
-        lines.append(datetime.now(timezone.utc).isoformat())
-        # Keep only the most recent entries so the file stays bounded.
-        if len(lines) > _HEARTBEAT_KEEP:
-            lines = lines[-_HEARTBEAT_KEEP:]
-        path.write_text("\n".join(lines) + "\n")
+        jsonio.append_line(path, datetime.now(timezone.utc).isoformat())
+        # Occasional compaction, amortized: at most one rewrite per
+        # _HEARTBEAT_KEEP appends.
+        try:
+            if path.stat().st_size > _HEARTBEAT_KEEP * 2 * 30:  # ~33 B/line
+                lines = path.read_text().splitlines()
+                if len(lines) > _HEARTBEAT_KEEP * 2:
+                    path.write_text("\n".join(lines[-_HEARTBEAT_KEEP:]) + "\n")
+        except OSError:
+            pass
     except OSError:
         pass  # heartbeat tracking is best-effort
 
