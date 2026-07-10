@@ -564,6 +564,25 @@
   font-size: var(--text-sm);
   color: var(--text-muted);
 }
+/* Header action cluster (fullscreen + close IconButtons) */
+.lightbox-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-left: var(--space-2);
+  flex-shrink: 0;
+}
+/* Fullscreen: the modal becomes the viewport; radius/backdrop padding drop. */
+.lightbox-backdrop.is-full { padding: 0; }
+.lightbox.is-full {
+  width: 100vw;
+  max-width: none;
+  height: 100vh;
+  max-height: none;
+  border-radius: 0;
+}
+
+/* legacy close glyph — still used by the frozen agents-view lightboxes */
 .lightbox-close {
   cursor: pointer;
   color: var(--text-faint);
@@ -591,6 +610,25 @@
   word-break: break-all;
   margin: 0;
 }
+/* Full-document HTML outputs render in a sandboxed iframe: edge-to-edge
+   body, the frame fills the modal. The iframe gets the active colorscheme
+   injected (see OutputDocFrame) so its background matches before load. */
+.lightbox-body.is-doc {
+  padding: 0;
+  display: flex;
+  overflow: hidden;
+}
+/* A document iframe has no intrinsic height — give the doc modal the full
+   allowed height instead of collapsing to the 150px iframe default. */
+.lightbox:has(.lightbox-body.is-doc) { height: 85vh; }
+.lightbox.is-full:has(.lightbox-body.is-doc) { height: 100vh; }
+.lightbox-doc-frame {
+  flex: 1;
+  width: 100%;
+  border: 0;
+  background: var(--bg);
+}
+
 /* Shared lightbox loading / placeholder text */
 .lightbox-loading { color: var(--text-muted); }
 .lightbox-loading--italic { font-style: italic; }
