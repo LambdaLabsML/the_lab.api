@@ -121,9 +121,8 @@ function applyEvent(event: WsEvent): void {
     }
     case "experiment_progress_updated": {
       const prog = event.progress as Record<string, unknown> | null | undefined;
-      const pct = (prog?.pct_complete ?? prog?.pct);
-      if (typeof pct === "number" && typeof event.label === "string") {
-        patchProgress(event.label, pct);
+      if (prog && typeof event.label === "string") {
+        patchProgress(event.label, prog);
       }
       break;
     }

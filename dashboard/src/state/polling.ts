@@ -339,6 +339,14 @@ export function patchExperiment(row: Partial<Experiment>): boolean {
     _running: isRunning || undefined,
   } as Experiment;
   if (!isRunning) delete merged._running;
+  // Event payloads carry the RECORD's metrics, which are empty while the
+  // experiment runs — the plotted values for running rows come from the
+  // progress file (via /chart-data or progress events). Never clobber
+  // populated metrics with an empty dict, or the chart triangle vanishes.
+  if (isRunning && idx >= 0 &&
+      (!row.metrics || Object.keys(row.metrics).length === 0)) {
+    merged.metrics = list[idx].metrics;
+  }
   const next = idx >= 0 ? [...list] : [...list, merged];
   if (idx >= 0) next[idx] = merged;
   next.sort(compareExps);
@@ -375,10 +383,39 @@ export function patchIdea(idea: Partial<IdeaNode> & { id: number }): boolean {
   return true;
 }
 
-/** Update one running experiment's pct from experiment_progress_updated. */
-export function patchProgress(label: string, pct: number): void {
-  if (!label || typeof pct !== "number") return;
-  runningProgress.value = { ...runningProgress.value, [label]: pct };
+/** Flatten a progress body to numeric leaves with dotted keys — the same
+ *  shape /chart-data produces for running rows (_numeric_metrics). */
+function numericMetrics(obj: Record<string, unknown>, prefix = ""): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    const key = prefix ? `${prefix}.${k}` : k;
+    if (typeof v === "number" && isFinite(v)) out[key] = v;
+    else if (v && typeof v === "object" && !Array.isArray(v) && !prefix.includes(".")) {
+      Object.assign(out, numericMetrics(v as Record<string, unknown>, key));
+    }
+  }
+  return out;
+}
+
+/** Apply an experiment_progress_updated body: refresh the pct map AND the
+ *  running row's plotted metrics, so the chart triangle appears with the
+ *  first progress report and moves live (the old 30s /chart-data poll did
+ *  this; as a slow reconcile it no longer can). */
+export function patchProgress(label: string, prog: Record<string, unknown>): void {
+  if (!label || !prog || typeof prog !== "object") return;
+  const pct = (prog as any).pct_complete ?? (prog as any).pct;
+  if (typeof pct === "number") {
+    runningProgress.value = { ...runningProgress.value, [label]: pct };
+  }
+  const nums = numericMetrics(prog);
+  if (Object.keys(nums).length === 0) return;
+  const list = allExperiments.value;
+  const idx = list.findIndex((e) => (e.label || String(e.id)) === label);
+  if (idx < 0 || !(list[idx]._running || list[idx].status === "running")) return;
+  const next = [...list];
+  next[idx] = { ...list[idx], metrics: nums };
+  resetGlobalBestBeforeCache();
+  allExperiments.value = next;
 }
 
 function clearProgress(label: string): void {
