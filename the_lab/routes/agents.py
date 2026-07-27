@@ -272,7 +272,9 @@ def get_agent_costs():
         with _costs_lock:
             try:
                 cache_path.parent.mkdir(parents=True, exist_ok=True)
-                jsonio.write_json(cache_path, cache)
+                from ..deps import DEMO_MODE
+                if not DEMO_MODE:  # demo: sample in memory, never persist
+                    jsonio.write_json(cache_path, cache)
             except Exception:
                 pass
 

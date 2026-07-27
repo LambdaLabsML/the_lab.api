@@ -2,6 +2,12 @@
 from __future__ import annotations
 
 import json
+import os
+
+# Read-only demo mode (set by `the-lab serve --demo` before app import):
+# mutations are blocked, the runner never reconciles/schedules, and nothing
+# writes to .the_lab/ — safe for showing a live DB snapshot to an audience.
+DEMO_MODE = os.environ.get("THE_LAB_DEMO", "").strip().lower() in ("1", "true", "yes")
 from pathlib import Path
 
 from fastapi import HTTPException

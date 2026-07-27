@@ -46,17 +46,24 @@ class Broadcaster:
 
     # ── Journal ────────────────────────────────────────────────────────────
 
-    def attach_journal(self, path: Path) -> None:
+    def attach_journal(self, path: Path, read_only: bool = False) -> None:
         """Enable persistence: continue seq from the journal tail, preload
         the ring with the most recent events, and start the writer thread.
-        Call once at app startup, before traffic."""
+        Call once at app startup, before traffic.
+
+        ``read_only`` (demo mode) preloads the ring — the activity feed
+        still replays history — but never writes: no writer thread, no
+        appends, no rotation.
+        """
         path = Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
         self._journal_path = path
         last_events = self._journal_tail(self._RING_SIZE)
         if last_events:
             self._seq = max(self._seq, last_events[-1].get("seq", 0))
             self._ring.extend(last_events)
+        if read_only:
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
         self._journal_q = _queue.Queue()
         threading.Thread(target=self._journal_writer, daemon=True,
                          name="ws-journal").start()

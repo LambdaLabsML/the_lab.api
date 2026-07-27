@@ -164,13 +164,17 @@ def get_dashboard_config():
     Example ``.the_lab/dashboard.json``:
         {"tagFilters": ["held-out"], "selectedMetric": "accuracy_per_mtoken"}
     """
+    from ..deps import DEMO_MODE
     config_path = REPO_DIR / ".the_lab" / "dashboard.json"
+    out: dict = {}
     if config_path.exists():
         try:
-            return json.loads(config_path.read_text())
+            out = json.loads(config_path.read_text())
         except (json.JSONDecodeError, OSError):
-            pass
-    return {}
+            out = {}
+    if DEMO_MODE:
+        out["demo"] = True
+    return out
 
 
 # --- Metric directions ---

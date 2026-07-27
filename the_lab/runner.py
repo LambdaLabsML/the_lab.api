@@ -128,8 +128,9 @@ def _parse_log_progress(lines: list[str]) -> dict | None:
 
 
 class ExperimentRunner:
-    def __init__(self, store: Store):
+    def __init__(self, store: Store, read_only: bool = False):
         self._store = store
+        self._read_only = read_only
         self._finished_queue: asyncio.Queue[int] = asyncio.Queue()
         self._tasks: dict[int, asyncio.Task] = {}
         self._git_lock = None  # initialized as asyncio.Lock in reattach_running
@@ -147,6 +148,11 @@ class ExperimentRunner:
         # If the process is still alive, re-attach to it. Otherwise mark as failed.
         self._reattach_running = []
         running_worktrees = set()
+        if read_only:
+            # Demo mode: NEVER touch the DB — no stale-running reconcile (it
+            # marks experiments failed), no worktree cleanup. The state is
+            # someone else's snapshot; we only display it.
+            return
         for exp in self._store.list_experiments_by_status("running"):
             pid = exp.get("pid")
             slurm_job_id = (exp.get("meta") or {}).get("slurm_job_id")
@@ -278,6 +284,11 @@ class ExperimentRunner:
                 dst_bin.symlink_to(src_bin)
 
     async def reattach_running(self):
+        if self._read_only:
+            # Demo mode: no monitors, no scheduler loop, no dispatching.
+            self._git_lock = asyncio.Lock()
+            self._scheduler_wake = asyncio.Event()
+            return
         """Re-attach to experiments that survived a server restart.
         Call this once after the event loop is running."""
         self._git_lock = asyncio.Lock()

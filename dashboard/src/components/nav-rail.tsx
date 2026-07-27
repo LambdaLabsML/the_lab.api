@@ -7,7 +7,7 @@
  */
 import type { ComponentChildren } from "preact";
 import { useState, useEffect } from "preact/hooks";
-import { sidebarWidth, sidebarCollapsed } from "../state/settings";
+import { serverDemoMode, sidebarWidth, sidebarCollapsed } from "../state/settings";
 import { wsCatchingUp, wsConnected, wsAuthFailed, wsLastMessageAt } from "../state/ws";
 import { Tooltip } from "./ui";
 
@@ -51,6 +51,7 @@ export function NavRail({
     return () => window.clearInterval(t);
   }, []);
 
+  const demo = serverDemoMode.value;
   const wsState = wsAuthFailed.value ? "auth" : wsCatchingUp.value ? "busy" : wsConnected.value ? "on" : "off";
   const wsLabel = wsAuthFailed.value ? "auth failed" : wsCatchingUp.value ? "catching up…" : wsConnected.value ? "connected" : "reconnecting…";
   const lastStr = relAgo(wsLastMessageAt.value);
@@ -74,6 +75,7 @@ export function NavRail({
 
   return (
     <nav class="nav-rail" aria-label="Primary navigation">
+      {demo && <span class="nav-rail-demo" title="Read-only demo — mutations are disabled">demo</span>}
       <Tooltip
         content={
           <>

@@ -37,6 +37,19 @@
   &--busy { color: var(--yellow); animation: ws-dot-pulse 1.2s ease-in-out infinite; }
   &--auth { color: var(--red); }
 }
+.nav-rail-demo {
+  align-self: center;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--yellow);
+  border: 1px solid color-mix(in srgb, var(--yellow) 45%, transparent);
+  border-radius: var(--radius-sm);
+  padding: 1px 5px;
+  margin-bottom: var(--space-2);
+  cursor: help;
+}
 .ws-word--on   { color: var(--green) !important; }
 .ws-word--off  { color: var(--yellow) !important; }
 .ws-word--busy { color: var(--yellow) !important; }

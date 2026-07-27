@@ -114,8 +114,10 @@ def load_config(repo_dir: Path) -> tuple[list[Resource], QueueConfig]:
     path = _config_path(repo_dir)
     if not path.exists():
         # First run: write a default with a single auto-detected resource.
+        # (In read-only demo mode, serve the default without persisting it.)
         default = _default_local_resource()
-        save_config(repo_dir, [default], QueueConfig())
+        if os.environ.get("THE_LAB_DEMO", "").strip().lower() not in ("1", "true", "yes"):
+            save_config(repo_dir, [default], QueueConfig())
         return [default], QueueConfig()
     try:
         mtime = path.stat().st_mtime_ns

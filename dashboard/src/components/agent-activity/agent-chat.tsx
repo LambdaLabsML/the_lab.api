@@ -5,12 +5,15 @@
  * recipient (menu opens upward). Terminal-clean per DESIGN.md.
  */
 import { useRef, useState } from "preact/hooks";
+import { serverDemoMode } from "../../state/settings";
 import { agentStates } from "../../state/agent-activity";
 import { agentColor } from "../../lib/colors";
 import { useEscape } from "../../lib/hooks/use-key";
 import { sendMessage } from "../../state/api";
 
 export function AgentQuickChat() {
+  if (serverDemoMode.value) return null; // read-only demo: no messaging
+
   const [to, setTo] = useState("all");
   const [text, setText] = useState("");
   const [state, setState] = useState<"idle" | "sending" | "sent" | "error">("idle");

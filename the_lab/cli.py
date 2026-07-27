@@ -1003,6 +1003,10 @@ def main():
     parser.add_argument("--host", default="0.0.0.0", help="Host to bind to (default: 0.0.0.0)")
     parser.add_argument("--port", type=int, default=8000, help="Port to bind to (default: 8000)")
     parser.add_argument("--dev", action="store_true", help="Development mode: auto-reload on code changes, hold requests during restart")
+    parser.add_argument("--demo", action="store_true",
+                        help="Read-only demo mode: block all mutations, don't start the "
+                             "scheduler or reconcile experiments, and never write to "
+                             ".the_lab/ — safe for showing a lab DB to an audience.")
     parser.add_argument("--https", action="store_true", help="Enable HTTPS with a self-signed certificate")
     parser.add_argument(
         "--http-redirect-port",
@@ -1033,6 +1037,9 @@ def main():
     load_dotenv(Path(__file__).parent.parent / ".env")
 
     os.environ["THE_LAB_REPO"] = str(repo_path)
+    if args.demo:
+        os.environ["THE_LAB_DEMO"] = "1"
+        print("[demo] read-only mode: mutations blocked, scheduler off, no disk writes", file=sys.stderr)
 
     if args.perf is not None:
         perf_path = Path(args.perf).resolve() if args.perf else (repo_path / ".the_lab" / "api_perf.csv")
@@ -1057,14 +1064,15 @@ def main():
     else:
         scheme = "http"
 
-    save_runtime_info(
-        repo_path,
-        {
-            "api_scheme": scheme,
-            "api_host": args.host,
-            "api_port": args.port,
-        },
-    )
+    if not args.demo:  # demo never writes into the inspected repo
+        save_runtime_info(
+            repo_path,
+            {
+                "api_scheme": scheme,
+                "api_host": args.host,
+                "api_port": args.port,
+            },
+        )
 
     # Announce auth status so operators know whether the UI is open.
     _auth_user = os.environ.get("THE_LAB_USER", "").strip()

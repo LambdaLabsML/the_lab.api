@@ -126,6 +126,10 @@ class ApiStats:
             self._prune_buckets(self._resp_hourly)
             self._dirty = True
 
+    # Demo mode: record() keeps working in memory (the Stats view stays
+    # live for the current session) but nothing is ever persisted.
+    read_only = False
+
     def _flush_quiet(self):
         try:
             self.flush()
@@ -133,6 +137,8 @@ class ApiStats:
             pass  # stats persistence is best-effort
 
     def flush(self):
+        if self.read_only:
+            return
         """Write stats to disk."""
         with self._lock:
             if not self._dirty:

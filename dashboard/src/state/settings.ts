@@ -129,11 +129,16 @@ const CONFIG_KEYS: Record<string, Signal<any>> = {
  * Fetch server config and apply defaults for keys that have no
  * localStorage value yet (first-time users). Called once on startup.
  */
+/** True when the server runs in read-only demo mode (`the-lab serve --demo`).
+ *  Mutating UI affordances hide themselves; the rail shows a demo badge. */
+export const serverDemoMode = signal(false);
+
 export async function applyServerDefaults(): Promise<void> {
   try {
     const resp = await fetch("/api/v1/config");
     if (!resp.ok) return;
     const config = await resp.json();
+    if (config.demo === true) serverDemoMode.value = true;
     for (const [key, sig] of Object.entries(CONFIG_KEYS)) {
       if (config[key] === undefined) continue;
       // Only apply if localStorage has no value for this key

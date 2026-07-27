@@ -49,9 +49,12 @@ from . import ws as _ws_mod
 # --- Configuration ---
 REPO_DIR = Path(os.environ.get("THE_LAB_REPO", os.getcwd())).resolve()
 
+from .deps import DEMO_MODE as _DEMO
+
 store = Store(REPO_DIR)
-runner = ExperimentRunner(store)
+runner = ExperimentRunner(store, read_only=_DEMO)
 api_stats = ApiStats(REPO_DIR / ".the_lab" / "api_stats.json")
+api_stats.read_only = _DEMO
 
 # Initialise shared state so route modules can import from deps
 deps.init(store, runner, api_stats, REPO_DIR)
@@ -267,6 +270,30 @@ app = FastAPI(title="The Lab", version="0.1.0", default_response_class=SafeJSONR
 
 
 # --- Middleware ---
+
+# Paths that are GET but still mutate or act agentic — blocked in demo too.
+_DEMO_BLOCKED_GETS = ("/api/v1/wait",)
+
+
+@app.middleware("http")
+async def demo_gate(request: Request, call_next):
+    """Read-only demo mode: reject every mutating request with a clear 403.
+
+    GET/HEAD/OPTIONS pass through (plus the WS upgrades, which are read-only
+    fan-out); /api/v1/wait is blocked despite being GET — it reconciles
+    experiment state and is an agent affordance, not an inspection one.
+    """
+    if _DEMO and request.url.path.startswith("/api/"):
+        blocked = request.method not in ("GET", "HEAD", "OPTIONS") \
+            or request.url.path in _DEMO_BLOCKED_GETS
+        if blocked:
+            return SafeJSONResponse(
+                {"error": "demo_mode",
+                 "detail": "This is a read-only demo instance — mutations are disabled."},
+                status_code=403,
+            )
+    return await call_next(request)
+
 
 @app.middleware("http")
 async def basic_auth(request: Request, call_next):
@@ -596,6 +623,11 @@ async def inject_notifications(request, call_next):
     ``X-Notifications-Count`` header instead so agents know to fetch
     ``GET /api/v1/notifications`` for the full payload.
     """
+    if _DEMO:
+        # Read-only demo: no agents, so no notifications — and skipping this
+        # middleware entirely avoids buffering + re-serializing every JSON
+        # response body just to (not) append a field.
+        return await call_next(request)
     # In-flight marker for the long-poll endpoint: /wait can block for minutes,
     # so tell the activity view the call is being processed BEFORE it completes
     # (pending: true; the completion event above clears it). resolve_agent runs
@@ -785,10 +817,14 @@ async def startup():
     # Persist events + continue seq across restarts (P4: the activity feed
     # and ?since= replay survive deploys).
     try:
-        _ws_mod.broadcaster.attach_journal(REPO_DIR / ".the_lab" / "events.jsonl")
+        _ws_mod.broadcaster.attach_journal(
+            REPO_DIR / ".the_lab" / "events.jsonl", read_only=_DEMO)
     except Exception as e:  # pragma: no cover
         logger.warning("event journal unavailable: %s", e)
     await runner.reattach_running()
+    if _DEMO:
+        logger.info("DEMO MODE: read-only — mutations blocked, scheduler off, no disk writes")
+        return  # no agent pruning either — it rewrites the registry
     # Reap agent worktrees whose registered PID is gone (a CLI wrapper that
     # crashed before unregistering). Safe to skip on errors.
     try:
@@ -1012,6 +1048,12 @@ async def messages_ws_endpoint(websocket: WebSocket):
     (select without claiming) so previews still fall through the other channels.
     """
     import asyncio as _asyncio
+    if _DEMO:
+        # Demo: delivery CLAIMS messages (a write) and this is an agent
+        # affordance — refuse the socket after the required accept().
+        await websocket.accept()
+        await websocket.close(code=1008)
+        return
 
     # Handshake must complete before any WS-level frame (see /ws for rationale).
     await websocket.accept()
