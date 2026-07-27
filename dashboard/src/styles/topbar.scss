@@ -143,6 +143,15 @@
 .ws-dot--on  { background: var(--green); box-shadow: 0 0 4px var(--green); }
 .ws-dot--off { background: var(--text-faint); }
 .ws-dot--auth { background: var(--red); }
+/* replay burst in progress — yellow = in-flight, the only pulsing color */
+.ws-dot--busy { background: var(--yellow); box-shadow: 0 0 4px var(--yellow); animation: ws-dot-pulse 1.2s ease-in-out infinite; }
+@keyframes ws-dot-pulse { 50% { opacity: 0.45; } }
+.ws-catchup {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--yellow);
+  letter-spacing: 0.06em;
+}
 
 /* Topbar menu trigger — ghost icon button (matches .ui-btn ghost behaviour) */
 .topbar-icon-btn {

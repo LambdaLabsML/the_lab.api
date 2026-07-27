@@ -34,10 +34,12 @@
   transition: color var(--transition-base);
   &--on   { color: var(--accent); }
   &--off  { color: var(--yellow); }
+  &--busy { color: var(--yellow); animation: ws-dot-pulse 1.2s ease-in-out infinite; }
   &--auth { color: var(--red); }
 }
 .ws-word--on   { color: var(--green) !important; }
 .ws-word--off  { color: var(--yellow) !important; }
+.ws-word--busy { color: var(--yellow) !important; }
 .ws-word--auth { color: var(--red) !important; }
 .nav-rail-group { display: flex; flex-direction: column; gap: 2px; }
 .nav-rail-spacer { flex: 1 1 auto; }

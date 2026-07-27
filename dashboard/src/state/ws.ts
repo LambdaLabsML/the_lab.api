@@ -49,6 +49,11 @@ export const wsLastMessageAt = signal<number | null>(null);
 /** Which transport is currently delivering events. */
 export const transportMode = signal<"ws" | "poll" | "down">("down");
 
+/** True while a replay burst of stale events is streaming in (reconnect
+ *  after sleep / fresh page load). The UI shows "catching up…" and live
+ *  patching is suspended until the burst settles and one resnapshot runs. */
+export const wsCatchingUp = signal<boolean>(false);
+
 // ---------------------------------------------------------------------------
 // Auth token helper
 // ---------------------------------------------------------------------------
@@ -150,12 +155,40 @@ function applyEvent(event: WsEvent): void {
  *  server journal (P4) keeps seq monotonic across restarts. */
 let lastSeq = 0;
 
+/** Events older than this are REPLAY (reconnect-after-sleep, fresh-load ring
+ *  replay, journal catch-up), not live truth. Applying them as live patches
+ *  makes experiments flicker through long-dead states — a phone waking after
+ *  hours replays hundreds of lifecycle events, each fighting the fresh
+ *  snapshot fetch. Stale events still reach subscribeWsEvents (the activity
+ *  feed rebuilds from them, with correct ages via their server ts); they are
+ *  just never applied to the data signals. One resnapshot at burst end
+ *  brings the signals to current truth in a single repaint. */
+const STALE_EVENT_MS = 90_000;
+let staleBurstTimer: ReturnType<typeof setTimeout> | null = null;
+
+function noteStaleReplay(): void {
+  wsCatchingUp.value = true;
+  if (staleBurstTimer !== null) clearTimeout(staleBurstTimer);
+  // Debounced: each stale event pushes the deadline out, so however long the
+  // burst is (mobile timer throttling included), we resnapshot exactly once.
+  staleBurstTimer = setTimeout(() => {
+    staleBurstTimer = null;
+    wsCatchingUp.value = false;
+    catchUp();
+  }, 500);
+}
+
 function handleRawEvent(event: WsEvent): void {
   wsLastMessageAt.value = Date.now();
   if (typeof event.seq === "number" && event.seq > lastSeq) {
     lastSeq = event.seq;
   }
-  applyEvent(event);
+  const tsMs = typeof event.ts === "number" ? event.ts * 1000 : null;
+  if (tsMs !== null && Date.now() - tsMs > STALE_EVENT_MS) {
+    noteStaleReplay();
+  } else {
+    applyEvent(event);
+  }
   // Fan out the raw event to activity subscribers (never let one throw break
   // the stream or the other subscribers).
   for (const sub of _subscribers) {
@@ -340,18 +373,39 @@ async function longPollLoop(abort: AbortSignal): Promise<void> {
 // Public API
 // ---------------------------------------------------------------------------
 
+function onVisibilityWake(): void {
+  if (document.hidden || !started || wsAuthFailed.value) return;
+  // Mobile browsers kill background sockets without a clean close event —
+  // on wake, don't sit out a 30s backoff: reconnect NOW.
+  const wsAlive = socket !== null && socket.readyState === WebSocket.OPEN;
+  if (wsAlive || pollActive) return;
+  if (reconnectTimer !== null) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  backoffMs = 1_000;
+  connect();
+}
+
 /** Start the event-stream connection manager. Safe to call multiple times. */
 export function startWs(): void {
   if (started) return;
   started = true;
   // Let the pollers read stream health without an import cycle.
   _setStreamHealthProbe(() => wsConnected.value);
+  document.addEventListener("visibilitychange", onVisibilityWake);
   connect();
 }
 
 /** Stop the event stream and cancel any pending reconnect. */
 export function stopWs(): void {
   started = false;
+  document.removeEventListener("visibilitychange", onVisibilityWake);
+  if (staleBurstTimer !== null) {
+    clearTimeout(staleBurstTimer);
+    staleBurstTimer = null;
+    wsCatchingUp.value = false;
+  }
   if (reconnectTimer !== null) {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;

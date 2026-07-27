@@ -8,7 +8,7 @@
 import type { ComponentChildren } from "preact";
 import { useState, useEffect } from "preact/hooks";
 import { sidebarWidth, sidebarCollapsed } from "../state/settings";
-import { wsConnected, wsAuthFailed, wsLastMessageAt } from "../state/ws";
+import { wsCatchingUp, wsConnected, wsAuthFailed, wsLastMessageAt } from "../state/ws";
 import { Tooltip } from "./ui";
 
 function relAgo(ms: number | null): string {
@@ -51,8 +51,8 @@ export function NavRail({
     return () => window.clearInterval(t);
   }, []);
 
-  const wsState = wsAuthFailed.value ? "auth" : wsConnected.value ? "on" : "off";
-  const wsLabel = wsAuthFailed.value ? "auth failed" : wsConnected.value ? "connected" : "reconnecting…";
+  const wsState = wsAuthFailed.value ? "auth" : wsCatchingUp.value ? "busy" : wsConnected.value ? "on" : "off";
+  const wsLabel = wsAuthFailed.value ? "auth failed" : wsCatchingUp.value ? "catching up…" : wsConnected.value ? "connected" : "reconnecting…";
   const lastStr = relAgo(wsLastMessageAt.value);
 
   const item = (it: RailItem) => {
