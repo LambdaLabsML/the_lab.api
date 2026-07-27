@@ -38,6 +38,92 @@ def _ask_yn(question: str, default: bool = True) -> bool:
         return default
     return answer in ("y", "yes")
 
+
+def _ask_multiline(first_prompt: str, cont_prompt: str) -> str:
+    """Read a possibly multi-line answer.
+
+    Terminates on EOF (Ctrl-D) or two consecutive blank lines, so pasted text
+    containing paragraph breaks survives intact. Returns "" if the user gives
+    nothing (or interrupts).
+    """
+    lines: list[str] = []
+    blanks = 0
+    while True:
+        prompt = first_prompt if not lines else cont_prompt
+        try:
+            line = input(prompt)
+        except EOFError:
+            print()
+            break
+        except KeyboardInterrupt:
+            print()
+            return ""
+        if not line.strip():
+            # First blank line before any content = skip the question entirely.
+            if not lines:
+                break
+            blanks += 1
+            if blanks >= 2:
+                break
+            lines.append("")
+            continue
+        blanks = 0
+        lines.append(line)
+    return "\n".join(lines).strip()
+
+
+# ---------------------------------------------------------------------------
+# Spinner — animated progress for long-running steps
+# ---------------------------------------------------------------------------
+
+class _Spinner:
+    """Braille spinner with elapsed seconds, animated on a daemon thread.
+
+    Falls back to a single static line when stdout is not a TTY.
+    """
+
+    _FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+    def __init__(self, message: str):
+        self.message = message
+        self._stop = None
+        self._thread = None
+
+    def __enter__(self):
+        import threading
+        import time
+
+        if not sys.stdout.isatty():
+            print(f"  {self.message}", flush=True)
+            return self
+
+        self._stop = threading.Event()
+
+        def _spin():
+            i = 0
+            start = time.monotonic()
+            while not self._stop.is_set():
+                frame = self._FRAMES[i % len(self._FRAMES)]
+                elapsed = int(time.monotonic() - start)
+                sys.stdout.write(
+                    f"\r  {_blue(frame)} {self.message} {_dim(f'({elapsed}s)')}\033[K"
+                )
+                sys.stdout.flush()
+                i += 1
+                self._stop.wait(0.08)
+            sys.stdout.write("\r\033[K")
+            sys.stdout.flush()
+
+        self._thread = threading.Thread(target=_spin, daemon=True)
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc):
+        if self._stop is not None:
+            self._stop.set()
+            self._thread.join()
+        return False
+
 # ---------------------------------------------------------------------------
 # Template for PROMPT.md
 # ---------------------------------------------------------------------------
@@ -260,14 +346,10 @@ def cmd_init(target: str | None = None):
     claude_bin = _shutil.which("claude")
     if claude_bin and active_prompt.exists():
         print(f"\n  {_blue('?')} Describe your research goal so Claude can pre-fill PROMPT.md.")
+        print(f"    {_dim('Multi-line paste is fine. Press Enter twice (or Ctrl-D) when done.')}")
         print(f"    {_dim('Leave blank to skip and edit the file yourself.')}")
-        try:
-            user_goal = input(f"    {_dim('>')} ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print()
-            user_goal = ""
+        user_goal = _ask_multiline(f"    {_dim('>')} ", f"    {_dim('|')} ")
         if user_goal:
-            print(f"  {_dim('...')} Claude is analyzing the repo...\n")
             prefill_prompt = (
                 "You are helping set up a research project for The Lab, an experiment "
                 "management system. The user described their goal as:\n\n"
@@ -280,14 +362,21 @@ def cmd_init(target: str | None = None):
                 "If you can't determine something, leave a [TODO: ...] marker.\n\n"
                 f"Edit the file: {active_prompt}"
             )
-            result = subprocess.run(
-                [claude_bin, "--dangerously-skip-permissions", "-p", prefill_prompt],
-                cwd=str(repo),
-            )
+            print()
+            with _Spinner("Claude is analyzing the repo and writing PROMPT.md..."):
+                result = subprocess.run(
+                    [claude_bin, "--dangerously-skip-permissions", "-p", prefill_prompt],
+                    cwd=str(repo),
+                    capture_output=True,
+                    text=True,
+                )
             if result.returncode == 0:
-                print(f"\n  {_green(chr(10003))} Claude pre-filled PROMPT.md — review and adjust as needed")
+                print(f"  {_green(chr(10003))} Claude pre-filled PROMPT.md — review and adjust as needed")
             else:
-                print(f"\n  {_yellow('!')} Claude exited with code {result.returncode} — check PROMPT.md manually")
+                print(f"  {_yellow('!')} Claude exited with code {result.returncode} — check PROMPT.md manually")
+                tail = (result.stderr or result.stdout or "").strip()
+                if tail:
+                    print(_dim("    " + tail[-500:].replace("\n", "\n    ")))
         else:
             print(f"  {_dim('-')} Skipped — edit PROMPT.md manually")
 
