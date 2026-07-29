@@ -658,8 +658,19 @@ def main():
         # Capabilities check deferred to here so it only runs when needed.
         capabilities = sandbox_capabilities()
         if not capabilities.get("available"):
+            # details is a multi-line explanation (what each missing program does,
+            # how to install it) — print it as its own block, not squashed onto
+            # one "Error:" line.
             details = capabilities.get("details") or "sandbox runtime unavailable"
-            print(f"Error: sandbox is unavailable: {details}", file=sys.stderr)
+            _tty = sys.stderr.isatty()
+            _red = "\033[31m" if _tty else ""
+            _dim = "\033[2m" if _tty else ""
+            _off = "\033[0m" if _tty else ""
+            print(f"\n{_red}Cannot start: the sandbox is unavailable.{_off}\n",
+                  file=sys.stderr)
+            print(details, file=sys.stderr)
+            print(f"\n{_dim}Or launch this agent without isolation: "
+                  f"the-lab-agent --sandbox off …{_off}", file=sys.stderr)
             sys.exit(1)
         cmd = build_sandbox_command(
             repo_root, args.agent, prompt_path.name, cmd,

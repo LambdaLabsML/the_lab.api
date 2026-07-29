@@ -162,6 +162,14 @@ export interface SandboxCapabilities {
   available: boolean;
   missing: string[];
   details: string;
+  /** One-line headline. Absent on servers predating the actionable messages. */
+  summary?: string;
+  /** "missing_binaries" | "probe_failed" */
+  reason?: string;
+  /** Per-missing-binary explanation: what it does and which package ships it. */
+  requirements?: { binary: string; package: string; purpose: string }[];
+  /** Distro-appropriate install command for the missing packages. */
+  install_command?: string;
 }
 
 export interface SandboxObservedEntry {

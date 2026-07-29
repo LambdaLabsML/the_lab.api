@@ -794,8 +794,20 @@ class ExperimentRunner:
         ):
             capabilities = sandbox_capabilities()
             if not capabilities.get("available"):
-                details = capabilities.get("details") or "sandbox runtime unavailable"
-                return {"status": "error", "reason": f"sandbox is enabled but unavailable: {details}"}
+                # Keep the stored reason to a few lines (it shows up in the
+                # experiment record), but still say what to install and how.
+                summary = capabilities.get("summary") or "The sandbox runtime is unavailable."
+                install = capabilities.get("install_command")
+                parts = [f"Experiment not started — the sandbox is enabled but unavailable. {summary}"]
+                if install:
+                    parts.append(f"Install the missing programs with: {install}")
+                parts.append(
+                    "Full explanation in the dashboard's Sandbox tab. To run without "
+                    "isolation, disable the sandbox there."
+                )
+                # Newline-joined so the install command is not run together with
+                # the following sentence.
+                return {"status": "error", "reason": "\n".join(parts)}
             env["THE_LAB_SANDBOX_TARGET_UID"] = str(os.getuid())
             env["THE_LAB_SANDBOX_TARGET_GID"] = str(os.getgid())
             command = build_sandbox_command(
