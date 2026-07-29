@@ -53,6 +53,75 @@ REQUIRED_BINARIES = [
 # what the tool does and gives a copy-pasteable install command.
 # ``packages`` maps a distro family (see _distro_family) to its package name;
 # "default" covers Debian/Ubuntu naming, which most families share.
+
+# GPU device nodes passed through to the sandbox.
+#
+# ``--dev /dev`` mounts a *fresh* tmpfs and bwrap populates only a minimal node
+# set (null/zero/random/tty/pts/...). Without explicit --dev-bind-try, every GPU
+# node is invisible inside the sandbox even when the host has them, so CUDA
+# fails with things like vLLM's "RuntimeError: Failed to infer device type".
+# The sandbox isolates *network and files*, not hardware, so pass these through
+# whenever the host has them.
+#
+# Globs are expanded at build time (one node per GPU: nvidia0, nvidia1, ...).
+# Everything is best-effort: --dev-bind-try skips sources that don't exist.
+_GPU_DEV_GLOBS = [
+    "/dev/nvidiactl",         # NVIDIA control node — required for any CUDA init
+    "/dev/nvidia-uvm",        # unified memory — required by CUDA runtime
+    "/dev/nvidia-uvm-tools",
+    "/dev/nvidia-modeset",
+    "/dev/nvidia[0-9]*",      # one per GPU
+    "/dev/nvidia-caps",       # MIG capability nodes (directory)
+    "/dev/dri",               # DRM render nodes (directory) — non-NVIDIA compute too
+    "/dev/kfd",               # AMD ROCm
+]
+
+
+def gpu_device_binds() -> list[str]:
+    """bwrap flags passing the host's GPU device nodes into the sandbox.
+
+    Returns an empty list on a host with no GPU nodes (so the sandbox is
+    unchanged there). Must be emitted AFTER ``--dev /dev`` or the tmpfs
+    shadows these binds.
+    """
+    import glob as _glob
+
+    args: list[str] = []
+    for pattern in _GPU_DEV_GLOBS:
+        for path in sorted(_glob.glob(pattern)):
+            args.extend(["--dev-bind-try", path, path])
+    return args
+
+
+def gpu_host_state() -> dict:
+    """Whether this host can offer GPUs to the sandbox, and if not, why.
+
+    Distinguishes the two situations that look identical from inside a failing
+    experiment: no GPU at all, versus a loaded driver whose device nodes were
+    never passed into *this* container (the usual `docker run` without
+    `--gpus all`). The second is not fixable from inside — hence the hint.
+    """
+    import glob as _glob
+
+    nodes = sorted({p for pattern in _GPU_DEV_GLOBS for p in _glob.glob(pattern)})
+    driver_loaded = Path("/proc/driver/nvidia/version").exists()
+    state = {"devices": nodes, "driver_loaded": driver_loaded, "warning": ""}
+    if nodes or not driver_loaded:
+        return state
+    # Driver is loaded but no device nodes exist anywhere in this namespace.
+    state["warning"] = (
+        "The NVIDIA driver is loaded on this machine, but no GPU device nodes "
+        "(/dev/nvidiactl, /dev/nvidia0, /dev/nvidia-uvm) exist in this namespace, "
+        "so CUDA will fail inside AND outside the sandbox. This normally means the "
+        "container was started without GPU passthrough — restart it with "
+        "`--gpus all` (nvidia container runtime), or pass the nodes explicitly: "
+        "--device /dev/nvidiactl --device /dev/nvidia0 --device /dev/nvidia-uvm. "
+        "It cannot be fixed from inside the container: mknod is denied and "
+        "nvidia-modprobe is usually absent."
+    )
+    return state
+
+
 _BINARY_INFO: dict[str, dict] = {
     "rootlesskit": {
         "purpose": "runs the sandbox as your own user, without root",
@@ -630,6 +699,9 @@ def sandbox_capabilities() -> dict:
         "reason": "",
         "requirements": [],
         "install_command": "",
+        # Which GPU nodes the sandbox will pass through, plus a warning when the
+        # driver is loaded but the nodes were never passed into this container.
+        "gpu": gpu_host_state(),
     }
     if missing:
         result.update(_missing_binary_help(missing))
@@ -705,7 +777,8 @@ def build_bwrap_args(repo_dir: Path, config: dict, cwd: Path | str | None = None
     subdirectory or worktree land where the caller expects.
 
     Runtime essentials always added: /tmp tmpfs, /proc, /dev, /sys (ro),
-    and a generated /etc/resolv.conf pointing at slirp4netns's DNS.
+    the host's GPU device nodes (see gpu_device_binds), and a generated
+    /etc/resolv.conf pointing at slirp4netns's DNS.
     """
     if cwd is None:
         cwd = repo_dir
@@ -780,6 +853,10 @@ def build_bwrap_args(repo_dir: Path, config: dict, cwd: Path | str | None = None
         "--dev", "/dev",
         "--ro-bind-try", "/sys", "/sys",
     ])
+
+    # GPU nodes must follow --dev /dev, whose fresh tmpfs would shadow them.
+    # No-op on hosts without GPUs.
+    args.extend(gpu_device_binds())
 
     # Ensure HOME exists as a traversable directory so tools that chdir to
     # $HOME or write under it (e.g. `uv` caches) don't hit ENOENT.

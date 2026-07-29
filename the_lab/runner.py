@@ -21,7 +21,12 @@ from .git_ops import (
 )
 from . import jsonio
 from .queue import Allocator, load_config, match_resource
-from .sandbox import build_sandbox_command, load_sandbox_config, sandbox_capabilities
+from .sandbox import (
+    build_sandbox_command,
+    gpu_host_state,
+    load_sandbox_config,
+    sandbox_capabilities,
+)
 from .store import Store
 from . import token_registry
 
@@ -821,6 +826,14 @@ class ExperimentRunner:
 
         # Write stdout/stderr directly to the log file so it survives server restarts.
         log_file = open(log_path, "w")
+        # If the driver is loaded but this container has no GPU device nodes, CUDA
+        # will fail with something opaque ("Failed to infer device type"). Say so
+        # at the top of the log — this holds sandboxed or not, and cannot be fixed
+        # from inside the container.
+        _gpu_warning = gpu_host_state().get("warning")
+        if _gpu_warning:
+            log_file.write(f"[the-lab] WARNING: {_gpu_warning}\n\n")
+            log_file.flush()
         process = await asyncio.create_subprocess_exec(
             *command,
             stdout=log_file,

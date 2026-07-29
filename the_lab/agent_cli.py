@@ -672,6 +672,16 @@ def main():
             print(f"\n{_dim}Or launch this agent without isolation: "
                   f"the-lab-agent --sandbox off …{_off}", file=sys.stderr)
             sys.exit(1)
+        # Driver loaded but no device nodes in this namespace: CUDA will fail and
+        # it is not fixable from inside. Warn at launch instead of letting the
+        # agent discover it as an opaque "Failed to infer device type" later.
+        _gpu_warning = (capabilities.get("gpu") or {}).get("warning")
+        if _gpu_warning:
+            _tty = sys.stderr.isatty()
+            _yellow = "\033[33m" if _tty else ""
+            _off = "\033[0m" if _tty else ""
+            print(f"\n{_yellow}⚠  No GPU available to this container.{_off}\n"
+                  f"{_gpu_warning}\n", file=sys.stderr)
         cmd = build_sandbox_command(
             repo_root, args.agent, prompt_path.name, cmd,
             cwd=str(agent_worktree) if agent_worktree else os.getcwd(),
