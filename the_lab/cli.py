@@ -130,6 +130,52 @@ class _Spinner:
 
 _PROMPT_TEMPLATE = Path(__file__).parent / "PROMPT_template.md"
 
+def _ensure_dashboard() -> None:
+    """Make sure this installation has a compiled dashboard (init step 7).
+
+    Deliberately quiet and non-fatal: `the-lab init` is about setting up a
+    project, so a missing dashboard is worth fixing silently but never worth
+    aborting setup over.
+
+    Skipped entirely for source checkouts — there the local dashboard/ sources
+    are authoritative and the server builds them on startup, so downloading a
+    release build would shadow the developer's own work.
+    """
+    if dashboard_installed():
+        print(f"  {_green(chr(10003))} Dashboard already installed")
+        return
+
+    if _find_dashboard_dir() is not None:
+        # Running from a clone: the server builds dashboard/ on startup.
+        print(f"  {_dim('-')} Dashboard not built yet — building from local "
+              f"dashboard/ sources on server start")
+        print(f"    {_dim('Build it now with:')} ./build-dashboard.sh")
+        return
+
+    # Prefer the newest tagged release; fall back to the rolling main build so a
+    # repo with no tagged release yet still yields a working UI.
+    last_error = "no release found"
+    for tag in (None, "main"):
+        label = tag or "latest release"
+        release, error = _fetch_release(_RELEASE_REPO, tag)
+        if release is None:
+            last_error = error
+            continue
+        with _Spinner(f"Fetching dashboard ({release.get('tag_name')})..."):
+            ok, message = _install_dashboard_from_release(release)
+        if ok:
+            print(f"  {_green(chr(10003))} Downloaded prebuilt dashboard ({message})")
+            return
+        last_error = f"{label}: {message}"
+
+    print(f"  {_yellow('!')} Could not download the prebuilt dashboard "
+          f"({last_error})")
+    print(f"    {_dim('The API works; only the web UI is missing. Retry later with:')}")
+    print(f"    {_dim('  the-lab fetch-dashboard')}")
+    if not (os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")):
+        print(f"    {_dim('Private repo? GITHUB_TOKEN=$(gh auth token) the-lab fetch-dashboard')}")
+
+
 # ---------------------------------------------------------------------------
 # init subcommand
 # ---------------------------------------------------------------------------
@@ -338,7 +384,14 @@ def cmd_init(target: str | None = None):
     else:
         print(f"  {_green(chr(10003))} .gitignore already includes .the_lab/ and .claude/")
 
-    # 7. Pre-fill PROMPT.md with Claude --------------------------------
+    # 7. Dashboard ------------------------------------------------------------
+    # the_lab/static/ is compiled build output and gitignored, so an install
+    # from git has no dashboard and the UI would show "Dashboard not built".
+    # Fetch the prebuilt bundle now rather than leaving that for the user to
+    # discover. Best-effort: setup must not fail because GitHub is unreachable.
+    _ensure_dashboard()
+
+    # 8. Pre-fill PROMPT.md with Claude --------------------------------
     # Pick the active prompt file: prefer .the_lab/PROMPT.md (canonical),
     # fall back to legacy <repo>/PROMPT.md if the user declined migration.
     active_prompt = canonical_prompt if canonical_prompt.exists() else legacy_prompt
@@ -380,7 +433,7 @@ def cmd_init(target: str | None = None):
         else:
             print(f"  {_dim('-')} Skipped — edit PROMPT.md manually")
 
-    # 8. Next steps ----------------------------------------------------------
+    # 9. Next steps ----------------------------------------------------------
     print(f"\n{_bold('Next steps:')}\n")
     print(f"  1. Review {_blue('PROMPT.md')}")
     print(f"  2. Start the server:")
@@ -1067,8 +1120,184 @@ def _cmd_messages_poll(args, api_base, _ssl_ctx, agent_id, headers):
         _time.sleep(args.poll)
 
 
+# ---------------------------------------------------------------------------
+# fetch-dashboard subcommand
+# ---------------------------------------------------------------------------
+
+# Override for forks: THE_LAB_RELEASE_REPO=owner/name
+_RELEASE_REPO = os.environ.get("THE_LAB_RELEASE_REPO", "LambdaLabsML/the_lab.api")
+_DASHBOARD_ASSET = "dashboard-static.tar.gz"
+
+
+def _github_request(url: str, accept: str):
+    """Open a GitHub API/asset URL, using a token when one is in the environment
+    (required for private repos)."""
+    import urllib.request as _req
+
+    headers = {"Accept": accept, "User-Agent": "the-lab-cli"}
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return _req.urlopen(_req.Request(url, headers=headers), timeout=60)
+
+
+def _safe_extract(tar, dest: Path) -> None:
+    """Extract a tar archive, rejecting members that would escape *dest*.
+
+    tarfile's ``filter="data"`` only exists on newer Pythons, so validate by
+    hand: no absolute paths, no ``..`` traversal, no links.
+    """
+    dest = dest.resolve()
+    for member in tar.getmembers():
+        if member.issym() or member.islnk():
+            raise ValueError(f"refusing to extract link member: {member.name}")
+        target = (dest / member.name).resolve()
+        if target != dest and dest not in target.parents:
+            raise ValueError(f"refusing to extract outside destination: {member.name}")
+    tar.extractall(dest)
+
+
+def dashboard_installed() -> bool:
+    """True when a compiled dashboard is present in this installation."""
+    return (Path(__file__).parent / "static" / "index.html").exists()
+
+
+def _fetch_release(repo: str, tag: str | None) -> tuple[dict | None, str]:
+    """Look up a release. Returns (release, error_message)."""
+    import json as _json
+    import urllib.error as _urlerr
+
+    api = (f"https://api.github.com/repos/{repo}/releases/tags/{tag}" if tag else
+           f"https://api.github.com/repos/{repo}/releases/latest")
+    try:
+        with _github_request(api, "application/vnd.github+json") as resp:
+            return _json.loads(resp.read().decode()), ""
+    except _urlerr.HTTPError as e:
+        hint = ""
+        if e.code == 404:
+            hint = (f"no release '{tag or 'latest'}' in {repo}"
+                    " (private repo? export GITHUB_TOKEN)")
+        elif e.code in (401, 403):
+            hint = "authentication failed or rate-limited (export GITHUB_TOKEN)"
+        return None, f"{e.code} {e.reason}{f' — {hint}' if hint else ''}"
+    except Exception as e:
+        return None, f"could not reach GitHub: {e}"
+
+
+def _install_dashboard_from_release(release: dict) -> tuple[bool, str]:
+    """Download the dashboard asset from *release* and swap it into the package.
+
+    Returns (ok, message). Never raises — callers decide how loud to be.
+    """
+    import io
+    import shutil as _shutil
+    import tarfile
+    import tempfile
+
+    asset = next((a for a in release.get("assets", [])
+                  if a.get("name") == _DASHBOARD_ASSET), None)
+    if asset is None:
+        names = ", ".join(a.get("name", "?") for a in release.get("assets", [])) or "none"
+        return False, (f"release {release.get('tag_name')} has no {_DASHBOARD_ASSET} "
+                       f"(assets: {names})")
+
+    # Private-repo downloads need the API asset URL + octet-stream, which also
+    # works for public repos, so use it unconditionally.
+    try:
+        with _github_request(asset["url"], "application/octet-stream") as resp:
+            blob = resp.read()
+    except Exception as e:
+        return False, f"download failed: {e}"
+
+    pkg_dir = Path(__file__).parent
+    static_dir = pkg_dir / "static"
+
+    # Extract to a temp dir first, then swap — a failure part-way through must
+    # not leave a half-written dashboard behind.
+    try:
+        with tempfile.TemporaryDirectory(dir=str(pkg_dir)) as tmp:
+            tmp_path = Path(tmp)
+            try:
+                with tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz") as tar:
+                    _safe_extract(tar, tmp_path)
+            except Exception as e:
+                return False, f"could not unpack {_DASHBOARD_ASSET}: {e}"
+
+            new_static = tmp_path / "static"
+            if not (new_static / "index.html").exists():
+                return False, "archive has no static/index.html — wrong asset?"
+
+            backup = pkg_dir / "static.previous"
+            try:
+                _shutil.rmtree(backup, ignore_errors=True)  # stale backup from a prior run
+                if static_dir.exists():
+                    static_dir.rename(backup)
+                new_static.rename(static_dir)
+            except PermissionError:
+                return False, f"no write permission for {pkg_dir}"
+            finally:
+                _shutil.rmtree(backup, ignore_errors=True)
+    except OSError as e:
+        return False, f"could not write to {pkg_dir}: {e}"
+
+    files = sum(1 for p in static_dir.rglob("*") if p.is_file())
+    return True, f"{files} files from {release.get('tag_name')}"
+
+
+def cmd_fetch_dashboard(argv: list[str]) -> None:
+    """Download the prebuilt dashboard from a GitHub release.
+
+    Installing from git (``pipx install git+…``) yields a package with no
+    dashboard, because the_lab/static/ is build output and gitignored. Rather
+    than requiring Node.js to fix that, pull the compiled bundle that CI
+    attached to a release.
+    """
+    parser = argparse.ArgumentParser(
+        prog="the-lab fetch-dashboard",
+        description="Download the prebuilt dashboard from a GitHub release into "
+                    "this installation (no Node.js required).",
+        epilog="Default is the latest tagged release. Pair '--tag main' with an "
+               "install from the main branch: the rolling 'main' prerelease "
+               "always carries a dashboard built from main's HEAD.",
+    )
+    parser.add_argument("--tag", default=None,
+                        help="Release tag to fetch, e.g. v0.1.1, or 'main' for the "
+                             "rolling build of the main branch (default: latest "
+                             "tagged release, which excludes prereleases)")
+    parser.add_argument("--repo", default=_RELEASE_REPO,
+                        help=f"GitHub repo to fetch from (default: {_RELEASE_REPO})")
+    args = parser.parse_args(argv)
+
+    print(f"\n{_bold('The Lab')} -- fetch dashboard\n")
+    print(f"  {_dim('repo:')}    {args.repo}")
+    print(f"  {_dim('release:')} {args.tag or 'latest'}")
+
+    release, error = _fetch_release(args.repo, args.tag)
+    if release is None:
+        print(f"\n  {_yellow('!')} Could not read the release ({error}).")
+        print(f"    {_dim('For a private repo:')}")
+        print(f"    {_dim('  GITHUB_TOKEN=$(gh auth token) the-lab fetch-dashboard')}")
+        sys.exit(1)
+
+    ok, message = False, ""
+    with _Spinner(f"Downloading dashboard from {release.get('tag_name')}..."):
+        ok, message = _install_dashboard_from_release(release)
+
+    if not ok:
+        print(f"  {_yellow('!')} {message}")
+        sys.exit(1)
+
+    static_dir = Path(__file__).parent / "static"
+    print(f"  {_green(chr(10003))} Installed dashboard to {static_dir} ({message})")
+    print(f"\n  {_dim('Restart the server to pick it up:')} {_green('the-lab .')}\n")
+
+
 def main():
     # Handle subcommands before argparse (server mode)
+    if len(sys.argv) >= 2 and sys.argv[1] == "fetch-dashboard":
+        cmd_fetch_dashboard(sys.argv[2:])
+        return
+
     if len(sys.argv) >= 2 and sys.argv[1] == "init":
         target = sys.argv[2] if len(sys.argv) >= 3 else None
         cmd_init(target)

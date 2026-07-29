@@ -874,6 +874,46 @@ else:
 
 _DASHBOARD_HTML: str | None = None
 
+# Shown when no compiled dashboard is present. the_lab/static/ is build output
+# and gitignored, so `pipx install git+…` lands here; the release wheels bake it
+# in, and `the-lab fetch-dashboard` tops up an existing install.
+_MISSING_DASHBOARD_HTML = """<!doctype html>
+<html><head><meta charset="utf-8"><title>The Lab — dashboard not built</title>
+<style>
+  body { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; line-height: 1.6;
+         max-width: 46rem; margin: 12vh auto; padding: 0 1.5rem;
+         background: #14151a; color: #e6e6e6; }
+  h1 { font-size: 1.15rem; font-weight: 600; margin-bottom: .25rem; }
+  p.sub { color: #9aa0aa; margin-top: 0; }
+  h2 { font-size: .85rem; text-transform: uppercase; letter-spacing: .08em;
+       color: #9aa0aa; margin: 2rem 0 .5rem; font-weight: 600; }
+  pre { background: #1d1f26; border: 1px solid #2b2e37; border-radius: 6px;
+        padding: .7rem .9rem; overflow-x: auto; }
+  code { color: #8fd18f; }
+  .note { color: #9aa0aa; font-size: .9rem; }
+  a { color: #7fb4ff; }
+</style></head>
+<body>
+  <h1>Dashboard not built</h1>
+  <p class="sub">The API is running — only the compiled web UI is missing.
+     The bundle is build output, so it is not in the git tree.</p>
+
+  <h2>Installed with pipx or pip</h2>
+  <p>Fetch the prebuilt dashboard from the latest release (no Node.js needed):</p>
+  <pre><code>the-lab fetch-dashboard</code></pre>
+  <p class="note">Private repo? <code>GITHUB_TOKEN=$(gh auth token) the-lab fetch-dashboard</code>.
+     Or reinstall from a release wheel, which already contains the dashboard.</p>
+
+  <h2>Working from a clone</h2>
+  <pre><code>cd dashboard &amp;&amp; npm ci &amp;&amp; npm run build
+# or, from the repo root:
+./build-dashboard.sh</code></pre>
+
+  <p class="note">Restart the server afterwards. The REST API and
+     <a href="/api/v1/docs">/api/v1/docs</a> work regardless.</p>
+</body></html>
+"""
+
 
 def _load_dashboard() -> str:
     global _DASHBOARD_HTML
@@ -882,7 +922,10 @@ def _load_dashboard() -> str:
         if html_path.exists():
             _DASHBOARD_HTML = html_path.read_text()
         else:
-            _DASHBOARD_HTML = "<html><body>Dashboard not found. Run npm run build in dashboard/.</body></html>"
+            # "Run npm run build in dashboard/" is useless advice for anyone who
+            # installed the package (pipx/pip): there is no dashboard/ directory
+            # in an installed copy. Name the routes that actually exist.
+            _DASHBOARD_HTML = _MISSING_DASHBOARD_HTML
     return _DASHBOARD_HTML
 
 
@@ -1247,6 +1290,15 @@ def spa_fallback(path: str):
     if _STATIC_DIR.exists() and (_STATIC_DIR / "index.html").exists():
         html = (_STATIC_DIR / "index.html").read_text()
         if _AUTH_ENABLED:
-            html = html.replace("</head>", f"{_token_script}</head>", 1)
+            # Built inline rather than reusing the module-level _token_script:
+            # that name only exists when static/ was present at import time, so
+            # a dashboard installed later (the-lab fetch-dashboard) would raise
+            # NameError here.
+            html = html.replace(
+                "</head>",
+                '<script>try{localStorage.setItem("the-lab:wsToken",'
+                f'"{_AUTH_EXPECTED}")}}catch(e){{}}</script></head>',
+                1,
+            )
         return html
     return _load_dashboard()
