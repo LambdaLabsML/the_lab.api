@@ -444,6 +444,46 @@ def cmd_init(target: str | None = None):
     print()
 
 
+# Messages uvicorn logs on the "uvicorn.error" logger that are about a *client*
+# doing something malformed, not about this server being unhealthy.
+_NOISY_UVICORN_WARNINGS = (
+    "Invalid HTTP request received.",   # h11.RemoteProtocolError — usually TLS bytes on a plain-HTTP port
+    "Invalid HTTP request received",    # (no trailing period in some versions)
+)
+
+
+def _apply_log_filters() -> None:
+    """Optionally drop uvicorn's per-connection "Invalid HTTP request" warnings.
+
+    Uvicorn logs one warning per malformed connection and offers no setting to
+    silence just those — the only knob is log_level, which would also hide real
+    warnings. Anything speaking non-HTTP at the port triggers it: a browser or
+    agent using https:// against the plain-HTTP port, a port scanner, a stale
+    HSTS redirect. Harmless, but it can flood the log.
+
+    Off by default (the warnings do point at a misconfigured client). Enable with
+    THE_LAB_QUIET_INVALID_HTTP=1.
+    """
+    if os.environ.get("THE_LAB_QUIET_INVALID_HTTP", "").lower() not in ("1", "true", "yes", "on"):
+        return
+
+    import logging
+
+    class _DropInvalidHTTP(logging.Filter):
+        def filter(self, record: logging.LogRecord) -> bool:
+            try:
+                msg = record.getMessage()
+            except Exception:
+                return True
+            return not any(msg.startswith(noise) for noise in _NOISY_UVICORN_WARNINGS)
+
+    # The protocol classes fetch this logger by name per connection, so one
+    # filter on the shared logger object covers every connection.
+    logging.getLogger("uvicorn.error").addFilter(_DropInvalidHTTP())
+    print("[log] suppressing uvicorn 'Invalid HTTP request received.' warnings "
+          "(THE_LAB_QUIET_INVALID_HTTP)", file=sys.stderr)
+
+
 def _find_dashboard_dir() -> Path | None:
     """Find the dashboard/ source directory (for Vite dev server)."""
     # Check relative to the package
@@ -1404,6 +1444,8 @@ def main():
     dashboard_dir = _find_dashboard_dir()
     if dashboard_dir:
         _build_dashboard(dashboard_dir)
+
+    _apply_log_filters()
 
     if args.dev:
         import asyncio
