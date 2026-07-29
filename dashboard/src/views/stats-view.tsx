@@ -237,7 +237,7 @@ export function StatsView() {
             <table class="stats-size-table">
               <thead>
                 <tr>
-                  {["endpoint", "calls", `total ${unit === "kb" ? "KB" : "tok"}`, `avg ${unit === "kb" ? "KB" : "tok"}`, `max ${unit === "kb" ? "KB" : "tok"}`].map((h) => (
+                  {["endpoint", "measured / all calls", `total ${unit === "kb" ? "KB" : "tok"}`, `avg ${unit === "kb" ? "KB" : "tok"}`, `max ${unit === "kb" ? "KB" : "tok"}`].map((h) => (
                     <th key={h} class={h === "endpoint" ? "" : "num"}>{h}</th>
                   ))}
                 </tr>
@@ -246,7 +246,15 @@ export function StatsView() {
                 {stats.response_sizes.slice(0, 20).map((r) => (
                   <tr key={r.endpoint}>
                     <td class="stats-size-endpoint">{r.endpoint.replace(/^(GET|POST|PUT|PATCH|DELETE) /, "")}</td>
-                    <td class="num muted">{r.calls}</td>
+                    <td class="num muted"
+                      title={r.all_calls != null && r.all_calls > r.calls
+                        ? `${r.calls} measured of ${r.all_calls} total calls (rest are curl / dashboard polling — not size-tracked)`
+                        : undefined}>
+                      {r.calls}
+                      {r.all_calls != null && r.all_calls > r.calls && (
+                        <span class="stats-size-oftotal"> / {r.all_calls}</span>
+                      )}
+                    </td>
                     <td class="num" style={{ color: r.total_kb > 1000 ? "var(--red)" : r.total_kb > 100 ? "var(--yellow)" : "var(--text)" }}>{fmtUnit(r.total_kb)}</td>
                     <td class="num" style={{ color: r.avg_kb > 20 ? "var(--yellow)" : "var(--text-muted)" }}>{fmtUnit(r.avg_kb)}</td>
                     <td class="num muted">{fmtUnit(r.max_kb)}</td>

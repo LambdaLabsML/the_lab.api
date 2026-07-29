@@ -131,6 +131,8 @@
 }
 .stats-size-table td.muted { color: var(--text-muted); }
 .stats-size-table tr:hover td { background: var(--bg-hi); }
+/* unmeasured remainder (curl / dashboard polling) — de-emphasised */
+.stats-size-oftotal { color: var(--text-faint); }
 .stats-size-endpoint {
   max-width: 320px;
   overflow: hidden;

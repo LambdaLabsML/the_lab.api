@@ -242,16 +242,21 @@ class ApiStats:
         total = sum(calls.values())
         mcp_calls = sum(1 for r in self._recent if r.get("mcp"))
 
-        # Build response-size table — sort by total bytes descending
+        # Build response-size table — sort by total bytes descending.
+        # Only successful MCP responses are measured (see app.py::_track_size),
+        # so "calls" here is the *measured* count — otherwise avg x calls would
+        # not reconcile with total. all_calls carries the full traffic count
+        # (MCP + curl + dashboard polling) for context.
         size_rows = []
-        for key in set(rb_total) | set(calls):
+        for key in rb_total:
             total_b = rb_total.get(key, 0)
             count   = rb_count.get(key, 0)
             size_rows.append({
                 "endpoint":    key,
-                "calls":       calls.get(key, 0),
+                "calls":       count,
+                "all_calls":   calls.get(key, 0),
                 "total_kb":    round(total_b / 1024, 1),
-                "avg_kb":      round(total_b / max(count, 1) / 1024, 1),
+                "avg_kb":      round(total_b / max(count, 1) / 1024, 2),
                 "max_kb":      round(rb_max.get(key, 0) / 1024, 1),
             })
         size_rows.sort(key=lambda r: r["total_kb"], reverse=True)
