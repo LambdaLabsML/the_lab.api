@@ -691,18 +691,28 @@ async def inject_notifications(request, call_next):
     async for chunk in response.body_iterator:
         body_parts.append(chunk if isinstance(chunk, bytes) else chunk.encode())
     body = b"".join(body_parts)
+    is_mcp_req = request.headers.get("x-mcp-proxy") == "true"
+
+    def _track_size(final_body: bytes) -> None:
+        if is_mcp_req and response.status_code < 400:
+            api_stats.record_response_size(request.method, path, len(final_body))
+
     # Size guard: parsing + re-serializing a multi-MB body on the event loop
     # just to append _notifications is a bad trade. Oversized responses pass
     # through untouched — the caller gets its notifications on the next
-    # normal-sized call (or via GET /api/v1/notifications).
+    # normal-sized call (or via GET /api/v1/notifications). They are still
+    # size-tracked: skipping them hid the very largest responses from the
+    # Stats size table, which is exactly what that table is for.
     if len(body) > _NOTIF_INJECT_MAX_BYTES:
         _emit_call(resp_bytes=len(body))
+        _track_size(body)
         return Response(content=body, status_code=response.status_code,
                         headers=dict(response.headers), media_type=response.media_type)
     try:
         data = _json.loads(body)
     except (ValueError, TypeError):
         _emit_call(resp_bytes=len(body))
+        _track_size(body)
         return Response(content=body, status_code=response.status_code,
                         headers=dict(response.headers), media_type=response.media_type)
     _emit_call(
@@ -710,11 +720,6 @@ async def inject_notifications(request, call_next):
         resp_keys=list(data.keys())[:8] if isinstance(data, dict) else None,
     )
     notifications = build_notifications(request)
-    is_mcp_req = request.headers.get("x-mcp-proxy") == "true"
-
-    def _track_size(final_body: bytes) -> None:
-        if is_mcp_req and response.status_code < 400:
-            api_stats.record_response_size(request.method, path, len(final_body))
 
     if not notifications:
         _track_size(body)
