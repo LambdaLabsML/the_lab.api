@@ -1,0 +1,121 @@
+name: Build
+
+# Reusable build: compile the dashboard, bake it into the Python
+# distributions, prove it is actually in there, and upload everything as the
+# `dist` artifact for the calling workflow to publish.
+#
+# Called by ci.yml (verify only), release.yml (tagged releases) and main.yml
+# (rolling build of the main branch), so the packaging checks have exactly one
+# implementation.
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: "Version to stamp into pyproject.toml (PEP 440)."
+        required: true
+        type: string
+    outputs:
+      wheel:
+        description: "Filename of the built wheel."
+        value: ${{ jobs.build.outputs.wheel }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      wheel: ${{ steps.names.outputs.wheel }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # The committed version is static, so every build would otherwise produce
+      # an identically-named wheel and pip/pipx would skip reinstalling.
+      - name: Stamp version into pyproject.toml
+        run: |
+          python - <<'PY'
+          import os, re, pathlib
+          version = os.environ["VERSION"]
+          p = pathlib.Path("pyproject.toml")
+          new, n = re.subn(r'(?m)^version = "[^"]+"', f'version = "{version}"',
+                           p.read_text(), count=1)
+          assert n == 1, "could not find the version line in pyproject.toml"
+          p.write_text(new)
+          print("version =", version)
+          PY
+        env:
+          VERSION: ${{ inputs.version }}
+
+      - name: Build dashboard
+        working-directory: dashboard
+        run: |
+          npm ci
+          npm run build # vite outDir = ../the_lab/static (see vite.config.ts)
+
+      # Fail loudly rather than shipping a package that renders
+      # "Dashboard not found" — the bug this whole pipeline exists to prevent.
+      - name: Verify dashboard build output
+        run: |
+          set -euo pipefail
+          test -f the_lab/static/index.html || { echo "::error::the_lab/static/index.html missing"; exit 1; }
+          ls the_lab/static/assets/*.js  >/dev/null || { echo "::error::no JS bundle in the_lab/static/assets/"; exit 1; }
+          ls the_lab/static/assets/*.css >/dev/null || { echo "::error::no CSS bundle in the_lab/static/assets/"; exit 1; }
+
+      - name: Build sdist + wheel
+        run: |
+          python -m pip install --upgrade build
+          python -m build
+
+      # A packaging regression (package-data / MANIFEST.in) would silently
+      # reintroduce the missing-dashboard bug, so assert on the built artifact.
+      - name: Verify wheel ships the compiled dashboard
+        run: |
+          set -euo pipefail
+          python - "$(ls dist/*.whl)" <<'PY'
+          import sys, zipfile
+          names = zipfile.ZipFile(sys.argv[1]).namelist()
+          assert any(n.endswith("the_lab/static/index.html") for n in names), \
+              "the_lab/static/index.html is NOT in the wheel"
+          assets = [n for n in names if "/static/assets/" in n]
+          assert assets, "no the_lab/static/assets/* in the wheel"
+          print(f"OK — index.html + {len(assets)} asset files in the wheel")
+          PY
+
+      # Must import and run on a clean machine: a broken entry point or missing
+      # package-data would otherwise only surface after a user installs.
+      - name: Smoke-test the installed wheel
+        run: |
+          set -euo pipefail
+          python -m venv /tmp/venv
+          /tmp/venv/bin/pip install --quiet "$(ls dist/*.whl)"
+          /tmp/venv/bin/the-lab --help > /dev/null
+          /tmp/venv/bin/python -c "
+          import pathlib, the_lab
+          p = pathlib.Path(the_lab.__file__).parent / 'static' / 'index.html'
+          assert p.exists(), f'dashboard missing from installed package: {p}'
+          print('installed dashboard OK:', p)
+          "
+
+      # Standalone dashboard bundle, so an existing install can be topped up
+      # with `the-lab fetch-dashboard` instead of reinstalling.
+      - name: Package dashboard-static.tar.gz
+        run: tar -czf dist/dashboard-static.tar.gz -C the_lab static
+
+      - name: Expose artifact names
+        id: names
+        run: echo "wheel=$(basename "$(ls dist/*.whl)")" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/*
+          if-no-files-found: error

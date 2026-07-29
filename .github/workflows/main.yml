@@ -1,0 +1,127 @@
+name: Release (main, rolling)
+
+# Development channel. Every push to main refreshes a prerelease tagged `main`
+# carrying the compiled dashboard, so people can run unreleased code without
+# installing Node.js:
+#
+#   pipx install --force "git+https://github.com/<owner>/<repo>@main"
+#   the-lab fetch-dashboard --tag main
+#
+# Those two commands never change: `dashboard-static.tar.gz` keeps a stable
+# asset name. The wheel cannot — a wheel's filename encodes its version, and
+# each build gets a distinct one (<base>.dev<run number>) so pip never serves a
+# cached older build. Grab it from the release page when you want a single
+# artifact, or use the stable channel (release.yml) for a permanent wheel URL.
+#
+# GitHub's "latest release" excludes prereleases, so this never shadows a
+# tagged release: plain `the-lab fetch-dashboard` still gets the stable one.
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "feedback/**"
+      - "optimization/**"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# One rolling build at a time: concurrent runs would race on asset upload.
+concurrency:
+  group: rolling-main
+  cancel-in-progress: true
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      # tomllib needs >= 3.11; do not rely on the runner's default interpreter.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - id: v
+        run: |
+          set -euo pipefail
+          base=$(python -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          echo "version=${base}.dev${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: version
+    uses: ./.github/workflows/build.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+
+  publish:
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      # Reuse one release and clobber its assets rather than deleting and
+      # recreating it, so the `main` tag is not churned on every push.
+      - name: Refresh the rolling `main` prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+          WHEEL: ${{ needs.build.outputs.wheel }}
+        run: |
+          set -euo pipefail
+          notes=$(cat <<EOF
+          Rolling build of \`main\` — **${VERSION}**, commit \`${GITHUB_SHA:0:7}\`
+          (updated $(date -u '+%Y-%m-%d %H:%M UTC')).
+
+          Unreleased code. For something stable, use the
+          [latest tagged release](https://github.com/${GITHUB_REPOSITORY}/releases/latest).
+
+          ### Install from main (these commands never change)
+
+          \`\`\`bash
+          pipx install --force "git+https://github.com/${GITHUB_REPOSITORY}@main"
+          the-lab fetch-dashboard --tag main
+          \`\`\`
+
+          The first command gets the code from \`main\`; the second adds the
+          compiled dashboard from this release, so no Node.js is needed.
+
+          ### Or install this exact build
+
+          \`\`\`bash
+          pipx install --force "https://github.com/${GITHUB_REPOSITORY}/releases/download/main/${WHEEL}"
+          \`\`\`
+
+          The wheel filename changes every build (it encodes the version) — copy
+          it from the asset list below.
+          EOF
+          )
+          if gh release view main >/dev/null 2>&1; then
+            gh release edit main --title "main (rolling)" --notes "$notes" --prerelease
+          else
+            gh release create main --title "main (rolling)" --notes "$notes" \
+              --prerelease --target "$GITHUB_SHA"
+          fi
+          # --clobber replaces same-named assets (dashboard-static.tar.gz).
+          gh release upload main dist/* --clobber
+
+          # Drop wheels/sdists from older runs so the asset list shows only this
+          # build. dashboard-static.tar.gz keeps its stable name and is clobbered
+          # above, so it is never deleted here.
+          gh release view main --json assets --jq '.assets[].name' \
+            | grep -E '\.(whl|tar\.gz)$' \
+            | grep -v '^dashboard-static\.tar\.gz$' \
+            | grep -vF "$WHEEL" \
+            | while IFS= read -r stale; do
+                case "$stale" in
+                  *"${VERSION}"*) ;; # this build's sdist — keep
+                  *) echo "deleting stale asset: $stale"
+                     gh release delete-asset main "$stale" --yes || true ;;
+                esac
+              done
