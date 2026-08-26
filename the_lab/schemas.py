@@ -44,7 +44,7 @@ class ResourceRequirements(BaseModel):
 class NewExperimentRequest(BaseModel):
     description: str
     meta: dict | None = None
-    script_content: str | None = None
+    script_content: str
     tags: list[str] = []
     auto_start: bool | None = None  # legacy, still accepted (ignored — queue handles it)
     priority: int = 0
