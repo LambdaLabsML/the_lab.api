@@ -125,17 +125,18 @@ def _create_and_queue_experiment(
     """Shared create+queue path used by single-create and batch-create.
 
     Mirrors the exact store calls of the single-create handler so scoring and
-    queueing behave identically: create the record, optionally write the wrapped
-    script, flip to ``queued``, broadcast, and wake the scheduler. Returns the
-    (queued) experiment record.
+    queueing behave identically: validate the script, create the record, write
+    the wrapped script, flip to ``queued``, broadcast, and wake the scheduler.
+    Returns the queued experiment record.
     """
-    exp = store.create_experiment(idea_id, description, meta=meta, tags=tags)
+    if not script_content or not script_content.strip():
+        raise HTTPException(400, "script_content must be a non-empty string")
 
-    if script_content is not None:
-        script_path = REPO_DIR / exp["script"]
-        script_path.parent.mkdir(parents=True, exist_ok=True)
-        script_path.write_text(_wrap_script(script_content))
-        os.chmod(script_path, 0o755)
+    exp = store.create_experiment(idea_id, description, meta=meta, tags=tags)
+    script_path = REPO_DIR / exp["script"]
+    script_path.parent.mkdir(parents=True, exist_ok=True)
+    script_path.write_text(_wrap_script(script_content))
+    os.chmod(script_path, 0o755)
 
     # The queue takes it from here. New experiments default to "queued";
     # the scheduler will start them when capacity permits and dependencies
@@ -181,22 +182,17 @@ def _queue_position(exp: dict) -> int | None:
 async def create_experiment(idea_id: int, req: NewExperimentRequest):
     """Create a new experiment under an idea.
 
-    Registers an experiment record and, if ``script_content`` is provided,
-    writes the script file to disk with an auto-injected guard and preamble.
-    The idea must be in ``active`` status. Use ``meta`` to store arbitrary
-    hyperparameters or configuration, and ``tags`` to categorize the
-    experiment for filtering and comparison.
-
-    Set ``auto_start: true`` to immediately start the experiment after creation,
-    saving a separate ``POST /experiments/<id>/start`` call.
+    Requires ``script_content`` and writes it with an auto-injected guard and
+    preamble before queueing the experiment. The idea must be in ``active``
+    status. Use ``meta`` to store arbitrary hyperparameters or configuration,
+    and ``tags`` to categorize the experiment for filtering and comparison.
 
     Example:
         POST /api/v1/ideas/1/experiments {"description": "baseline run",
                                            "script_content": "#!/bin/bash\\npython train.py",
                                            "tags": ["baseline", "v1"],
-                                           "meta": {"lr": 0.001, "epochs": 50},
-                                           "auto_start": true}
-        -> {"id": 4, "idea_id": 1, "status": "running", "script": ".the_lab/scripts/4.sh", ...}
+                                           "meta": {"lr": 0.001, "epochs": 50}}
+        -> {"id": "1.4", "idea_id": 1, "status": "queued", ...}
     """
     idea = store.get_idea(idea_id)
     if not idea:
@@ -241,9 +237,9 @@ async def create_experiment(idea_id: int, req: NewExperimentRequest):
 async def batch_create_experiments(idea_id: int, request: Request):
     """Batch-create queued experiments that share one script (feedback M1).
 
-    Creates one queued experiment per entry in ``metas``, each reusing the same
-    ``shared_script_content`` and the exact single-create store path (so
-    scoring/queueing behave identically). Body:
+    Requires ``shared_script_content`` and creates one queued experiment per
+    entry in ``metas``, each reusing the same script and the exact single-create
+    store path (so scoring/queueing behave identically). Body:
 
         {"shared_script_content": "#!/bin/bash\\npython train.py",
          "metas": [
@@ -1101,6 +1097,8 @@ async def rerun_experiment(exp_ref: str):
     if not script_path.exists():
         raise HTTPException(400, f"script file not found: {source['script']}")
     script_content = script_path.read_text()
+    if not script_content.strip():
+        raise HTTPException(400, f"script file is empty: {source['script']}")
 
     # Create the new experiment — strip stale "rerun: " prefixes so they don't accumulate
     base_desc = re.sub(r'^(rerun: )+', '', source['description'])

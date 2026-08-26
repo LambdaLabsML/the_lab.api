@@ -22,7 +22,7 @@ The core loop (aim for 5-7 API calls per iteration):
 1. **Orient** → `GET /orient` — current state + recommended next action. Follow `next_step`.
 2. **Leaderboard** → `GET /leaderboard?metric=score` — rankings of ideas by metric.
 3. **Create idea** → `POST /ideas/new {parent_ids, description}` — creates git branch and **auto-checkouts** (no separate checkout call needed).
-4. **Create + start experiment** → `POST /ideas/<id>/experiments {description, script_content, meta, tags}` — when `script_content` is provided, the experiment **auto-starts** (no separate start call needed).
+4. **Create experiment** → `POST /ideas/<id>/experiments {description, script_content, meta, tags}` — `script_content` is required and the experiment is queued automatically.
 5. **Wait** → `GET /wait?experiment_id=<id>` — blocks until finished, returns the **full experiment result** with metrics, branch diff, and progress comparison.
 6. **Note findings** → `POST /ideas/<id>/note {text, level}`
 7. **Conclude** → `POST /ideas/<id>/conclude {conclusion}` — then branch into next idea

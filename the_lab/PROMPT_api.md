@@ -27,7 +27,7 @@ The core loop (aim for 5-7 API calls per iteration):
 1. **Orient** → `GET /orient` — current state + recommended next action. Follow `next_step`.
 2. **Leaderboard + Search** → `GET /leaderboard/search?metric=score&q=keyword` — rankings AND search in one call. Includes the best idea's details — no need to GET individual ideas separately.
 3. **Create idea** → `POST /ideas/new {parent_ids, description}` — creates git branch and **auto-checkouts** (no separate checkout call needed).
-4. **Create + start experiment** → `POST /ideas/<id>/experiments {description, script_content, meta, tags}` — when `script_content` is provided, the experiment **auto-starts** (no separate start call needed).
+4. **Create experiment** → `POST /ideas/<id>/experiments {description, script_content, meta, tags}` — `script_content` is required and the experiment is queued automatically.
 5. **Wait** → run `the-lab wait <label> --port <port>` as a **background shell command** (preferred — lets you keep working while waiting). Exits 0 on success, 1 on failure, prints compact JSON. Or call `GET /wait?experiment_id=<id>` directly for simple sequential flows.
 5b. **Wait for messages** → run `the-lab messages --port <port>` as a **background shell command** to block until a message arrives in your inbox. Prints a JSON array of unread messages on exit.
 6. **Note findings** → `POST /ideas/<id>/note {text, level}`
@@ -142,7 +142,7 @@ use them directly instead of curl. The tools map 1:1 to API endpoints.
 1. **orient** → current state + recommended next action
 2. **leaderboard_search** → rankings + related ideas in one call
 3. **create_idea** → creates branch + auto-checkout
-4. **create_experiment** → provide `script_content` to auto-start
+4. **create_experiment** → provide required `script_content`; the experiment is queued automatically
 5. **wait_for_experiment** → blocks until done, returns full result
 6. **add_note** → record findings
 7. **conclude_idea** → then branch into next idea
