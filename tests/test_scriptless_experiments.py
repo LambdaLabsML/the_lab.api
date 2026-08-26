@@ -1,3 +1,4 @@
+import asyncio
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from the_lab import deps
 from the_lab.routes import experiments
+from the_lab.runner import ExperimentRunner
 from the_lab.store import Store
 
 
@@ -71,6 +73,25 @@ class ExperimentRouteTest(unittest.TestCase):
         self.assertEqual(400, response.status_code)
         labels = [exp["label"] for exp in self.store.list_all_experiments()]
         self.assertEqual([source["label"]], labels)
+
+
+class ExperimentRunnerTest(unittest.TestCase):
+    def test_start_marks_missing_script_failed(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo_dir = Path(temp_dir)
+            (repo_dir / ".git" / "info").mkdir(parents=True)
+            store = Store(repo_dir)
+            exp = store.create_experiment(1, "missing script")
+            store.update_experiment(exp["label"], status="queued")
+            runner = ExperimentRunner(store)
+
+            result = asyncio.run(runner.start(exp["label"]))
+
+            saved = store.get_experiment(exp["label"])
+            self.assertEqual("error", result["status"])
+            self.assertEqual("failed", saved["status"])
+            self.assertIn("script not found", saved["error"])
+
 
 if __name__ == "__main__":
     unittest.main()

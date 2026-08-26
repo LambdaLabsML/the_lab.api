@@ -664,6 +664,7 @@ class ExperimentRunner:
         if exp["status"] not in ("queued", "pending", "failed", "cancelled"):
             return {"status": "error", "reason": f"experiment is {exp['status']}, expected queued, failed, or cancelled"}
 
+        label = exp.get("label") or str(exp_id)
         script_path = self._store.repo_dir / exp["script"]
         if not script_path.exists():
             msg = (
