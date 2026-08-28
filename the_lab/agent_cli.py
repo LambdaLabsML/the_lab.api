@@ -68,6 +68,10 @@ def _agent_binary(agent: str) -> str:
     return shutil.which(name) or name
 
 
+def _uses_interactive_child(agent: str, use_loop: bool) -> bool:
+    return not (agent == "codex" and use_loop)
+
+
 def _build_launch_command(
     agent: str,
     agent_bin: str,
@@ -78,6 +82,7 @@ def _build_launch_command(
     mcp_path: str | None = None,
     sandboxed: bool = False,
     extra_agent_args: list[str] | None = None,
+    loop_duration: str | None = None,
 ) -> list[str]:
     """Build the agent launch command.
 
@@ -92,6 +97,7 @@ def _build_launch_command(
     extra_agent_args: additional flags forwarded verbatim to the agent binary,
                 inserted before the ``--`` / prompt separator so they are
                 parsed by the agent itself.  Example: ``['--resume', '<id>']``.
+    loop_duration: run Codex through its fixed-schedule resume loop when set.
     """
     if agent == "claude":
         cmd = [agent_bin]
@@ -109,6 +115,24 @@ def _build_launch_command(
                 mcp_path = str(dest)
             cmd.extend(["--mcp-config", mcp_path, "--"])
         cmd.append(loop_prompt)
+        return cmd
+
+    if loop_duration is not None:
+        cmd = [
+            sys.executable,
+            "-m",
+            "the_lab.codex_loop",
+            "--codex-bin",
+            agent_bin,
+            "--duration",
+            loop_duration,
+            "--prompt",
+            loop_prompt,
+        ]
+        if model:
+            cmd.extend(["--model", model])
+        if extra_agent_args:
+            cmd.extend(["--", *extra_agent_args])
         return cmd
 
     cmd = [agent_bin, "--yolo"]
@@ -520,7 +544,7 @@ def main():
         }}})
         print(f"MCP bridge: labapi → {api_base}", file=sys.stderr)
 
-    # Build the prompt argument for Claude
+    # Build the prompt argument for the selected agent.
     role_suffix = f" (role='{effective_role}')" if effective_role != "default" else ""
     role_arg = f"role='{effective_role}'" if effective_role != "default" else ""
     if use_loop:
@@ -530,13 +554,17 @@ def main():
         #     left off. Only re-read instructions if genuinely lost (e.g. after
         #     a crash/restart or when unsure what to do next).
         tool_call = f"get_instructions(role='{effective_role}')" if role_arg else "get_instructions()"
-        agent_prompt = (
-            f"/loop {args.duration} "
+        loop_task = (
             f"Start by calling {tool_call} to load the project instructions and API reference. "
             f"Then enter a continuous optimisation loop: propose and run experiments, "
             f"analyse results, and keep improving. "
             f"Only call {tool_call} again if you have lost context and are unsure what to do — "
             f"otherwise trust your current context and keep working."
+        )
+        agent_prompt = (
+            f"/loop {args.duration} {loop_task}"
+            if args.agent == "claude"
+            else loop_task
         )
         print(f"Mode: loop (every {args.duration}){role_suffix}", file=sys.stderr)
     else:
@@ -620,6 +648,7 @@ def main():
         mcp_path=mcp_path_in_sandbox,  # None when not sandboxed → writes to /tmp itself
         sandboxed=bool(sandbox_mode),
         extra_agent_args=extra_agent_args or None,
+        loop_duration=args.duration if use_loop and args.agent == "codex" else None,
     )
 
     env = dict(os.environ)
@@ -1141,9 +1170,10 @@ def main():
         # We set stdin to raw mode so every keypress (arrows, ctrl-*, etc.)
         # is forwarded immediately rather than line-buffered.
         import tty as _tty
+        _interactive_child = _uses_interactive_child(args.agent, use_loop)
         _old_tty: list | None = None
         try:
-            if sys.stdin.isatty():
+            if _interactive_child and sys.stdin.isatty():
                 _old_tty = _termios.tcgetattr(sys.stdin.fileno())
                 _tty.setraw(sys.stdin.fileno(), _termios.TCSANOW)
         except Exception:
@@ -1181,8 +1211,9 @@ def main():
             finally:
                 pass  # TTY restored in the main finally block
 
-        _t_stdin = _threading.Thread(target=_stdin_relay, daemon=True)
-        _t_stdin.start()
+        if _interactive_child:
+            _t_stdin = _threading.Thread(target=_stdin_relay, daemon=True)
+            _t_stdin.start()
 
         forwarded = {"sig": None}
 
