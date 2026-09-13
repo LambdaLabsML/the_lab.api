@@ -1,5 +1,6 @@
 """CLI entrypoint for The Lab API server."""
 import argparse
+import json
 import os
 import shutil
 import subprocess
@@ -1369,10 +1370,44 @@ def cmd_fetch_dashboard(argv: list[str]) -> None:
     print(f"\n  {_dim('Restart the server to pick it up:')} {_green('the-lab .')}\n")
 
 
+def cmd_index(argv: list[str]) -> None:
+    """Manage the local, disposable SQLite projection without opening Store."""
+    parser = argparse.ArgumentParser(prog="the-lab index", description="Manage The Lab's disposable local SQLite index")
+    parser.add_argument("action", choices=("rebuild", "status"))
+    parser.add_argument("repo", nargs="?", default=".")
+    parser.add_argument("--index-dir", default=None,
+                        help="Local directory for the derived index (or THE_LAB_INDEX_DIR)")
+    args = parser.parse_args(argv)
+    repo = Path(args.repo).resolve()
+    if not repo.is_dir():
+        parser.error(f"repository directory does not exist: {repo}")
+    # Do not construct Store: index rebuild must not mutate repository files.
+    try:
+        instance_id = (repo / ".the_lab" / "instance.id").read_text().strip() or "no-instance-id"
+    except OSError:
+        instance_id = "no-instance-id"
+    from .index import FilesystemIndex, IndexUnavailable
+    index = FilesystemIndex(repo, instance_id, index_dir=args.index_dir)
+    try:
+        result = index.rebuild() if args.action == "rebuild" else index.status()
+    except IndexUnavailable as exc:
+        print(f"index unavailable: {exc}", file=sys.stderr)
+        sys.exit(2)
+    print(json.dumps(result, indent=2, sort_keys=True))
+
+
 def main():
     # Handle subcommands before argparse (server mode)
     if len(sys.argv) >= 2 and sys.argv[1] == "fetch-dashboard":
         cmd_fetch_dashboard(sys.argv[2:])
+        return
+
+    if len(sys.argv) >= 2 and sys.argv[1] == "index":
+        cmd_index(sys.argv[2:])
+        return
+
+    if len(sys.argv) >= 2 and sys.argv[1] == "rebuild-index":
+        cmd_index(["rebuild", *sys.argv[2:]])
         return
 
     if len(sys.argv) >= 2 and sys.argv[1] == "init":

@@ -33,6 +33,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import jsonio
+from .index import FilesystemIndex, IndexUnavailable
 
 logger = logging.getLogger(__name__)
 
@@ -133,13 +134,33 @@ class Store:
         # entries by (endpoint, params, version), so any write naturally
         # invalidates all cached reads.
         self._version = 0
+        # Every successful authoritative filesystem mutation advances this
+        # fence, including notes/meta that have no SQL row.  Routes compare it
+        # before trusting the optional index.
+        self._index_version = 0
         self._completed_version = 0
         # Structured diagnostics, keyed by authoritative pathname.  We never
         # rewrite a malformed record during recovery: fixing it is an explicit
         # operator action, after which ``reconcile()`` can be called.
         self._load_errors: dict[str, str] = {}
+        self._fs_signature: tuple[tuple[str, int, int], ...] | None = None
 
+        self.index: FilesystemIndex | None = None
         self._load_all()
+        if not self.read_only:
+            try:
+                self.index = FilesystemIndex(self.repo_dir, self.instance_id)
+                # A new Store process starts its revision epoch at zero.  An
+                # authoritative full rebuild avoids trusting a higher revision
+                # left by a previous process against changed/deleted files.
+                if self.is_ready:
+                    self.index.rebuild(self.index_snapshot())
+                else:
+                    self.index.mark_dirty("authoritative filesystem scan has errors; index rebuild deferred")
+            except Exception as exc:
+                logger.warning("SQLite index disabled/unavailable; Store remains filesystem-authoritative: %s", exc)
+                if self.index is None or not self.index.enabled:
+                    self.index = None
 
     def _load_or_create_instance_id(self) -> str:
         """Return the 8-char instance ID, creating it on first run."""
@@ -179,6 +200,41 @@ class Store:
         return self._version
 
     @property
+    def index_version(self) -> int:
+        return self._index_version
+
+    def _index_revision_locked(self) -> int:
+        self._index_version += 1
+        return self._index_version
+
+    def _index_upsert(self, kind: str, record: dict, revision: int) -> None:
+        if self.index is None:
+            return
+        try:
+            self.index.upsert(kind, record, revision=revision)
+        except Exception as exc:
+            self.index.mark_dirty(str(exc))
+            logger.warning("SQLite index update failed after successful filesystem commit: %s", exc)
+
+    def _index_delete(self, kind: str, record_id: str, revision: int) -> None:
+        if self.index is None:
+            return
+        try:
+            self.index.delete(kind, record_id, revision=revision)
+        except Exception as exc:
+            self.index.mark_dirty(str(exc))
+            logger.warning("SQLite index delete failed after successful filesystem commit: %s", exc)
+
+    def _index_touch(self, revision: int) -> None:
+        if self.index is None:
+            return
+        try:
+            self.index.touch(revision)
+        except Exception as exc:
+            self.index.mark_dirty(str(exc))
+            logger.warning("SQLite index revision update failed after successful filesystem commit: %s", exc)
+
+    @property
     def completed_version(self) -> int:
         """Revision of completed chart rows (live progress does not invalidate it)."""
         return self._completed_version
@@ -205,6 +261,36 @@ class Store:
         """Initial authoritative scan.  See ``reconcile`` for later scans."""
         self.reconcile(initial=True)
 
+    def _filesystem_signature(self) -> tuple[tuple[str, int, int], ...] | None:
+        """Cheap stat-only change detector for periodic external-edit scans."""
+        try:
+            if not self.lab_dir.exists():
+                return ()
+            rows = []
+            def add(path: Path) -> None:
+                stat = path.stat()
+                rows.append((str(path.relative_to(self.lab_dir)), stat.st_mtime_ns, stat.st_size))
+            root_highwater = self.lab_dir / ".next_idea_id.json"
+            if root_highwater.exists():
+                add(root_highwater)
+            for idea_dir in self.lab_dir.iterdir():
+                if not idea_dir.is_dir() or not idea_dir.name.isdigit():
+                    continue
+                for name in ("idea.json", "notes.json", ".next_seq.json"):
+                    path = idea_dir / name
+                    if path.exists():
+                        add(path)
+                for child in idea_dir.iterdir():
+                    if child.is_file() and child.suffix == ".json" and child.stem.isdigit():
+                        add(child)
+                    elif child.is_dir() and child.name.isdigit():
+                        experiment = child / "experiment.json"
+                        if experiment.exists():
+                            add(experiment)
+            return tuple(sorted(rows))
+        except OSError:
+            return None
+
     @staticmethod
     def _record_error(errors: dict[str, str], path: Path, exc: Exception | str) -> None:
         errors[str(path)] = f"{type(exc).__name__}: {exc}" if isinstance(exc, Exception) else str(exc)
@@ -218,8 +304,20 @@ class Store:
         new projects use per-idea seq (e.g. 1.json). Both work —
         the file stem IS the seq number in the label.
         """
+        signature = self._filesystem_signature()
         with self._lock:
-            scan_version = self._version
+            scan_version = self._index_version
+            unchanged = not initial and signature is not None and signature == self._fs_signature
+        if unchanged:
+            # Avoid reparsing unchanged JSON, but still retry repair of a lost,
+            # dirty, or transiently unavailable derived cache from this known
+            # good in-memory authoritative snapshot.
+            if self.index is not None and self.is_ready:
+                try:
+                    self.index.reconcile(self.index_snapshot())
+                except Exception as exc:
+                    logger.warning("SQLite index reconciliation failed; filesystem Store remains available: %s", exc)
+            return not self._load_errors
         ideas: dict[int, dict] = {}
         experiments: dict[str, dict] = {}
         exp_by_idea: dict[int, set[str]] = {}
@@ -357,7 +455,7 @@ class Store:
         # A failed directory scan cannot safely imply deletions. Keep the last
         # good cache rather than replacing it with an incomplete snapshot.
         with self._lock:
-            if not initial and self._version != scan_version:
+            if not initial and self._index_version != scan_version:
                 # Do not replace newer successful mutations with a scan that
                 # began before them.  The next periodic/manual reconcile will
                 # see a stable point-in-time snapshot.
@@ -365,6 +463,8 @@ class Store:
             self._load_errors = errors
             if scan_failed and not initial:
                 return False
+            changed = (ideas != self._ideas or experiments != self._experiments or
+                       exp_by_idea != self._exp_by_idea or notes != self._notes)
             self._ideas = ideas
             self._experiments = experiments
             self._exp_by_idea = exp_by_idea
@@ -377,9 +477,21 @@ class Store:
                     for i, labels in exp_by_idea.items()
                 }.items()
             }
-            self._version += 1
-            self._completed_version += 1
-        return not errors
+            if changed or initial:
+                self._version += 1
+                self._completed_version += 1
+                self._index_revision_locked()
+            self._fs_signature = signature
+        healthy = not errors
+        # Reconcile only after the complete authoritative snapshot has swapped
+        # in. A concurrent later mutation carries a higher revision fence and
+        # cannot be overwritten by this slower scan.
+        if healthy and self.index is not None:
+            try:
+                self.index.reconcile(self.index_snapshot())
+            except Exception as exc:
+                logger.warning("SQLite index reconciliation failed; filesystem Store remains available: %s", exc)
+        return healthy
 
     def _idea_dir(self, idea_id: int) -> Path:
         return self.lab_dir / str(idea_id)
@@ -474,6 +586,8 @@ class Store:
             if idea_id not in self._exp_by_idea:
                 self._exp_by_idea[idea_id] = set()
             self._version += 1
+            index_revision = self._index_revision_locked()
+        self._index_upsert("ideas", idea, index_revision)
         if is_new:
             try:
                 from . import ws as ws_mod
@@ -504,6 +618,8 @@ class Store:
             self._ideas[idea_id] = idea
             self._completed_version += 1
             self._version += 1
+            index_revision = self._index_revision_locked()
+        self._index_upsert("ideas", idea, index_revision)
         # Determine change type for WebSocket emit.
         new_status = idea.get("status")
         if new_status == "concluded":
@@ -557,6 +673,8 @@ class Store:
             _write_json(notes_path, notes)
             self._notes[idea_id] = notes
             self._version += 1
+            index_revision = self._index_revision_locked()
+        self._index_touch(index_revision)
         try:
             from . import ws as ws_mod
             ws_mod.broadcaster.broadcast_soon({
@@ -683,6 +801,8 @@ class Store:
             self._exp_by_idea.setdefault(idea_id, set()).add(label)
             self._next_seq_by_idea[idea_id] = seq + 1
             self._version += 1
+            index_revision = self._index_revision_locked()
+        self._index_upsert("experiments", exp, index_revision)
         return exp
 
     def get_experiment(self, exp_ref) -> dict | None:
@@ -719,6 +839,8 @@ class Store:
                 self._version += 1
                 if cur.get("status") == "completed" or exp.get("status") == "completed":
                     self._completed_version += 1
+            index_revision = self._index_revision_locked()
+        self._index_upsert("experiments", exp, index_revision)
         return exp
 
     def transition_experiment(self, exp_ref, allowed: set[str] | tuple[str, ...],
@@ -749,7 +871,9 @@ class Store:
                 self._version += 1
                 if cur.get("status") == "completed" or exp.get("status") == "completed":
                     self._completed_version += 1
-            return exp
+            index_revision = self._index_revision_locked()
+        self._index_upsert("experiments", exp, index_revision)
+        return exp
 
     def _safe_cleanup_path(self, value, *, key: str, label: str) -> Path | None:
         """Resolve *value* and return it only if it sits inside the repo.
@@ -834,7 +958,9 @@ class Store:
             if labels is not None:
                 labels.discard(label)
             self._version += 1
+            index_revision = self._index_revision_locked()
 
+        self._index_delete("experiments", label, index_revision)
         return exp
 
     def list_experiments(self, idea_id: int) -> list[dict]:
@@ -908,7 +1034,7 @@ class Store:
                 "experiments": [dict(x) for x in self._experiments.values()],
                 "notes": {key: [dict(n) for n in value]
                           for key, value in self._notes.items()},
-                "version": self._version,
+                "version": self._index_version,
             }
 
     def search_ideas_by_keywords(

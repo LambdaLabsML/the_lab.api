@@ -83,3 +83,22 @@ the writer lock. Review uncertain launches before manually requeueing them.
 Websocket subscriptions precede replay, duplicate sequences are discarded,
 and gaps/overflow request a fresh snapshot. Journal buffering is bounded;
 the filesystem records, not websocket replay, are the recovery authority.
+
+## 5. Keep SQLite disposable and local
+
+The index projects filesystem idea/experiment records and numeric metrics onto
+local SQLite tables. Selected chart history can be queried without decoding
+large experiment metadata blobs. Successful filesystem writes precede all
+index updates; index errors fall back to Store data rather than failing a
+successful authoritative write. Revision checks fence delayed callbacks and
+reconciliation snapshots.
+
+`THE_LAB_INDEX=off` disables the optimization. `THE_LAB_INDEX_DIR` selects a
+local cache directory; detected network filesystems are refused for SQLite
+WAL. Periodic off-loop filesystem reconciliation detects external edits and
+deletions, including when the index is disabled. Source files must still be
+backed up: rebuilding SQLite cannot recreate missing authoritative files.
+
+See [sqlite-index.md](sqlite-index.md) for rebuild/status commands, storage
+layout, and recovery details. No schema migration moves research data out of
+the filesystem.

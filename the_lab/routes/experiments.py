@@ -17,6 +17,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 
 from .. import jsonio
+from ..index import IndexUnavailable
 from ..deps import (
     sanitize_error,
     store,
@@ -397,10 +398,35 @@ def list_all_experiments(
         GET /api/v1/experiments?status=completed&metric=score
         GET /api/v1/experiments?tags=baseline&all=true
     """
-    all_exps = store.list_all_experiments()
     idea_cache: dict[int, dict] = {}
 
     tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
+
+    # Serve the normal newest/status paging path from the derived SQL index.
+    # Tag and legacy top-level metric filtering retain their exact Store
+    # semantics; index errors are ordinary cache misses.
+    indexed = None
+    local_index = getattr(store, "index", None)
+    if local_index is not None and not tag_list and metric is None:
+        try:
+            indexed = local_index.list_records(
+                "experiments", status=status, page=1 if show_all else page,
+                page_size=1_000_000 if show_all else page_size,
+                required_revision=getattr(store, "index_version", store.version))
+        except (IndexUnavailable, ValueError):
+            indexed = None
+    if indexed is not None:
+        rows, total = indexed["records"], indexed["total"]
+        tag_hint = "Tags hidden in bulk listing. Use GET /experiments/tags to list tags, then GET /experiments?tags=<tag> to filter by approach."
+        if show_all:
+            return {"experiments": [_list_row(e, idea_cache, None, []) for e in rows],
+                    "count": total, "tag_hint": tag_hint}
+        return {"experiments": [_list_row(e, idea_cache, None, []) for e in rows],
+                "page": page, "page_size": page_size, "total": total,
+                "total_pages": math.ceil(total / page_size) if total else 0,
+                "tag_hint": tag_hint}
+
+    all_exps = store.list_all_experiments()
 
     filtered = []
     for exp in all_exps:

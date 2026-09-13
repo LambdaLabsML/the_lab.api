@@ -21,6 +21,7 @@ from ..deps import (
     resolve_metric,
 )
 from ..git_ops import get_current_branch
+from ..index import IndexUnavailable, numeric_metric_leaves
 
 router = APIRouter(prefix="/api/v1")
 
@@ -1109,6 +1110,27 @@ def _completed_chart_data():
     return rows, keys
 
 
+@cached_response(lambda limit, metrics: (limit, metrics), version_fn=lambda s: s.completed_version)
+def _completed_window(limit: int, metrics: tuple[str, ...] | None):
+    """Cache expensive completed history; running progress stays fresh below."""
+    selected = set(metrics) if metrics is not None else None
+    local_index = getattr(store, "index", None)
+    if local_index is not None:
+        try:
+            indexed = local_index.completed_history(
+                limit=limit or None, metrics=list(metrics) if metrics else None, compact=False,
+                required_revision=getattr(store, "index_version", store.version))
+            return indexed["experiments"], indexed["metric_keys"], indexed["total"]
+        except (IndexUnavailable, ValueError):
+            pass
+    completed, keys = _completed_chart_data()
+    if selected is not None:
+        completed = [dict(row, metrics={k: v for k, v in row["metrics"].items() if k in selected})
+                     for row in completed]
+    window = completed[:limit] if limit else completed
+    return window, keys, len(completed)
+
+
 @router.get("/chart-data")
 def get_chart_data(
     limit: int = Query(default=0, ge=0, description="Newest completed rows; 0 returns all history."),
@@ -1121,10 +1143,12 @@ def get_chart_data(
     Omitting parameters preserves the full-history API. The dashboard requests
     a compact window and explicitly increases it when older history is needed.
     """
-    completed, keys = _completed_chart_data()
+    selected_list = [key.strip() for key in metrics.split(",") if key.strip()] if metrics is not None else None
+    selected_tuple = tuple(selected_list) if selected_list is not None else None
+    completed, keys, total = _completed_window(limit, selected_tuple)
     running = _chart_rows(store.list_experiments_by_status("running"))["running"]
     keys = sorted(set(keys) | {k for row in running for k in row["metrics"]})
-    selected = set(metrics.split(",")) if metrics is not None else None
+    selected = set(selected_list) if selected_list is not None else None
 
     def project(row):
         result = dict(row)
@@ -1135,12 +1159,12 @@ def get_chart_data(
             result["idea_description"] = (row.get("idea_description") or "")[:160]
         return result
 
-    window = completed[:limit] if limit else completed
+    window = completed
     return {
         "experiments": [project(row) for row in window],
         "running": [project(row) for row in running],
         "metric_keys": keys,
-        "history": {"loaded": len(window), "total": len(completed), "has_more": len(window) < len(completed)},
+        "history": {"loaded": len(window), "total": total, "has_more": len(window) < total},
     }
 
 
@@ -1168,19 +1192,9 @@ def _chart_rows(all_exps):
     # Build idea lookup once
     idea_cache: dict[int, dict] = {}
 
-    def _numeric_metrics(metrics: dict, _prefix: str = "") -> dict:
-        """Flatten nested dicts with dot notation, keeping only numeric leaves.
-        e.g. {"context": {"peak_kchars": 146.1}} → {"context.peak_kchars": 146.1}
-        Capped at two levels of nesting to avoid exploding per-game dicts."""
-        out: dict = {}
-        for k, v in metrics.items():
-            key = f"{_prefix}.{k}" if _prefix else k
-            if isinstance(v, (int, float)):
-                out[key] = v
-            elif isinstance(v, dict) and _prefix.count(".") < 1:
-                # Recurse one level deep only (level-0 → level-1 dot keys)
-                out.update(_numeric_metrics(v, key))
-        return out
+    def _numeric_metrics(metrics: dict) -> dict:
+        """Shared safe flattening used by both Store and SQLite chart paths."""
+        return numeric_metric_leaves(metrics)
 
     # Only the fields the dashboard chart actually needs. Critically, we
     # omit ``meta`` — it carries large per-experiment blobs (scorecards,

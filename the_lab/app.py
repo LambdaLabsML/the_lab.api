@@ -78,6 +78,21 @@ deps.init(store, runner, api_stats, REPO_DIR)
 _START_TIME = _time_mod.monotonic()
 
 
+async def _periodic_filesystem_reconcile() -> None:
+    """Repair derived index drift from external edits without blocking ASGI."""
+    import asyncio
+    try:
+        interval = max(5.0, float(os.environ.get("THE_LAB_INDEX_RECONCILE_SECONDS", "60")))
+    except ValueError:
+        interval = 60.0
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            await run_blocking(store.reconcile)
+        except Exception as exc:  # Store/index remain diagnostic-only caches
+            logger.warning("periodic filesystem/index reconciliation failed: %s", exc)
+
+
 # ---------------------------------------------------------------------------
 # Live per-agent "API call" ticker  (dashboard: agent activity feed)
 #
@@ -886,8 +901,8 @@ async def health():
     """Unauthenticated liveness probe (feedback: /health ENDPOINT).
 
     Exempted from both basic_auth and the notifications middleware so a
-    monitor/bridge can poll it cheaply without credentials. Reports the live
-    agent count and process uptime; fail-soft on the registry read.
+    monitor/bridge can poll it cheaply without credentials. Reports only
+    process liveness/uptime and does not read the filesystem or agent registry.
     """
     return {
         "status": "ok",
@@ -906,7 +921,15 @@ def readiness():
         raise HTTPException(status_code=503, detail={
             "status": "degraded", "load_errors": store.load_errors,
         })
-    return {"status": "ready"}
+    index = getattr(store, "index", None)
+    return {"status": "ready", "index": index.status() if index is not None else {"enabled": False, "ready": False}}
+
+
+@app.get("/api/v1/index/status")
+def index_status():
+    """Derived-index diagnostics; authoritative filesystem readiness is separate."""
+    index = getattr(store, "index", None)
+    return index.status() if index is not None else {"enabled": False, "ready": False, "error": "index disabled"}
 
 
 # GZip compression. Starlette's add_middleware() inserts at position 0 of the
@@ -954,6 +977,8 @@ async def startup():
     # events emitted from sync threads before the FIRST WebSocket subscriber
     # arrives are silently dropped (breaks /api/v1/events-only clients).
     _ws_mod.broadcaster.capture_loop()
+    if not _DEMO:
+        app.state.index_reconcile_task = asyncio.create_task(_periodic_filesystem_reconcile())
     # Persist events + continue seq across restarts (P4: the activity feed
     # and ?since= replay survive deploys).
     try:
@@ -987,6 +1012,10 @@ async def shutdown():
         if task is not None:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+        index_task = getattr(app.state, "index_reconcile_task", None)
+        if index_task is not None:
+            index_task.cancel()
+            await asyncio.gather(index_task, return_exceptions=True)
         try:
             await runner.shutdown()
         finally:

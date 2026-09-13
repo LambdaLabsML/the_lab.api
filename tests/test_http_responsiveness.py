@@ -84,10 +84,31 @@ class HttpResponsivenessTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(len(second["experiments"]), 3)
                 self.assertEqual(second["running"][0]["metrics"], {"score": 5})
                 completed_builds = [call for call in build.call_args_list if call.args[0] and call.args[0][0]["status"] == "completed"]
-                self.assertEqual(len(completed_builds), 1)
+                # Completed history now comes from the SQL projection; only
+                # fresh running rows invoke the in-memory chart builder.
+                self.assertEqual(len(completed_builds), 0)
                 store.update_experiment(completed[-1], metrics={"score": 8})
                 third = (await client.get("/api/v1/chart-data?metrics=score")).json()
                 self.assertEqual(third["experiments"][0]["metrics"], {"score": 8})
+
+    async def test_completed_sql_window_is_cached_across_running_updates(self):
+        from the_lab import cache, jsonio
+        from pathlib import Path
+        store = self.module.store
+        self.assertIsNotNone(store.index)
+        live = store.create_experiment(self.idea_id, "cache-running")
+        store.update_experiment(live["id"], status="running")
+        progress = Path(self.directory.name) / live["script"].replace(".sh", ".progress")
+        jsonio.write_json(progress, {"score": 1})
+        cache.clear()
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=self.module.app), base_url="http://test") as client:
+            with patch.object(store.index, "completed_history", wraps=store.index.completed_history) as history:
+                first = await client.get("/api/v1/chart-data?limit=2&metrics=score")
+                jsonio.write_json(progress, {"score": 2})
+                second = await client.get("/api/v1/chart-data?limit=2&metrics=score")
+                self.assertEqual(first.status_code, 200)
+                self.assertEqual(second.status_code, 200)
+                self.assertEqual(history.call_count, 1)
 
     async def test_dashboard_does_not_build_notifications(self):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=self.module.app), base_url="http://test") as client:
