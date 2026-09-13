@@ -6,7 +6,7 @@
  * carries only identity, websocket status, and the current branch/idea context.
  */
 import { backlogData, allIdeas } from "../state/signals";
-import { wsConnected, wsAuthFailed } from "../state/ws";
+import { wsCatchingUp, wsConnected, wsAuthFailed } from "../state/ws";
 
 export function Topbar() {
   const data = backlogData.value;
@@ -19,14 +19,16 @@ export function Topbar() {
 
   const isWsConnected = wsConnected.value;
   const isWsAuthFailed = wsAuthFailed.value;
+  const isCatchingUp = wsCatchingUp.value;
 
   return (
     <header class="slim-topbar">
       <span class="slim-topbar-mark">the_lab</span>
       <span
-        class={`ws-dot ${isWsAuthFailed ? "ws-dot--auth" : isWsConnected ? "ws-dot--on" : "ws-dot--off"}`}
-        title={isWsAuthFailed ? "WebSocket: auth failed" : isWsConnected ? "WebSocket: connected" : "WebSocket: reconnecting…"}
+        class={`ws-dot ${isWsAuthFailed ? "ws-dot--auth" : isCatchingUp ? "ws-dot--busy" : isWsConnected ? "ws-dot--on" : "ws-dot--off"}`}
+        title={isWsAuthFailed ? "WebSocket: auth failed" : isCatchingUp ? "Catching up on missed events…" : isWsConnected ? "WebSocket: connected" : "WebSocket: reconnecting…"}
       />
+      {isCatchingUp && <span class="ws-catchup">catching up…</span>}
       {currentBranch && (
         <span class="slim-topbar-branch" title={branchTitle ?? currentBranch}>
           <span class="slim-topbar-branch-name">{currentBranch}</span>

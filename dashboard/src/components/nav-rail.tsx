@@ -7,8 +7,8 @@
  */
 import type { ComponentChildren } from "preact";
 import { useState, useEffect } from "preact/hooks";
-import { sidebarWidth, sidebarCollapsed } from "../state/settings";
-import { wsConnected, wsAuthFailed, wsLastMessageAt } from "../state/ws";
+import { serverDemoMode, sidebarWidth, sidebarCollapsed } from "../state/settings";
+import { wsCatchingUp, wsConnected, wsAuthFailed, wsLastMessageAt } from "../state/ws";
 import { Tooltip } from "./ui";
 
 function relAgo(ms: number | null): string {
@@ -20,7 +20,7 @@ function relAgo(ms: number | null): string {
   return `${Math.floor(m / 60)}h ago`;
 }
 
-export type NavSection = "review" | "activity" | "queue" | "workbench" | "tools";
+export type NavSection = "review" | "activity" | "queue" | "workbench" | "tools" | "messages";
 
 interface RailItem { id: NavSection; label: string; icon: string }
 
@@ -30,6 +30,7 @@ const PRIMARY: RailItem[] = [
   { id: "queue",     label: "Queue",     icon: "≡" },
   { id: "workbench", label: "Workbench", icon: "⊞" },
   { id: "tools",     label: "Tools",     icon: "⚒" },
+  { id: "messages",  label: "Messages",  icon: "✉" },
 ];
 
 export function NavRail({
@@ -50,8 +51,9 @@ export function NavRail({
     return () => window.clearInterval(t);
   }, []);
 
-  const wsState = wsAuthFailed.value ? "auth" : wsConnected.value ? "on" : "off";
-  const wsLabel = wsAuthFailed.value ? "auth failed" : wsConnected.value ? "connected" : "reconnecting…";
+  const demo = serverDemoMode.value;
+  const wsState = wsAuthFailed.value ? "auth" : wsCatchingUp.value ? "busy" : wsConnected.value ? "on" : "off";
+  const wsLabel = wsAuthFailed.value ? "auth failed" : wsCatchingUp.value ? "catching up…" : wsConnected.value ? "connected" : "reconnecting…";
   const lastStr = relAgo(wsLastMessageAt.value);
 
   const item = (it: RailItem) => {
@@ -73,6 +75,7 @@ export function NavRail({
 
   return (
     <nav class="nav-rail" aria-label="Primary navigation">
+      {demo && <span class="nav-rail-demo" title="Read-only demo — mutations are disabled">demo</span>}
       <Tooltip
         content={
           <>

@@ -1,7 +1,8 @@
-import { useEffect, useLayoutEffect, useState, useRef } from "preact/hooks";
-import { selectedIdea, selectedMetric, detailTimeline, detailSortNewest } from "../state/settings";
+import { useEffect, useLayoutEffect, useMemo, useState, useRef } from "preact/hooks";
+import { selectedIdea, selectedMetric, detailTimeline, detailSortNewest, colorTheme } from "../state/settings";
 import { scrollToExperiment, runningProgress, allExperiments } from "../state/signals";
 import { getIdea, getExperimentProgress, getExperimentLog, getExperimentScript, getExperimentOutput, getIdeaDiff } from "../state/api";
+import { subscribeWsEvents } from "../state/ws";
 import { formatTime, badgeHtml, escapeHtml } from "../lib/format";
 import { Lightbox } from "./lightbox";
 import { JsonView } from "./json-view";
@@ -153,8 +154,17 @@ export function DetailPanel({ embedded = false }: { embedded?: boolean } = {}) {
     }
 
     fetchData();
-    const timer = setInterval(fetchData, 10_000);
-    return () => clearInterval(timer);
+    // Push-driven: refetch when anything about THIS idea changes; keep a
+    // slow reconcile for computed fields events can't carry.
+    const un = subscribeWsEvents((ev) => {
+      if (ev.idea_id === ideaId &&
+          ["idea_changed", "note_added", "experiment_queued", "experiment_started",
+           "experiment_finished", "experiment_cancelled", "experiment_deleted"].includes(ev.type)) {
+        fetchData();
+      }
+    });
+    const timer = setInterval(fetchData, 30_000);
+    return () => { clearInterval(timer); un(); };
   }, [ideaId]);
 
   // Scroll-to-pane THEN highlight (#50). When `scrollToExperiment` fires we
@@ -283,8 +293,23 @@ export function DetailPanel({ embedded = false }: { embedded?: boolean } = {}) {
       });
     }
     pollProgress();
-    pollRef.current = window.setInterval(pollProgress, 3000);
-    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+    // experiment_progress_updated carries the full progress body — apply it
+    // directly; the poll drops to a slow reconcile.
+    const byLabel: Record<string, Experiment> = {};
+    running.forEach((exp) => { byLabel[exp.label || String(exp.id)] = exp; });
+    const un = subscribeWsEvents((ev) => {
+      if (ev.type !== "experiment_progress_updated") return;
+      const exp = byLabel[String(ev.label ?? "")];
+      const prog = ev.progress as Record<string, any> | null | undefined;
+      if (!exp || !prog) return;
+      setProgressData((prev) => ({ ...prev, [String(exp.id)]: prog }));
+      const pct = prog.pct_complete ?? prog.pct;
+      if (typeof pct === "number") {
+        runningProgress.value = { ...runningProgress.value, [ev.label as string]: pct };
+      }
+    });
+    pollRef.current = window.setInterval(pollProgress, 15_000);
+    return () => { if (pollRef.current) clearInterval(pollRef.current); un(); };
   }, [idea]);
 
   // --- Log ---
@@ -299,8 +324,18 @@ export function DetailPanel({ embedded = false }: { embedded?: boolean } = {}) {
   useEffect(() => {
     if (logPollRef.current) { clearInterval(logPollRef.current); logPollRef.current = null; }
     if (!logExp || logExp.status !== "running") return;
-    logPollRef.current = window.setInterval(() => fetchLogContent(logExp), 3000);
-    return () => { if (logPollRef.current) { clearInterval(logPollRef.current); logPollRef.current = null; } };
+    const label = logExp.label || String(logExp.id);
+    const un = subscribeWsEvents((ev) => {
+      if ((ev.type === "experiment_log_updated" || ev.type === "experiment_progress_updated")
+          && String(ev.label ?? "") === label) {
+        fetchLogContent(logExp);
+      }
+    });
+    logPollRef.current = window.setInterval(() => fetchLogContent(logExp), 15_000);
+    return () => {
+      un();
+      if (logPollRef.current) { clearInterval(logPollRef.current); logPollRef.current = null; }
+    };
   }, [logExp]);
 
   // Auto-scroll log when following and content updates
@@ -336,8 +371,17 @@ export function DetailPanel({ embedded = false }: { embedded?: boolean } = {}) {
   useEffect(() => {
     if (outputPollRef.current) { clearInterval(outputPollRef.current); outputPollRef.current = null; }
     if (!outputExp || outputExp.status !== "running") return;
-    outputPollRef.current = window.setInterval(() => fetchOutputContent(outputExp), 5000);
-    return () => { if (outputPollRef.current) { clearInterval(outputPollRef.current); outputPollRef.current = null; } };
+    const label = outputExp.label || String(outputExp.id);
+    const un = subscribeWsEvents((ev) => {
+      if (ev.type === "experiment_progress_updated" && String(ev.label ?? "") === label) {
+        fetchOutputContent(outputExp);
+      }
+    });
+    outputPollRef.current = window.setInterval(() => fetchOutputContent(outputExp), 15_000);
+    return () => {
+      un();
+      if (outputPollRef.current) { clearInterval(outputPollRef.current); outputPollRef.current = null; }
+    };
   }, [outputExp]);
 
   // Currently-displayed file: top of stack if any linked .md is open, else
@@ -930,10 +974,12 @@ export function DetailPanel({ embedded = false }: { embedded?: boolean } = {}) {
         const title = linked
           ? `Output — exp/${outputExp.label || outputExp.id} › ${linkedName}`
           : `Output — exp/${outputExp.label || outputExp.id}`;
+        const isDoc = isFullHtmlDoc(displayedContent, displayedFormat);
         return (
           <Lightbox
             title={title}
             onClose={() => { setOutputExp(null); setHash({ view: null, exp: null }); }}
+            bodyClass={isDoc ? "is-doc" : undefined}
             bodyRef={outputBodyRef}
             onBodyScroll={(e) => {
               const el = e.currentTarget as HTMLDivElement;
@@ -989,7 +1035,7 @@ export function DetailPanel({ embedded = false }: { embedded?: boolean } = {}) {
                 >
                   ↻ Refresh
                 </Toggle>
-                {!linked && (
+                {!linked && !isDoc && (
                   <Toggle
                     active={outputFollowing}
                     onClick={() => {
@@ -1010,6 +1056,8 @@ export function DetailPanel({ embedded = false }: { embedded?: boolean } = {}) {
             {displayedContent !== null && (
               displayedContent.startsWith("(") ? (
                 <div class="lightbox-loading lightbox-loading--italic">{displayedContent}</div>
+              ) : isDoc ? (
+                <OutputDocFrame content={displayedContent} basePath={displayedBasePath} />
               ) : (
                 <div
                   class="md-output"
@@ -1048,6 +1096,109 @@ export function DetailPanel({ embedded = false }: { embedded?: boolean } = {}) {
         </Lightbox>
       )}
     </>
+  );
+}
+
+/** True when an html-format output is a full standalone document. Those are
+ *  rendered in a sandboxed iframe: injecting them inline let their <style>
+ *  blocks (e.g. their own :root{--bg:…} palettes) leak into the app DOM and
+ *  fight the dashboard theme. */
+function isFullHtmlDoc(content: string | null, format: "md" | "html"): boolean {
+  return format === "html" && /^\s*(<!doctype|<html)/i.test(content ?? "");
+}
+
+/** Read the active colorscheme's palette off the live DOM. */
+function readThemeVars() {
+  const cs = getComputedStyle(document.documentElement);
+  const v = (n: string) => cs.getPropertyValue(n).trim();
+  return {
+    bg: v("--bg"), bgElev: v("--bg-elev"), bgHi: v("--bg-hi"),
+    border: v("--border"), text: v("--text"), textMuted: v("--text-muted"),
+    accent: v("--accent"), purple: v("--purple"),
+    font: v("--font-mono"),
+  };
+}
+
+/** Rough luminance check so the iframe gets the right `color-scheme`
+ *  (native scrollbars/form controls) for light themes. */
+function isLightColor(hex: string): boolean {
+  const m = hex.match(/^#([0-9a-f]{6})$/i);
+  if (!m) return false;
+  const n = parseInt(m[1], 16);
+  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  return 0.299 * r + 0.587 * g + 0.114 * b > 140;
+}
+
+/**
+ * Wrap a standalone HTML output for the themed iframe: a <base> so its
+ * relative asset links resolve under /api/v1/files/, plus defaults (inserted
+ * into <head>, BEFORE the doc's own styles) for outputs that bring no CSS.
+ * The palette override is applied post-load via contentDocument (see
+ * applyThemePalette) — string-injecting near </body> is unreliable in large
+ * outputs whose embedded session text can contain markup.
+ */
+function baseOutputDoc(content: string, basePath: string): string {
+  const t = readThemeVars();
+  const base = basePath ? `<base href="/api/v1/files/${basePath}/">` : "";
+  const defaults = `<style data-lab-defaults>` +
+    `body{background:${t.bg};color:${t.text};font-family:${t.font || "monospace"};}` +
+    `</style>`;
+  return /<head[^>]*>/i.test(content)
+    ? content.replace(/<head[^>]*>/i, (m) => m + base + defaults)
+    : base + defaults + content;
+}
+
+/** (Re)write the palette <style> inside the frame document, keeping it LAST
+ *  in <head> so it wins the cascade: re-points the variable names lab
+ *  outputs conventionally use (--bg/--panel/--fg/--accent/…) at the ACTIVE
+ *  dashboard colorscheme, so Settings → colorscheme flows through. */
+function applyThemePalette(frame: HTMLIFrameElement): void {
+  try {
+    const doc = frame.contentDocument;
+    if (!doc) return;
+    const t = readThemeVars();
+    const scheme = isLightColor(t.bg) ? "light" : "dark";
+    const host = doc.head || doc.documentElement;
+    if (!host) return;
+    let el = doc.getElementById("lab-theme") as HTMLStyleElement | null;
+    if (!el) {
+      el = doc.createElement("style");
+      el.id = "lab-theme";
+    }
+    el.textContent =
+      `:root{color-scheme:${scheme};` +
+      `--bg:${t.bg} !important;--panel:${t.bgElev} !important;` +
+      `--panel-2:${t.bgHi} !important;--border:${t.border} !important;` +
+      `--fg:${t.text} !important;--fg-muted:${t.textMuted} !important;` +
+      `--accent:${t.accent} !important;--accent-2:${t.accent} !important;}` +
+      `body{background:${t.bg};}`;
+    host.appendChild(el); // (re)append → always last in the cascade
+  } catch { /* cross-origin or teardown — palette is best-effort */ }
+}
+
+/** Sandboxed, colorscheme-following host for full-document HTML outputs.
+ *  Scripts run inside the frame (isolated from the app DOM); the palette
+ *  re-applies on load and whenever Settings → colorscheme changes. */
+function OutputDocFrame({ content, basePath }: { content: string; basePath: string }) {
+  const theme = colorTheme.value;
+  const ref = useRef<HTMLIFrameElement>(null);
+  const srcdoc = useMemo(() => baseOutputDoc(content, basePath), [content, basePath]);
+  useEffect(() => {
+    const frame = ref.current;
+    if (!frame) return;
+    const apply = () => applyThemePalette(frame);
+    if (frame.contentDocument && frame.contentDocument.readyState !== "loading") apply();
+    frame.addEventListener("load", apply);
+    return () => frame.removeEventListener("load", apply);
+  }, [theme, srcdoc]);
+  return (
+    <iframe
+      ref={ref}
+      class="lightbox-doc-frame"
+      sandbox="allow-scripts allow-same-origin"
+      srcdoc={srcdoc}
+      title="experiment output"
+    />
   );
 }
 

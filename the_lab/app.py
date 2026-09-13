@@ -5,7 +5,11 @@ import base64
 import json as _json
 import logging
 import os
+import re
 import secrets
+import threading
+import time as _time_mod
+from datetime import datetime, timezone
 from pathlib import Path
 
 import math
@@ -39,18 +43,207 @@ from .store import Store
 from .runner import ExperimentRunner
 from .stats import ApiStats, normalize_path as _normalize_path
 from . import deps
+from . import jsonio
 from . import perf_log
 from . import ws as _ws_mod
 
 # --- Configuration ---
 REPO_DIR = Path(os.environ.get("THE_LAB_REPO", os.getcwd())).resolve()
 
+from .deps import DEMO_MODE as _DEMO
+
 store = Store(REPO_DIR)
-runner = ExperimentRunner(store)
+runner = ExperimentRunner(store, read_only=_DEMO)
 api_stats = ApiStats(REPO_DIR / ".the_lab" / "api_stats.json")
+api_stats.read_only = _DEMO
 
 # Initialise shared state so route modules can import from deps
 deps.init(store, runner, api_stats, REPO_DIR)
+
+# Module start time — used by the /health endpoint to report uptime.
+_START_TIME = _time_mod.monotonic()
+
+
+# ---------------------------------------------------------------------------
+# Live per-agent "API call" ticker  (dashboard: agent activity feed)
+#
+# Emit one lightweight ``agent_api_call`` WS event per routed request made by a
+# registered agent, so the dashboard can show a live ticker of what each agent
+# is calling. This fires in the response path (inject_notifications), so it must
+# be cheap and self-limiting — see _should_emit_api_call below.
+#
+# THROTTLE: coalesce per-agent to at most one event per _API_CALL_WINDOW_SEC.
+# We keep a plain dict {agent_id: last_emit_monotonic}. It's only touched from
+# the async HTTP middleware (single-threaded under asyncio), so no lock is
+# needed; a stray race would at worst emit one extra event, which is harmless.
+# ---------------------------------------------------------------------------
+_API_CALL_WINDOW_SEC = 1.0
+_api_call_last_emit: dict[str, float] = {}
+
+# Path prefixes whose traffic is polling/messaging plumbing (or would feed back
+# on itself). We want AGENT work calls, not this noise.
+_API_CALL_SKIP_PREFIXES = (
+    "/api/v1/messages",       # covers /messages and /messages/ws
+    "/api/v1/notifications",
+    "/api/v1/ws",
+    "/api/v1/health",
+)
+
+
+def _should_emit_api_call(method: str, path: str, status: int) -> bool:
+    """Denoise filter for the agent_api_call ticker.
+
+    Skip polling/messaging plumbing, GETs to /agents* (dashboard poll traffic),
+    and server errors. Only genuine agent work calls get through.
+    """
+    if status >= 500:
+        return False
+    for prefix in _API_CALL_SKIP_PREFIXES:
+        if path.startswith(prefix):
+            return False
+    # GETs to /agents* are dashboard/poll traffic; keep POST/DELETE (real work).
+    if method == "GET" and path.startswith("/api/v1/agents"):
+        return False
+    return True
+
+
+def _emit_agent_api_call(agent_id: str, method: str, path: str, status: int,
+                         duration_ms: int | None = None,
+                         resp_bytes: int | None = None,
+                         resp_keys: list | None = None) -> None:
+    """Throttled per-agent broadcast of an agent_api_call event. Fail-soft.
+
+    Coalesces to at most one event per agent per _API_CALL_WINDOW_SEC; drops the
+    rest. Never raises — event emission must not break the response.
+    /wait completions bypass the throttle: they pair with a pending-start event
+    (see inject_notifications) and the UI needs the completion to clear it.
+    """
+    try:
+        now = _time_mod.monotonic()
+        if path != "/api/v1/wait":
+            last = _api_call_last_emit.get(agent_id)
+            if last is not None and (now - last) < _API_CALL_WINDOW_SEC:
+                return
+        _api_call_last_emit[agent_id] = now
+        event = {
+            "type": "agent_api_call",
+            "agent_id": agent_id,
+            "method": method,
+            "path": path,
+            "status": status,
+        }
+        if duration_ms is not None:
+            event["duration_ms"] = duration_ms
+        if resp_bytes is not None:
+            event["resp_bytes"] = resp_bytes
+        if resp_keys:
+            event["resp_keys"] = resp_keys
+        _ws_mod.broadcaster.broadcast_soon(event)
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Per-agent "seen notifications" store  (feedback: STUCK-NOTIFICATION NOISE)
+#
+# Notifications for failures / suggestions / agent-lifecycle events used to be
+# re-emitted on EVERY API response — a permanent token tax for weeks-old
+# failures that can't be cleared. We now deliver each distinct event to a given
+# agent exactly ONCE by tracking the stable notification keys an agent has
+# already seen. Stored as .the_lab/agents/notif_seen.json:
+#     {"<agent_id>": ["failure:13.4", "suggestion:42", ...], ...}
+#
+# A freshly-registered agent (no entry yet) is BASELINED: all currently-existing
+# keys are marked seen up-front so it isn't spammed with the pre-existing
+# backlog — it only receives notifications for events that happen AFTER it
+# registered (feedback: NEW-ONLY-ON-REGISTER). Message previews are handled
+# separately (messages have their own read tracking) and are NOT routed here.
+#
+# File IO is fail-soft (a corrupt/missing store never breaks a response) and
+# guarded by a module-level lock, mirroring agents.py note_message_poll().
+# Store logic lives here because the feedback restricts edits to app.py.
+# ---------------------------------------------------------------------------
+# Responses bigger than this skip _notifications injection entirely (see
+# inject_notifications) — parse/re-dump cost on the loop outweighs the value.
+_NOTIF_INJECT_MAX_BYTES = 512 * 1024
+
+_notif_seen_lock = threading.Lock()
+_notif_seen_cache: dict | None = None  # in-memory authority; loaded once
+
+
+def _notif_seen_path() -> Path:
+    p = REPO_DIR / ".the_lab" / "agents"
+    p.mkdir(parents=True, exist_ok=True)
+    return p / "notif_seen.json"
+
+
+def _read_notif_seen() -> dict:
+    """agent_id -> set of seen notification keys, from the in-memory cache
+    (loaded from disk once). Fail-soft to {}. Call under _notif_seen_lock."""
+    global _notif_seen_cache
+    if _notif_seen_cache is None:
+        path = _notif_seen_path()
+        try:
+            data = _json.loads(path.read_text()) if path.exists() else {}
+            if not isinstance(data, dict):
+                data = {}
+            _notif_seen_cache = {
+                k: set(v) for k, v in data.items() if isinstance(v, list)
+            }
+        except (ValueError, TypeError, OSError):
+            _notif_seen_cache = {}
+    return _notif_seen_cache
+
+
+def _write_notif_seen(data: dict) -> None:
+    """Adopt *data* as the cache and persist it. Fail-soft: never raise.
+    Call under _notif_seen_lock."""
+    global _notif_seen_cache
+    _notif_seen_cache = data
+    try:
+        serializable = {k: sorted(v) for k, v in data.items()}
+        jsonio.write_json(_notif_seen_path(), serializable)
+    except (TypeError, OSError):
+        pass
+
+
+def _filter_and_mark_seen(agent_id: str, keyed: list[tuple[str, dict]],
+                          all_keys: set[str]) -> list[dict]:
+    """Return only the notifications this agent hasn't seen, marking them seen.
+
+    ``keyed`` is a list of (stable_key, notification) for the currently-emittable
+    failure/suggestion/lifecycle events. ``all_keys`` is every key that currently
+    exists — used to baseline a brand-new agent so it skips the backlog.
+
+    Under the lock we: baseline unknown agents to ``all_keys`` (emit nothing for
+    pre-existing events), else emit the unseen keys and add them to the seen set.
+    """
+    if not agent_id:
+        # Unidentified caller (dashboard) — can't track per-agent state, so
+        # fall back to emitting everything (unchanged behaviour for the UI).
+        return [n for _, n in keyed]
+    out: list[dict] = []
+    with _notif_seen_lock:
+        store_data = _read_notif_seen()
+        is_new_agent = agent_id not in store_data
+        seen = store_data.get(agent_id, set())
+        if is_new_agent:
+            # NEW-ONLY-ON-REGISTER: baseline this agent — treat every existing
+            # key as already-seen so no pre-registration backlog is delivered.
+            store_data[agent_id] = set(all_keys)
+            _write_notif_seen(store_data)
+            return out
+        changed = False
+        for key, notif in keyed:
+            if key in seen:
+                continue
+            out.append(notif)
+            seen.add(key)
+            changed = True
+        if changed:
+            store_data[agent_id] = seen
+            _write_notif_seen(store_data)
+    return out
 
 
 def _sanitize_floats(obj):
@@ -79,6 +272,74 @@ app = FastAPI(title="The Lab", version="0.1.0", default_response_class=SafeJSONR
 
 # --- Middleware ---
 
+# Paths that are GET but still mutate or act agentic — blocked in demo too.
+_DEMO_BLOCKED_GETS = ("/api/v1/wait",)
+
+
+@app.middleware("http")
+async def demo_gate(request: Request, call_next):
+    """Read-only demo mode: reject every mutating request with a clear 403.
+
+    GET/HEAD/OPTIONS pass through (plus the WS upgrades, which are read-only
+    fan-out); /api/v1/wait is blocked despite being GET — it reconciles
+    experiment state and is an agent affordance, not an inspection one.
+    """
+    if _DEMO and request.url.path.startswith("/api/"):
+        blocked = request.method not in ("GET", "HEAD", "OPTIONS") \
+            or request.url.path in _DEMO_BLOCKED_GETS
+        if blocked:
+            return SafeJSONResponse(
+                {"error": "demo_mode",
+                 "detail": "This is a read-only demo instance — mutations are disabled."},
+                status_code=403,
+            )
+    return await call_next(request)
+
+
+# Routes an experiment/agent bearer token must never reach — the operational
+# and secret-bearing surface. Keyed by normalized path pattern; value is the set
+# of methods that are admin-only ("*" = every method).
+#
+# A denylist (rather than an allowlist of permitted routes) is deliberate: a
+# project's .the_lab/preamble.sh may legitimately call any read route, and
+# breaking those silently would be worse than the residual risk here. Everything
+# demonstrated as exploitable in review is covered.
+_ADMIN_ONLY_ROUTES: dict[str, set[str]] = {
+    "/api/v1/prompts/{}":            {"PUT", "DELETE"},   # instruction injection into future agents
+    "/api/v1/sandbox":               {"PUT"},             # widening the sandbox mount allowlist
+    "/api/v1/stats":                 {"GET"},             # replay buffer leaks captured request bodies
+    "/api/v1/stats/import":          {"*"},
+    "/api/v1/resources/{}":          {"PUT", "DELETE"},   # defines the SSH/Slurm command target
+    "/api/v1/queue/config":          {"PUT"},
+    "/api/v1/queue/pause":           {"*"},
+    "/api/v1/queue/resume":          {"*"},
+    "/api/v1/task":                  {"PUT"},
+    "/api/v1/config/metric-directions": {"*"},
+    "/api/v1/chat":                  {"*"},               # spends the operator's Anthropic key
+}
+
+
+def _admin_route_key(path: str) -> str:
+    """Collapse a concrete path to its _ADMIN_ONLY_ROUTES key.
+
+    Only the final path segment is templated, which is enough for the
+    single-parameter routes in the table (``/prompts/<role>``,
+    ``/resources/<name>``) without pulling in the router's own matcher.
+    """
+    p = "/" + path.strip("/")
+    if p in _ADMIN_ONLY_ROUTES:
+        return p
+    head, _, _tail = p.rpartition("/")
+    return f"{head}/{{}}" if head else p
+
+
+def _is_admin_only(method: str, path: str) -> bool:
+    methods = _ADMIN_ONLY_ROUTES.get(_admin_route_key(path))
+    if not methods:
+        return False
+    return "*" in methods or method.upper() in methods
+
+
 @app.middleware("http")
 async def basic_auth(request: Request, call_next):
     """HTTP Basic Auth gate. Active only when THE_LAB_USER + THE_LAB_PASSWORD are set.
@@ -87,22 +348,49 @@ async def basic_auth(request: Request, call_next):
     after the auth dialog has been accepted. Every other path — including
     the SPA root and all /api/v1/ routes — requires a valid credential.
     """
+    # Default tier. With auth disabled there is no gate to distinguish callers,
+    # so everything is "admin" — which is exactly why an unauthenticated
+    # non-loopback bind is now refused in cli.py.
+    request.state.auth_tier = "admin"
     if not _AUTH_ENABLED:
         return await call_next(request)
     # Static assets are fetched by the browser after the page is authenticated;
     # they don't send credentials themselves, so exempt them.
     if request.url.path.startswith("/assets/"):
         return await call_next(request)
+    # /health is an unauthenticated liveness probe so a monitor/bridge can hit
+    # it without credentials (feedback: /health ENDPOINT).
+    if request.url.path == "/api/v1/health":
+        return await call_next(request)
     auth_header = request.headers.get("Authorization", "")
     if auth_header.startswith("Basic "):
         provided = auth_header[len("Basic "):].strip()
         if secrets.compare_digest(provided, _AUTH_EXPECTED):
+            request.state.auth_tier = "admin"
             return await call_next(request)
     # Also accept Bearer tokens issued by the runner for experiment processes.
     # This lets preamble/scripts call the API without needing admin credentials.
+    #
+    # These tokens are NOT admin-equivalent. They are handed to agent-authored
+    # experiment code, so anything they can reach is reachable by a single
+    # misbehaving experiment: a red-team pass used one ordinary experiment's
+    # token to rewrite a role's system prompt (poisoning every later agent
+    # session), to read a plaintext sandbox-disable password back out of the
+    # stats replay buffer, and to widen the sandbox mount allowlist. The
+    # operational surface below is therefore admin-only (Basic auth).
     if auth_header.startswith("Bearer "):
         token = auth_header[len("Bearer "):].strip()
         if _token_registry.is_valid(token):
+            if _is_admin_only(request.method, request.url.path):
+                return Response(
+                    content=(
+                        "Forbidden: this route requires admin credentials. "
+                        "Experiment/agent bearer tokens are scoped to experiment "
+                        "reporting and cannot reach operational routes."
+                    ),
+                    status_code=403,
+                )
+            request.state.auth_tier = "experiment"
             return await call_next(request)
     return Response(
         content="Unauthorized",
@@ -138,18 +426,48 @@ async def resolve_agent(request, call_next):
     return await call_next(request)
 
 
+# Body fields whose VALUES must never reach the stats replay buffer.
+_SECRET_BODY_FIELDS = (
+    "disable_password", "password", "passwd", "secret", "token",
+    "api_key", "apikey", "authorization", "credential", "private_key",
+)
+
+# "field": "value"  /  "field": 123  — tolerant of whitespace and quote style.
+_SECRET_FIELD_RE = re.compile(
+    r'("(?:' + "|".join(_SECRET_BODY_FIELDS) + r')"\s*:\s*)'
+    r'("(?:[^"\\]|\\.)*"|[^,}\s]+)',
+    re.IGNORECASE,
+)
+
+
+def _redact_secrets(body: str) -> str:
+    """Replace secret-ish JSON field values with a placeholder.
+
+    Operates on the raw text rather than parsed JSON so it still redacts a
+    truncated or malformed body — the capture is a debugging aid, and a partial
+    body is exactly where a naive parse would give up and store the secret.
+    """
+    if not body:
+        return body
+    return _SECRET_FIELD_RE.sub(r'\1"[REDACTED]"', body)
+
+
 @app.middleware("http")
 async def track_api_stats(request, call_next):
     import time as _time
 
-    # Capture body preview for POST/PUT before passing to handler
+    # Capture body preview for POST/PUT before passing to handler.
+    # Bodies land in a replay buffer that GET /api/v1/stats serves back, so any
+    # secret in a request body became readable by every caller with a token —
+    # review read a plaintext sandbox disable_password out of it. Redact the
+    # known-sensitive fields before storing.
     body_preview = ""
     body_bytes = 0
     if request.method in ("POST", "PUT") and request.url.path.startswith("/api/v1/"):
         try:
             raw = await request.body()
             body_bytes = len(raw)
-            body_preview = raw.decode(errors="replace")[:200]
+            body_preview = _redact_secrets(raw.decode(errors="replace"))[:200]
         except Exception:
             pass
     t0 = _time.perf_counter()
@@ -215,35 +533,115 @@ def build_notifications(request) -> list[dict]:
     from . import messages as messages_mod
     from . import agents as agents_mod
 
-    notifications: list[dict] = []
+    agent_id = getattr(request.state, "agent_id", None)
+
+    # N1: NO blanket WS-presence suppression. Piggybacked _notifications are
+    # always built; cross-channel dedup rests on read/seen state instead — the
+    # message-preview block below uses unread_for (previews stop the instant the
+    # WS claims a message via claim_unread_for), and the shown-once seen-store
+    # dedups failures/suggestions/lifecycle. This avoids starving an agent whose
+    # socket is open but not being read.
+
+    # ── Shown-once notifications (failures / suggestions / agent lifecycle) ──
+    # Each gets a STABLE key so the per-agent seen-store can deliver it exactly
+    # once (feedback: STUCK-NOTIFICATION NOISE). We collect (key, notification)
+    # pairs plus the full set of currently-existing keys (for baselining a new
+    # agent — feedback: NEW-ONLY-ON-REGISTER), then filter through the store.
+    keyed: list[tuple[str, dict]] = []
+    all_keys: set[str] = set()
+
     # Suggestion queue — gives any caller a quick scan over pending ideas.
+    # Keyed per idea (suggestion:<idea_id>) so each suggestion fires once.
     try:
         suggested = store.list_ideas(status="suggested")
         for idea in suggested:
             p = idea.get("priority", "normal")
             desc = (idea.get("description") or "").split("\n")[0][:120]
-            notifications.append({
+            key = f"suggestion:{idea['id']}"
+            all_keys.add(key)
+            keyed.append((key, {
                 "type": "suggestion",
                 "priority": p,
                 "message": f"Suggested idea #{idea['id']}: {desc}",
                 "action": f"POST /api/v1/ideas/{idea['id']}/adopt" if p == "high"
                           else f"POST /api/v1/ideas/{idea['id']}/abandon",
-            })
+            }))
+    except Exception:
+        pass
+
+    # Failures — one notification per failed experiment id (failure:<exp_id>) so
+    # a given failure is delivered to a given agent exactly once, instead of the
+    # old "N experiment(s) failed" banner re-sent on every response.
+    try:
+        failed = store.list_experiments_by_status("failed")
+        for e in failed:
+            exp_id = e["id"]
+            label = e.get("label", str(exp_id))
+            key = f"failure:{exp_id}"
+            all_keys.add(key)
+            keyed.append((key, {
+                "type": "failure",
+                "message": f"experiment {label} failed",
+                "action": "GET /api/v1/experiments/log",
+            }))
+    except Exception:
+        pass
+
+    # ── Agent lifecycle (feedback: AGENT LIFECYCLE NOTIFICATIONS) ──
+    # Surface agents that registered / completed recently (last ~10 min).
+    # Keyed agent_registered:<id> / agent_done:<id> so the shown-once mechanism
+    # delivers each exactly once; the baseline rule keeps a new agent from
+    # seeing lifecycle events that predate its own registration.
+    _LIFECYCLE_WINDOW_SEC = 600
+
+    def _recent(iso: str | None) -> bool:
+        if not iso:
+            return False
+        try:
+            t = datetime.fromisoformat(iso)
+        except (ValueError, TypeError):
+            return False
+        if t.tzinfo is None:
+            t = t.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - t).total_seconds() <= _LIFECYCLE_WINDOW_SEC
+
+    try:
+        for a in agents_mod.list_agents(REPO_DIR):
+            aid = a.get("agent_id")
+            if not aid:
+                continue
+            key = f"agent_registered:{aid}"
+            all_keys.add(key)
+            if _recent(a.get("created_at")):
+                role = a.get("role") or "default"
+                keyed.append((key, {
+                    "type": "agent",
+                    "message": f"agent {aid} ({role}) registered",
+                    "action": "GET /api/v1/agents",
+                }))
     except Exception:
         pass
     try:
-        failed = store.list_experiments_by_status("failed")
-        if failed:
-            labels = [e.get("label", str(e["id"])) for e in failed[:3]]
-            notifications.append({
-                "type": "failure",
-                "message": f"{len(failed)} experiment(s) failed: {', '.join(labels)}",
-                "action": "GET /api/v1/experiments/log",
-            })
+        for a in agents_mod.list_past_agents(REPO_DIR):
+            aid = a.get("agent_id")
+            if not aid:
+                continue
+            key = f"agent_done:{aid}"
+            all_keys.add(key)
+            if _recent(a.get("completed_at")):
+                role = a.get("role") or "default"
+                keyed.append((key, {
+                    "type": "agent",
+                    "message": f"agent {aid} ({role}) completed",
+                    "action": "GET /api/v1/agents",
+                }))
     except Exception:
         pass
+
+    # Filter through the per-agent seen-store (shown-once + new-agent baseline).
+    notifications: list[dict] = _filter_and_mark_seen(agent_id, keyed, all_keys)
+
     # Per-agent inbox: unread directed messages.
-    agent_id = getattr(request.state, "agent_id", None)
     if agent_id:
         try:
             entry = agents_mod.lookup_agent(REPO_DIR, agent_id) or {}
@@ -252,13 +650,13 @@ def build_notifications(request) -> list[dict]:
                 REPO_DIR, agent_id=agent_id, role=role, limit=20,
             )
             fully_shown: list[int] = []
-            for m in unread:
+            for idx, m in enumerate(unread):
                 origin = m.get("from_role") or m.get("from_agent") or "system"
                 text = m.get("text") or ""
                 truncated = len(text) > 60
                 snippet = text[:60].rstrip()
                 preview = (snippet + "…") if truncated else snippet
-                notifications.append({
+                notif = {
                     "type": "message",
                     "priority": "high",
                     "message_id": m["id"],
@@ -266,7 +664,16 @@ def build_notifications(request) -> list[dict]:
                     "to": m.get("to"),
                     "message": f"new message from {origin}: {preview}",
                     "action": f"GET /api/v1/messages (read full text), then POST /api/v1/messages/{m['id']}/read",
-                })
+                }
+                # EXCERPT NOTE: hint once (on the first message) that the CLI
+                # message loop is best run as a background task — otherwise
+                # agents only see these 60-char previews piggy-backed on other
+                # responses. Kept to a single field to avoid per-message spam.
+                if idx == 0:
+                    notif["tip"] = (
+                        "run `the-lab messages` in the background to receive these"
+                    )
+                notifications.append(notif)
                 if not truncated:
                     fully_shown.append(m["id"])
             # A short message is delivered in full right here, so mark it read —
@@ -314,34 +721,103 @@ async def inject_notifications(request, call_next):
     ``X-Notifications-Count`` header instead so agents know to fetch
     ``GET /api/v1/notifications`` for the full payload.
     """
+    if _DEMO:
+        # Read-only demo: no agents, so no notifications — and skipping this
+        # middleware entirely avoids buffering + re-serializing every JSON
+        # response body just to (not) append a field.
+        return await call_next(request)
+    # In-flight marker for the long-poll endpoint: /wait can block for minutes,
+    # so tell the activity view the call is being processed BEFORE it completes
+    # (pending: true; the completion event above clears it). resolve_agent runs
+    # inside this middleware, so read the header directly. Fail-soft.
+    if request.url.path == "/api/v1/wait":
+        _wid = (request.headers.get("x-agent-id") or "").strip()
+        if _wid:
+            try:
+                _ws_mod.broadcaster.broadcast_soon({
+                    "type": "agent_api_call",
+                    "agent_id": _wid,
+                    "method": request.method,
+                    "path": "/api/v1/wait",
+                    "status": None,
+                    "pending": True,
+                })
+            except Exception:
+                pass
+
+    _t0 = _time_mod.monotonic()
     response = await call_next(request)
+    _call_ms = int((_time_mod.monotonic() - _t0) * 1000)
     path = request.url.path
+
+    # Live agent ticker: a throttled agent_api_call event for real work calls
+    # made by a registered agent. Emission is deferred until we know the body
+    # (below) so the event can carry duration + response size + top-level keys
+    # for the sidebar hover card; early-return paths emit without body info.
+    agent_id = getattr(request.state, "agent_id", None)
+    _want_call_emit = bool(
+        agent_id
+        and not getattr(request.state, "agent_unknown", False)
+        and _should_emit_api_call(request.method, path, response.status_code)
+    )
+
+    def _emit_call(resp_bytes=None, resp_keys=None):
+        nonlocal _want_call_emit
+        if not _want_call_emit:
+            return
+        _want_call_emit = False
+        _emit_agent_api_call(
+            agent_id, request.method, path, response.status_code,
+            duration_ms=_call_ms, resp_bytes=resp_bytes, resp_keys=resp_keys,
+        )
+
     # Only enrich /api/v1/ JSON responses (skip openapi, docs, stats, dashboard).
     # Skip the dedicated /notifications endpoint to avoid self-reference.
     if (not path.startswith("/api/v1/")
             or path in ("/api/v1/openapi.json", "/api/v1/docs", "/api/v1/redoc")
             or path.startswith("/api/v1/stats")
             or path == "/api/v1/notifications"
+            or path == "/api/v1/health"  # liveness probe — keep it minimal
             or response.status_code >= 400):
+        _emit_call()
         return response
     content_type = response.headers.get("content-type", "")
     if "application/json" not in content_type:
+        _emit_call()
         return response
     body_parts = []
     async for chunk in response.body_iterator:
         body_parts.append(chunk if isinstance(chunk, bytes) else chunk.encode())
     body = b"".join(body_parts)
-    try:
-        data = _json.loads(body)
-    except (ValueError, TypeError):
-        return Response(content=body, status_code=response.status_code,
-                        headers=dict(response.headers), media_type=response.media_type)
-    notifications = build_notifications(request)
     is_mcp_req = request.headers.get("x-mcp-proxy") == "true"
 
     def _track_size(final_body: bytes) -> None:
         if is_mcp_req and response.status_code < 400:
             api_stats.record_response_size(request.method, path, len(final_body))
+
+    # Size guard: parsing + re-serializing a multi-MB body on the event loop
+    # just to append _notifications is a bad trade. Oversized responses pass
+    # through untouched — the caller gets its notifications on the next
+    # normal-sized call (or via GET /api/v1/notifications). They are still
+    # size-tracked: skipping them hid the very largest responses from the
+    # Stats size table, which is exactly what that table is for.
+    if len(body) > _NOTIF_INJECT_MAX_BYTES:
+        _emit_call(resp_bytes=len(body))
+        _track_size(body)
+        return Response(content=body, status_code=response.status_code,
+                        headers=dict(response.headers), media_type=response.media_type)
+    try:
+        data = _json.loads(body)
+    except (ValueError, TypeError):
+        _emit_call(resp_bytes=len(body))
+        _track_size(body)
+        return Response(content=body, status_code=response.status_code,
+                        headers=dict(response.headers), media_type=response.media_type)
+    _emit_call(
+        resp_bytes=len(body),
+        resp_keys=list(data.keys())[:8] if isinstance(data, dict) else None,
+    )
+    notifications = build_notifications(request)
 
     if not notifications:
         _track_size(body)
@@ -376,6 +852,26 @@ def get_notifications(request: Request):
     The response shape is ``{"notifications": [...]}``.
     """
     return {"notifications": build_notifications(request)}
+
+
+@app.get("/api/v1/health")
+def health():
+    """Unauthenticated liveness probe (feedback: /health ENDPOINT).
+
+    Exempted from both basic_auth and the notifications middleware so a
+    monitor/bridge can poll it cheaply without credentials. Reports the live
+    agent count and process uptime; fail-soft on the registry read.
+    """
+    try:
+        from . import agents as agents_mod
+        agent_count = len(agents_mod.list_agents(REPO_DIR))
+    except Exception:
+        agent_count = 0
+    return {
+        "status": "ok",
+        "agents": agent_count,
+        "uptime_sec": int(_time_mod.monotonic() - _START_TIME),
+    }
 
 
 # GZip compression. Starlette's add_middleware() inserts at position 0 of the
@@ -417,7 +913,21 @@ app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 @app.on_event("startup")
 async def startup():
+    # Capture the event loop for broadcast_soon() immediately — otherwise
+    # events emitted from sync threads before the FIRST WebSocket subscriber
+    # arrives are silently dropped (breaks /api/v1/events-only clients).
+    _ws_mod.broadcaster.capture_loop()
+    # Persist events + continue seq across restarts (P4: the activity feed
+    # and ?since= replay survive deploys).
+    try:
+        _ws_mod.broadcaster.attach_journal(
+            REPO_DIR / ".the_lab" / "events.jsonl", read_only=_DEMO)
+    except Exception as e:  # pragma: no cover
+        logger.warning("event journal unavailable: %s", e)
     await runner.reattach_running()
+    if _DEMO:
+        logger.info("DEMO MODE: read-only — mutations blocked, scheduler off, no disk writes")
+        return  # no agent pruning either — it rewrites the registry
     # Reap agent worktrees whose registered PID is gone (a CLI wrapper that
     # crashed before unregistering). Safe to skip on errors.
     try:
@@ -462,6 +972,46 @@ else:
 
 _DASHBOARD_HTML: str | None = None
 
+# Shown when no compiled dashboard is present. the_lab/static/ is build output
+# and gitignored, so `pipx install git+…` lands here; the release wheels bake it
+# in, and `the-lab fetch-dashboard` tops up an existing install.
+_MISSING_DASHBOARD_HTML = """<!doctype html>
+<html><head><meta charset="utf-8"><title>The Lab — dashboard not built</title>
+<style>
+  body { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; line-height: 1.6;
+         max-width: 46rem; margin: 12vh auto; padding: 0 1.5rem;
+         background: #14151a; color: #e6e6e6; }
+  h1 { font-size: 1.15rem; font-weight: 600; margin-bottom: .25rem; }
+  p.sub { color: #9aa0aa; margin-top: 0; }
+  h2 { font-size: .85rem; text-transform: uppercase; letter-spacing: .08em;
+       color: #9aa0aa; margin: 2rem 0 .5rem; font-weight: 600; }
+  pre { background: #1d1f26; border: 1px solid #2b2e37; border-radius: 6px;
+        padding: .7rem .9rem; overflow-x: auto; }
+  code { color: #8fd18f; }
+  .note { color: #9aa0aa; font-size: .9rem; }
+  a { color: #7fb4ff; }
+</style></head>
+<body>
+  <h1>Dashboard not built</h1>
+  <p class="sub">The API is running — only the compiled web UI is missing.
+     The bundle is build output, so it is not in the git tree.</p>
+
+  <h2>Installed with pipx or pip</h2>
+  <p>Fetch the prebuilt dashboard from the latest release (no Node.js needed):</p>
+  <pre><code>the-lab fetch-dashboard</code></pre>
+  <p class="note">Private repo? <code>GITHUB_TOKEN=$(gh auth token) the-lab fetch-dashboard</code>.
+     Or reinstall from a release wheel, which already contains the dashboard.</p>
+
+  <h2>Working from a clone</h2>
+  <pre><code>cd dashboard &amp;&amp; npm ci &amp;&amp; npm run build
+# or, from the repo root:
+./build-dashboard.sh</code></pre>
+
+  <p class="note">Restart the server afterwards. The REST API and
+     <a href="/api/v1/docs">/api/v1/docs</a> work regardless.</p>
+</body></html>
+"""
+
 
 def _load_dashboard() -> str:
     global _DASHBOARD_HTML
@@ -470,7 +1020,10 @@ def _load_dashboard() -> str:
         if html_path.exists():
             _DASHBOARD_HTML = html_path.read_text()
         else:
-            _DASHBOARD_HTML = "<html><body>Dashboard not found. Run npm run build in dashboard/.</body></html>"
+            # "Run npm run build in dashboard/" is useless advice for anyone who
+            # installed the package (pipx/pip): there is no dashboard/ directory
+            # in an installed copy. Name the routes that actually exist.
+            _DASHBOARD_HTML = _MISSING_DASHBOARD_HTML
     return _DASHBOARD_HTML
 
 
@@ -526,8 +1079,12 @@ async def ws_endpoint(websocket: WebSocket, since: int = 0, token: str = ""):
             await websocket.close(code=1008)
             return
 
-    # Replay any missed events.
-    for event in _ws_mod.broadcaster.replay_since(since):
+    # Replay any missed events — journal-aware (reads files), so run the
+    # collection off-loop.
+    _loop = __import__("asyncio").get_running_loop()
+    replay = await _loop.run_in_executor(
+        None, _ws_mod.broadcaster.replay_with_journal, since)
+    for event in replay:
         try:
             await websocket.send_json(event)
         except Exception:
@@ -573,6 +1130,253 @@ async def ws_endpoint(websocket: WebSocket, since: int = 0, token: str = ""):
         _ws_mod.broadcaster.unsubscribe(q)
 
 
+# --- Agent-scoped messages WebSocket ---
+
+class _NotifRequestShim:
+    """Minimal stand-in for a Starlette Request so build_notifications() can run
+    outside the HTTP path (from the messages WebSocket handler).
+
+    build_notifications only reads ``request.state.agent_id`` and a couple of
+    optional flags; we provide exactly those so the same single-source-of-truth
+    notification builder is reused verbatim.
+    """
+
+    class _State:
+        def __init__(self, agent_id):
+            self.agent_id = agent_id
+            self.agent_cwd = None
+            self.agent_unknown = False
+            self.git_no_agent_warning = False
+
+    def __init__(self, agent_id):
+        self.state = _NotifRequestShim._State(agent_id)
+
+
+# Broadcast event types that should trigger a fresh notifications push to a
+# listening agent (idea/experiment/agent-lifecycle churn that build_notifications
+# derives its failure/suggestion/lifecycle items from). message_received is
+# handled separately (it drives the per-agent inbox); M3: experiment_* events
+# are additionally forwarded as their own "experiment" frame regardless of this
+# set (the set only gates the follow-up notifications re-derive).
+_NOTIF_TRIGGER_TYPES = frozenset({
+    "experiment_finished",
+    "experiment_cancelled",
+    "experiment_queued",
+    "experiment_started",
+    "idea_changed",
+    "note_added",
+})
+
+
+@app.websocket("/api/v1/messages/ws")
+async def messages_ws_endpoint(websocket: WebSocket):
+    """Agent-scoped listening WebSocket for `the-lab messages`.
+
+    N1: messages are delivered here by CLAIMING them (claim_unread_for) so a
+    message can't also arrive on the piggyback/poll channel — there is no
+    blanket suppression anymore; dedup rests on claim-on-delivery + read state.
+
+    Connect with ``ws[s]://host/api/v1/messages/ws``. The agent is identified by
+    the ``X-Agent-Id`` request header (our CLI sends it in the handshake), with a
+    ``?agent_id=`` query-string fallback. Auth mirrors ``/ws``: pass
+    ``?token=<base64 user:pass>`` when auth is enabled (also accepts the standard
+    ``Authorization: Basic`` handshake header for parity).
+
+    Frames (JSON):
+      * initial    — ``{"type":"init","messages":[...],"notifications":[...]}``
+      * message    — ``{"type":"message","messages":[<full msg>...]}`` as they arrive
+      * notify     — ``{"type":"notifications","notifications":[...]}`` on churn
+      * experiment — ``{"type":"experiment","event":"experiment_...", ...payload}``
+                     (M3 fold-in: experiment lifecycle events forwarded verbatim)
+      * ping       — ``{"type":"ping","seq":-1}`` every 30 s keep-alive
+
+    Pass ``?peek=1`` to leave delivered messages unread — then unread_for is used
+    (select without claiming) so previews still fall through the other channels.
+    """
+    import asyncio as _asyncio
+    if _DEMO:
+        # Demo: delivery CLAIMS messages (a write) and this is an agent
+        # affordance — refuse the socket after the required accept().
+        await websocket.accept()
+        await websocket.close(code=1008)
+        return
+
+    # Handshake must complete before any WS-level frame (see /ws for rationale).
+    await websocket.accept()
+
+    # Query params: token (auth), agent_id (fallback), peek.
+    qp = websocket.query_params
+    token = qp.get("token", "") or ""
+    peek = qp.get("peek", "") in ("1", "true", "yes")
+
+    # Auth gate — mirror /ws (token query param) but also accept the standard
+    # Authorization: Basic handshake header the CLI sends for parity.
+    if _AUTH_ENABLED:
+        ok = bool(token) and secrets.compare_digest(token, _AUTH_EXPECTED)
+        if not ok:
+            auth_header = websocket.headers.get("authorization", "")
+            if auth_header.startswith("Basic "):
+                provided = auth_header[len("Basic "):].strip()
+                ok = secrets.compare_digest(provided, _AUTH_EXPECTED)
+        if not ok:
+            await websocket.close(code=1008)
+            return
+
+    # Identify the agent: X-Agent-Id header (CLI sends it), ?agent_id= fallback.
+    agent_id = websocket.headers.get("x-agent-id") or qp.get("agent_id") or None
+    if not agent_id:
+        # Nothing to scope to — a listener with no identity can't have messages
+        # suppressed or delivered. Close cleanly with a policy code.
+        await websocket.close(code=1008)
+        return
+
+    from . import messages as messages_mod
+    from . import agents as agents_mod
+
+    entry = agents_mod.lookup_agent(REPO_DIR, agent_id) or {}
+    role = entry.get("role")
+    shim = _NotifRequestShim(agent_id)
+
+    def _fetch_deliver() -> list[dict]:
+        """Select this agent's unread messages for delivery.
+
+        N1: normally CLAIM them (select + mark read atomically) so the same
+        message can't also be delivered via the piggyback/poll channel. When
+        ?peek=1, select WITHOUT claiming (unread_for) so the caller sees them
+        but they remain deliverable elsewhere.
+        """
+        try:
+            if peek:
+                return messages_mod.unread_for(
+                    REPO_DIR, agent_id=agent_id, role=role, limit=50,
+                )
+            return messages_mod.claim_unread_for(
+                REPO_DIR, agent_id=agent_id, role=role, limit=50,
+            )
+        except Exception:
+            return []
+
+    # Record the poll-heuristic timestamp so the dashboard "listening" flag
+    # (agents.is_listening) lights up immediately, without waiting for a GET.
+    # (N1: no listening-registry suppression anymore — dedup is claim-based.)
+    try:
+        agents_mod.note_message_poll(REPO_DIR, agent_id)
+    except Exception:
+        pass
+
+    q = None
+    try:
+        # ── Initial frame: current unread messages + current notifications ──
+        init_unread = _fetch_deliver()
+        try:
+            init_notifs = build_notifications(shim)
+        except Exception:
+            init_notifs = []
+        await websocket.send_json({
+            "type": "init",
+            "messages": init_unread,
+            "notifications": init_notifs,
+        })
+
+        # Subscribe AFTER the initial snapshot so we don't miss events that land
+        # between the snapshot read and the subscribe (they'll be re-derived on
+        # the next relevant broadcast anyway).
+        q = _ws_mod.broadcaster.subscribe()
+
+        async def _send_loop():
+            while True:
+                event = await q.get()
+                etype = event.get("type") or ""
+                if etype == "message_received":
+                    # A directed message landed. Claim this agent's unread and
+                    # forward only what's addressed to it (is_for handles
+                    # agent/role/all + self-exclusion). N1: claiming here dedups
+                    # against the piggyback/poll channel.
+                    unread = _fetch_deliver()
+                    if unread:
+                        await websocket.send_json({
+                            "type": "message",
+                            "messages": unread,
+                        })
+                elif etype.startswith("experiment_"):
+                    # M3 fold-in: forward experiment lifecycle events to the
+                    # listener verbatim (payload carries experiment_id/label/
+                    # idea_id/status/status_msg). Always forwarded — these are
+                    # their own frame type, independent of --no-notifications.
+                    frame = {k: v for k, v in event.items() if k != "type"}
+                    frame["type"] = "experiment"
+                    frame["event"] = etype
+                    await websocket.send_json(frame)
+                    # Experiment churn may also produce new notifications for this
+                    # agent (failures/lifecycle) — re-derive and push any.
+                    if etype in _NOTIF_TRIGGER_TYPES:
+                        try:
+                            notifs = build_notifications(shim)
+                        except Exception:
+                            notifs = []
+                        if notifs:
+                            await websocket.send_json({
+                                "type": "notifications",
+                                "notifications": notifs,
+                            })
+                elif etype in _NOTIF_TRIGGER_TYPES:
+                    # Non-experiment churn (idea_changed/note_added) that may have
+                    # produced new notifications for this agent. Re-derive + push.
+                    try:
+                        notifs = build_notifications(shim)
+                    except Exception:
+                        notifs = []
+                    if notifs:
+                        await websocket.send_json({
+                            "type": "notifications",
+                            "notifications": notifs,
+                        })
+
+        async def _recv_loop():
+            # Refresh the poll heuristic on any client frame; discard content.
+            while True:
+                await websocket.receive_text()
+                try:
+                    agents_mod.note_message_poll(REPO_DIR, agent_id)
+                except Exception:
+                    pass
+
+        async def _ping_loop():
+            while True:
+                await _asyncio.sleep(30)
+                await websocket.send_json({"type": "ping", "seq": -1})
+                # Keep the poll-heuristic warm while the socket is held open.
+                try:
+                    agents_mod.note_message_poll(REPO_DIR, agent_id)
+                except Exception:
+                    pass
+
+        send_task = _asyncio.create_task(_send_loop())
+        recv_task = _asyncio.create_task(_recv_loop())
+        ping_task = _asyncio.create_task(_ping_loop())
+        try:
+            done, pending = await _asyncio.wait(
+                [send_task, recv_task, ping_task],
+                return_when=_asyncio.FIRST_EXCEPTION,
+            )
+        finally:
+            for t in (send_task, recv_task, ping_task):
+                t.cancel()
+            for t in (send_task, recv_task, ping_task):
+                try:
+                    await t
+                except (_asyncio.CancelledError, Exception):
+                    pass
+    except (WebSocketDisconnect, _asyncio.CancelledError):
+        pass
+    except Exception:  # noqa: BLE001 — never let a listener crash the server.
+        pass
+    finally:
+        # N1: no listening-registry to unregister — dedup is claim-based now.
+        if q is not None:
+            _ws_mod.broadcaster.unsubscribe(q)
+
+
 # --- SPA Fallback (must be last) ---
 # Serves the Preact app for any non-API path (enables client-side routing).
 # Falls back to legacy dashboard.html if Vite build output doesn't exist.
@@ -584,6 +1388,15 @@ def spa_fallback(path: str):
     if _STATIC_DIR.exists() and (_STATIC_DIR / "index.html").exists():
         html = (_STATIC_DIR / "index.html").read_text()
         if _AUTH_ENABLED:
-            html = html.replace("</head>", f"{_token_script}</head>", 1)
+            # Built inline rather than reusing the module-level _token_script:
+            # that name only exists when static/ was present at import time, so
+            # a dashboard installed later (the-lab fetch-dashboard) would raise
+            # NameError here.
+            html = html.replace(
+                "</head>",
+                '<script>try{localStorage.setItem("the-lab:wsToken",'
+                f'"{_AUTH_EXPECTED}")}}catch(e){{}}</script></head>',
+                1,
+            )
         return html
     return _load_dashboard()

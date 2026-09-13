@@ -2,10 +2,17 @@
 from __future__ import annotations
 
 import json
+import os
+
+# Read-only demo mode (set by `the-lab serve --demo` before app import):
+# mutations are blocked, the runner never reconciles/schedules, and nothing
+# writes to .the_lab/ — safe for showing a live DB snapshot to an audience.
+DEMO_MODE = os.environ.get("THE_LAB_DEMO", "").strip().lower() in ("1", "true", "yes")
 from pathlib import Path
 
 from fastapi import HTTPException
 
+from . import jsonio
 from .git_ops import branch_diff
 from .store import Store
 from .runner import ExperimentRunner
@@ -73,6 +80,30 @@ _INTERNAL_META_KEYS = {"git_branch", "git_commit", "worktree"}
 
 
 # --- Helper functions ---
+
+def sanitize_error(exc: BaseException | str) -> str:
+    """Error text with host filesystem layout redacted.
+
+    Exception strings from git/subprocess routinely embed absolute paths, and
+    several routes returned them verbatim to the caller — leaking the operator's
+    username, NFS mount layout and repo location. The message itself is useful
+    to an agent ("branch already exists", "index.lock present"), so rewrite the
+    paths rather than dropping the text: REPO_DIR becomes "<repo>" and the home
+    directory becomes "~".
+    """
+    text = str(exc)
+    try:
+        repo = str(REPO_DIR)
+        if repo and repo != "/":
+            text = text.replace(repo, "<repo>")
+        home = str(Path.home())
+        if home and home != "/":
+            text = text.replace(home, "~")
+    except Exception:
+        pass
+    return text
+
+
 
 def _description_short(desc: str | None, limit: int = 120) -> str:
     """First line of a description, truncated to *limit* chars with an ellipsis.
@@ -309,7 +340,7 @@ def _write_task(text: str) -> dict:
     from .store import _now
     task_path = REPO_DIR / ".the_lab" / "task.json"
     task = {"text": text, "updated_at": _now()}
-    task_path.write_text(json.dumps(task, indent=2) + "\n")
+    jsonio.write_json(task_path, task)
     # Bump store version so /ideas and /backlog caches (which embed the task
     # via _read_task) get invalidated on task changes.
     if store is not None:

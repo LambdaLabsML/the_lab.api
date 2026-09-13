@@ -2,17 +2,19 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import threading
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
 from .. import agents as agents_mod
+from .. import jsonio
 from .. import messages as messages_mod
-from ..deps import REPO_DIR, store
+from ..deps import REPO_DIR, sanitize_error, store
 from ..git_ops import get_current_branch
 
 _costs_lock = threading.Lock()
@@ -72,6 +74,13 @@ class RegisterAgentRequest(BaseModel):
     pid: int | None = None
 
 
+# Ceiling on simultaneously-registered agents (each holds a git worktree).
+try:
+    MAX_REGISTERED_AGENTS = int(os.environ.get("THE_LAB_MAX_AGENTS", "") or 64)
+except ValueError:
+    MAX_REGISTERED_AGENTS = 64
+
+
 @router.post("/api/v1/agents/register")
 def register_agent(req: RegisterAgentRequest):
     """Allocate a 5-char agent id, create a per-agent git worktree.
@@ -90,10 +99,37 @@ def register_agent(req: RegisterAgentRequest):
     agent of a new session), all accumulated messages from previous sessions
     are cleared so the new agent starts with a clean inbox.
     """
+    # Cap concurrent registrations. Each one creates a git worktree and a
+    # registry entry, and the route was completely unbounded — review made 1000
+    # consecutive credential-free registrations with no throttling. A ceiling is
+    # more useful than a rate limit here: the resource is worktrees on disk, not
+    # requests per second.
     try:
-        return agents_mod.register_agent(REPO_DIR, store, role=req.role, pid=req.pid)
+        live = len(agents_mod.list_agents(REPO_DIR))
+    except Exception:
+        live = 0
+    if live >= MAX_REGISTERED_AGENTS:
+        raise HTTPException(
+            429,
+            f"agent registration limit reached ({live}/{MAX_REGISTERED_AGENTS}). "
+            "Unregister finished agents (DELETE /api/v1/agents/{id}) or raise "
+            "THE_LAB_MAX_AGENTS.",
+        )
+    try:
+        result = agents_mod.register_agent(REPO_DIR, store, role=req.role, pid=req.pid)
     except Exception as e:
-        raise HTTPException(500, f"failed to register agent: {e}")
+        raise HTTPException(500, f"failed to register agent: {sanitize_error(e)}")
+    try:
+        from .. import ws as ws_mod
+        ws_mod.broadcaster.broadcast_soon({
+            "type": "agent_changed",
+            "agent_id": result.get("agent_id"),
+            "change": "registered",
+            "role": result.get("role"),
+        })
+    except Exception:
+        pass
+    return result
 
 
 @router.get("/api/v1/agents")
@@ -104,9 +140,32 @@ def list_registered_agents():
 
 
 @router.get("/api/v1/agents/past")
-def list_past_agents_endpoint():
+def list_past_agents_endpoint(
+    page: int | None = Query(
+        default=None,
+        description="1-based page number. OPT-IN: omit for the existing bare-list "
+                    "shape (dashboard-safe); supply to get a paged envelope. "
+                    "History holds up to 200 entries.",
+    ),
+    page_size: int = Query(default=10, description="Items per page when paginating."),
+):
     """Return the 200 most recently completed agents."""
-    return agents_mod.list_past_agents(REPO_DIR)
+    past = agents_mod.list_past_agents(REPO_DIR)
+    # Pager feedback (OPT-IN): page is None -> unchanged bare list. list_past_agents
+    # is already newest-first; sort by completed_at desc to be explicit before slicing.
+    if page is not None:
+        import math
+        total = len(past)
+        ordered = sorted(past, key=lambda a: a.get("completed_at", ""), reverse=True)
+        start = max(page - 1, 0) * page_size
+        return {
+            "agents": ordered[start:start + page_size],
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+            "total_pages": math.ceil(total / page_size) if page_size > 0 else 0,
+        }
+    return past
 
 
 @router.get("/api/v1/agents/costs")
@@ -237,16 +296,44 @@ def get_agent_costs():
         with _costs_lock:
             try:
                 cache_path.parent.mkdir(parents=True, exist_ok=True)
-                cache_path.write_text(json.dumps(cache, indent=2))
+                from ..deps import DEMO_MODE
+                if not DEMO_MODE:  # demo: sample in memory, never persist
+                    jsonio.write_json(cache_path, cache)
             except Exception:
                 pass
 
     return cache
 
 
+def _require_own_agent(request: Request, agent_id: str) -> None:
+    """Reject cross-agent access to another agent's record, output or history.
+
+    These routes took the target id purely from the URL and never compared it
+    to the caller, so any agent could read or delete any other agent's session
+    (review demonstrated agent B deleting agent A using only B's own header).
+
+    The rule: a caller that identifies itself with ``X-Agent-Id`` may only act
+    on ITSELF. A caller that asserts no agent identity is the operator — the
+    dashboard and CLI manage agents that way — and keeps full access.
+
+    Note this is an *ownership* check, not authentication: ``X-Agent-Id`` is
+    self-asserted, so it stops accidental and casual cross-agent access, not a
+    caller who lies about being someone else. Real separation needs per-agent
+    credentials (tracked as the token-scoping work in the same review).
+    """
+    caller = getattr(request.state, "agent_id", None)
+    if caller and caller != agent_id:
+        raise HTTPException(
+            403,
+            f"agent '{caller}' may not act on agent '{agent_id}'. "
+            "Omit X-Agent-Id to manage agents as the operator.",
+        )
+
+
 @router.get("/api/v1/agents/{agent_id}")
-def get_agent(agent_id: str):
+def get_agent(agent_id: str, request: Request):
     """Return a single agent's registry entry (enriched), or 404."""
+    _require_own_agent(request, agent_id)
     entry = agents_mod.lookup_agent(REPO_DIR, agent_id)
     if not entry:
         raise HTTPException(404, f"agent '{agent_id}' not registered")
@@ -254,16 +341,27 @@ def get_agent(agent_id: str):
 
 
 @router.delete("/api/v1/agents/{agent_id}")
-def unregister_agent(agent_id: str, keep_branch: bool = True):
+def unregister_agent(agent_id: str, request: Request, keep_branch: bool = True):
     """Remove an agent's worktree (and optionally its branch)."""
+    _require_own_agent(request, agent_id)
     if not agents_mod.unregister_agent(REPO_DIR, agent_id, keep_branch=keep_branch):
         raise HTTPException(404, f"agent '{agent_id}' not registered")
+    try:
+        from .. import ws as ws_mod
+        ws_mod.broadcaster.broadcast_soon({
+            "type": "agent_changed",
+            "agent_id": agent_id,
+            "change": "removed",
+        })
+    except Exception:
+        pass
     return {"status": "unregistered", "agent_id": agent_id}
 
 
 @router.get("/api/v1/agents/{agent_id}/output")
 def get_agent_output(
     agent_id: str,
+    request: Request,
     tail: int = Query(default=0, description="Return only the last N lines (0 = all)"),
 ):
     """Return the timestamped output log for an agent session.
@@ -275,6 +373,7 @@ def get_agent_output(
     Example:
         GET /api/v1/agents/mkn23/output?tail=100
     """
+    _require_own_agent(request, agent_id)
     entry = agents_mod.lookup_agent(REPO_DIR, agent_id)
     if not entry:
         raise HTTPException(404, f"agent '{agent_id}' not registered")
@@ -446,13 +545,14 @@ def _parse_jsonl_dir(project_dir: Path, since: float | None = None) -> dict:
 
 
 @router.get("/api/v1/agents/{agent_id}/history")
-def get_agent_history(agent_id: str):
+def get_agent_history(agent_id: str, request: Request):
     """Return parsed Claude Code conversation history for an agent session.
 
     Works for both live agents (in the registry) and past agents (in
     history.json).  Locates JSONL files via the worktree path recorded at
     registration time.
     """
+    _require_own_agent(request, agent_id)
     # Try live registry first, then fall back to completed-agent history
     entry = agents_mod.lookup_agent(REPO_DIR, agent_id)
     if not entry:

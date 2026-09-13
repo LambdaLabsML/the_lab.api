@@ -20,7 +20,8 @@ the local executor creates one under .the_lab/worktrees/.  The full flow:
 
 executor_config keys
 --------------------
-  ssh_host        : SSH host alias or user@host  (default: "slurm")
+  ssh_host        : SSH host alias or user@host, or "local" when the API
+                    process itself can run Slurm commands (default: "slurm")
   partition       : Slurm partition               (default: "lowprio")
   qos             : QOS name                      (default: partition)
   account         : Slurm account                 (optional)
@@ -42,6 +43,8 @@ executor_config keys
 from __future__ import annotations
 
 import logging
+import shlex
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -53,7 +56,16 @@ class SlurmExecutor:
     DEFAULT_SLURM_CONF = "/data/slurm/etc/slurm.conf"
 
     def __init__(self, ssh_host: str, config: dict, instance_id: str | None = None):
+        # Re-validate at construction, not just at the API boundary. Values that
+        # reach here from a hand-edited .the_lab/queue.json, or a resource
+        # written before ingress validation existed, get spliced into remote
+        # command strings the same way — and ssh hands those to the remote
+        # user's shell. Fail loudly at dispatch rather than executing them.
+        from ..queue import _validate_executor_config
+        _validate_executor_config({**(config or {}), "ssh_host": ssh_host})
+
         self.ssh_host    = ssh_host
+        self._is_local    = ssh_host == "local"
         self.instance_id = instance_id or ""
         self.partition   = config.get("partition",  "lowprio")
         self.account     = config.get("account")
@@ -72,6 +84,10 @@ class SlurmExecutor:
         # overrides, proxy URLs, etc.  Merged before per-experiment env_extra
         # so experiment-level values always win.
         self.env_vars: dict = config.get("env_vars") or {}
+        # Optional, fixed launcher for a model server which lives for exactly
+        # the lifetime of this batch allocation.  It is intentionally not an
+        # arbitrary command; validation only permits known launchers.
+        self.model_server: dict | None = config.get("model_server") or None
         # $HOME in remote_base is embedded into sbatch directives; Slurm's
         # sbatch parser doesn't expand shell variables so we resolve it to an
         # absolute path at submit time via _resolve_remote_base().
@@ -85,9 +101,15 @@ class SlurmExecutor:
 
     def _ssh(self, cmd: str, check: bool = True) -> subprocess.CompletedProcess:
         """Run cmd on the remote host via SSH, with SLURM_CONF prefixed."""
-        full_cmd = f"SLURM_CONF={self.slurm_conf} {cmd}"
+        # shlex.quote the config-derived value: ssh runs this string through
+        # the remote user's shell, so an unquoted "…conf; <anything>" would
+        # execute <anything> there. Validated at ingress too
+        # (queue._validate_executor_config) — quoted here so a resource written
+        # by an older version, or loaded straight off disk, is still safe.
+        full_cmd = f"SLURM_CONF={shlex.quote(self.slurm_conf)} {cmd}"
+        argv = ["bash", "-lc", full_cmd] if self._is_local else ["ssh", self.ssh_host, full_cmd]
         result = subprocess.run(
-            ["ssh", self.ssh_host, full_cmd],
+            argv,
             capture_output=True, text=True,
         )
         if check and result.returncode != 0:
@@ -105,13 +127,14 @@ class SlurmExecutor:
         The remote process is killed if the local timeout fires.
         """
         try:
-            result = subprocess.run(
-                ["ssh",
+            argv = (["bash", "-lc", cmd] if self._is_local else ["ssh",
                  # Kill remote process when the connection dies (prevents orphaned
                  # git processes that leave index.lock files on the remote).
                  "-o", "ServerAliveInterval=10",
                  "-o", "ServerAliveCountMax=3",
-                 self.ssh_host, cmd],
+                 self.ssh_host, cmd])
+            result = subprocess.run(
+                argv,
                 capture_output=True, text=True,
                 timeout=timeout,
             )
@@ -133,6 +156,11 @@ class SlurmExecutor:
         return result
 
     def _scp_to_remote(self, local_path: str | Path, remote_path: str) -> None:
+        if self._is_local:
+            target = Path(remote_path)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(local_path, target)
+            return
         result = subprocess.run(
             ["scp", str(local_path), f"{self.ssh_host}:{remote_path}"],
             capture_output=True, text=True,
@@ -185,9 +213,10 @@ class SlurmExecutor:
         safety net when the remote is a non-bare repo with a branch checked out.
         """
         abs_path = self._resolve_git_repo_path()
+        q_path = shlex.quote(abs_path)
         self._ssh_plain(
-            f"git init --bare {abs_path} -q 2>/dev/null || true && "
-            f"git -C {abs_path} config receive.denyCurrentBranch ignore"
+            f"git init --bare {q_path} -q 2>/dev/null || true && "
+            f"git -C {q_path} config receive.denyCurrentBranch ignore"
         )
         self._resolved_bare_path: str = abs_path  # type: ignore[attr-defined]
         return abs_path
@@ -203,7 +232,7 @@ class SlurmExecutor:
         (checkout main, or detach HEAD) so the push can proceed cleanly.
         """
         abs_bare = self._resolve_git_repo_path()
-        remote_url = f"ssh://{self.ssh_host}{abs_bare}"
+        remote_url = abs_bare if self._is_local else f"ssh://{self.ssh_host}{abs_bare}"
 
         def _do_push() -> subprocess.CompletedProcess:
             return subprocess.run(
@@ -357,6 +386,55 @@ export UV="{self.base_venv_path}/bin/uv"
         else:
             venv_setup = ""
 
+        model_setup = ""
+        if self.model_server:
+            model_root = self.model_server.get(
+                "model_inference_root", "/home/davidh/architects/model_inference"
+            )
+            api_key_file = self.model_server.get("api_key_file", f"{model_root}/secret.key")
+            port = self.model_server.get("port", 30000)
+            readiness_timeout = self.model_server.get("readiness_timeout_s", 2700)
+            model_setup = f'''\
+# ── allocation-local Qwen 3.8 Flash server ──────────────────────────────────
+# The launcher uses the shared model_inference HF cache; it never copies model
+# weights into this per-experiment job directory.
+export MODEL_INFERENCE_ROOT="{model_root}"
+export MODEL_API_KEY_FILE="{api_key_file}"
+export SGLANG_PORT="{port}"
+export SGLANG_READY_TIMEOUT_S="{readiness_timeout}"
+export THE_LAB_MODEL_READY_FILE="{remote_job_dir}/model.ready.json"
+export VLLM_BASE="http://127.0.0.1:{port}/v1"
+export VLLM_BASE_URL="$VLLM_BASE"
+export VLLM_API_KEY="$(tr -d '\\r\\n' < "$MODEL_API_KEY_FILE")"
+if [ -z "$VLLM_API_KEY" ]; then
+    echo "model API key is empty" >&2
+    exit 1
+fi
+printf '{{"status":"starting_model","model":"qwen3.8-flash-next","pct_complete":0}}\\n' > "$THE_LAB_PROGRESS"
+bash "{remote_job_dir}/model_server.sh" &
+_MODEL_PID=$!
+_model_deadline=$((SECONDS + SGLANG_READY_TIMEOUT_S + 30))
+until [ -s "$THE_LAB_MODEL_READY_FILE" ]; do
+    if ! kill -0 "$_MODEL_PID" 2>/dev/null; then
+        wait "$_MODEL_PID"
+        exit 1
+    fi
+    if [ "$SECONDS" -ge "$_model_deadline" ]; then
+        echo "timed out waiting for model readiness file" >&2
+        exit 1
+    fi
+    sleep 2
+done
+printf '{{"status":"model_ready","model":"qwen3.8-flash-next","pct_complete":0}}\\n' > "$THE_LAB_PROGRESS"
+_cleanup_model() {{
+    if [ -n "${{_MODEL_PID:-}}" ] && kill -0 "$_MODEL_PID" 2>/dev/null; then
+        kill "$_MODEL_PID" 2>/dev/null || true
+        wait "$_MODEL_PID" 2>/dev/null || true
+    fi
+}}
+# ─────────────────────────────────────────────────────────────────────────────
+'''
+
         return f"""#!/bin/bash
 #SBATCH --partition={self.partition}
 #SBATCH --job-name=thelab-{label}
@@ -375,12 +453,13 @@ export UV="{self.base_venv_path}/bin/uv"
 {env_exports}
 
 {venv_setup}
+{model_setup}
 # Preemption handler — Slurm sends SIGTERM before killing the job
 _PREEMPTED=0
 _lab_requeue() {{
     _PREEMPTED=1
     curl -s -X POST "$THE_LAB_API_URL/experiments/{label}/requeue" \\
-         -H "Authorization: Basic $THE_LAB_AUTH" \\
+         -H "Authorization: Bearer $THE_LAB_TOKEN" \\
          -H "Content-Type: application/json" \\
          -d '{{"reason":"preempted"}}' || true
 }}
@@ -418,6 +497,10 @@ bash "{remote_job_dir}/script.sh" &
 _SCRIPT_PID=$!
 wait $_SCRIPT_PID
 _EXIT=$?
+
+if [ "${{_MODEL_PID:-}}" ]; then
+    _cleanup_model || true
+fi
 
 # Stop watcher and do one final push
 kill $_WATCHER_PID 2>/dev/null || true
@@ -459,7 +542,7 @@ if [ $_PREEMPTED -eq 0 ]; then
     fi
 
     curl -s -X POST "$THE_LAB_API_URL/experiments/{label}/slurm_done" \\
-         -H "Authorization: Basic $THE_LAB_AUTH" \\
+         -H "Authorization: Bearer $THE_LAB_TOKEN" \\
          -H "Content-Type: application/json" \\
          -d "{{\\"exit_code\\":$_EXIT}}" || true
 fi
@@ -529,6 +612,11 @@ exit $_EXIT
         # Merge resource-level env_vars (e.g. HF_HOME) with per-experiment
         # env_extra; experiment values take precedence.
         merged_env = {**self.env_vars, **(env_extra or {})}
+        if self.model_server:
+            launcher = Path(__file__).parent.parent / "artifacts" / "model_inference" / "launch_qwen38_flash_sglang.sh"
+            if not launcher.is_file():
+                raise RuntimeError(f"bundled model launcher is missing: {launcher}")
+            self._scp_to_remote(launcher, f"{remote_job_dir}/model_server.sh")
         wrapper_content = self._build_wrapper(
             label, remote_job_dir, worktree_dir, unit_kind=unit_kind,
             env_vars=merged_env,
@@ -576,6 +664,8 @@ exit $_EXIT
     def pull_results(self, label: str, local_exp_dir: str | Path) -> None:
         """rsync the job dir back to the local experiment directory."""
         local_dir = str(local_exp_dir).rstrip("/") + "/"
+        source = (f"{self._rsync_base}/{label}/" if self._is_local
+                  else f"{self.ssh_host}:{self._rsync_base}/{label}/")
         result = subprocess.run(
             ["rsync", "-az",
              # The worktree is git-tracked code the local machine already has —
@@ -584,7 +674,7 @@ exit $_EXIT
              # and any artifacts the script copies to the job root.
              "--exclude=worktree/",
              "--exclude=venv/",
-             f"{self.ssh_host}:{self._rsync_base}/{label}/",
+             source,
              local_dir],
             capture_output=True, text=True,
         )

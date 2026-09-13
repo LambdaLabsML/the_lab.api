@@ -50,10 +50,12 @@ import { MetricsChart } from "./components/chart-panel/metrics-chart";
 import { ScatterChart } from "./components/chart-panel/scatter-chart";
 import { FilterBar } from "./components/filter-bar";
 import { SearchFilter, type FilterItem } from "./components/search-filter/search-filter";
-import { Eyebrow, Stat, Tooltip, experimentTipContent, ideaTipContent } from "./components/ui";
+import { Eyebrow, Stat, Stepper, Tooltip, experimentTipContent, ideaTipContent } from "./components/ui";
 import { NavRail, SecondaryPanel, type NavSection } from "./components/nav-rail";
 import { ActivityPane } from "./components/activity/activity-pane";
-import { ActivityShortlog } from "./components/activity/activity-shortlog";
+import { ActivitySidebar } from "./components/activity/activity-sidebar";
+import { MessagePreviewOverlay } from "./components/agent-activity/message-preview";
+import { startAgentActivity } from "./state/agent-activity";
 import { SettingsPanel } from "./components/settings-panel";
 import {
   currentView, selectedIdea, selectedMetric, colorMode,
@@ -70,7 +72,7 @@ import {
 } from "./state/settings";
 import { startPolling, stopPolling } from "./state/polling";
 import { getQueue } from "./state/api";
-import { startWs, stopWs } from "./state/ws";
+import { subscribeWsEvents, startWs, stopWs } from "./state/ws";
 import {
   allExperiments,
   allIdeas,
@@ -89,7 +91,7 @@ import {
 import { initTouchMoveMenu } from "./lib/touch-move-menu";
 import { getStatusColor, isLowerBetter } from "./lib/colors";
 import { navigateToIdea } from "./lib/navigate";
-import { fmtMetricName } from "./lib/format";
+import { fmtMetricName, fmtScoreShort } from "./lib/format";
 import { collectChartKeys } from "./lib/chart-data";
 
 // ---------------------------------------------------------------------------
@@ -108,18 +110,11 @@ const PANEL_NAMES: Record<string, string> = {
 const ALL_PANEL_IDS = Object.keys(PANEL_NAMES);
 
 // Review dashboard sections, surfaced as the left secondary-nav list.
-const REVIEW_SECTIONS: { id: string; label: string; icon: string }[] = [
-  { id: "review-runs",    label: "Experiments", icon: "◉" },
-  { id: "review-ideas",   label: "Ideas",       icon: "◈" },
-  { id: "review-compare", label: "Correlation", icon: "⊞" },
-  { id: "review-detail",  label: "Idea Detail", icon: "▸" },
-];
-
 // Tools surfaced from the rail (grouped), rendered in the center when active.
 type ToolView = "agents" | "sandbox" | "prompts" | "stats" | "api" | "messages" | "suggest" | "task";
 const TOOL_GROUPS: { group: string; items: { id: ToolView; label: string }[] }[] = [
   { group: "Run",     items: [{ id: "agents", label: "Agents" }, { id: "sandbox", label: "Sandbox" }, { id: "prompts", label: "Prompts" }] },
-  { group: "Inspect", items: [{ id: "stats", label: "Stats" }, { id: "api", label: "API" }, { id: "messages", label: "Messages" }] },
+  { group: "Inspect", items: [{ id: "stats", label: "Stats" }, { id: "api", label: "API" }] },
   { group: "Plan",    items: [{ id: "suggest", label: "Suggest" }, { id: "task", label: "Task" }] },
 ];
 const TOOL_VIEWS: Record<ToolView, () => preact.JSX.Element> = {
@@ -142,7 +137,7 @@ function compareExperimentsChronological(a: ExperimentLike, b: ExperimentLike): 
 }
 
 // URL hash ⇄ nav selection (deep-linkable). `#section` or `#tools/<tool>`.
-const NAV_SECTIONS = ["review", "activity", "queue", "workbench", "tools"];
+const NAV_SECTIONS = ["review", "activity", "queue", "workbench", "tools", "messages"];
 function parseNavHash(): { section: NavSection; tool: ToolView } {
   const h = (location.hash || "").replace(/^#\/?/, "");
   const [sec, tool] = h.split("/");
@@ -896,6 +891,7 @@ export function App() {
     window.addEventListener("popstate", readFiltersFromUrl);
     startPolling();
     startWs();
+    startAgentActivity();
     const dispose = effect(syncUrlFromSignals);
     return () => {
       window.removeEventListener("popstate", readFiltersFromUrl);
@@ -1076,16 +1072,7 @@ export function App() {
 
   const focusPanelIds = availablePanels.value;
   const inFocusMode = isMaximized.value;
-  const openReviewSection = useCallback((id: string) => {
-    setNavSection("review");
-    requestAnimationFrame(() => {
-      const el = document.getElementById(id);
-      if (el instanceof HTMLDetailsElement) el.open = true;
-      el?.scrollIntoView({ behavior: "smooth", block: "start" });
-    });
-  }, []);
-
-  const showSecondary = settingsOpen || navSection === "review" || navSection === "queue" || navSection === "workbench" || navSection === "tools";
+  const showSecondary = settingsOpen || navSection === "review" || navSection === "activity" || navSection === "queue" || navSection === "messages" || navSection === "workbench" || navSection === "tools";
   void layoutVersion; // re-read saved layouts after a save/delete
   const savedLayouts = getSavedLayouts();
   return (
@@ -1099,27 +1086,17 @@ export function App() {
 
       {showSecondary && (
         <SecondaryPanel
-          label={settingsOpen ? "Settings" : navSection === "workbench" ? "Workbench" : navSection === "queue" ? "Queue" : navSection === "tools" ? "Tools" : "Review sections"}
+          label={settingsOpen ? "Settings" : navSection === "workbench" ? "Workbench" : navSection === "queue" ? "Queue" : navSection === "tools" ? "Tools" : navSection === "activity" ? "Activity" : navSection === "messages" ? "Messages" : "Overview"}
         >
           {settingsOpen ? (
             <SettingsPanel />
           ) : (
             <>
-              {navSection === "review" && (
-                <>
-                  <nav class="nav-secondary-list">
-                    <div class="nav-secondary-head"><Eyebrow>Sections</Eyebrow></div>
-                    {REVIEW_SECTIONS.map((s) => (
-                      <button key={s.id} class="nav-secondary-btn" onClick={() => openReviewSection(s.id)}>
-                        <span class="nav-secondary-icon" aria-hidden="true">{s.icon}</span>
-                        {s.label}
-                      </button>
-                    ))}
-                  </nav>
-                  <ActivityShortlog />
-                </>
+              {/* Overview / Activity / Queue share ONE sidebar: running+recent
+                  on top, agents filling the rest, composer pinned at bottom. */}
+              {(navSection === "review" || navSection === "activity" || navSection === "queue" || navSection === "messages") && (
+                <ActivitySidebar />
               )}
-              {navSection === "queue" && <ActivityShortlog />}
               {navSection === "tools" && (
                 <nav class="nav-secondary-list">
                   {TOOL_GROUPS.map((g) => (
@@ -1217,8 +1194,17 @@ export function App() {
 
       <div class="app-main">
         <AgentBar />
+        {/* hover-preview of sidebar message rows, floating over the main area */}
+        <MessagePreviewOverlay />
         <div class="app-content">
           {navSection === "activity" && <ActivityPane />}
+          {navSection === "messages" && (
+            <div class="app-scroll">
+              <main class="dashboard-page">
+                <MessagesView />
+              </main>
+            </div>
+          )}
 
           {navSection === "review" && (
             <div class="app-scroll">
@@ -1300,38 +1286,7 @@ function setSectionHeight(id: string, mode: "summary" | "detail", v: number) {
   if (mode === "detail") requestAnimationFrame(() => window.dispatchEvent(new Event("resize")));
 }
 
-/** A clean up/down chevron (10px polyline, currentColor stroke, no fill). */
-function Chevron({ dir }: { dir: "up" | "down" }) {
-  return (
-    <svg class="review-chev" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"
-      fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-      {dir === "up"
-        ? <polyline points="2,6.5 5,3.5 8,6.5" />
-        : <polyline points="2,3.5 5,6.5 8,3.5" />}
-    </svg>
-  );
-}
-
-/** A compact ghost stepper pair — chevron-up = smaller, chevron-down = bigger. */
-function HeightSteppers({ value, min, max, step, onChange, what }: {
-  value: number; min: number; max: number; step: number;
-  onChange: (next: number) => void; what: string;
-}) {
-  return (
-    <span class="review-steppers" role="group" aria-label={`${what} size`}>
-      <button type="button" class="ui-btn review-step"
-        title={`Fewer / shorter (${what})`} aria-label={`Fewer ${what}`} disabled={value <= min}
-        onClick={(e) => { e.preventDefault(); e.stopPropagation(); onChange(Math.max(min, value - step)); }}>
-        <Chevron dir="up" />
-      </button>
-      <button type="button" class="ui-btn review-step"
-        title={`More / taller (${what})`} aria-label={`More ${what}`} disabled={value >= max}
-        onClick={(e) => { e.preventDefault(); e.stopPropagation(); onChange(Math.min(max, value + step)); }}>
-        <Chevron dir="down" />
-      </button>
-    </span>
-  );
-}
+// Up/down steppers are the shared <Stepper> from components/ui (size m here).
 
 // ── Idea mini leaderboard ─────────────────────────────────────────────────────
 
@@ -1576,10 +1531,6 @@ const EXP_STATUS_WORD: Record<string, string> = {
   pending: "queued", cancelled: "cancelled",
 };
 
-function fmtScoreShort(v: number) {
-  return Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(2) : v.toFixed(3);
-}
-
 /** (#84) Map a review experiment → the SHARED experiment tooltip content, so
    timeline squares/chips and milestone rows render identically to the chart. */
 function expTip(
@@ -1595,6 +1546,7 @@ function expTip(
     ideaId: exp.idea_id,
     ideaTitle: ideas[exp.idea_id]?.description?.split("\n")[0] ?? undefined,
     status,
+    statusMsg: exp.status_msg,
     metricName: fmtMetricName(metric),
     value: typeof score === "number" && isFinite(score) ? score : null,
     record: isMilestone,
@@ -2387,8 +2339,9 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
       })
       .catch(() => { /* keep last known */ });
     load();
-    const t = window.setInterval(load, 15000);
-    return () => { dead = true; window.clearInterval(t); };
+    const un = subscribeWsEvents((ev) => { if (ev.type === "queue_changed") load(); });
+    const t = window.setInterval(load, 60000);
+    return () => { dead = true; un(); window.clearInterval(t); };
   }, []);
 
   const data = backlogData.value;
@@ -2543,7 +2496,7 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
       : cfg.max;
     const value = Math.min(sectionHeight(id, mode), max);
     return (
-      <HeightSteppers
+      <Stepper
         value={value} min={cfg.min} max={max} step={cfg.step}
         what={open ? "panel height" : `${what} rows`}
         onChange={(v) => setSectionHeight(id, mode, v)}
@@ -2663,7 +2616,7 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
       <div class="review-chart-head">
         <span class="ui-eyebrow">progress over experiments · {fmtMetricName(metric)}</span>
         <span class="review-chart-steppers">
-          <HeightSteppers
+          <Stepper
             value={reviewChartHeight.value} min={220} max={760} step={60} what="chart height"
             onChange={(v) => { reviewChartHeight.value = v; requestAnimationFrame(() => window.dispatchEvent(new Event("resize"))); }}
           />

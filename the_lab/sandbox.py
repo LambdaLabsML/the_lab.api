@@ -9,6 +9,8 @@ import os
 import shutil
 import subprocess
 import sys
+
+from . import jsonio
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
@@ -44,6 +46,210 @@ REQUIRED_BINARIES = [
     "ip",
     "bwrap",
 ]
+
+# What each required binary is for, and the package that ships it. Surfaced
+# verbatim when the sandbox runtime is unavailable: "missing bwrap" means
+# nothing to someone who has never heard of bubblewrap, so every message says
+# what the tool does and gives a copy-pasteable install command.
+# ``packages`` maps a distro family (see _distro_family) to its package name;
+# "default" covers Debian/Ubuntu naming, which most families share.
+
+# GPU device nodes passed through to the sandbox.
+#
+# ``--dev /dev`` mounts a *fresh* tmpfs and bwrap populates only a minimal node
+# set (null/zero/random/tty/pts/...). Without explicit --dev-bind-try, every GPU
+# node is invisible inside the sandbox even when the host has them, so CUDA
+# fails with things like vLLM's "RuntimeError: Failed to infer device type".
+# The sandbox isolates *network and files*, not hardware, so pass these through
+# whenever the host has them.
+#
+# Globs are expanded at build time (one node per GPU: nvidia0, nvidia1, ...).
+# Everything is best-effort: --dev-bind-try skips sources that don't exist.
+_GPU_DEV_GLOBS = [
+    "/dev/nvidiactl",         # NVIDIA control node — required for any CUDA init
+    "/dev/nvidia-uvm",        # unified memory — required by CUDA runtime
+    "/dev/nvidia-uvm-tools",
+    "/dev/nvidia-modeset",
+    "/dev/nvidia[0-9]*",      # one per GPU
+    "/dev/nvidia-caps",       # MIG capability nodes (directory)
+    "/dev/dri",               # DRM render nodes (directory) — non-NVIDIA compute too
+    "/dev/kfd",               # AMD ROCm
+]
+
+
+def gpu_device_binds() -> list[str]:
+    """bwrap flags passing the host's GPU device nodes into the sandbox.
+
+    Returns an empty list on a host with no GPU nodes (so the sandbox is
+    unchanged there). Must be emitted AFTER ``--dev /dev`` or the tmpfs
+    shadows these binds.
+    """
+    import glob as _glob
+
+    args: list[str] = []
+    for pattern in _GPU_DEV_GLOBS:
+        for path in sorted(_glob.glob(pattern)):
+            args.extend(["--dev-bind-try", path, path])
+    return args
+
+
+def gpu_host_state() -> dict:
+    """Whether this host can offer GPUs to the sandbox, and if not, why.
+
+    Distinguishes the two situations that look identical from inside a failing
+    experiment: no GPU at all, versus a loaded driver whose device nodes were
+    never passed into *this* container (the usual `docker run` without
+    `--gpus all`). The second is not fixable from inside — hence the hint.
+    """
+    import glob as _glob
+
+    nodes = sorted({p for pattern in _GPU_DEV_GLOBS for p in _glob.glob(pattern)})
+    driver_loaded = Path("/proc/driver/nvidia/version").exists()
+    state = {"devices": nodes, "driver_loaded": driver_loaded, "warning": ""}
+    if nodes or not driver_loaded:
+        return state
+    # Driver is loaded but no device nodes exist anywhere in this namespace.
+    state["warning"] = (
+        "The NVIDIA driver is loaded on this machine, but no GPU device nodes "
+        "(/dev/nvidiactl, /dev/nvidia0, /dev/nvidia-uvm) exist in this namespace, "
+        "so CUDA will fail inside AND outside the sandbox. This normally means the "
+        "container was started without GPU passthrough — restart it with "
+        "`--gpus all` (nvidia container runtime), or pass the nodes explicitly: "
+        "--device /dev/nvidiactl --device /dev/nvidia0 --device /dev/nvidia-uvm. "
+        "It cannot be fixed from inside the container: mknod is denied and "
+        "nvidia-modprobe is usually absent."
+    )
+    return state
+
+
+_BINARY_INFO: dict[str, dict] = {
+    "rootlesskit": {
+        "purpose": "runs the sandbox as your own user, without root",
+        "packages": {"default": "rootlesskit"},
+    },
+    "slirp4netns": {
+        "purpose": "gives the sandbox its own network stack, so its traffic can be filtered",
+        "packages": {"default": "slirp4netns"},
+    },
+    "iptables": {
+        "purpose": "enforces the host allowlist/denylist on that network",
+        "packages": {"default": "iptables"},
+    },
+    "ip": {
+        "purpose": "configures the sandbox's virtual network interface",
+        "packages": {"default": "iproute2", "fedora": "iproute"},
+    },
+    "bwrap": {
+        "purpose": "the filesystem jail — only paths in your file rules are visible",
+        "packages": {"default": "bubblewrap"},
+    },
+}
+
+# Install command per distro family, keyed by the ID/ID_LIKE in /etc/os-release.
+_INSTALL_COMMANDS = {
+    "debian": "sudo apt install {pkgs}",
+    "fedora": "sudo dnf install {pkgs}",
+    "arch":   "sudo pacman -S --needed {pkgs}",
+    "suse":   "sudo zypper install {pkgs}",
+    "alpine": "sudo apk add {pkgs}",
+}
+
+
+_PROBE_FAILURE_HINT = (
+    "This usually means unprivileged user namespaces are disabled or restricted.\n"
+    "Common fixes (need root, and may be blocked by your admin or container runtime):\n"
+    "  sudo sysctl -w kernel.unprivileged_userns_clone=1   # Debian/Ubuntu\n"
+    "  sudo sysctl -w user.max_user_namespaces=15000       # if set to 0\n"
+    "  sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0   # Ubuntu 24.04+\n"
+    "Inside Docker/Kubernetes, nested namespaces often need --privileged or\n"
+    "seccomp/AppArmor changes on the outer container.\n"
+    "To run without isolation instead, disable the sandbox in the Sandbox tab."
+)
+
+
+def _distro_family() -> str | None:
+    """Best-effort distro family from /etc/os-release (ID, then ID_LIKE)."""
+    try:
+        fields = {}
+        for line in Path("/etc/os-release").read_text().splitlines():
+            if "=" in line:
+                k, _, v = line.partition("=")
+                fields[k.strip()] = v.strip().strip('"').strip("'")
+    except OSError:
+        return None
+    candidates = [fields.get("ID", "")] + fields.get("ID_LIKE", "").split()
+    for cand in candidates:
+        cand = cand.lower()
+        if cand in _INSTALL_COMMANDS:
+            return cand
+        # Map common IDs onto their family.
+        if cand in ("ubuntu", "linuxmint", "pop", "raspbian"):
+            return "debian"
+        if cand in ("rhel", "centos", "rocky", "almalinux"):
+            return "fedora"
+        if cand in ("manjaro", "endeavouros"):
+            return "arch"
+        if cand in ("opensuse", "opensuse-leap", "opensuse-tumbleweed", "sles"):
+            return "suse"
+    return None
+
+
+def _package_for(binary: str, family: str | None) -> str:
+    pkgs = _BINARY_INFO.get(binary, {}).get("packages", {})
+    return pkgs.get(family or "", pkgs.get("default", binary))
+
+
+def _missing_binary_help(missing: list[str]) -> dict:
+    """Build the human-facing explanation for missing sandbox binaries."""
+    family = _distro_family()
+    requirements = [
+        {
+            "binary": name,
+            "package": _package_for(name, family),
+            "purpose": _BINARY_INFO.get(name, {}).get("purpose", ""),
+        }
+        for name in missing
+    ]
+    # Deduplicate while preserving order — distinct binaries can share a package.
+    seen: set[str] = set()
+    packages = [r["package"] for r in requirements
+                if not (r["package"] in seen or seen.add(r["package"]))]
+    install_command = (
+        _INSTALL_COMMANDS[family].format(pkgs=" ".join(packages)) if family
+        else f"install these packages with your system package manager: {' '.join(packages)}"
+    )
+    plural = "programs" if len(missing) != 1 else "program"
+    summary = (
+        f"The sandbox needs {len(missing)} more {plural} on this machine: "
+        f"{', '.join(missing)}."
+    )
+    lines = [
+        summary,
+        "",
+        "The sandbox isolates experiments using standard Linux tooling, so these",
+        "must be installed on the host — The Lab cannot ship them:",
+        "",
+    ]
+    width = max(len(r["binary"]) for r in requirements)
+    for r in requirements:
+        lines.append(f"  {r['binary']:<{width}}  {r['purpose']} (package: {r['package']})")
+    lines += [
+        "",
+        f"Install them with:  {install_command}",
+        "",
+        # Channel-neutral: this same text is printed by the CLI and returned to
+        # the dashboard, which renders its own trailing hint from the structured
+        # fields instead.
+        "Re-run afterwards to re-check. To run without isolation instead, disable",
+        "the sandbox in the dashboard's Sandbox tab.",
+    ]
+    return {
+        "reason": "missing_binaries",
+        "requirements": requirements,
+        "install_command": install_command,
+        "summary": summary,
+        "details": "\n".join(lines),
+    }
 
 
 # System paths always bound read-only inside the sandbox (not user-configurable).
@@ -82,8 +288,7 @@ def sandbox_runtime_path(repo_dir: Path) -> Path:
 
 
 def _write_json(path: Path, data) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2) + "\n")
+    jsonio.write_json(path, data)
 
 
 def _read_json(path: Path, default):
@@ -343,6 +548,38 @@ def load_sandbox_config(repo_dir: Path) -> dict:
     return config
 
 
+# Paths a sandbox file rule must never mount. The sandbox exists to contain
+# agent-authored experiment code; a rule of "/" (or a home/system root) hands
+# that code the whole filesystem, which build_bwrap_args faithfully turns into a
+# real "--bind / /" argument. Nothing legitimate needs these, and the review
+# demonstrated setting them with no credential and no disable-password.
+_DENIED_BIND_PATHS = frozenset({
+    "/", "/etc", "/usr", "/bin", "/sbin", "/lib", "/lib64", "/boot",
+    "/dev", "/proc", "/sys", "/var", "/root", "/home", "/Users",
+})
+
+
+def _reject_dangerous_binds(abs_paths: list[str], field: str) -> None:
+    """Raise ValueError if any path is a denied filesystem root.
+
+    Compares canonical forms so "/", "//", "/.", "/etc/../", and a symlink to /
+    are all caught rather than just the literal string.
+    """
+    home = str(Path.home())
+    for raw in abs_paths:
+        try:
+            resolved = Path(raw).expanduser().resolve(strict=False)
+        except (OSError, RuntimeError, ValueError):
+            raise ValueError(f"sandbox {field}: unusable path {raw!r}")
+        as_str = str(resolved)
+        if as_str in _DENIED_BIND_PATHS or as_str == home:
+            raise ValueError(
+                f"sandbox {field}: refusing to bind {as_str!r} — mounting a "
+                "filesystem or home root would disable the isolation the "
+                "sandbox provides. Bind the specific paths the experiment needs."
+            )
+
+
 def save_sandbox_config(repo_dir: Path, payload: dict) -> dict:
     base = str(repo_dir)
     # Normalize to absolute first (resolves any relative inputs), then convert
@@ -350,6 +587,8 @@ def save_sandbox_config(repo_dir: Path, payload: dict) -> dict:
     # worktrees without editing.
     abs_rw = normalize_paths(payload.get("file_rw", []), base_dir=base)
     abs_ro = normalize_paths(payload.get("file_ro", []), base_dir=base)
+    _reject_dangerous_binds(abs_rw, "file_rw")
+    _reject_dangerous_binds(abs_ro, "file_ro")
     stored = {
         "enabled": bool(payload.get("enabled", True)),
         "allowlist": normalize_rules(payload.get("allowlist", [])),
@@ -490,9 +729,16 @@ def sandbox_capabilities() -> dict:
         "available": False,
         "missing": missing,
         "details": "",
+        "summary": "",
+        "reason": "",
+        "requirements": [],
+        "install_command": "",
+        # Which GPU nodes the sandbox will pass through, plus a warning when the
+        # driver is loaded but the nodes were never passed into this container.
+        "gpu": gpu_host_state(),
     }
     if missing:
-        result["details"] = f"missing required binaries: {', '.join(missing)}"
+        result.update(_missing_binary_help(missing))
         return result
     try:
         # Probe the full layering: rootlesskit (user+net ns) + bwrap (mount ns).
@@ -512,10 +758,31 @@ def sandbox_capabilities() -> dict:
             check=False,
         )
     except Exception as exc:
-        result["details"] = str(exc)
+        result["reason"] = "probe_failed"
+        result["summary"] = "The sandbox runtime could not be started."
+        result["details"] = f"{result['summary']}\n\n{exc}\n\n{_PROBE_FAILURE_HINT}"
         return result
     result["available"] = probe.returncode == 0
-    result["details"] = (probe.stderr or probe.stdout or "").strip()
+    probe_output = (probe.stderr or probe.stdout or "").strip()
+    if result["available"]:
+        result["details"] = probe_output
+        return result
+    # All binaries are present but the layered namespaces would not start —
+    # on most hosts that means unprivileged user namespaces are restricted.
+    # The raw stderr alone ("bwrap: No permissions to creating new namespace")
+    # tells people nothing about what to change.
+    result["reason"] = "probe_failed"
+    result["summary"] = (
+        "All sandbox programs are installed, but this machine would not let them "
+        "start an isolated namespace."
+    )
+    result["details"] = "\n\n".join(
+        part for part in (
+            result["summary"],
+            f"The runtime reported:\n  {probe_output}" if probe_output else "",
+            _PROBE_FAILURE_HINT,
+        ) if part
+    )
     return result
 
 
@@ -544,7 +811,8 @@ def build_bwrap_args(repo_dir: Path, config: dict, cwd: Path | str | None = None
     subdirectory or worktree land where the caller expects.
 
     Runtime essentials always added: /tmp tmpfs, /proc, /dev, /sys (ro),
-    and a generated /etc/resolv.conf pointing at slirp4netns's DNS.
+    the host's GPU device nodes (see gpu_device_binds), and a generated
+    /etc/resolv.conf pointing at slirp4netns's DNS.
     """
     if cwd is None:
         cwd = repo_dir
@@ -619,6 +887,10 @@ def build_bwrap_args(repo_dir: Path, config: dict, cwd: Path | str | None = None
         "--dev", "/dev",
         "--ro-bind-try", "/sys", "/sys",
     ])
+
+    # GPU nodes must follow --dev /dev, whose fresh tmpfs would shadow them.
+    # No-op on hosts without GPUs.
+    args.extend(gpu_device_binds())
 
     # Ensure HOME exists as a traversable directory so tools that chdir to
     # $HOME or write under it (e.g. `uv` caches) don't hit ENOENT.

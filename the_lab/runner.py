@@ -19,8 +19,14 @@ from .git_ops import (
     remove_worktree,
     resolve_branch_commit,
 )
+from . import jsonio
 from .queue import Allocator, load_config, match_resource
-from .sandbox import build_sandbox_command, load_sandbox_config, sandbox_capabilities
+from .sandbox import (
+    build_sandbox_command,
+    gpu_host_state,
+    load_sandbox_config,
+    sandbox_capabilities,
+)
 from .store import Store
 from . import token_registry
 
@@ -126,9 +132,35 @@ def _parse_log_progress(lines: list[str]) -> dict | None:
     }
 
 
+# Experiment wall-clock bounds (seconds). A caller-supplied timeout is capped at
+# THE_LAB_MAX_EXPERIMENT_TIMEOUT; a caller that supplies none gets
+# THE_LAB_DEFAULT_EXPERIMENT_TIMEOUT. Set either to 0 to disable that bound.
+def _env_seconds(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, "") or default)
+    except ValueError:
+        return default
+
+
+DEFAULT_EXPERIMENT_TIMEOUT = _env_seconds("THE_LAB_DEFAULT_EXPERIMENT_TIMEOUT", 24 * 3600)
+MAX_EXPERIMENT_TIMEOUT = _env_seconds("THE_LAB_MAX_EXPERIMENT_TIMEOUT", 7 * 24 * 3600)
+
+
+def _clamp_experiment_timeout(requested: float | None) -> float | None:
+    """Apply the default/maximum wall-clock bounds to a requested timeout."""
+    if requested is None or requested <= 0:
+        requested = DEFAULT_EXPERIMENT_TIMEOUT
+    if requested <= 0:
+        return None            # default bound disabled by the operator
+    if MAX_EXPERIMENT_TIMEOUT > 0:
+        return min(requested, MAX_EXPERIMENT_TIMEOUT)
+    return requested
+
+
 class ExperimentRunner:
-    def __init__(self, store: Store):
+    def __init__(self, store: Store, read_only: bool = False):
         self._store = store
+        self._read_only = read_only
         self._finished_queue: asyncio.Queue[int] = asyncio.Queue()
         self._tasks: dict[int, asyncio.Task] = {}
         self._git_lock = None  # initialized as asyncio.Lock in reattach_running
@@ -146,6 +178,11 @@ class ExperimentRunner:
         # If the process is still alive, re-attach to it. Otherwise mark as failed.
         self._reattach_running = []
         running_worktrees = set()
+        if read_only:
+            # Demo mode: NEVER touch the DB — no stale-running reconcile (it
+            # marks experiments failed), no worktree cleanup. The state is
+            # someone else's snapshot; we only display it.
+            return
         for exp in self._store.list_experiments_by_status("running"):
             pid = exp.get("pid")
             slurm_job_id = (exp.get("meta") or {}).get("slurm_job_id")
@@ -168,6 +205,8 @@ class ExperimentRunner:
                         exp["id"],
                         status="failed",
                         error="server restarted while experiment was running (process gone)",
+                        # M3 feedback: terminal-state reason line.
+                        status_msg="error: server restarted while experiment was running (process gone)",
                         pid=None,
                         finished_at=datetime.now(timezone.utc).isoformat(),
                     )
@@ -185,6 +224,17 @@ class ExperimentRunner:
         for status in ("completed", "failed", "cancelled"):
             for exp in self._store.list_experiments_by_status(status):
                 self._seen.add(exp["id"])
+
+    @staticmethod
+    async def _read_text_off_loop(path: Path) -> str:
+        """Read a (possibly multi-MB, possibly NFS) file on the threadpool so
+        monitor/reconcile coroutines never stall the event loop on disk."""
+        loop = asyncio.get_running_loop()
+
+        def _read() -> str:
+            return path.read_text() if path.exists() else ""
+
+        return await loop.run_in_executor(None, _read)
 
     @staticmethod
     def _pid_alive(pid: int) -> bool:
@@ -264,6 +314,11 @@ class ExperimentRunner:
                 dst_bin.symlink_to(src_bin)
 
     async def reattach_running(self):
+        if self._read_only:
+            # Demo mode: no monitors, no scheduler loop, no dispatching.
+            self._git_lock = asyncio.Lock()
+            self._scheduler_wake = asyncio.Event()
+            return
         """Re-attach to experiments that survived a server restart.
         Call this once after the event loop is running."""
         self._git_lock = asyncio.Lock()
@@ -361,6 +416,10 @@ class ExperimentRunner:
         by_label: dict[str, dict] = {(e.get("label") or str(e["id"])): e for e in all_exps}
 
         for exp in queued:
+            # Compute a safe label up front so it is always defined before any
+            # code below can raise — fixes "local variable 'label' referenced
+            # before assignment" in the dispatch except handler.
+            label = exp.get("label") or str(exp.get("id") or "?")
             qm = _qmeta(exp)
             # Dependency check.
             deps = list(qm.get("depends_on") or [])
@@ -371,9 +430,11 @@ class ExperimentRunner:
                 if not dep:
                     # Missing dependency — fail the experiment with a clear reason.
                     self._store.update_experiment(
-                        (exp.get("label") or str(exp["id"])),
+                        label,
                         status="failed",
                         error=f"depends_on references unknown experiment '{dep_label}'",
+                        # M3 feedback: terminal-state reason line.
+                        status_msg=f"error: depends_on references unknown experiment '{dep_label}'",
                         finished_at=datetime.now(timezone.utc).isoformat(),
                     )
                     ready = False
@@ -383,9 +444,11 @@ class ExperimentRunner:
                     break
                 if on_success and dep.get("status") in ("failed", "cancelled"):
                     self._store.update_experiment(
-                        (exp.get("label") or str(exp["id"])),
+                        label,
                         status="cancelled",
                         error=f"parent experiment '{dep_label}' {dep['status']}",
+                        # M3 feedback: terminal-state reason line.
+                        status_msg=f"cancelled: parent experiment '{dep_label}' {dep['status']}",
                         finished_at=datetime.now(timezone.utc).isoformat(),
                     )
                     ready = False
@@ -399,7 +462,7 @@ class ExperimentRunner:
             if resource is None:
                 continue
             units_wanted = int(req.get("units") or resource.default_units_per_job)
-            label = exp.get("label") or str(exp["id"])
+            # (label already computed at the top of the loop)
             # Re-check status: it may have been cancelled while we awaited
             # the previous dispatch (the queued list is a snapshot from above).
             current = self._store.get_experiment(label)
@@ -443,6 +506,13 @@ class ExperimentRunner:
                 start_timeout = float(meta_timeout) if meta_timeout is not None else None
             except (TypeError, ValueError):
                 start_timeout = None
+            # A run with no timeout held its resource units forever, so one
+            # wedged experiment could stall the queue indefinitely. Apply a
+            # default deadline when the caller didn't set one, and cap what a
+            # caller may ask for. Both are env-overridable for long training
+            # jobs; 0 / negative disables (explicitly opting back in to the old
+            # unbounded behaviour).
+            start_timeout = _clamp_experiment_timeout(start_timeout)
 
             try:
                 if resource.kind == "slurm":
@@ -452,10 +522,14 @@ class ExperimentRunner:
                 if result.get("status") == "error":
                     # Release the units we held; the start failed.
                     self._allocator.release(label)
-                else:
+                elif resource.kind == "slurm":
+                    # Only the slurm path broadcasts here — start() (the local
+                    # path) already emits experiment_started itself, and
+                    # emitting from both sites doubled the activity-feed line.
                     from . import ws as ws_mod
                     ws_mod.broadcaster.broadcast({
                         "type": "experiment_started",
+                        "experiment_id": exp.get("id"),  # M3 feedback
                         "label": label,
                         "idea_id": exp.get("idea_id"),
                         "assigned_resource": resource.name,
@@ -490,6 +564,11 @@ class ExperimentRunner:
         _label = exp.get("label") or str(exp_id)
         _idea_id = exp.get("idea_id")
         if result is not None:
+            # M3 cancel-bug fix: re-read status immediately before the terminal
+            # write. If a user cancelled while we reconciled, don't clobber it.
+            _cur = self._store.get_experiment(exp_id)
+            if _cur and _cur.get("status") == "cancelled":
+                return True
             metrics, result_meta = _metrics_from_result(result)
             meta = {**exp.get("meta", {}), **result_meta}
             self._store.update_experiment(
@@ -499,6 +578,7 @@ class ExperimentRunner:
                 meta=meta,
                 pid=None,
                 error=None,
+                status_msg=None,  # normal success
                 finished_at=now,
             )
             if result_idx is not None:
@@ -508,8 +588,9 @@ class ExperimentRunner:
             self.wake_scheduler()
             from . import ws as ws_mod
             ws_mod.broadcaster.broadcast_soon({"type": "experiment_finished", "label": _label,
+                                               "experiment_id": exp_id,
                                                "idea_id": _idea_id, "status": "completed",
-                                               "metrics": metrics})
+                                               "status_msg": None, "metrics": metrics})
             return True
 
         if progress_path.exists():
@@ -518,12 +599,18 @@ class ExperimentRunner:
             except json.JSONDecodeError:
                 progress = {}
             if progress.get("pipeline_status") == "done" or progress.get("status") == "done":
+                # M3 cancel-bug fix: re-read status before clobbering with a
+                # terminal write, so a concurrent cancel wins.
+                _cur = self._store.get_experiment(exp_id)
+                if _cur and _cur.get("status") == "cancelled":
+                    return True
                 self._store.update_experiment(
                     exp_id,
                     status="completed",
                     metrics=exp.get("metrics"),
                     pid=None,
                     error=None,
+                    status_msg=None,  # normal success
                     finished_at=now,
                 )
                 self._cleanup_worktree(exp)
@@ -531,7 +618,9 @@ class ExperimentRunner:
                 self.wake_scheduler()
                 from . import ws as ws_mod
                 ws_mod.broadcaster.broadcast_soon({"type": "experiment_finished", "label": _label,
+                                                   "experiment_id": exp_id,
                                                    "idea_id": _idea_id, "status": "completed",
+                                                   "status_msg": None,
                                                    "metrics": exp.get("metrics")})
                 return True
 
@@ -552,7 +641,15 @@ class ExperimentRunner:
 
         # Process is done — read the log file (which the original bash process wrote to)
         now = datetime.now(timezone.utc).isoformat()
-        output = log_path.read_text() if log_path.exists() else ""
+        output = await self._read_text_off_loop(log_path)
+
+        # M3 cancel-bug fix: re-read status before the terminal write so a
+        # cancel that landed while we polled the PID isn't clobbered.
+        _cur = self._store.get_experiment(exp_id)
+        if _cur and _cur.get("status") == "cancelled":
+            self._tasks.pop(exp_id, None)
+            self._finished_queue.put_nowait(exp_id)
+            return
 
         result, result_idx = self._extract_json(output)
         if result is not None:
@@ -560,15 +657,16 @@ class ExperimentRunner:
             meta = {**exp.get("meta", {}), **result_meta}
             self._store.update_experiment(
                 exp_id, status="completed", metrics=metrics, meta=meta,
-                pid=None, finished_at=now,
+                pid=None, status_msg=None, finished_at=now,  # normal success
             )
             if result_idx is not None:
-                self._strip_result_line(log_path, result_idx)
+                await asyncio.get_running_loop().run_in_executor(
+                    None, self._strip_result_line, log_path, result_idx)
         else:
             # Metrics-optional: assume success if process was running normally
             self._store.update_experiment(
                 exp_id, status="completed", metrics=None,
-                pid=None, finished_at=now,
+                pid=None, status_msg=None, finished_at=now,  # normal success
             )
 
         # Clean up worktree
@@ -607,16 +705,25 @@ class ExperimentRunner:
             )
             self._store.update_experiment(
                 label, status="failed", error=msg,
+                # M3 feedback: terminal-state reason line.
+                status_msg="error: script not found",
                 finished_at=datetime.now(timezone.utc).isoformat(),
             )
             return {"status": "error", "reason": msg}
 
         os.chmod(script_path, os.stat(script_path).st_mode | 0o755)
 
-        try:
+        loop = asyncio.get_running_loop()
+
+        def _auto_commit_sync():
             desc = exp.get("description", "")
-            label = exp.get("label", str(exp_id))
-            auto_commit(cwd=self._store.repo_dir, message=f"exp {label}: {desc}")
+            lbl = exp.get("label", str(exp_id))
+            auto_commit(cwd=self._store.repo_dir, message=f"exp {lbl}: {desc}")
+
+        try:
+            # Git subprocesses block — run off-loop so a slow NFS index scan
+            # can't stall the scheduler, WS pings, and every in-flight request.
+            await loop.run_in_executor(None, _auto_commit_sync)
         except Exception:
             pass
 
@@ -624,36 +731,52 @@ class ExperimentRunner:
         # this experiment runs in isolation (concurrent experiments don't
         # interfere with each other or the main checkout).
         idea = self._store.get_idea(exp["idea_id"])
-        branch = idea["branch"] if idea else get_current_branch(cwd=self._store.repo_dir)
         worktree_path = None
         worktree_commit = None  # the actual commit the experiment runs on
         run_cwd = str(self._store.repo_dir)  # fallback
 
-        try:
-            worktree_commit = resolve_branch_commit(branch, cwd=self._store.repo_dir)
-            worktree_path = self._worktree_dir / str(exp_id).replace(".", "_")
-            if worktree_path.exists():
-                remove_worktree(worktree_path, cwd=self._store.repo_dir)
-            if self._git_lock:
-                await self._git_lock.acquire()
-            try:
-                create_worktree(worktree_path, worktree_commit, cwd=self._store.repo_dir)
-            finally:
-                if self._git_lock:
-                    self._git_lock.release()
+        def _prepare_worktree_sync(branch: str):
+            """Blocking git + symlink work; runs on the threadpool."""
+            commit = resolve_branch_commit(branch, cwd=self._store.repo_dir)
+            wt_path = self._worktree_dir / str(exp_id).replace(".", "_")
+            if wt_path.exists():
+                remove_worktree(wt_path, cwd=self._store.repo_dir)
+            create_worktree(wt_path, commit, cwd=self._store.repo_dir)
             # Symlink .venv directories from the main repo into the worktree.
             # Worktrees only contain git-tracked files, but experiments often
             # need virtual environments which are in .gitignore.
-            self._symlink_venvs(worktree_path)
-            self._symlink_the_lab_files(worktree_path)
+            self._symlink_venvs(wt_path)
+            self._symlink_the_lab_files(wt_path)
+            return wt_path, commit
+
+        try:
+            branch = idea["branch"] if idea else await loop.run_in_executor(
+                None, lambda: get_current_branch(cwd=self._store.repo_dir))
+            if self._git_lock:
+                await self._git_lock.acquire()
+            try:
+                worktree_path, worktree_commit = await loop.run_in_executor(
+                    None, _prepare_worktree_sync, branch)
+            finally:
+                if self._git_lock:
+                    self._git_lock.release()
             run_cwd = str(worktree_path)
         except Exception:
             worktree_path = None  # fall back to main repo
+            if idea:
+                branch = idea["branch"]
+            else:
+                try:
+                    branch = await loop.run_in_executor(
+                        None, lambda: get_current_branch(cwd=self._store.repo_dir))
+                except Exception:
+                    branch = "main"
 
         try:
             # Log the commit the experiment actually runs on (the worktree's commit),
             # not the main checkout's HEAD which may differ.
-            actual_commit = worktree_commit if worktree_commit else get_head_commit(cwd=self._store.repo_dir)
+            actual_commit = worktree_commit if worktree_commit else await loop.run_in_executor(
+                None, lambda: get_head_commit(cwd=self._store.repo_dir))
             meta = {
                 **exp.get("meta", {}),
                 "git_branch": branch,
@@ -661,8 +784,7 @@ class ExperimentRunner:
             }
             if worktree_path:
                 meta["worktree"] = str(worktree_path)
-            self._store.update_experiment(exp_id, meta=meta)
-            exp["meta"] = meta
+            exp = self._store.update_experiment(exp_id, meta=meta) or exp
         except Exception:
             pass
 
@@ -697,7 +819,7 @@ class ExperimentRunner:
 
         command = ["bash", str(command_script_path)]
         try:
-            uses_inner_arc_sandbox = "_sandboxed" in script_path.read_text()
+            uses_inner_arc_sandbox = "_sandboxed" in await self._read_text_off_loop(script_path)
         except Exception:
             uses_inner_arc_sandbox = False
 
@@ -709,8 +831,20 @@ class ExperimentRunner:
         ):
             capabilities = sandbox_capabilities()
             if not capabilities.get("available"):
-                details = capabilities.get("details") or "sandbox runtime unavailable"
-                return {"status": "error", "reason": f"sandbox is enabled but unavailable: {details}"}
+                # Keep the stored reason to a few lines (it shows up in the
+                # experiment record), but still say what to install and how.
+                summary = capabilities.get("summary") or "The sandbox runtime is unavailable."
+                install = capabilities.get("install_command")
+                parts = [f"Experiment not started — the sandbox is enabled but unavailable. {summary}"]
+                if install:
+                    parts.append(f"Install the missing programs with: {install}")
+                parts.append(
+                    "Full explanation in the dashboard's Sandbox tab. To run without "
+                    "isolation, disable the sandbox there."
+                )
+                # Newline-joined so the install command is not run together with
+                # the following sentence.
+                return {"status": "error", "reason": "\n".join(parts)}
             env["THE_LAB_SANDBOX_TARGET_UID"] = str(os.getuid())
             env["THE_LAB_SANDBOX_TARGET_GID"] = str(os.getgid())
             command = build_sandbox_command(
@@ -724,6 +858,14 @@ class ExperimentRunner:
 
         # Write stdout/stderr directly to the log file so it survives server restarts.
         log_file = open(log_path, "w")
+        # If the driver is loaded but this container has no GPU device nodes, CUDA
+        # will fail with something opaque ("Failed to infer device type"). Say so
+        # at the top of the log — this holds sandboxed or not, and cannot be fixed
+        # from inside the container.
+        _gpu_warning = gpu_host_state().get("warning")
+        if _gpu_warning:
+            log_file.write(f"[the-lab] WARNING: {_gpu_warning}\n\n")
+            log_file.flush()
         process = await asyncio.create_subprocess_exec(
             *command,
             stdout=log_file,
@@ -742,6 +884,16 @@ class ExperimentRunner:
             started_at=datetime.now(timezone.utc).isoformat(),
             finished_at=None,
         )
+
+        # M3 feedback: lightweight started broadcast on the running transition.
+        # We're post-await here, so use broadcast (not broadcast_soon).
+        from . import ws as ws_mod
+        ws_mod.broadcaster.broadcast({
+            "type": "experiment_started",
+            "experiment_id": exp_id,
+            "label": exp.get("label") if exp else str(exp_id),
+            "idea_id": exp.get("idea_id") if exp else None,
+        })
 
         task = asyncio.create_task(
             self._monitor(exp_id, process, err_path, timeout=timeout, run_token=run_token)
@@ -778,51 +930,87 @@ class ExperimentRunner:
             return
 
         log_path = (self._store.repo_dir / exp["script"]).with_suffix(".log")
-        output = log_path.read_text() if log_path.exists() else ""
+        output = await self._read_text_off_loop(log_path)
         now = datetime.now(timezone.utc).isoformat()
 
         from . import ws as ws_mod
         _label = exp.get("label") or str(exp_id)
         _idea_id = exp.get("idea_id")
 
+        # M3 cancel-bug fix: a user cancel may have landed between the guard
+        # above and the terminal write below (we awaited a log read + did work).
+        # Re-read right before writing; if cancelled, leave it alone. Extends
+        # the same pattern already used at the top of this method and in the
+        # slurm monitor (~1118).
+        def _cancelled_now() -> bool:
+            _cur = self._store.get_experiment(exp_id)
+            return bool(_cur and _cur.get("status") == "cancelled")
+
         if timed_out:
             error = f"killed: exceeded timeout of {timeout}s"
-            self._store.update_experiment(
-                exp_id, status="failed", error=error, pid=None, finished_at=now,
-            )
-            err_path.write_text(f"{error}\n\n{output[-2000:]}")
-            ws_mod.broadcaster.broadcast({"type": "experiment_finished", "label": _label,
-                                          "idea_id": _idea_id, "status": "failed", "metrics": None})
+            # M3 feedback: distinguish a hard SIGTERM/timeout kill from the case
+            # where the run cleanly abandoned after exhausting its budget/turns.
+            # Best-effort from the live progress snapshot the script maintains.
+            _msg = f"timeout: exceeded timeout of {timeout}s"
+            try:
+                _prog = exp.get("progress") or {}
+                _budget = _prog.get("budget_remaining_s")
+                if _budget is not None and float(_budget) <= 0:
+                    _msg = "cap_abandoned: budget_remaining_s exhausted"
+            except (TypeError, ValueError):
+                pass
+            if not _cancelled_now():
+                self._store.update_experiment(
+                    exp_id, status="failed", error=error,
+                    status_msg=_msg, pid=None, finished_at=now,
+                )
+                err_path.write_text(f"{error}\n\n{output[-2000:]}")
+                ws_mod.broadcaster.broadcast({"type": "experiment_finished", "label": _label,
+                                              "experiment_id": exp_id, "idea_id": _idea_id,
+                                              "status": "failed", "status_msg": _msg,
+                                              "metrics": None})
         elif process.returncode == 0:
             result, result_idx = self._extract_json(output)
             if result is not None:
                 metrics, result_meta = _metrics_from_result(result)
                 meta = {**exp.get("meta", {}), **result_meta}
-                self._store.update_experiment(
-                    exp_id, status="completed", metrics=metrics, meta=meta,
-                    pid=None, finished_at=now,
-                )
-                if result_idx is not None:
-                    self._strip_result_line(log_path, result_idx)
-                ws_mod.broadcaster.broadcast({"type": "experiment_finished", "label": _label,
-                                              "idea_id": _idea_id, "status": "completed",
-                                              "metrics": metrics})
+                if not _cancelled_now():
+                    self._store.update_experiment(
+                        exp_id, status="completed", metrics=metrics, meta=meta,
+                        pid=None, status_msg=None, finished_at=now,  # normal success
+                    )
+                    if result_idx is not None:
+                        await asyncio.get_running_loop().run_in_executor(
+                            None, self._strip_result_line, log_path, result_idx)
+                    ws_mod.broadcaster.broadcast({"type": "experiment_finished", "label": _label,
+                                                  "experiment_id": exp_id, "idea_id": _idea_id,
+                                                  "status": "completed", "status_msg": None,
+                                                  "metrics": metrics})
             else:
-                self._store.update_experiment(
-                    exp_id, status="completed", metrics=None,
-                    pid=None, finished_at=now,
-                )
-                ws_mod.broadcaster.broadcast({"type": "experiment_finished", "label": _label,
-                                              "idea_id": _idea_id, "status": "completed",
-                                              "metrics": None})
+                if not _cancelled_now():
+                    self._store.update_experiment(
+                        exp_id, status="completed", metrics=None,
+                        pid=None, status_msg=None, finished_at=now,  # normal success
+                    )
+                    ws_mod.broadcaster.broadcast({"type": "experiment_finished", "label": _label,
+                                                  "experiment_id": exp_id, "idea_id": _idea_id,
+                                                  "status": "completed", "status_msg": None,
+                                                  "metrics": None})
         else:
             error = f"exit code {process.returncode}"
-            self._store.update_experiment(
-                exp_id, status="failed", error=error, pid=None, finished_at=now,
-            )
-            err_path.write_text(f"{error}\n\n{output[-2000:]}")
-            ws_mod.broadcaster.broadcast({"type": "experiment_finished", "label": _label,
-                                          "idea_id": _idea_id, "status": "failed", "metrics": None})
+            # M3 feedback: best-effort reason line from the tail of the log.
+            _tail = next((ln.strip() for ln in reversed(output.splitlines()) if ln.strip()), "")
+            _msg = f"error: {_tail}" if _tail else f"error: {error}"
+            if not _cancelled_now():
+                self._store.update_experiment(
+                    exp_id, status="failed", error=error,
+                    status_msg=_msg, pid=None, finished_at=now,
+                )
+                err_path.write_text(f"{error}\n\n{output[-2000:]}")
+                ws_mod.broadcaster.broadcast({"type": "experiment_finished", "label": _label,
+                                              "experiment_id": exp_id, "idea_id": _idea_id,
+                                              "status": "failed", "status_msg": _msg,
+                                              "metrics": None})
 
         # Clean up worktree
         wt = (exp.get("meta") or {}).get("worktree")
@@ -856,16 +1044,21 @@ class ExperimentRunner:
         env_extra: dict[str, str],
     ) -> dict:
         """Submit an experiment to Slurm via SSH and start monitoring."""
-        import base64
         from .executors.slurm import SlurmExecutor
 
         ssh_host = resource.executor_config.get("ssh_host", "slurm")
         executor = SlurmExecutor(ssh_host, resource.executor_config, instance_id=self._store.instance_id)
 
         # Build env dict that the wrapper script will expose to the experiment
-        lab_user = os.environ.get("THE_LAB_USER", "")
-        lab_password = os.environ.get("THE_LAB_PASSWORD", "")
-        lab_auth = base64.b64encode(f"{lab_user}:{lab_password}".encode()).decode()
+        # The admin Basic credential is deliberately NOT computed or embedded
+        # here. The generated wrapper runs on a remote compute node and curls
+        # back to callback_url — which comes from caller-supplied
+        # executor_config — so anything the wrapper carries can be aimed at an
+        # attacker's listener. Review demonstrated exactly that: the real
+        # admin credential arriving at a controlled endpoint. Every callback in
+        # the wrapper now authenticates with the per-run bearer token instead,
+        # which is scoped, unregistered when the run ends, and useless for the
+        # admin-only routes (see app._ADMIN_ONLY_ROUTES).
 
         # The callback URL must be reachable from the *compute node*, not just
         # localhost.  Priority order:
@@ -897,6 +1090,8 @@ class ExperimentRunner:
             )
             self._store.update_experiment(
                 label, status="failed", error=msg,
+                # M3 feedback: terminal-state reason line.
+                status_msg="error: script file missing",
                 finished_at=datetime.now(timezone.utc).isoformat(),
             )
             print(f"[the-lab] errored experiment {label}: {msg}")
@@ -935,7 +1130,6 @@ class ExperimentRunner:
         wrapper_env = {
             "THE_LAB_TOKEN":   run_token,
             "THE_LAB_API_URL": lab_api_url,
-            "THE_LAB_AUTH":    lab_auth,
             "THE_LAB_EXP_ID":  str(exp["id"]),
             "THE_LAB_IDEA_ID": str(exp.get("idea_id", "")),
             **{k: str(v) for k, v in env_extra.items()},
@@ -1051,11 +1245,11 @@ class ExperimentRunner:
                         _prog_path = local_exp_dir / "script.progress"
                         if _log_path.exists():
                             try:
-                                _lines = _log_path.read_text().splitlines()
+                                _lines = (await self._read_text_off_loop(_log_path)).splitlines()
                                 _snap = _parse_log_progress(_lines)
                                 if _snap:
                                     import json as _json
-                                    _prog_path.write_text(_json.dumps(_snap))
+                                    jsonio.write_json(_prog_path, _snap, indent=0)
                             except Exception:
                                 pass
                         ws_mod.broadcaster.broadcast_soon({
@@ -1120,7 +1314,7 @@ class ExperimentRunner:
                     return
                 now = datetime.now(timezone.utc).isoformat()
                 log_path = local_exp_dir / "script.log"
-                output = log_path.read_text() if log_path.exists() else ""
+                output = await self._read_text_off_loop(log_path)
                 result, result_idx = self._extract_json(output)
                 if result is not None:
                     metrics, result_meta = _metrics_from_result(result)
@@ -1141,25 +1335,28 @@ class ExperimentRunner:
                         metrics=metrics,
                         meta=meta,
                         pid=None,
+                        status_msg=None,  # M3: normal success
                         finished_at=now,
                     )
                     # Overwrite the progress file with final state so GET /progress
                     # never returns stale intermediate data after completion.
                     _progress_path = local_exp_dir / "script.progress"
                     try:
-                        import json as _json
-                        _progress_path.write_text(_json.dumps({
+                        jsonio.write_json(_progress_path, {
                             "_final": True, "pct_complete": 100, **(metrics or {})
-                        }))
+                        }, indent=0)
                     except OSError:
                         pass
                     if result_idx is not None:
-                        self._strip_result_line(log_path, result_idx)
+                        await asyncio.get_running_loop().run_in_executor(
+                            None, self._strip_result_line, log_path, result_idx)
                     ws_mod.broadcaster.broadcast_soon({
                         "type": "experiment_finished",
                         "label": label,
+                        "experiment_id": exp_id,  # M3 feedback
                         "idea_id": exp.get("idea_id"),
                         "status": "completed",
+                        "status_msg": None,
                         "metrics": metrics,
                     })
                 else:
@@ -1172,18 +1369,24 @@ class ExperimentRunner:
                     _log_has_fatal = any(p in output for p in _fatal_patterns)
                     if _log_has_fatal:
                         _last_lines = "\n".join(output.splitlines()[-10:])
+                        # M3 feedback: best-effort reason from the last log line.
+                        _tail = next((ln.strip() for ln in reversed(output.splitlines()) if ln.strip()), "")
+                        _msg = f"error: {_tail}" if _tail else "error: fatal error detected in log (no metrics produced)"
                         self._store.update_experiment(
                             exp_id,
                             status="failed",
                             error=f"fatal error detected in log (no metrics produced):\n{_last_lines}",
+                            status_msg=_msg,
                             pid=None,
                             finished_at=now,
                         )
                         ws_mod.broadcaster.broadcast_soon({
                             "type": "experiment_finished",
                             "label": label,
+                            "experiment_id": exp_id,  # M3 feedback
                             "idea_id": exp.get("idea_id"),
                             "status": "failed",
+                            "status_msg": _msg,
                             "metrics": None,
                         })
                     else:
@@ -1192,13 +1395,16 @@ class ExperimentRunner:
                             status="completed",
                             metrics=None,
                             pid=None,
+                            status_msg=None,  # M3: normal success
                             finished_at=now,
                         )
                         ws_mod.broadcaster.broadcast_soon({
                             "type": "experiment_finished",
                             "label": label,
+                            "experiment_id": exp_id,  # M3 feedback
                             "idea_id": exp.get("idea_id"),
                             "status": "completed",
+                            "status_msg": None,
                             "metrics": None,
                         })
                 asyncio.get_event_loop().run_in_executor(None, lambda: executor.cleanup_remote(label, abs_bare_path=getattr(executor, "_resolved_bare_path", None)))
@@ -1219,7 +1425,7 @@ class ExperimentRunner:
                     return
                 now = datetime.now(timezone.utc).isoformat()
                 log_path = local_exp_dir / "script.log"
-                output = log_path.read_text() if log_path.exists() else ""
+                output = await self._read_text_off_loop(log_path)
                 # Try to extract JSON metrics — the script may have completed
                 # successfully before Slurm killed/cancelled the wrapper.
                 result, result_idx = self._extract_json(output)
@@ -1232,15 +1438,19 @@ class ExperimentRunner:
                         metrics=metrics,
                         meta=meta,
                         pid=None,
+                        status_msg=None,  # M3: metrics present despite slurm kill
                         finished_at=now,
                     )
                     if result_idx is not None:
-                        self._strip_result_line(log_path, result_idx)
+                        await asyncio.get_running_loop().run_in_executor(
+                            None, self._strip_result_line, log_path, result_idx)
                     ws_mod.broadcaster.broadcast_soon({
                         "type": "experiment_finished",
                         "label": label,
+                        "experiment_id": exp_id,  # M3 feedback
                         "idea_id": exp.get("idea_id"),
                         "status": "completed",
+                        "status_msg": None,
                         "metrics": metrics,
                     })
                 else:
@@ -1256,10 +1466,17 @@ class ExperimentRunner:
                         err_path.write_text(error)
                     except OSError:
                         pass
+                    # M3 feedback: slurm TIMEOUT gets a timeout: reason line;
+                    # every other terminal slurm state is a generic error:.
+                    if state == "TIMEOUT":
+                        _msg = f"timeout: slurm job {job_id} hit its time limit"
+                    else:
+                        _msg = f"error: slurm job {job_id} ended with state {state}"
                     self._store.update_experiment(
                         exp_id,
                         status="failed",
                         error=error,
+                        status_msg=_msg,
                         pid=None,
                         finished_at=now,
                     )
@@ -1267,8 +1484,10 @@ class ExperimentRunner:
                     ws_mod.broadcaster.broadcast_soon({
                         "type": "experiment_finished",
                         "label": label,
+                        "experiment_id": exp_id,  # M3 feedback
                         "idea_id": exp.get("idea_id"),
                         "status": "failed",
+                        "status_msg": _msg,
                         "metrics": None,
                     })
                 asyncio.get_event_loop().run_in_executor(None, lambda: executor.cleanup_remote(label, abs_bare_path=getattr(executor, "_resolved_bare_path", None)))
@@ -1364,6 +1583,7 @@ class ExperimentRunner:
             result = self._store.update_experiment(
                 exp_id,
                 status="cancelled",
+                status_msg="cancelled",  # M3: user cancelled before it ran
                 finished_at=datetime.now(timezone.utc).isoformat(),
             )
             ws_mod.broadcaster.broadcast({"type": "experiment_cancelled",
@@ -1403,6 +1623,8 @@ class ExperimentRunner:
         result = self._store.update_experiment(
             exp_id,
             status="cancelled",
+            # M3: SIGTERM/SIGKILL sent to a running process by user cancel.
+            status_msg="sigterm",
             pid=None,
             finished_at=datetime.now(timezone.utc).isoformat(),
         )
@@ -1410,14 +1632,34 @@ class ExperimentRunner:
                                       "label": label, "idea_id": idea_id})
         return result
 
+    @staticmethod
+    def _read_tail(path: Path, n_lines: int, block: int = 65536) -> str:
+        """Read only the last *n_lines* lines of *path* by seeking backwards
+        in blocks — a ?tail=25 poll on a multi-MB NFS log costs one or two
+        64kB reads instead of the whole file. Capped at 8MB as a guard
+        against pathological single-line files."""
+        with path.open("rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            pos = fh.tell()
+            data = b""
+            while pos > 0 and data.count(b"\n") <= n_lines and len(data) < 8 * 1024 * 1024:
+                step = min(block, pos)
+                pos -= step
+                fh.seek(pos)
+                data = fh.read(step) + data
+        text = data.decode("utf-8", errors="replace")
+        lines = text.split("\n")
+        return "\n".join(lines[-n_lines:]) if len(lines) > n_lines else text
+
     def get_log(self, exp_id: int, tail: int | None = None) -> str | None:
         """Read the .log file for an experiment, optionally tail N lines.
 
-        Trailing JSON-object lines (the script's final result dump) are
-        filtered out — the parsed metrics already live on the experiment
-        record and the raw blob clutters the "Show log" view. Newly-
-        completed runs have the line stripped from disk; this filter is
-        defense-in-depth for legacy logs.
+        Tail reads use a backwards seek (see _read_tail) and never load the
+        whole file. Trailing JSON-object lines (the script's final result
+        dump) are filtered out — the parsed metrics already live on the
+        experiment record and the raw blob clutters the "Show log" view.
+        Newly-completed runs have the line stripped from disk; this filter
+        is defense-in-depth for legacy logs.
         """
         exp = self._store.get_experiment(exp_id)
         if not exp:
@@ -1425,11 +1667,14 @@ class ExperimentRunner:
         log_path = self._store.repo_dir / exp["script"].replace(".sh", ".log")
         if not log_path.exists():
             return ""
-        content = self._strip_trailing_json_line(log_path.read_text())
         if tail is not None:
+            # Over-read a few lines so stripping the JSON result line still
+            # leaves a full *tail* lines (parity with the full-read path).
+            raw = self._read_tail(log_path, tail + 3)
+            content = self._strip_trailing_json_line(raw)
             lines = content.split("\n")
-            content = "\n".join(lines[-tail:])
-        return content
+            return "\n".join(lines[-tail:])
+        return self._strip_trailing_json_line(log_path.read_text())
 
     async def pull_results_for_label(self, label: str) -> bool:
         """Trigger an immediate rsync pull for a slurm experiment. Used by
@@ -1504,30 +1749,75 @@ class ExperimentRunner:
             for exp in list(self._store.list_experiments_by_status("running")):
                 pid = exp.get("pid")
                 if pid is not None and not self._pid_alive(pid):
-                    self._reconcile_stale_running(exp)
+                    # Sync helper (also used at startup); its log read can be
+                    # multi-MB on NFS — run it off-loop.
+                    await asyncio.get_event_loop().run_in_executor(
+                        None, self._reconcile_stale_running, exp)
 
-            # Check store for any finished experiments we haven't returned yet.
-            # This catches results across server restarts and race conditions.
-            for status in ("completed", "failed"):
-                for exp in self._store.list_experiments_by_status(status):
-                    if exp["id"] in self._seen:
-                        continue
-                    if experiment_id is not None and exp["id"] != experiment_id:
-                        continue
-                    if idea_id is not None and exp.get("idea_id") != idea_id:
-                        continue
-                    self._seen.add(exp["id"])
+            # Waiting on ONE named experiment asks "what happened to this run?",
+            # so answer from its current state and bypass _seen entirely.
+            #
+            # _seen is process-global and pre-populated at startup with every
+            # already-finished experiment, and it is consumed destructively (the
+            # first waiter to observe a completion removes it from every other
+            # waiter's view). Consulting it here meant `the-lab wait <label>`
+            # blocked until timeout — with no output — whenever the experiment
+            # was already terminal: finished before this server started, or
+            # finished while the caller was away and claimed by another waiter.
+            # It also silently never reported "cancelled", which the scan below
+            # omits while startup marks it seen.
+            if experiment_id is not None:
+                exp = self._store.get_experiment(experiment_id)
+                if exp and exp.get("status") in ("completed", "failed", "cancelled"):
+                    # Deliberately not added to _seen: this response is scoped to
+                    # this caller, and claiming it would starve a global waiter.
                     return {
                         "event": exp["status"],
                         "experiment": exp,
                     }
+            else:
+                # Unfiltered / idea-scoped wait keeps "wake me on the next
+                # completion" semantics, where _seen is what stops the same
+                # result being returned over and over.
+                for status in ("completed", "failed", "cancelled"):
+                    for exp in self._store.list_experiments_by_status(status):
+                        if exp["id"] in self._seen:
+                            continue
+                        if idea_id is not None and exp.get("idea_id") != idea_id:
+                            continue
+                        self._seen.add(exp["id"])
+                        return {
+                            "event": exp["status"],
+                            "experiment": exp,
+                        }
 
             # Check for unread messages addressed to this agent — return early
             # so the caller can react. Same recipient resolution as the
             # notifications middleware.
             if agent_id or agent_role:
-                unread = messages_mod.unread_for(
-                    repo_dir, agent_id=agent_id, role=agent_role, limit=20,
+                # CLAIM on delivery rather than peek. "Unread" is a latch, not
+                # an edge: unread_for() is a pure read, so it stayed true until
+                # the agent explicitly read elsewhere and this wake re-fired on
+                # every call. A client that re-waits the moment /wait returns
+                # then spins as fast as the network allows — measured ~36 req/s
+                # from three pollers against one agent with 10 stale unread
+                # messages, which also floods the dashboard's activity feed.
+                #
+                # claim_unread_for() selects and marks read under one lock, the
+                # same contract the notifications middleware and the WS listener
+                # already use (N1 cross-channel dedup) — so a message delivered
+                # here is not re-delivered there, and vice versa.
+                # Role-only callers can't claim (no id for read_by); the /wait
+                # route only sets agent_role when agent_id resolved, so in
+                # practice this is always the claiming path.
+                unread = (
+                    messages_mod.claim_unread_for(
+                        repo_dir, agent_id=agent_id, role=agent_role, limit=20,
+                    )
+                    if agent_id
+                    else messages_mod.unread_for(
+                        repo_dir, agent_id=agent_id, role=agent_role, limit=20,
+                    )
                 )
                 if unread:
                     running = self._store.list_experiments_by_status("running")

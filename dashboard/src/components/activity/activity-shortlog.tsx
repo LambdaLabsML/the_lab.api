@@ -5,9 +5,13 @@
  * global signals (no extra polling), clicking a row jumps to that idea.
  */
 import { allExperiments, allIdeas, runningProgress } from "../../state/signals";
+import { showRunPreview, hideRunPreview } from "../../state/agent-activity";
+import { selectedMetric } from "../../state/settings";
 import { navigateToIdea } from "../../lib/navigate";
-import { ideaTitle } from "../../lib/format";
+import { ideaTitle, fmtScoreShort } from "../../lib/format";
 import { Eyebrow } from "../ui";
+import { ExpLink } from "../exp-link";
+import { IdeaLink } from "../idea-link";
 
 function relTime(iso?: string | null): string {
   if (!iso) return "";
@@ -54,7 +58,11 @@ export function ActivityShortlog() {
                 <button
                   class="shortlog-row"
                   onClick={() => navigateToIdea(e.idea_id, label)}
-                  title={ideas[e.idea_id]?.description}
+                  onMouseEnter={(ev) => showRunPreview(
+                    { label, ideaId: e.idea_id, pct: typeof pct === "number" ? pct : undefined },
+                    ev.currentTarget as Element,
+                  )}
+                  onMouseLeave={hideRunPreview}
                 >
                   <span class="shortlog-dot is-running" />
                   <span class="shortlog-row-main">#{e.idea_id} {ideaTitle(ideas[e.idea_id]?.description ?? "")}</span>
@@ -77,17 +85,26 @@ export function ActivityShortlog() {
           <div class="shortlog-sub"><Eyebrow>Recent</Eyebrow></div>
           {recent.map((e) => {
             const ok = e.status === "completed";
+            // Shared link components (ExpLink/IdeaLink) carry the canonical
+            // styling + hover cards; the score column mirrors the Overview
+            // experiment tables. Row is a div — links are buttons themselves.
+            const score = e.metrics?.[selectedMetric.value];
             return (
-              <button
+              <div
                 key={`f-${e.id}`}
                 class="shortlog-row"
+                role="button"
                 onClick={() => navigateToIdea(e.idea_id, e.label || String(e.id))}
                 title={ideas[e.idea_id]?.description}
               >
                 <span class={`shortlog-dot ${ok ? "is-done" : "is-bad"}`} />
-                <span class="shortlog-row-main">exp {e.label ?? e.id} · #{e.idea_id}</span>
+                <ExpLink label={String(e.label ?? e.id)} ideaId={e.idea_id} class="shortlog-exp" />
+                <IdeaLink id={e.idea_id} />
+                {typeof score === "number" && isFinite(score) && (
+                  <span class="shortlog-score">{fmtScoreShort(score)}</span>
+                )}
                 <span class="shortlog-time">{relTime(e.finished_at)}</span>
-              </button>
+              </div>
             );
           })}
         </div>

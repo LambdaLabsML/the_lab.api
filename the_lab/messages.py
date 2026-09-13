@@ -29,6 +29,8 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+
+from . import jsonio
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -90,16 +92,31 @@ def _path(repo_dir: Path) -> Path:
     return p / _FILE_NAME
 
 
+# Single-slot in-memory cache: messages are consulted on every dict-shaped
+# API response (unread_for in the notifications middleware) and by every
+# /wait poll pass — reading messages.json from NFS each time was the single
+# hottest read in the process. Memory is authoritative; every mutation
+# writes through atomically via jsonio. All access happens under _lock.
+_cache: dict | None = None
+_cache_path: Path | None = None
+
+
 def _read(repo_dir: Path) -> dict:
+    """Return the live message store dict. Call while holding _lock."""
+    global _cache, _cache_path
     path = _path(repo_dir)
+    if _cache is not None and _cache_path == path:
+        return _cache
     if not path.exists():
-        return {"next_id": 1, "messages": []}
-    try:
-        data = json.loads(path.read_text())
-    except (json.JSONDecodeError, OSError):
-        return {"next_id": 1, "messages": []}
+        data = {"next_id": 1, "messages": []}
+    else:
+        try:
+            data = json.loads(path.read_text())
+        except (json.JSONDecodeError, OSError):
+            data = {"next_id": 1, "messages": []}
     data.setdefault("next_id", 1)
     data.setdefault("messages", [])
+    _cache, _cache_path = data, path
     return data
 
 
@@ -108,7 +125,10 @@ def _prune(data: dict) -> dict:
 
 
 def _write(repo_dir: Path, data: dict) -> None:
-    _path(repo_dir).write_text(json.dumps(_prune(data), indent=2) + "\n")
+    """Persist and adopt *data* as the cache. Call while holding _lock."""
+    global _cache, _cache_path
+    _cache, _cache_path = data, _path(repo_dir)
+    jsonio.write_json(_cache_path, _prune(data))
 
 
 def _validate_to(to: str) -> None:
@@ -158,7 +178,9 @@ def add_message(
             "type": "message_received",
             "id": msg["id"],
             "to": to,
+            "from_agent": from_agent,
             "from_role": from_role,
+            "text": text[:80],
         })
     except Exception:  # noqa: BLE001
         pass
@@ -225,6 +247,53 @@ def unread_for(
         out.append(m)
         if limit is not None and len(out) >= limit:
             break
+    return out
+
+
+def claim_unread_for(
+    repo_dir: Path,
+    *,
+    agent_id: str | None,
+    role: str | None,
+    limit: int | None = None,
+) -> list[dict]:
+    """Atomically select AND claim (mark-read) this agent's unread messages.
+
+    N1: cross-channel dedup rests on claim-on-delivery. Selecting the unread
+    set and marking it read happen inside ONE ``_lock`` acquisition, so two
+    channels (the WS listener vs. a piggybacked/polling reader) can never both
+    deliver the same message — whichever claims it first wins, the other sees
+    it already in ``read_by`` and skips it.
+
+    Selection predicate is identical to ``unread_for`` (is_for(agent) AND
+    agent_id not already in read_by AND not self-sent); returns the claimed
+    messages newest-first. ``agent_id`` is required to claim (a role-only
+    caller has no id to record in ``read_by``).
+    """
+    if not agent_id:
+        return []
+    out: list[dict] = []
+    with _lock:
+        data = _read(repo_dir)
+        changed = False
+        for m in reversed(data["messages"]):
+            # Same predicate as unread_for (kept in lock-step to avoid drift).
+            if not is_for(m, agent_id=agent_id, role=role):
+                continue
+            if m.get("from_agent") and m["from_agent"] == agent_id:
+                continue
+            rb = m.get("read_by") or []
+            if agent_id in rb:
+                continue
+            out.append(m)
+            # Claim it: append agent_id to read_by (same mark logic as mark_read).
+            rb = m.setdefault("read_by", [])
+            rb.append(agent_id)
+            changed = True
+            if limit is not None and len(out) >= limit:
+                break
+        if changed:
+            _write(repo_dir, data)
     return out
 
 

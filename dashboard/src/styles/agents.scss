@@ -335,20 +335,31 @@
   font-size: var(--text-xs);
 }
 .messages-listening-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   color: var(--text-faint);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
+.messages-listening-dot {
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+}
 .messages-listening-chip {
   padding: 1px 7px;
   border-radius: 999px;
-  border: 1px solid currentColor;     // color set inline per agent
+  border: 1px solid var(--border-soft);   // neutral pill language
   background: none;
+  color: var(--text-muted);
   font: inherit;
+  font-family: var(--font-mono);
   font-size: var(--text-xs);
+  font-weight: 600;
   cursor: pointer;
 }
-.messages-listening-chip:hover { background: var(--bg-elev); }
+.messages-listening-chip:hover { background: var(--bg-elev); color: var(--text); }
 
 .messages-perspective-note {
   font-size: var(--text-sm);
@@ -364,43 +375,45 @@
 .msg-list {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-3);              // breathing room between messages
   list-style: none;
   margin: 0;
   padding: 0;
 }
 
+// Terminal-clean (DESIGN.md): a small dot carries agent identity (per-agent
+// color); no avatar circles. Hairline hover, accent bar for new-to-viewer.
 .msg {
   display: flex;
-  gap: 10px;
-  padding: 8px 10px;
+  padding: 10px 14px;
   border-radius: var(--radius-md);
+  background: var(--bg-elev);       // muted box — quiet elevation, no border
   transition: background 0.12s ease;
 }
-.msg:hover { background: var(--bg-elev); }
+.msg:hover { background: var(--bg-hi); }
 .msg.is-new { box-shadow: inset 2px 0 0 var(--accent); }  // new to the viewer
+// deep-link target (sidebar click): flash ring while scrolled into view
+.msg.is-focus {
+  background: var(--bg-hi);
+  box-shadow: inset 0 0 0 1px var(--yellow);
+}
 .msg.is-read { opacity: 0.62; }
 
-.msg-avatar {
+.msg-dot {
   flex-shrink: 0;
-  width: 28px;
-  height: 28px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: var(--text-xs);
-  font-weight: 700;
-  color: #0b0f14;
-  letter-spacing: 0.02em;
+  align-self: center;
+  // background (agent color) set inline
 }
 
 .msg-main { flex: 1; min-width: 0; }
 
 .msg-head {
   display: flex;
-  align-items: center;
-  gap: 6px;
+  align-items: baseline;
+  gap: var(--space-2);
   flex-wrap: wrap;
   font-size: var(--text-sm);
   color: var(--text-muted);
@@ -425,7 +438,7 @@
 .msg-readdot:not(.is-static):hover { box-shadow: 0 0 0 2px var(--border-soft); }
 
 .msg-body {
-  color: var(--text);
+  color: var(--text-muted);         // dimmed prose — links/numbers/chips pop
   font-size: var(--text-base);
   white-space: pre-wrap;
   word-break: break-word;
@@ -622,5 +635,64 @@
   height: 100%;
   overflow-y: auto;
   box-sizing: border-box;
-  background: var(--bg-elev);
+  background: var(--bg);   // canvas — the message boxes carry the elevation
+}
+
+/* ── consolidated spend chart (Agents pane) ───────────────────────────────── */
+.spend-chart {
+  background: var(--bg);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+}
+.spend-chart-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  margin-bottom: var(--space-2);
+}
+.spend-chart-total {
+  font-family: var(--font-mono);
+  font-size: var(--text-lg);
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.spend-chart-controls { margin-left: auto; display: inline-flex; gap: var(--space-2); }
+.spend-chart-svg { display: block; width: 100%; height: auto; }
+.spend-chart-tick {
+  fill: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 9px;   /* svg-internal scale (viewBox units), not a --text token */
+}
+.spend-chart-legend {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  margin-top: var(--space-2);
+}
+.spend-chart-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  background: none;
+  padding: 1px 2px;
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.spend-chart-key:hover { color: var(--text); }
+.spend-chart-key.is-off { opacity: 0.4; text-decoration: line-through; }
+.spend-chart-key.is-static { cursor: default; }
+.spend-chart-key-val { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.spend-chart-swatch { width: 8px; height: 8px; border-radius: 2px; flex-shrink: 0; }
+.spend-chart-note { margin-left: auto; color: var(--text-faint); font-size: var(--text-xs); }
+
+.agents-card-cost {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }

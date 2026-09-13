@@ -23,9 +23,13 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import shutil
 import subprocess
 import threading
+from urllib.parse import urlparse
+
+from . import jsonio
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
@@ -96,21 +100,44 @@ def _default_local_resource() -> Resource:
     return Resource(name="local", kind="local", unit_kind="none", capacity=1)
 
 
+# The scheduler calls load_config every tick (default 2s) from the event
+# loop — cache the parsed config keyed on the file's mtime so the NFS read
+# + parse happens only when queue.json actually changed.
+_config_cache: tuple[int, list, QueueConfig] | None = None
+_config_cache_lock = threading.Lock()
+
+
 def load_config(repo_dir: Path) -> tuple[list[Resource], QueueConfig]:
-    """Load resources + queue config; auto-create on first run."""
+    """Load resources + queue config; auto-create on first run.
+
+    mtime-cached: re-reads only when queue.json changed on disk.
+    """
+    global _config_cache
     path = _config_path(repo_dir)
     if not path.exists():
         # First run: write a default with a single auto-detected resource.
+        # (In read-only demo mode, serve the default without persisting it.)
         default = _default_local_resource()
-        save_config(repo_dir, [default], QueueConfig())
+        if os.environ.get("THE_LAB_DEMO", "").strip().lower() not in ("1", "true", "yes"):
+            save_config(repo_dir, [default], QueueConfig())
         return [default], QueueConfig()
+    try:
+        mtime = path.stat().st_mtime_ns
+    except OSError:
+        mtime = -1
+    with _config_cache_lock:
+        if _config_cache is not None and _config_cache[0] == mtime:
+            _, resources, qc = _config_cache
+            return list(resources), qc
     try:
         data = json.loads(path.read_text())
     except (json.JSONDecodeError, OSError):
         return [], QueueConfig()
     resources = [Resource(**r) for r in data.get("resources", [])]
     qc = QueueConfig(**data.get("queue", {}))
-    return resources, qc
+    with _config_cache_lock:
+        _config_cache = (mtime, resources, qc)
+    return list(resources), qc
 
 
 def save_config(repo_dir: Path, resources: list[Resource], qc: QueueConfig) -> None:
@@ -120,7 +147,7 @@ def save_config(repo_dir: Path, resources: list[Resource], qc: QueueConfig) -> N
         "resources": [asdict(r) for r in resources],
         "queue": asdict(qc),
     }
-    path.write_text(json.dumps(payload, indent=2) + "\n")
+    jsonio.write_json(path, payload)
 
 
 # ---------------------------------------------------------------------------
@@ -258,11 +285,139 @@ def match_resource(
 # Resource-list CRUD helpers (used by the routes)
 # ---------------------------------------------------------------------------
 
+# An ssh destination: [user@]host, where host is a hostname/IPv4/IPv6-in-brackets.
+# Deliberately strict — a leading "-" would be parsed by ssh as an OPTION
+# (e.g. -oProxyCommand=...) rather than a destination, and shell metacharacters
+# would break out of the remote command string the executor builds.
+_SSH_HOST_RE = re.compile(
+    r"^(?:[A-Za-z0-9._-]+@)?"                      # optional user@
+    r"(?:"
+    r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?"  # hostname / IPv4
+    r"|\[[0-9A-Fa-f:.]+\]"                        # [IPv6]
+    r")$"
+)
+
+# Config values that end up inside a remote command string or an sbatch
+# directive. Even with shlex.quote() at the splice points, reject the obviously
+# hostile shapes at ingress so a bad resource definition fails loudly at
+# definition time rather than silently at dispatch time.
+_SHELL_UNSAFE = set(";|&$`\n\r<>()!*?[]{}'\"\\")
+_PATHY_CONFIG_KEYS = ("slurm_conf", "remote_base", "git_repo_path", "base_venv_path")
+
+
+def _validate_model_server_config(value: object) -> None:
+    """Validate the optional model server launched inside a Slurm allocation.
+
+    This deliberately supports a small, versioned surface rather than an
+    arbitrary shell command.  A resource definition is editable from the API,
+    so allowing a command here would turn a scheduling setting into remote code
+    execution on the cluster login host.
+    """
+    if value is None:
+        return
+    if not isinstance(value, dict):
+        raise ValueError("executor_config.model_server must be an object")
+    if value.get("kind") != "qwen38_flash_sglang":
+        raise ValueError(
+            "executor_config.model_server.kind must be 'qwen38_flash_sglang'"
+        )
+    for key in ("model_inference_root", "api_key_file"):
+        item = value.get(key)
+        if item is None:
+            continue
+        if not isinstance(item, str) or not item:
+            raise ValueError(f"executor_config.model_server.{key} must be a non-empty string")
+        if _SHELL_UNSAFE.intersection(item):
+            raise ValueError(
+                f"executor_config.model_server.{key} contains shell metacharacters"
+            )
+    for key, minimum, maximum in (("port", 1024, 65535), ("readiness_timeout_s", 1, 3600)):
+        item = value.get(key)
+        if item is None:
+            continue
+        if isinstance(item, bool) or not isinstance(item, int) or not minimum <= item <= maximum:
+            raise ValueError(
+                f"executor_config.model_server.{key} must be an integer in [{minimum}, {maximum}]"
+            )
+
+
+def _validate_executor_config(cfg: dict) -> None:
+    """Reject executor_config values that would escape into the remote shell.
+
+    ``executor_config`` used to be accepted with no validation at all, while
+    ``ssh_host``/``slurm_conf``/``remote_base``/``git_repo_path`` were spliced
+    unescaped into strings handed to ``ssh`` — which runs them through the
+    remote user's shell. Anyone able to define a resource could therefore run
+    arbitrary commands on the configured host.
+    """
+    if not isinstance(cfg, dict):
+        raise ValueError("executor_config must be an object")
+
+    host = cfg.get("ssh_host")
+    if host is not None:
+        if not isinstance(host, str) or not host.strip():
+            raise ValueError("executor_config.ssh_host must be a non-empty string")
+        if host.strip() != "local" and not _SSH_HOST_RE.match(host.strip()):
+            raise ValueError(
+                f"executor_config.ssh_host '{host}' is not a valid [user@]host "
+                "(or 'local'; letters, digits, dot, dash, underscore; no leading '-', no "
+                "shell metacharacters)"
+            )
+
+    for key in _PATHY_CONFIG_KEYS:
+        value = cfg.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, str):
+            raise ValueError(f"executor_config.{key} must be a string")
+        # "$HOME" is a supported, documented placeholder here (the executor
+        # expands it via _resolve_remote_base), and it is the built-in default
+        # for remote_base — so allow exactly that token while still rejecting
+        # any other use of "$".
+        probe = value.replace("$HOME", "")
+        bad = _SHELL_UNSAFE.intersection(probe)
+        if bad:
+            raise ValueError(
+                f"executor_config.{key} contains disallowed character(s) "
+                f"{''.join(sorted(bad))!r} — paths must not contain shell metacharacters"
+            )
+
+    callback = cfg.get("callback_url")
+    if callback is not None:
+        if not isinstance(callback, str):
+            raise ValueError("executor_config.callback_url must be a string")
+        parsed = urlparse(callback)
+        if parsed.scheme not in ("http", "https"):
+            raise ValueError(
+                "executor_config.callback_url must be an http(s) URL"
+            )
+        if _SHELL_UNSAFE.intersection(callback):
+            raise ValueError(
+                "executor_config.callback_url contains shell metacharacters"
+            )
+
+    _validate_model_server_config(cfg.get("model_server"))
+
+
+# Upper bound on a resource's declared unit count. Unbounded capacity let one
+# API call schedule an arbitrary number of parallel jobs on the host.
+try:
+    MAX_RESOURCE_CAPACITY = int(os.environ.get("THE_LAB_MAX_RESOURCE_CAPACITY", "") or 1024)
+except ValueError:
+    MAX_RESOURCE_CAPACITY = 1024
+
+
 def _validate_resource(r: Resource) -> None:
     if not r.name or "/" in r.name or " " in r.name:
         raise ValueError(f"invalid resource name '{r.name}'")
     if r.capacity < 1:
         raise ValueError("capacity must be >= 1")
+    if r.capacity > MAX_RESOURCE_CAPACITY:
+        raise ValueError(
+            f"capacity {r.capacity} exceeds the maximum of {MAX_RESOURCE_CAPACITY} "
+            "(raise THE_LAB_MAX_RESOURCE_CAPACITY if this machine really has "
+            "that many units)"
+        )
     if r.jobs_per_unit <= 0:
         raise ValueError("jobs_per_unit must be > 0")
     if r.jobs_per_unit > 1.0:
@@ -273,6 +428,7 @@ def _validate_resource(r: Resource) -> None:
         raise ValueError(f"resource kind '{r.kind}' is not supported (use 'local' or 'slurm')")
     if r.unit_kind not in ("gpu", "cpu", "none"):
         raise ValueError(f"unit_kind must be one of: gpu, cpu, none")
+    _validate_executor_config(r.executor_config or {})
 
 
 def upsert_resource(repo_dir: Path, resource: Resource) -> Resource:

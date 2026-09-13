@@ -1,6 +1,7 @@
 """Experiment CRUD, start/cancel, timeseries, compare, and analyze endpoints."""
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -8,20 +9,22 @@ from datetime import datetime, timezone
 
 import mimetypes
 
+import math
+
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 
+from .. import jsonio
 from ..deps import (
+    sanitize_error,
     store,
     runner,
     REPO_DIR,
     _resolve_exp,
-    _idea_context,
     _branch_diff_summary,
     _description_short,
     _wrap_script,
 )
-from ..git_ops import get_current_branch
 from ..schemas import (
     NewExperimentRequest,
     StartExperimentRequest,
@@ -35,7 +38,145 @@ from ..schemas import (
 router = APIRouter(prefix="/api/v1")
 
 
+def _truncate_soft(text: str | None, limit: int = 240) -> str | None:
+    """Shorten *text* without cutting mid-sentence/mid-word.
+
+    Prefers a sentence boundary (``. `` / newline) at or before *limit*, else
+    falls back to the last whole word, always ending with an explicit ellipsis.
+    Fixes error/summary strings that were clipped mid-sentence.
+    """
+    if not text:
+        return text
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    window = text[:limit]
+    # Prefer the last sentence end within the window.
+    for sep in (". ", ".\n", "\n", "! ", "? "):
+        idx = window.rfind(sep)
+        if idx > 0:
+            return text[: idx + 1].rstrip()
+    # Otherwise back off to the last whole word.
+    sp = window.rfind(" ")
+    cut = window[:sp] if sp > 0 else window
+    return cut.rstrip() + " …"
+
+
+# --- Paging + compaction (feedback A1) ---
+# Opt-in only: callers that pass `page` get a paged+compact response; without
+# `page` the legacy raw shape is preserved so the dashboard keeps working.
+
+def _exp_sort_key(exp: dict):
+    """Newest-first ordering key: prefer finished_at, then created_at, then id.
+
+    Returns a tuple sorted descending, so more-recent experiments come first.
+    """
+    return (
+        exp.get("finished_at") or "",
+        exp.get("created_at") or "",
+        str(exp.get("id") or ""),
+    )
+
+
+def _list_row(exp: dict, idea_cache: dict[int, dict], metric: str | None,
+              tag_list: list[str]) -> dict:
+    """One trimmed listing row: short idea/description, metrics, soft error."""
+    label = exp.get("label", str(exp["id"]))
+    idea_id = exp["idea_id"]
+    if idea_id not in idea_cache:
+        idea_cache[idea_id] = store.get_idea(idea_id)
+    idea = idea_cache[idea_id]
+
+    # When ?metric=X is given, show only that value (the caller knows what
+    # they care about). Otherwise include all metrics — we don't know which
+    # metric the project optimises, so hardcoding names would be wrong.
+    all_metrics = exp.get("metrics") or {}
+    shown_metrics = {metric: all_metrics[metric]} if metric else all_metrics
+
+    out = {
+        "id":          exp["id"],
+        "label":       label,
+        "idea_id":     idea_id,
+        "idea":        _description_short(idea["description"], limit=80) if idea else None,
+        "description": _description_short(exp.get("description")) or None,
+        "status":      exp.get("status"),
+        "metrics":     shown_metrics,
+        # Truncate on a sentence/word boundary (not mid-sentence) so the
+        # error stays readable; full text via GET /experiments/{ref}.
+        "error":       _truncate_soft(exp.get("error"), limit=240) or None,
+        "runtime":     exp.get("runtime"),
+        "finished_at": exp.get("finished_at"),
+    }
+    if tag_list:
+        out["tags"] = exp.get("tags")
+    if exp.get("status") == "failed":
+        out["log"] = f"GET /api/v1/experiments/{label}/log?tail=50"
+    return out
+
+
 # --- Experiments ---
+
+def _create_and_queue_experiment(
+    idea_id: int,
+    description: str,
+    meta: dict,
+    tags: list[str] | None,
+    script_content: str | None,
+) -> dict:
+    """Shared create+queue path used by single-create and batch-create.
+
+    Mirrors the exact store calls of the single-create handler so scoring and
+    queueing behave identically: create the record, optionally write the wrapped
+    script, flip to ``queued``, broadcast, and wake the scheduler. Returns the
+    (queued) experiment record.
+    """
+    exp = store.create_experiment(idea_id, description, meta=meta, tags=tags)
+
+    if script_content is not None:
+        script_path = REPO_DIR / exp["script"]
+        script_path.parent.mkdir(parents=True, exist_ok=True)
+        script_path.write_text(_wrap_script(script_content))
+        os.chmod(script_path, 0o755)
+
+    # The queue takes it from here. New experiments default to "queued";
+    # the scheduler will start them when capacity permits and dependencies
+    # have settled. The legacy `auto_start` flag is ignored — queueing is
+    # mandatory now.
+    label = exp.get("label") or str(exp["id"])
+    store.update_experiment(
+        label,
+        status="queued",
+        queued_at=datetime.now(timezone.utc).isoformat(),
+    )
+    exp = store.get_experiment(label) or exp
+    try:
+        from .. import ws as ws_mod
+        ws_mod.broadcaster.broadcast_soon({
+            "type": "experiment_queued",
+            "label": exp.get("label") or str(exp["id"]),
+            "idea_id": exp.get("idea_id"),
+        })
+    except Exception:
+        pass
+    runner.wake_scheduler()
+    return exp
+
+
+def _queue_position(exp: dict) -> int | None:
+    """Best-effort queue position for *exp* among queued/pending experiments."""
+    queue = [
+        e for e in store.list_all_experiments()
+        if e.get("status") in ("queued", "pending")
+    ]
+    queue.sort(key=lambda e: (
+        -int((e.get("meta") or {}).get("priority", 0) or 0),
+        e.get("created_at") or "",
+    ))
+    for i, qexp in enumerate(queue):
+        if qexp.get("id") == exp.get("id"):
+            return i + 1
+    return None
+
 
 @router.post("/ideas/{idea_id}/experiments", status_code=201)
 async def create_experiment(idea_id: int, req: NewExperimentRequest):
@@ -77,50 +218,13 @@ async def create_experiment(idea_id: int, req: NewExperimentRequest):
         extra_meta["depends_on_success"] = False
     merged_meta = {**(req.meta or {}), **extra_meta}
 
-    exp = store.create_experiment(idea_id, req.description, meta=merged_meta, tags=req.tags)
-
-    if req.script_content is not None:
-        script_path = REPO_DIR / exp["script"]
-        script_path.parent.mkdir(parents=True, exist_ok=True)
-        script_path.write_text(_wrap_script(req.script_content))
-        os.chmod(script_path, 0o755)
-
-    # The queue takes it from here. New experiments default to "queued";
-    # the scheduler will start them when capacity permits and dependencies
-    # have settled. The legacy `auto_start` flag is ignored — queueing is
-    # mandatory now.
-    store.update_experiment(
-        exp.get("label") or str(exp["id"]),
-        status="queued",
-        queued_at=datetime.now(timezone.utc).isoformat(),
+    exp = _create_and_queue_experiment(
+        idea_id, req.description, merged_meta, req.tags, req.script_content,
     )
-    exp = store.get_experiment(exp.get("label") or str(exp["id"])) or exp
-    try:
-        from .. import ws as ws_mod
-        ws_mod.broadcaster.broadcast_soon({
-            "type": "experiment_queued",
-            "label": exp.get("label") or str(exp["id"]),
-            "idea_id": exp.get("idea_id"),
-        })
-    except Exception:
-        pass
-    runner.wake_scheduler()
 
     # Surface the queue position so callers know roughly when to expect it
     # to start. Best-effort — doesn't account for resource capacity.
-    queue = [
-        e for e in store.list_all_experiments()
-        if e.get("status") in ("queued", "pending")
-    ]
-    queue.sort(key=lambda e: (
-        -int((e.get("meta") or {}).get("priority", 0) or 0),
-        e.get("created_at") or "",
-    ))
-    queue_position = None
-    for i, qexp in enumerate(queue):
-        if qexp.get("id") == exp.get("id"):
-            queue_position = i + 1
-            break
+    queue_position = _queue_position(exp)
 
     label = exp.get("label") or str(exp["id"])
     return {
@@ -134,18 +238,108 @@ async def create_experiment(idea_id: int, req: NewExperimentRequest):
     }
 
 
+@router.post("/ideas/{idea_id}/experiments/batch", status_code=201)
+async def batch_create_experiments(idea_id: int, request: Request):
+    """Batch-create queued experiments that share one script (feedback M1).
+
+    Creates one queued experiment per entry in ``metas``, each reusing the same
+    ``shared_script_content`` and the exact single-create store path (so
+    scoring/queueing behave identically). Body:
+
+        {"shared_script_content": "#!/bin/bash\\npython train.py",
+         "metas": [
+             {"label"?: str, "meta"?: {"lr": 0.01}, "tags"?: ["sweep"], "description"?: str},
+             {"meta": {"lr": 0.03}},
+             ...
+         ]}
+
+    ``label`` is advisory only (recorded on meta as ``requested_label``); the
+    store assigns the canonical ``<idea>.<seq>`` label. Returns a compact
+    summary. Fails 400 on empty/invalid ``metas``.
+
+    Example:
+        POST /api/v1/ideas/1/experiments/batch
+        -> {"created": [{"id": "1.4", "label": "1.4"}, {"id": "1.5", "label": "1.5"}], "count": 2}
+    """
+    idea = store.get_idea(idea_id)
+    if not idea:
+        raise HTTPException(404, "idea not found")
+    if idea["status"] != "active":
+        raise HTTPException(400, f"idea is {idea['status']}, cannot add experiments")
+
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "body must be valid JSON")
+    if not isinstance(body, dict):
+        raise HTTPException(400, "body must be a JSON object")
+
+    shared_script_content = body.get("shared_script_content")
+    if shared_script_content is not None and not isinstance(shared_script_content, str):
+        raise HTTPException(400, "shared_script_content must be a string")
+
+    metas = body.get("metas")
+    if not isinstance(metas, list) or not metas:
+        raise HTTPException(400, "metas must be a non-empty list")
+
+    # Validate every entry up front so we don't half-create the batch.
+    for i, m in enumerate(metas):
+        if not isinstance(m, dict):
+            raise HTTPException(400, f"metas[{i}] must be an object")
+        if "meta" in m and m["meta"] is not None and not isinstance(m["meta"], dict):
+            raise HTTPException(400, f"metas[{i}].meta must be an object")
+        if "tags" in m and m["tags"] is not None and not isinstance(m["tags"], list):
+            raise HTTPException(400, f"metas[{i}].tags must be a list")
+
+    created = []
+    for m in metas:
+        # Preserve an advisory label on meta (store assigns the real one).
+        merged_meta = dict(m.get("meta") or {})
+        if m.get("label"):
+            merged_meta.setdefault("requested_label", m["label"])
+        description = m.get("description") or "batch experiment"
+        exp = _create_and_queue_experiment(
+            idea_id,
+            description,
+            merged_meta,
+            m.get("tags"),
+            shared_script_content,
+        )
+        created.append({"id": exp["id"], "label": exp.get("label") or str(exp["id"])})
+
+    return {"created": created, "count": len(created)}
+
+
 @router.get("/ideas/{idea_id}/experiments")
-def list_experiments(idea_id: int):
+def list_experiments(
+    idea_id: int,
+    page: int | None = Query(default=None, description="1-based page number. OPT-IN: when set, returns a paged+compact shape; omit for the full raw list."),
+    page_size: int = Query(default=10, description="Page size when paging is enabled."),
+):
     """List all experiments belonging to an idea.
 
     Returns every experiment record for the given idea, regardless of status.
     Each record includes the experiment's description, status, metrics, meta,
     tags, and timing information. Failed experiments include a ``read_log`` URL.
 
+    Feedback A1 — opt-in paging: pass ``?page=N`` to receive a newest-first,
+    compacted page ``{"experiments": [...], "page", "page_size", "total",
+    "total_pages"}``. When ``page`` is omitted the legacy raw list is returned
+    UNCHANGED so the dashboard (which consumes this as ``Experiment[]``) keeps
+    working.
+
     Example:
         GET /api/v1/ideas/1/experiments
         -> [{"id": 4, "idea_id": 1, "status": "completed", "metrics": {"acc": 0.91}, ...}, ...]
+        GET /api/v1/ideas/1/experiments?page=1&page_size=10
+        -> {"experiments": [{"id": 4, ..., "metrics": {"_collapsed": true, ...}}], "page": 1, ...}
     """
+    # A1: paging is OPT-IN. Only switch to the paged+compact shape when `page`
+    # is provided; compact the full store records so placeholders point at real
+    # nested data reachable via GET /experiments/<ref>.
+    if page is not None:
+        return _paginate(store.list_experiments(idea_id), page, page_size)
+
     exps = store.list_experiments(idea_id)
     results = []
     for exp in exps:
@@ -175,72 +369,72 @@ def list_all_experiments(
     status: str | None = Query(default=None, description="Filter by status: completed, failed, running, pending"),
     tags: str | None = Query(default=None, description="Comma-separated tags — experiments must have ALL (AND filter)"),
     metric: str | None = Query(default=None, description="Only return experiments that have this metric"),
+    page: int = Query(default=1, ge=1, description="1-based page number (newest first). Paging is ALWAYS on; page 1 is returned when omitted."),
+    page_size: int = Query(default=10, ge=1, le=100, description="Rows per page (max 100)."),
+    show_all: bool = Query(default=False, alias="all", description="Escape hatch: return EVERY row unpaged. Expensive on large projects — prefer filters + paging."),
 ):
-    """List all experiments across all ideas.
+    """List experiments across all ideas — PAGED, newest first.
 
-    Returns every experiment with its metrics, tags, and parent idea description.
-    Use filters to narrow results. This is more efficient than fetching
-    experiments per-idea when you need data across the whole project.
+    Returns trimmed rows (metrics, status, short idea/description) with pager
+    meta ``{"experiments": [...], "page", "page_size", "total", "total_pages"}``.
+    Page 1 with 10 rows is the default; use ``?page=N`` / ``?page_size=M`` to
+    walk further. Filters (status/tags/metric) compose with paging.
 
     Pass ``?metric=X`` to filter to experiments that have metric X **and** show
     only that metric value in the response — useful for focused comparison when
     you know which metric you're optimising. Without ``?metric``, all metrics
     are returned for each experiment.
 
+    ``?all=true`` returns the full unpaged list (legacy shape with ``count``).
+    On large projects this is hundreds of kB — use it only when you truly need
+    every row; filters + paging cover almost every workflow.
+
     Example:
-        GET /api/v1/experiments
+        GET /api/v1/experiments                     (page 1, newest 10)
+        GET /api/v1/experiments?page=3&page_size=25
         GET /api/v1/experiments?status=completed&metric=score
-        GET /api/v1/experiments?tags=baseline&metric=accuracy
+        GET /api/v1/experiments?tags=baseline&all=true
     """
     all_exps = store.list_all_experiments()
     idea_cache: dict[int, dict] = {}
 
     tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
 
-    results = []
+    filtered = []
     for exp in all_exps:
         if status and exp.get("status") != status:
             continue
         if tag_list and not all(t in (exp.get("tags") or []) for t in tag_list):
             continue
-        all_metrics = exp.get("metrics") or {}
-        if metric and metric not in all_metrics:
+        if metric and metric not in (exp.get("metrics") or {}):
             continue
-        label = exp.get("label", str(exp["id"]))
-        idea_id = exp["idea_id"]
-        if idea_id not in idea_cache:
-            idea_cache[idea_id] = store.get_idea(idea_id)
-        idea = idea_cache[idea_id]
+        filtered.append(exp)
 
-        # When ?metric=X is given, show only that value (the caller knows what
-        # they care about). Otherwise include all metrics — we don't know which
-        # metric the project optimises, so hardcoding names would be wrong.
-        if metric:
-            shown_metrics = {metric: all_metrics[metric]}
-        else:
-            shown_metrics = all_metrics
+    tag_hint = (
+        None if tag_list else
+        "Tags hidden in bulk listing. Use GET /experiments/tags to list tags, then GET /experiments?tags=<tag> to filter by approach."
+    )
 
-        out = {
-            "id":          exp["id"],
-            "label":       label,
-            "idea_id":     idea_id,
-            "idea":        _description_short(idea["description"], limit=80) if idea else None,
-            "description": _description_short(exp.get("description")) or None,
-            "status":      exp.get("status"),
-            "metrics":     shown_metrics,
-            "error":       _description_short(exp.get("error"), limit=120) or None,
-            "runtime":     exp.get("runtime"),
-            "finished_at": exp.get("finished_at"),
-        }
-        if tag_list:
-            out["tags"] = exp.get("tags")
-        if exp.get("status") == "failed":
-            out["log"] = f"GET /api/v1/experiments/{label}/log?tail=50"
-        results.append(out)
+    if show_all:
+        results = [_list_row(e, idea_cache, metric, tag_list) for e in filtered]
+        resp = {"experiments": results, "count": len(results)}
+        if tag_hint:
+            resp["tag_hint"] = tag_hint
+        return resp
 
-    resp = {"experiments": results, "count": len(results)}
-    if not tag_list:
-        resp["tag_hint"] = "Tags hidden in bulk listing. Use GET /experiments/tags to list tags, then GET /experiments?tags=<tag> to filter by approach."
+    ordered = sorted(filtered, key=_exp_sort_key, reverse=True)
+    total = len(ordered)
+    total_pages = math.ceil(total / page_size) if total else 0
+    window = ordered[(page - 1) * page_size:(page - 1) * page_size + page_size]
+    resp = {
+        "experiments": [_list_row(e, idea_cache, metric, tag_list) for e in window],
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+        "total_pages": total_pages,
+    }
+    if tag_hint:
+        resp["tag_hint"] = tag_hint
     return resp
 
 
@@ -640,14 +834,44 @@ def serve_repo_file(file_path: str):
 
 # --- Parameterized experiment routes (MUST come after literal paths) ---
 
+def _queue_position(exp_id) -> int | None:
+    """1-based position of *exp_id* in the scheduler's queued/pending order."""
+    queue = [
+        e for e in store.list_all_experiments()
+        if e.get("status") in ("queued", "pending")
+    ]
+    queue.sort(key=lambda e: (
+        -int((e.get("meta") or {}).get("priority", 0) or 0),
+        e.get("created_at") or "",
+    ))
+    for i, qexp in enumerate(queue):
+        if qexp.get("id") == exp_id:
+            return i + 1
+    return None
+
+
 _META_STRIP = frozenset({
     "slurm_run_token", "slurm_job_id", "slurm_attempts",
     "worktree", "git_commit", "git_branch", "assigned_units",
 })
 
 
+# Meta values bigger than this (as JSON) are result blobs accumulated during
+# the run (scorecards, per-environment results, …), not startup config — they
+# are collapsed in GET /experiments/{ref} and served whole by …/{ref}/meta.
+_META_INLINE_MAX_BYTES = 1500
+
+
+def _visible_meta(exp: dict) -> dict:
+    """Experiment meta minus internal infrastructure keys."""
+    return {k: v for k, v in (exp.get("meta") or {}).items() if k not in _META_STRIP}
+
+
 @router.get("/experiments/{exp_ref}")
-def get_experiment(exp_ref: str):
+def get_experiment(
+    exp_ref: str,
+    metric: str | None = Query(default=None, description="Surface this metric as `selected_score` at the top level."),
+):
     """Get detail for a single experiment.
 
     Accepts global ID (``4``) or label (``1.2`` = idea 1, experiment 2).
@@ -655,18 +879,70 @@ def get_experiment(exp_ref: str):
     are stripped. Use ``GET /api/v1/wait?compare=true`` for best-score
     comparison (requires a full experiment scan).
 
+    ``meta`` shows startup keys only: values that grew large during the run
+    (accumulated results such as scorecards) are collapsed to a placeholder.
+    The complete dict is at ``GET /api/v1/experiments/{ref}/meta``.
+
     Example:
-        GET /api/v1/experiments/1.2
-        -> {"id": 4, "label": "1.2", "status": "completed", "metrics": {...}, ...}
+        GET /api/v1/experiments/1.2?metric=score
+        -> {"id": 4, "label": "1.2", "status": "completed", "metrics": {...},
+            "selected_score": {"metric": "score", "value": 0.68}, ...}
+    """
+    # Shallow-copy the store record (and meta) — this handler trims fields,
+    # and the store hands out its live dict.
+    exp = dict(_resolve_exp(exp_ref))
+    label = exp.get("label", str(exp["id"]))
+    if exp.get("status") == "failed":
+        exp["read_log"] = f"GET /api/v1/experiments/{label}/log?tail=50"
+
+    # Startup meta only: strip internal keys, collapse accumulated result blobs.
+    meta: dict = {}
+    collapsed = []
+    for k, v in _visible_meta(exp).items():
+        try:
+            size = len(json.dumps(v, default=str))
+        except (TypeError, ValueError):
+            size = _META_INLINE_MAX_BYTES + 1
+        if isinstance(v, (dict, list)) and size > _META_INLINE_MAX_BYTES:
+            meta[k] = {"_collapsed": True, "_bytes": size,
+                       "_via": f"GET /api/v1/experiments/{label}/meta"}
+            collapsed.append(k)
+        else:
+            meta[k] = v
+    exp["meta"] = meta
+    if collapsed:
+        exp["_note"] = (
+            f"meta keys {collapsed} hold accumulated results and are collapsed "
+            f"here; the full meta dict is at GET /api/v1/experiments/{label}/meta"
+        )
+
+    if metric:
+        exp["selected_score"] = {
+            "metric": metric,
+            "value": (exp.get("metrics") or {}).get(metric),
+        }
+    return exp
+
+
+@router.get("/experiments/{exp_ref}/meta")
+def get_experiment_meta(exp_ref: str):
+    """Full meta dict for one experiment — accumulated results included.
+
+    The companion of ``GET /experiments/{ref}``, which collapses large meta
+    values (scorecards and other result blobs written during the run). This
+    endpoint returns every meta key uncollapsed; only internal infrastructure
+    fields (slurm tokens, worktree paths, git hashes) are stripped.
+
+    Example:
+        GET /api/v1/experiments/1.2/meta
+        -> {"id": 4, "label": "1.2", "meta": {"scorecard": {...}, ...}}
     """
     exp = _resolve_exp(exp_ref)
-    if exp.get("status") == "failed":
-        label = exp.get("label", str(exp["id"]))
-        exp["read_log"] = f"GET /api/v1/experiments/{label}/log?tail=50"
-    # Strip internal-only meta keys
-    meta = {k: v for k, v in (exp.get("meta") or {}).items() if k not in _META_STRIP}
-    exp["meta"] = meta
-    return exp
+    return {
+        "id": exp["id"],
+        "label": exp.get("label", str(exp["id"])),
+        "meta": _visible_meta(exp),
+    }
 
 
 @router.delete("/experiments/{exp_ref}")
@@ -684,6 +960,16 @@ def delete_experiment(exp_ref: str):
     deleted = store.delete_experiment(exp_id)
     if deleted is None:
         raise HTTPException(404, "experiment not found")
+    try:
+        from .. import ws as ws_mod
+        ws_mod.broadcaster.broadcast_soon({
+            "type": "experiment_deleted",
+            "label": exp.get("label", str(exp_id)),
+            "experiment_id": exp_id,
+            "idea_id": deleted.get("idea_id"),
+        })
+    except Exception:
+        pass
     return {
         "deleted": True,
         "experiment_id": exp_id,
@@ -709,10 +995,13 @@ async def start_experiment(exp_ref: str, req: StartExperimentRequest | None = No
     The ``timeout`` field on the request is recorded on the experiment's
     meta and applied by the scheduler when it eventually dispatches.
 
+    Returns a SHORT object (id/label/status/queue_position/message) — the
+    full record stays one ``GET /api/v1/experiments/{ref}`` away.
+
     Example:
         POST /api/v1/experiments/4/start {"timeout": 600}
-        -> {"status": "queued", "experiment": {"id": 4, ...},
-            "queue_position": 2, "current_branch": "idea/1", ...}
+        -> {"status": "queued", "id": 4, "label": "1.2", "idea_id": 1,
+            "queue_position": 2, "message": "..."}
     """
     # Resolve exp ref (global ID or label like '1.2')
     exp_check = _resolve_exp(exp_ref)
@@ -721,9 +1010,13 @@ async def start_experiment(exp_ref: str, req: StartExperimentRequest | None = No
     if exp_check.get("status") == "running":
         return {
             "status": "already_running",
-            "experiment": exp_check,
-            "current_branch": get_current_branch(cwd=REPO_DIR),
-            **_idea_context(exp_check.get("idea_id")),
+            "id": exp_check["id"],
+            "label": label,
+            "idea_id": exp_check.get("idea_id"),
+            "message": (
+                f"already running — watch GET /api/v1/experiments/{label}/progress "
+                f"or GET /api/v1/wait"
+            ),
         }
     if exp_check.get("status") == "completed":
         raise HTTPException(
@@ -759,26 +1052,20 @@ async def start_experiment(exp_ref: str, req: StartExperimentRequest | None = No
         pass
     runner.wake_scheduler()
 
-    # Build the response in the same shape /rerun returns: include
-    # queue_position so the caller knows where they sit.
+    # SHORT response (same slimming as /cancel): id/label/queue_position,
+    # not the full record — that stays behind GET /experiments/{ref}.
     exp = store.get_experiment(label) or exp_check
-    queue = [
-        e for e in store.list_all_experiments()
-        if e.get("status") in ("queued", "pending")
-    ]
-    queue.sort(key=lambda e: (
-        -int((e.get("meta") or {}).get("priority", 0) or 0),
-        e.get("created_at") or "",
-    ))
-    for i, qexp in enumerate(queue):
-        if qexp.get("id") == exp.get("id"):
-            exp["queue_position"] = i + 1
-            break
-
-    result = {"status": "queued", "experiment": exp}
-    result["current_branch"] = get_current_branch(cwd=REPO_DIR)
-    result.update(_idea_context(exp.get("idea_id")))
-    return result
+    return {
+        "status": "queued",
+        "id": exp["id"],
+        "label": label,
+        "idea_id": exp.get("idea_id"),
+        "queue_position": _queue_position(exp.get("id")),
+        "message": (
+            f"queued — the scheduler dispatches when capacity frees. "
+            f"Watch GET /api/v1/experiments/{label}/progress or GET /api/v1/wait."
+        ),
+    }
 
 
 
@@ -793,10 +1080,13 @@ async def rerun_experiment(exp_ref: str):
     create_experiment call. Works on experiments in any status; useful for
     re-running a completed experiment to check reproducibility.
 
+    Returns a SHORT object (id/label/status/queue_position/rerun_of/message)
+    — fetch the full new record via ``GET /api/v1/experiments/{label}``.
+
     Example:
         POST /api/v1/experiments/1.2/rerun
-        -> {"id": "1.3", "label": "1.3", "idea_id": 1, "status": "queued",
-            "queue_position": 2, "rerun_of": "1.2", ...}
+        -> {"status": "queued", "id": 7, "label": "1.3", "idea_id": 1,
+            "queue_position": 2, "rerun_of": "1.2", "message": "..."}
     """
     source = _resolve_exp(exp_ref)
     idea_id = source["idea_id"]
@@ -852,22 +1142,20 @@ async def rerun_experiment(exp_ref: str):
         pass
     runner.wake_scheduler()
 
-    # Surface queue position so the caller sees where they sit.
-    queue = [
-        e for e in store.list_all_experiments()
-        if e.get("status") in ("queued", "pending")
-    ]
-    queue.sort(key=lambda e: (
-        -int((e.get("meta") or {}).get("priority", 0) or 0),
-        e.get("created_at") or "",
-    ))
-    for i, qexp in enumerate(queue):
-        if qexp.get("id") == new_exp.get("id"):
-            new_exp["queue_position"] = i + 1
-            break
-
-    new_exp["rerun_of"] = source.get("label", str(source["id"]))
-    return new_exp
+    # SHORT response (same slimming as /start and /cancel).
+    src_label = source.get("label", str(source["id"]))
+    return {
+        "status": "queued",
+        "id": new_exp["id"],
+        "label": label,
+        "idea_id": idea_id,
+        "queue_position": _queue_position(new_exp.get("id")),
+        "rerun_of": src_label,
+        "message": (
+            f"queued copy of {src_label} — full record: "
+            f"GET /api/v1/experiments/{label}"
+        ),
+    }
 
 
 @router.post("/experiments/{exp_ref}/cancel")
@@ -879,9 +1167,13 @@ async def cancel_experiment(exp_ref: str):
     sent to force termination. Pending experiments are marked ``cancelled``
     immediately.
 
+    Feedback A2: returns a SHORT object only (id/label/status/cancelled_at/
+    message), not the full experiment record.
+
     Example:
         POST /api/v1/experiments/4/cancel
-        -> {"id": 4, "status": "cancelled", ...}
+        -> {"id": 4, "label": "1.2", "status": "cancelled",
+            "cancelled_at": "2026-06-26T...Z", "message": "..."}
     """
     exp = _resolve_exp(exp_ref)
     try:
@@ -892,12 +1184,28 @@ async def cancel_experiment(exp_ref: str):
     # The cancel side effect may still have succeeded (process killed,
     # status updated by the watch task) — only return 404 if the
     # experiment really isn't in the store.
-    if result is None:
-        latest = store.get_experiment(exp["id"])
-        if latest is None:
-            raise HTTPException(404, "experiment not found")
-        return latest
-    return result
+    latest = result if result is not None else store.get_experiment(exp["id"])
+    if latest is None:
+        raise HTTPException(404, "experiment not found")
+
+    # A2: return a SHORT object reflecting the CURRENT status only. Do not fold
+    # in the full record. NOTE: there is a known separate bug where a cancelled
+    # run can later report status "completed"; that end-state correctness fix is
+    # deferred to a later batch — we simply report whatever status is set now.
+    status = latest.get("status")
+    label = latest.get("label") or exp.get("label") or str(exp["id"])
+    if status not in ("cancelled", "cancelling"):
+        # Flag the known race: cancel was requested but status isn't cancelled.
+        message = f"cancel requested; current status is '{status}' (may settle to cancelled shortly)"
+    else:
+        message = "experiment cancelled"
+    return {
+        "id": latest.get("id", exp["id"]),
+        "label": label,
+        "status": status,
+        "cancelled_at": datetime.now(timezone.utc).isoformat(),
+        "message": message,
+    }
 
 
 @router.get("/experiments/{exp_ref}/log")
@@ -924,7 +1232,10 @@ def get_experiment_log(
         GET /api/v1/experiments/4/log?grep=error&above=2&below=5  # with context
     """
     exp = _resolve_exp(exp_ref)
-    raw = runner.get_log(exp["id"], tail=None)
+    # Fast path: a plain tail read never loads the whole log — grep/head/full
+    # still need the complete file.
+    want_full = bool(grep) or full or head is not None or not tail
+    raw = runner.get_log(exp["id"], tail=None if want_full else tail)
     if raw is None:
         raise HTTPException(404, "experiment log not found")
 
@@ -944,8 +1255,9 @@ def get_experiment_log(
     elif head is not None:
         log = "\n".join(raw.splitlines()[:head])
     else:
-        effective_tail = tail if tail else None
-        log = "\n".join(raw.splitlines()[-effective_tail:]) if effective_tail else raw
+        # Tail was already applied by runner.get_log's seek-based fast path
+        # (raw IS the tail); tail=0 means the full log.
+        log = raw
     return {"log": log}
 
 
@@ -1017,6 +1329,78 @@ def get_experiment_output(exp_ref: str):
     )
 
 
+# --- Progress heartbeat tracking ---
+# The `.progress` file only holds the *latest* JSON body (it is overwritten on
+# every POST). To report heartbeat timing (last_at / avg interval / age) we
+# append one ISO-8601 timestamp per POST to a sibling `.heartbeats` file and
+# summarise it on GET. Fail-soft everywhere so heartbeat bookkeeping never
+# breaks the actual progress read/write.
+
+_HEARTBEAT_KEEP = 500  # bound the sidecar so it can't grow without limit
+
+
+def _heartbeat_path(script: str):
+    """Sidecar file (next to `.progress`) holding one ISO timestamp per beat."""
+    return REPO_DIR / script.replace(".sh", ".heartbeats")
+
+
+def _record_heartbeat(script: str) -> None:
+    """Append the current UTC timestamp to the experiment's heartbeat log.
+
+    True O(1) append — the old read-all/rewrite-all per beat was two full
+    NFS passes per POST /progress. The file is compacted back down to
+    _HEARTBEAT_KEEP lines only when it grows past twice that.
+    """
+    try:
+        path = _heartbeat_path(script)
+        jsonio.append_line(path, datetime.now(timezone.utc).isoformat())
+        # Occasional compaction, amortized: at most one rewrite per
+        # _HEARTBEAT_KEEP appends.
+        try:
+            if path.stat().st_size > _HEARTBEAT_KEEP * 2 * 30:  # ~33 B/line
+                lines = path.read_text().splitlines()
+                if len(lines) > _HEARTBEAT_KEEP * 2:
+                    path.write_text("\n".join(lines[-_HEARTBEAT_KEEP:]) + "\n")
+        except OSError:
+            pass
+    except OSError:
+        pass  # heartbeat tracking is best-effort
+
+
+def _heartbeat_summary(script: str) -> dict:
+    """Summarise recorded heartbeats: last_at, avg interval, age, count.
+
+    avg_interval_sec is null when there are fewer than 2 heartbeats.
+    """
+    summary = {"last_at": None, "avg_interval_sec": None, "since_last_sec": None, "count": 0}
+    try:
+        path = _heartbeat_path(script)
+        if not path.exists():
+            return summary
+        stamps = []
+        for line in path.read_text().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                stamps.append(datetime.fromisoformat(line))
+            except ValueError:
+                continue
+        if not stamps:
+            return summary
+        summary["count"] = len(stamps)
+        last = stamps[-1]
+        summary["last_at"] = last.isoformat()
+        now = datetime.now(timezone.utc)
+        summary["since_last_sec"] = round((now - last).total_seconds(), 3)
+        if len(stamps) >= 2:
+            gaps = [(stamps[i] - stamps[i - 1]).total_seconds() for i in range(1, len(stamps))]
+            summary["avg_interval_sec"] = round(sum(gaps) / len(gaps), 3)
+    except (OSError, ValueError):
+        pass
+    return summary
+
+
 @router.get("/experiments/{exp_ref}/progress")
 def get_experiment_progress(exp_ref: str):
     """Read script-reported progress for an experiment.
@@ -1033,6 +1417,9 @@ def get_experiment_progress(exp_ref: str):
     exp = _resolve_exp(exp_ref)
     status = exp["status"]
     result: dict = {"status": status}
+
+    # Heartbeat timing: last beat, avg interval between beats, age since last.
+    result["heartbeat"] = _heartbeat_summary(exp["script"])
 
     # For terminal states return metrics as the final progress snapshot so the
     # UI never shows stale "starting" data from an earlier write.
@@ -1075,12 +1462,19 @@ async def post_experiment_progress(exp_ref: str, request: Request):
     except Exception:
         raise HTTPException(400, "body must be valid JSON")
 
-    # Write to the local progress file so GET /progress still works.
+    # Write to the local progress file so GET /progress still works, and
+    # record a heartbeat for beat timing — both on the threadpool: this
+    # handler is async (for request.json()) and progress posts arrive every
+    # few seconds per running experiment, so NFS writes must not ride the
+    # event loop.
     progress_path = REPO_DIR / exp["script"].replace(".sh", ".progress")
+    loop = asyncio.get_running_loop()
     try:
-        progress_path.write_text(json.dumps(body))
+        await loop.run_in_executor(
+            None, lambda: jsonio.write_json(progress_path, body, indent=0))
     except OSError as exc:
-        raise HTTPException(500, f"could not write progress file: {exc}")
+        raise HTTPException(500, f"could not write progress file: {sanitize_error(exc)}")
+    await loop.run_in_executor(None, _record_heartbeat, exp["script"])
 
     # Broadcast immediately — no rsync lag.
     ws_mod.broadcaster.broadcast_soon({
@@ -1155,7 +1549,7 @@ def get_experiment_via_idea(idea_id: int, exp_ref: str):
     Agents sometimes construct this URL pattern. This route serves the
     experiment data directly and includes a hint about the canonical URL.
     """
-    exp = _resolve_exp(exp_ref)
+    exp = dict(_resolve_exp(exp_ref))  # copy — never annotate the live record
     exp["_hint"] = f"Tip: use GET /api/v1/experiments/{exp_ref} directly next time"
     return exp
 
