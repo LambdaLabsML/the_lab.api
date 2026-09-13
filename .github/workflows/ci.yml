@@ -1,0 +1,16 @@
+name: CI
+
+# Verify-only: runs the same build as the release channels (build.yml) without
+# publishing, so a change that breaks the dashboard build or drops it out of the
+# wheel fails on the PR instead of at release time.
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    uses: ./.github/workflows/build.yml
+    with:
+      # Distinguishable in logs; never published.
+      version: 0.0.0.dev0

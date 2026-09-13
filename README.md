@@ -27,13 +27,15 @@ Jump To: <a href="#quick-start">Quick Start</a>, <a href="#how-it-works">How It 
 ## Quick Start
 
 ```bash
-# User install
-pipx install git+https://github.com/LambdaLabsML/the_lab.api.git
+# User install — from the main branch, dashboard included, no Node.js needed
+pipx install --force "git+https://github.com/LambdaLabsML/the_lab.api@main"
+the-lab fetch-dashboard --tag main
 
-# Or install from source while developing
+# Or install from source while developing (needs Node.js >= 18 for the dashboard)
 git clone https://github.com/LambdaLabsML/the_lab.api.git
 cd the_lab.api
 pip install -e .
+./build-dashboard.sh
 
 # Initialize your project (interactive — sets up prompts, MCP, gitignore)
 cd /path/to/your/repo
@@ -48,6 +50,26 @@ the-lab-agent loop -d 15m
 ```
 
 That's it. Open `http://localhost:8000` and watch the agent work.
+
+<br/>
+
+### Install channels
+
+The dashboard is compiled build output and is not in the git tree, so a plain
+`pipx install git+…` gives you a working API with the UI replaced by a
+"Dashboard not built" page. CI builds the dashboard and attaches it to releases;
+pick a channel:
+
+| | Command | Gets |
+|---|---|---|
+| **main** (latest code) | `pipx install --force "git+https://github.com/LambdaLabsML/the_lab.api@main"`<br/>`the-lab fetch-dashboard --tag main` | `main` HEAD + a dashboard built from it. Both commands are permanent. |
+| **tagged release** (stable) | `the-lab fetch-dashboard` after installing, **or** the wheel URL from the [latest release](https://github.com/LambdaLabsML/the_lab.api/releases/latest) | The newest tagged version. The release wheel already contains the dashboard, so it is a single install. |
+| **clone** (developing) | `pip install -e .` + `./build-dashboard.sh` | Your working tree. Needs Node.js ≥ 18. |
+
+`the-lab fetch-dashboard` drops the compiled dashboard into an existing install
+at any time — no reinstall, no Node.js. It defaults to the latest tagged release
+(prereleases excluded) and takes `--tag main` for the rolling build. For a
+private repo, pass a token: `GITHUB_TOKEN=$(gh auth token) the-lab fetch-dashboard`.
 
 See [LambdaLabsML/the_lab.api.demo](https://github.com/LambdaLabsML/the_lab.api.demo) for a working example project.
 
