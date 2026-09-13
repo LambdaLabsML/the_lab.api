@@ -155,9 +155,10 @@ export async function getExperimentScript(
 /** GET /api/v1/experiments/:expRef/output */
 export async function getExperimentOutput(
   expRef: string | number,
+  signal?: AbortSignal,
 ): Promise<{ output: string; base_path: string; format?: "md" | "html" }> {
   return fetchJson<{ output: string; base_path: string; format?: "md" | "html" }>(
-    `/api/v1/experiments/${expRef}/output`,
+    `/api/v1/experiments/${expRef}/output`, { signal }, { expectedStatuses: [404] },
   );
 }
 

@@ -13,3 +13,12 @@ export function recordRequest(url: string, error?: unknown): void {
   }
   apiFailures.value = next;
 }
+
+/** Clear a stale failure for an expected non-success response without
+ * claiming it was an API success (for example, output that is not written yet). */
+export function clearRequestFailure(url: string): void {
+  const key = url.split("?")[0];
+  const next = { ...apiFailures.peek() };
+  delete next[key];
+  apiFailures.value = next;
+}

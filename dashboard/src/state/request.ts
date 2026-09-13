@@ -1,10 +1,15 @@
-import { recordRequest } from "./request-health";
+import { apiFailures, clearRequestFailure, lastApiSuccess, recordRequest } from "./request-health";
 
 export class HttpError extends Error {
   constructor(public status: number, message: string) { super(message); }
 }
 
-export interface RequestPolicy { timeoutMs?: number; retries?: number; retryDelayMs?: number }
+export interface RequestPolicy {
+  timeoutMs?: number; retries?: number; retryDelayMs?: number;
+  /** Non-success statuses expected by this specific read. They still reject,
+   * but do not pollute global API-health and are never retried. */
+  expectedStatuses?: number[];
+}
 
 function timeoutError(method: string, url: string): DOMException {
   const mutationNote = method === "GET"
@@ -74,6 +79,11 @@ async function request<T>(url: string, init: RequestInit | undefined, policy: Re
       return data;
     } catch (error) {
       if (callerSignal?.aborted) throw error;
+      const expected = error instanceof HttpError && policy.expectedStatuses?.includes(error.status);
+      if (expected) {
+        clearRequestFailure(url);
+        throw error;
+      }
       recordRequest(url, error);
       const retryable = error instanceof HttpError
         ? [408, 429, 500, 502, 503, 504].includes(error.status)
@@ -98,3 +108,6 @@ export function requestJson<T>(url: string, init?: RequestInit, policy: RequestP
 export function requestText(url: string, init?: RequestInit, policy: RequestPolicy = {}): Promise<string> {
   return request(url, init, policy, (response) => response.text());
 }
+
+/** Test-only access to request-health behavior without a browser renderer. */
+export const __requestTest = { apiFailures, lastApiSuccess };

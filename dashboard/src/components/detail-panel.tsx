@@ -3,6 +3,9 @@ import { selectedIdea, selectedMetric, detailTimeline, detailSortNewest, colorTh
 import { scrollToExperiment, runningProgress, allExperiments } from "../state/signals";
 import { getIdea, getExperimentProgress, getExperimentLog, getExperimentScript, getExperimentOutput, getIdeaDiff } from "../state/api";
 import { subscribeWsEvents } from "../state/ws";
+import { HttpError } from "../state/request";
+import { canShowExperimentOutput, isOutputRefreshEvent, outputUnavailableState } from "../state/output-view";
+import { OutputController } from "../state/output-controller";
 import { formatTime, badgeHtml, escapeHtml } from "../lib/format";
 import { Lightbox } from "./lightbox";
 import { JsonView } from "./json-view";
@@ -13,6 +16,7 @@ import { getStatusColor, isLowerBetter } from "../lib/colors";
 
 // Map experiment status / note level → a <Badge> tone.
 const STATUS_TONE: Record<string, BadgeTone> = {
+  starting: "running",
   running: "running",
   pending: "neutral",
   completed: "good",
@@ -84,9 +88,13 @@ export function DetailPanel({ embedded = false }: { embedded?: boolean } = {}) {
   const [outputBasePath, setOutputBasePath] = useState("");
   const [outputFormat, setOutputFormat] = useState<"md" | "html">("md");
   const [outputLoading, setOutputLoading] = useState(false);
+  const [outputState, setOutputState] = useState<"ready" | "waiting" | "unavailable" | "error">("ready");
+  const [outputError, setOutputError] = useState("");
   const [outputFollowing, setOutputFollowing] = useState(true);
   const outputBodyRef = useRef<HTMLDivElement>(null);
   const outputPollRef = useRef<number | null>(null);
+  const outputControllerRef = useRef(new OutputController<{ output: string; base_path: string; format?: "md" | "html" }>());
+  const outputExpRef = useRef<Experiment | null>(null);
   // Remember open/closed state of <details> across polls so collapsible
   // sections survive the 5s refresh. Keyed by summary text; falls back to
   // position index when two summaries are identical.
@@ -149,7 +157,22 @@ export function DetailPanel({ embedded = false }: { embedded?: boolean } = {}) {
 
     function fetchData() {
       getIdea(ideaId, true)
-        .then((data) => { if (fetchRef.current === seq) { setIdea(data); setLoading(false); } })
+        .then((data) => {
+          if (fetchRef.current !== seq) return;
+          setIdea(data);
+          setOutputExp((open) => {
+            if (!open) return open;
+            const key = String(open.label || open.id);
+            const candidate = data.experiments?.find((item) => String(item.label || item.id) === key);
+            // A response started before a terminal WS event must not move the
+            // viewer back to running/starting merely because it arrived late.
+            const terminal = (status?: string) => ["completed", "failed", "cancelled"].includes(status || "");
+            const next = candidate && !(terminal(open.status) && !terminal(candidate.status)) ? candidate : open;
+            outputExpRef.current = next;
+            return next;
+          });
+          setLoading(false);
+        })
         .catch(() => { if (fetchRef.current === seq) { setIdea(null); setLoading(false); } });
     }
 
@@ -159,7 +182,8 @@ export function DetailPanel({ embedded = false }: { embedded?: boolean } = {}) {
     const un = subscribeWsEvents((ev) => {
       if (ev.idea_id === ideaId &&
           ["idea_changed", "note_added", "experiment_queued", "experiment_started",
-           "experiment_finished", "experiment_cancelled", "experiment_deleted"].includes(ev.type)) {
+           "experiment_finished", "experiment_cancelled", "experiment_deleted",
+           "experiment_log_updated", "experiment_output_updated", "experiment_progress_updated"].includes(ev.type)) {
         fetchData();
       }
     });
@@ -357,32 +381,59 @@ export function DetailPanel({ embedded = false }: { embedded?: boolean } = {}) {
   // --- Output ---
 
   function fetchOutputContent(exp: Experiment) {
-    getExperimentOutput(exp.label || exp.id)
-      .then((data) => {
+    const key = String(exp.label || exp.id);
+    return outputControllerRef.current.fetch(
+      key,
+      (signal) => getExperimentOutput(key, signal),
+      (data) => {
         setOutputContent(data.output);
         setOutputBasePath(data.base_path || "");
         setOutputFormat((data.format as "md" | "html") || "md");
+        setOutputState("ready");
+        setOutputError("");
         setOutputLoading(false);
-      })
-      .catch(() => { setOutputContent("(output file not found)"); setOutputLoading(false); });
+      },
+      (error) => {
+        const currentStatus = outputExpRef.current?.status ?? exp.status;
+        const state = outputUnavailableState(currentStatus, error instanceof HttpError ? error.status : undefined);
+        setOutputState(state);
+        setOutputError(state === "waiting" ? "Output has not arrived yet; the experiment is still running."
+          : state === "unavailable" ? "No output is available for this experiment. Inspect its log and Slurm sync status."
+          : "Could not refresh output. Existing output is kept below; retry when the server is reachable.");
+        setOutputLoading(false);
+      },
+    );
   }
 
   // Auto-refresh output when running
   useEffect(() => {
     if (outputPollRef.current) { clearInterval(outputPollRef.current); outputPollRef.current = null; }
-    if (!outputExp || outputExp.status !== "running") return;
+    if (!outputExp) return;
     const label = outputExp.label || String(outputExp.id);
     const un = subscribeWsEvents((ev) => {
-      if (ev.type === "experiment_progress_updated" && String(ev.label ?? "") === label) {
-        fetchOutputContent(outputExp);
+      if (isOutputRefreshEvent(ev.type) && String(ev.label ?? "") === label) {
+        const eventExperiment = ev.experiment as Experiment | undefined;
+        const current = eventExperiment
+          ? { ...outputExp, ...eventExperiment, meta: eventExperiment.meta ?? outputExp.meta }
+          : ev.type === "experiment_finished"
+          ? { ...outputExp, status: String(ev.status || outputExp.status) }
+          : outputExp;
+        if (current !== outputExp) setOutputExp(current);
+        outputExpRef.current = current;
+        fetchOutputContent(current);
       }
     });
-    outputPollRef.current = window.setInterval(() => fetchOutputContent(outputExp), 15_000);
+    if (["starting", "running"].includes(outputExp.status)) {
+      outputPollRef.current = window.setInterval(() => fetchOutputContent(outputExp), 10_000);
+    }
     return () => {
       un();
       if (outputPollRef.current) { clearInterval(outputPollRef.current); outputPollRef.current = null; }
     };
   }, [outputExp]);
+
+  useEffect(() => () => { outputControllerRef.current.close(); }, []);
+  useEffect(() => { outputExpRef.current = outputExp; }, [outputExp]);
 
   // Currently-displayed file: top of stack if any linked .md is open, else
   // the experiment's own output. Effects below depend on these so they
@@ -621,9 +672,13 @@ export function DetailPanel({ embedded = false }: { embedded?: boolean } = {}) {
     // Switching experiments clears the persisted state — different
     // output.md files shouldn't share open/closed memory.
     if (outputExp?.id !== exp.id) outputDetailsRef.current = new Map();
+    outputControllerRef.current.open(String(exp.label || exp.id));
+    outputExpRef.current = exp;
     setOutputExp(exp);
     setOutputContent(null);
     setOutputLoading(true);
+    setOutputState("ready");
+    setOutputError("");
     setOutputFollowing(true);
     setOutputFileStack([]);  // drop any previous linked-file navigation
     fetchOutputContent(exp);
@@ -978,7 +1033,12 @@ export function DetailPanel({ embedded = false }: { embedded?: boolean } = {}) {
         return (
           <Lightbox
             title={title}
-            onClose={() => { setOutputExp(null); setHash({ view: null, exp: null }); }}
+            onClose={() => {
+              outputControllerRef.current.close();
+              outputExpRef.current = null;
+              setOutputExp(null);
+              setHash({ view: null, exp: null });
+            }}
             bodyClass={isDoc ? "is-doc" : undefined}
             bodyRef={outputBodyRef}
             onBodyScroll={(e) => {
@@ -1053,6 +1113,34 @@ export function DetailPanel({ embedded = false }: { embedded?: boolean } = {}) {
             }
           >
             {(outputLoading || outputFileLoading) && <div class="lightbox-loading">Loading…</div>}
+            {outputState !== "ready" && (
+              <div class="lightbox-loading lightbox-loading--italic">
+                {outputError}
+                {outputState === "unavailable" && (
+                  <button type="button" onClick={() => {
+                    outputControllerRef.current.close();
+                    outputExpRef.current = null;
+                    setOutputExp(null);
+                    openLog(outputExp);
+                  }}>
+                    Show log
+                  </button>
+                )}
+              </div>
+            )}
+            {(() => {
+              const meta = outputExp.meta as Record<string, unknown> | undefined;
+              // Lifecycle records the successful timestamp; accept the older
+              // generic key during rolling upgrades.
+              const synced = meta?.slurm_last_successful_sync_at ?? meta?.slurm_last_sync_at;
+              const syncError = meta?.slurm_sync_error;
+              return (synced || syncError) ? (
+                <div class="lightbox-loading lightbox-loading--italic">
+                  {synced ? `Slurm synced ${formatTime(String(synced))}.` : "Slurm output sync pending."}
+                  {syncError ? ` Last sync issue: ${String(syncError)}` : ""}
+                </div>
+              ) : null;
+            })()}
             {displayedContent !== null && (
               displayedContent.startsWith("(") ? (
                 <div class="lightbox-loading lightbox-loading--italic">{displayedContent}</div>
@@ -1788,7 +1876,7 @@ function ExperimentItem({
         );
       })()}
       <div class="exp-actions">
-        {exp.has_output && onShowOutput && (
+        {canShowExperimentOutput(exp.status, exp.has_output) && onShowOutput && (
           <Toggle active={false} onClick={onShowOutput}>Show output</Toggle>
         )}
         <Toggle active={false} onClick={onShowLog}>Show log</Toggle>

@@ -11,7 +11,7 @@ const bundle = join(directory, "request.mjs");
 const pollingBundle = join(directory, "polling.mjs");
 await build({ entryPoints: ["src/state/request.ts"], outfile: bundle, bundle: true, platform: "node", format: "esm" });
 await build({ entryPoints: ["src/state/polling.ts"], outfile: pollingBundle, bundle: true, platform: "node", format: "esm" });
-const { createInFlightGuard, requestJson, requestText } = await import(pathToFileURL(bundle));
+const { createInFlightGuard, requestJson, requestText, __requestTest } = await import(pathToFileURL(bundle));
 const { __pollingTest } = await import(pathToFileURL(pollingBundle));
 const originalFetch = globalThis.fetch;
 after(async () => { globalThis.fetch = originalFetch; await rm(directory, { recursive: true }); });
@@ -50,6 +50,17 @@ test("authentication and malformed JSON errors do not retry", async () => {
   globalThis.fetch = async () => { calls++; return { ok: true, json: async () => { throw new SyntaxError("bad JSON"); } }; };
   await assert.rejects(requestJson("/bad-json"));
   assert.equal(calls, 2);
+});
+
+test("expected output 404 clears stale health without claiming API success", async () => {
+  globalThis.fetch = async () => ({ ok: false, status: 500 });
+  await assert.rejects(requestJson("/api/v1/experiments/1/output", undefined, { retries: 0 }));
+  assert.ok(__requestTest.apiFailures.value["/api/v1/experiments/1/output"]);
+  const previousSuccess = __requestTest.lastApiSuccess.value;
+  globalThis.fetch = async () => ({ ok: false, status: 404 });
+  await assert.rejects(requestJson("/api/v1/experiments/1/output", undefined, { expectedStatuses: [404] }));
+  assert.equal(__requestTest.apiFailures.value["/api/v1/experiments/1/output"], undefined);
+  assert.equal(__requestTest.lastApiSuccess.value, previousSuccess);
 });
 
 test("caller cancellation settles a hanging request without retry", async () => {
