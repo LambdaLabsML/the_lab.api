@@ -23,6 +23,75 @@ function snapshot(
   return JSON.stringify({ enabled, allowText, denyText, rwText, roText });
 }
 
+/** Sandbox-unavailable banner.
+ *
+ * "missing required binaries: rootlesskit, slirp4netns, bwrap" told people
+ * nothing actionable, so this spells out what each program does, which package
+ * ships it, and gives a copy-pasteable install command. Falls back to the raw
+ * details string when talking to a server that predates those fields.
+ */
+function SandboxUnavailable({ capabilities }: { capabilities: SandboxCapabilities }) {
+  const [copied, setCopied] = useState(false);
+  const reqs = capabilities.requirements ?? [];
+  const install = capabilities.install_command;
+
+  const copy = () => {
+    if (!install) return;
+    navigator.clipboard?.writeText(install).then(
+      () => { setCopied(true); setTimeout(() => setCopied(false), 1500); },
+      () => {},
+    );
+  };
+
+  // Older server (no structured fields) — show whatever it sent, preserving newlines.
+  if (!reqs.length && !install) {
+    return (
+      <div class="sandbox-warning">
+        <div class="sandbox-warning-head">Sandbox unavailable — experiments cannot run isolated.</div>
+        {capabilities.details && <pre class="sandbox-warning-raw">{capabilities.details}</pre>}
+      </div>
+    );
+  }
+
+  return (
+    <div class="sandbox-warning">
+      <div class="sandbox-warning-head">
+        {capabilities.summary || "Sandbox unavailable — experiments cannot run isolated."}
+      </div>
+      {reqs.length > 0 && (
+        <>
+          <div class="sandbox-warning-body">
+            The sandbox isolates experiments using standard Linux tooling, so these must be
+            installed on the host — The Lab cannot ship them:
+          </div>
+          <ul class="sandbox-warning-reqs">
+            {reqs.map((r) => (
+              <li key={r.binary}>
+                <code>{r.binary}</code> — {r.purpose}
+                {r.package !== r.binary && <span class="sandbox-warning-pkg"> (package: {r.package})</span>}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      {install && (
+        <div class="sandbox-warning-install">
+          <code>{install}</code>
+          <button type="button" class="ui-btn ui-btn--outlined sandbox-warning-copy" onClick={copy}>
+            {copied ? "copied" : "copy"}
+          </button>
+        </div>
+      )}
+      <div class="sandbox-warning-body">
+        Then reload this page to re-check. To run without isolation, disable the sandbox above.
+      </div>
+      {capabilities.reason === "probe_failed" && capabilities.details && (
+        <pre class="sandbox-warning-raw">{capabilities.details}</pre>
+      )}
+    </div>
+  );
+}
+
 export function SandboxView() {
   const [loaded, setLoaded] = useState(false);
   const [enabled, setEnabled] = useState(true);
@@ -221,10 +290,7 @@ export function SandboxView() {
       </div>
 
       {capabilities && !capabilities.available && (
-        <div class="sandbox-warning">
-          Sandbox runtime unavailable.
-          {capabilities.details && <span> {capabilities.details}</span>}
-        </div>
+        <SandboxUnavailable capabilities={capabilities} />
       )}
       {error && <div class="sandbox-error">{error}</div>}
 

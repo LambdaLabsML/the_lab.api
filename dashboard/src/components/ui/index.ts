@@ -11,4 +11,7 @@ export {
 } from "./primitives";
 export type { BadgeTone } from "./primitives";
 export { Tooltip } from "./tooltip";
+export { Stepper } from "./stepper";
+export { FloatCard } from "./float-card";
+export type { FloatAnchor } from "./float-card";
 export { experimentTipContent, ideaTipContent } from "./entity-tip";

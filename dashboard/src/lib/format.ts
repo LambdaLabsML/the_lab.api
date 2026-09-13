@@ -47,6 +47,12 @@ export function ideaTitle(s: string): string {
   return m ? m[0].trim() : s;
 }
 
+/** Short score for dense tables/rows: 123 · 1.23 · 0.123 (the Overview
+ *  experiment tables' format — reuse this everywhere a score is inlined). */
+export function fmtScoreShort(v: number): string {
+  return Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(2) : v.toFixed(3);
+}
+
 /**
  * Human-readable metric key:
  *   duration_s       → "duration (s)"

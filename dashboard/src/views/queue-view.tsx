@@ -10,7 +10,7 @@ import {
   upsertResource,
 } from "../state/api";
 import { selectedIdea } from "../state/settings";
-import { useDisclosure } from "../lib/hooks";
+import { useDisclosure, useLiveRefresh } from "../lib/hooks";
 import { Badge, EmptyState, IconButton, Toggle, type BadgeTone } from "../components/ui";
 import type {
   QueueExp,
@@ -410,15 +410,17 @@ export function QueueView() {
     }
   }
 
+  useLiveRefresh(
+    ["queue_changed", "experiment_queued", "experiment_started",
+     "experiment_finished", "experiment_cancelled", "experiment_deleted"],
+    refresh, 30_000);
   useEffect(() => {
     cancelledRef.current = false;
     refresh();
-    const poll = window.setInterval(refresh, 3000);
     const tick = window.setInterval(() => setTick((n) => n + 1), 30000);
     return () => {
       cancelledRef.current = true;
-      window.clearInterval(poll);
-      window.clearInterval(tick);
+      window.      window.clearInterval(tick);
     };
   }, []);
 

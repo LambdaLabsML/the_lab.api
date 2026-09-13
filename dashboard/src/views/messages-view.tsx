@@ -1,9 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { listAgents, listMessages } from "../state/api";
+import { useLiveRefresh } from "../lib/hooks";
 import type { AgentEntry, MessageEntry } from "../lib/types";
 import { Badge, EmptyState, IconButton } from "../components/ui";
-import { agentColor, agentInitials } from "../lib/colors";
+import { agentColor } from "../lib/colors";
 import { messagesReadByMe } from "../state/settings";
+import { focusMessageId } from "../state/agent-activity";
+import { AgentPill } from "../components/agent-pill";
+import { RichText, stripRouting } from "../components/rich-text";
 
 /** Format a created_at ISO timestamp as "Xs ago" / "Xm ago" / "Xh ago" / "Xd ago". */
 function relativeTime(iso: string): string {
@@ -87,17 +91,32 @@ export function MessagesView() {
     }
   }
 
+  useLiveRefresh(["message_received", "agent_changed"], refresh, 30_000);
   useEffect(() => {
     cancelledRef.current = false;
     refresh();
-    const poll = window.setInterval(refresh, 5000);
     const tickT = window.setInterval(() => setTick((n) => n + 1), 30000);
     return () => {
       cancelledRef.current = true;
-      window.clearInterval(poll);
-      window.clearInterval(tickT);
+      window.      window.clearInterval(tickT);
     };
   }, []);
+
+  // Deep-link from the sidebar: expand + scroll to + flash the focused message.
+  const focusId = focusMessageId.value;
+  const [flashId, setFlashId] = useState<number | null>(null);
+  useEffect(() => {
+    if (focusId == null || !loaded) return;
+    if (!messages.some((m) => m.id === focusId)) return;
+    focusMessageId.value = null;                       // consume
+    setExpanded((prev) => { const n = new Set(prev); n.add(focusId); return n; });
+    setFlashId(focusId);
+    requestAnimationFrame(() => {
+      document.getElementById(`msg-${focusId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+    const t = window.setTimeout(() => setFlashId(null), 2500);
+    return () => window.clearTimeout(t);
+  }, [focusId, loaded, messages]);
 
   const roleByAgent = useMemo(() => {
     const map: Record<string, string> = {};
@@ -114,17 +133,6 @@ export function MessagesView() {
     if (to.startsWith("agent:")) return labelAgent(to.slice(6));
     if (to.startsWith("role:")) return `role:${to.slice(5)}`;
     return to;
-  }
-  function recipientColor(to: string): string {
-    if (to.startsWith("agent:")) return agentColor(to.slice(6));
-    return "var(--accent)";
-  }
-  function describeSender(m: MessageEntry): string {
-    if (m.from_agent) {
-      const role = m.from_role || roleByAgent[m.from_agent];
-      return role ? `${m.from_agent} · ${role}` : m.from_agent;
-    }
-    return m.from_role || "system";
   }
 
   // Perspective: "me" uses local read state; an agent uses its server read_by.
@@ -220,7 +228,7 @@ export function MessagesView() {
           >
             <option value="">you (the dashboard)</option>
             {agents.map((a) => (
-              <option key={a.agent_id} value={a.agent_id}>{labelAgent(a.agent_id)}{a.listening ? " · 🎧" : ""}</option>
+              <option key={a.agent_id} value={a.agent_id}>{labelAgent(a.agent_id)}{a.listening ? " · live" : ""}</option>
             ))}
           </select>
         </label>
@@ -232,7 +240,7 @@ export function MessagesView() {
         >
           <option value="">All agents</option>
           {agents.map((a) => (
-            <option key={a.agent_id} value={a.agent_id}>{labelAgent(a.agent_id)}{a.listening ? " · 🎧" : ""}</option>
+            <option key={a.agent_id} value={a.agent_id}>{labelAgent(a.agent_id)}{a.listening ? " · live" : ""}</option>
           ))}
         </select>
         <select
@@ -259,12 +267,11 @@ export function MessagesView() {
 
       {listeningAgents.length > 0 && (
         <div class="messages-listening">
-          <span class="messages-listening-label">🎧 listening now</span>
+          <span class="messages-listening-label"><span class="messages-listening-dot" />listening now</span>
           {listeningAgents.map((a) => (
             <button
               key={a.agent_id}
               class="messages-listening-chip"
-              style={{ color: agentColor(a.agent_id), borderColor: agentColor(a.agent_id) }}
               title={`Actively running the-lab messages — click to view ${a.agent_id}'s inbox`}
               onClick={() => setViewAs(a.agent_id)}
             >
@@ -276,7 +283,7 @@ export function MessagesView() {
 
       {inPerspective && (
         <div class="messages-perspective-note">
-          👁 Viewing <b style={{ color: agentColor(viewAs) }}>{labelAgent(viewAs)}</b>'s inbox — read-only;
+          Viewing <b style={{ color: agentColor(viewAs) }}>{labelAgent(viewAs)}</b>'s inbox — read-only;
           nothing is marked read for them.
         </div>
       )}
@@ -307,20 +314,17 @@ export function MessagesView() {
               const long = isLong(m.text);
               const open = expanded.has(m.id);
               const sColor = agentColor(m.from_agent);
+              const toId = m.to === "all" ? "all" : m.to.replace(/^agent:|^role:/, "");
               return (
-                <li class={`msg${read ? " is-read" : " is-new"}`} key={m.id}>
-                  <div
-                    class="msg-avatar"
-                    style={{ background: sColor }}
-                    title={`agent ${m.from_agent ?? "system"}`}
-                  >
-                    {agentInitials(m.from_agent)}
-                  </div>
+                <li class={`msg${read ? " is-read" : " is-new"}${flashId === m.id ? " is-focus" : ""}`}
+                  key={m.id} id={`msg-${m.id}`}>
                   <div class="msg-main">
                     <div class="msg-head">
-                      <span class="msg-from" style={{ color: sColor }}>{describeSender(m)}</span>
+                      <span class="msg-dot" style={{ background: sColor }} title={`agent ${m.from_agent ?? "system"}`} />
+                      {/* shared AgentPill language (see DESIGN.md) */}
+                      <AgentPill id={m.from_agent ?? m.from_role ?? "system"} />
                       <span class="msg-arrow">→</span>
-                      <span class="msg-to" style={{ color: recipientColor(m.to) }}>{describeRecipient(m.to)}</span>
+                      <AgentPill id={toId} />
                       <span class="msg-time" title={m.created_at}>{relativeTime(m.created_at)}</span>
                       {inPerspective ? (
                         <span
@@ -336,7 +340,9 @@ export function MessagesView() {
                       )}
                     </div>
 
-                    <div class={`msg-body${long && !open ? " is-clamped" : ""}`}>{m.text}</div>
+                    <div class={`msg-body${long && !open ? " is-clamped" : ""}`}>
+                      <RichText text={stripRouting(m.text)} />
+                    </div>
                     {long && (
                       <button class="msg-expand" onClick={() => toggleExpand(m.id)}>
                         {open ? "Show less" : "Show more"}
@@ -348,14 +354,7 @@ export function MessagesView() {
                         <>
                           <span class="msg-readers-label">read by</span>
                           {readers.map((rid) => (
-                            <span
-                              class="msg-reader"
-                              key={rid}
-                              title={`read by ${rid}`}
-                              style={{ color: agentColor(rid), borderColor: agentColor(rid) }}
-                            >
-                              {labelAgent(rid)}
-                            </span>
+                            <span key={rid} title={`read by ${rid}`}><AgentPill id={rid} /></span>
                           ))}
                         </>
                       ) : (

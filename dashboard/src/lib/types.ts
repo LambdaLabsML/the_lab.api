@@ -52,6 +52,7 @@ export interface Experiment {
   label?: string;
   description: string;
   status: string;          // 'running' | 'completed' | 'failed' | 'cancelled' | 'pending'
+  status_msg?: string | null;  // terminal-reason detail (timeout/cap_abandoned/sigterm/error/…)
   idea_status?: string;
   idea_description?: string;
   metrics?: Record<string, number>;
@@ -144,6 +145,9 @@ export interface ChartDataResult {
 /** Response from GET /api/v1/experiments/:id/progress */
 export interface ProgressResponse {
   progress: Record<string, unknown> | null;
+  /** Heartbeat timing (M3): last_at / avg_interval_sec / since_last_sec / count. */
+  heartbeat?: Record<string, unknown> | null;
+  status?: string;
 }
 
 /** Request body for POST /api/v1/ideas/suggest */
@@ -158,6 +162,14 @@ export interface SandboxCapabilities {
   available: boolean;
   missing: string[];
   details: string;
+  /** One-line headline. Absent on servers predating the actionable messages. */
+  summary?: string;
+  /** "missing_binaries" | "probe_failed" */
+  reason?: string;
+  /** Per-missing-binary explanation: what it does and which package ships it. */
+  requirements?: { binary: string; package: string; purpose: string }[];
+  /** Distro-appropriate install command for the missing packages. */
+  install_command?: string;
 }
 
 export interface SandboxObservedEntry {
