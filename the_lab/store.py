@@ -844,6 +844,9 @@ class Store:
         return exp
 
     def transition_experiment(self, exp_ref, allowed: set[str] | tuple[str, ...],
+                              *, expected_meta: dict | None = None,
+                              meta_updates: dict | None = None,
+                              meta_remove: tuple[str, ...] | list[str] = (),
                               **fields) -> dict | None:
         """Atomically update only when the record is in an expected state.
 
@@ -858,6 +861,18 @@ class Store:
             cur = self._experiments.get(label)
             if not cur or cur.get("status") not in allowed:
                 return None
+            if expected_meta and any((cur.get("meta") or {}).get(k) != v
+                                     for k, v in expected_meta.items()):
+                return None
+            # Apply small meta patches under the same lock as the state CAS.
+            # Monitor heartbeats must never replace a concurrently-written
+            # result/attempt metadata dictionary with an older snapshot.
+            if meta_updates is not None or meta_remove:
+                patched_meta = dict(cur.get("meta") or {})
+                patched_meta.update(meta_updates or {})
+                for key in meta_remove:
+                    patched_meta.pop(key, None)
+                fields = {**fields, "meta": patched_meta}
             renderable_changed = any(
                 k in RENDERABLE_EXPERIMENT_FIELDS and cur.get(k) != v
                 for k, v in fields.items()

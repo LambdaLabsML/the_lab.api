@@ -139,3 +139,7 @@ class RequeueRequest(BaseModel):
 
 class SlurmDoneRequest(BaseModel):
     exit_code: int = 0
+    # The wrapper's Slurm attempt identity.  Required by the endpoint for
+    # mutation; optional here to produce a clear endpoint error for legacy
+    # wrappers instead of silently accepting a stale callback.
+    job_id: str | None = None

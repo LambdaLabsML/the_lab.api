@@ -1532,6 +1532,10 @@ async def pull_experiment_results(exp_ref: str):
     exp = _resolve_exp(exp_ref)
     label = exp.get("label") or str(exp["id"])
     ok = await runner.pull_results_for_label(label)
+    if not ok:
+        # The wrapper treats a non-2xx response as "do not delete remote
+        # output".  Returning 200 {ok:false} previously lost that guarantee.
+        raise HTTPException(503, "remote Slurm artifacts were not synced; retry is safe")
     return {"ok": ok, "label": label}
 
 
@@ -1614,7 +1618,7 @@ async def rerun_experiment_via_idea(idea_id: int, exp_ref: str):
 
 @router.post("/experiments/{exp_ref}/requeue")
 async def requeue_experiment(exp_ref: str, req: RequeueRequest | None = None):
-    """Mark a running or failed experiment as queued for re-dispatch.
+    """Mark the current running Slurm attempt as queued for re-dispatch.
 
     Called by the Slurm wrapper when the job is preempted (SIGTERM received).
     Records the event in meta.slurm_attempts, resets status to 'queued',
@@ -1635,24 +1639,26 @@ async def requeue_experiment(exp_ref: str, req: RequeueRequest | None = None):
     meta["slurm_attempts"] = slurm_attempts
     meta.pop("slurm_job_id", None)
 
-    updated = (await run_blocking(store.update_experiment,
-        label,
+    updated = (await run_blocking(store.transition_experiment,
+        label, {"running"},
         status="queued",
         queued_at=now,
         meta=meta,
         error=None,
     ))
-    runner.wake_scheduler()
+    if updated:
+        runner.wake_scheduler()
 
-    try:
-        from .. import ws as ws_mod
-        ws_mod.broadcaster.broadcast_soon({
-            "type": "experiment_queued",
-            "label": label,
-            "idea_id": exp.get("idea_id"),
-        })
-    except Exception:
-        pass
+    if updated:
+        try:
+            from .. import ws as ws_mod
+            ws_mod.broadcaster.broadcast_soon({
+                "type": "experiment_queued",
+                "label": label,
+                "idea_id": exp.get("idea_id"),
+            })
+        except Exception:
+            pass
 
     return updated or store.get_experiment(label) or exp
 
@@ -1666,17 +1672,35 @@ async def slurm_done(exp_ref: str, req: SlurmDoneRequest | None = None):
     completion path (it rsyncs results and parses metrics); this endpoint
     is a fast-path hint so the lab marks failures quickly.
 
-    - exit_code == 0: leave as-is (monitor will complete it after rsync)
-    - exit_code != 0: mark as failed with the exit code
+    The callback is only a hint.  It must match the current attempt's pulled
+    ``exit-status.json``; otherwise an old wrapper can race a requeue/cancel.
     """
     exp = _resolve_exp(exp_ref)
     label = exp.get("label") or str(exp["id"])
-    exit_code = (req.exit_code if req else None) or 0
+    if req is None or "exit_code" not in req.model_fields_set:
+        raise HTTPException(422, "exit_code is required for a Slurm completion callback")
+    job_id = str(req.job_id or "")
+    current_job_id = str((exp.get("meta") or {}).get("slurm_job_id") or "")
+    if not job_id or job_id != current_job_id:
+        raise HTTPException(409, "Slurm callback does not match the current attempt")
+    status_path = (REPO_DIR / exp["script"]).parent / "exit-status.json"
+    try:
+        durable = await run_blocking(jsonio.read_json, status_path, default={})
+    except Exception:
+        durable = {}
+    if (not isinstance(durable, dict) or str(durable.get("job_id") or "") != job_id
+            or not isinstance(durable.get("exit_code"), int)
+            or durable["exit_code"] != req.exit_code):
+        # The monitor will retry pull/accounting; do not manufacture an exit 0
+        # or let an uncorrelated callback terminalize this record.
+        raise HTTPException(409, "durable exit status for this Slurm attempt is not available")
+    exit_code = req.exit_code
     now = datetime.now(timezone.utc).isoformat()
 
     if exit_code != 0:
-        updated = (await run_blocking(store.update_experiment,
-            label,
+        updated = (await run_blocking(store.transition_experiment,
+            label, {"running"},
+            expected_meta={"slurm_job_id": job_id},
             status="failed",
             error=f"slurm job exited with code {exit_code}",
             pid=None,

@@ -1505,6 +1505,13 @@ def main():
     else:
         scheme = "http"
 
+    # Slurm wrappers are generated in this process and must call back to the
+    # port/protocol this server actually owns.  An explicit THE_LAB_API_URL or
+    # resource callback_url still wins in the runner; these are only the
+    # reliable auto-detection fallback.
+    os.environ["THE_LAB_PORT"] = str(args.port)
+    os.environ["THE_LAB_API_SCHEME"] = scheme
+
     if not args.demo:  # demo never writes into the inspected repo
         save_runtime_info(
             repo_path,
