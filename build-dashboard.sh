@@ -2,11 +2,14 @@
 # Build the dashboard and deploy it by updating compatibility symlinks
 # so the running server picks up the new build without restart.
 set -e
-cd "$(dirname "$0")/dashboard"
+# Resolve the repo root before cd'ing — $0 is relative, so dirname must not be
+# re-evaluated from inside dashboard/.
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+cd "$ROOT/dashboard"
 npm run build
 
-ASSETS="$(dirname "$0")/the_lab/static/assets"
-HTML="$(dirname "$0")/the_lab/static/index.html"
+ASSETS="$ROOT/the_lab/static/assets"
+HTML="$ROOT/the_lab/static/index.html"
 
 # Read the new asset hashes from the freshly built index.html
 NEW_JS=$(grep -o 'assets/index-[^"]*\.js' "$HTML" | head -1 | sed 's|assets/||')
