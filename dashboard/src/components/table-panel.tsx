@@ -1,4 +1,5 @@
 import { useMemo, useState } from "preact/hooks";
+import { chartMetricKeys, useRequestedMetrics } from "../state/chart-query";
 import { allExperiments, allIdeas, currentLayout, highlightedIdea, runningProgress } from "../state/signals";
 import {
   selectedMetric, colorMode, activeTagFilters, tagFilterMode,
@@ -55,6 +56,7 @@ export function TablePanel() {
   const ideas = allIdeas.value;
   const layout = currentLayout.value;
   const metric = selectedMetric.value;
+  const catalog = chartMetricKeys.value;
 
   // Compute milestone experiment IDs (new global bests in chronological order)
   const milestoneIds = useMemo(() => {
@@ -164,9 +166,9 @@ export function TablePanel() {
 
   // Collect all metric keys from the filtered set
   const allMetricKeys = useMemo(() => {
-    const keys = collectChartKeys(filtered);
+    const keys = collectChartKeys(filtered, catalog);
     return keys.metrics;
-  }, [filtered]);
+  }, [filtered, catalog]);
 
   // Order columns: selected metric first, then the rest alphabetically
   const orderedMetrics = useMemo(() => {
@@ -184,6 +186,7 @@ export function TablePanel() {
       : orderedMetrics;
     return finalOrder.filter((k) => !hiddenCols.has(k));
   }, [orderedMetrics, allMetricKeys, colOrder, hiddenCols]);
+  useRequestedMetrics([...visibleMetrics, metric, sortKey]);
 
   // Sort experiments
   const sorted = useMemo(() => {

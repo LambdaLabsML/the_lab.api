@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "preact/hooks";
+import { chartMetricKeys, useRequestedMetrics } from "../../state/chart-query";
 import { allExperiments, allIdeas, currentLayout, cloneChartPanel, updatePanelTitle } from "../../state/signals";
 import {
   selectedMetric,
@@ -31,6 +32,7 @@ export function MetricsChart({ instanceId, initialMetric, hideClone }: { instanc
   const ideas = allIdeas.value;
   const layout = currentLayout.value;
   const metric = isClone ? localMetric : selectedMetric.value;
+  useRequestedMetrics([metric]);
   const mode = colorMode.value;
   const impOnly = improvementsOnly.value;
   const tags = activeTagFilters.value;
@@ -50,7 +52,8 @@ export function MetricsChart({ instanceId, initialMetric, hideClone }: { instanc
   const hideRunning = !showRunning.value;
 
   // Collect chartable keys grouped by source
-  const grouped = useMemo(() => collectChartKeys(experiments), [experiments]);
+  const catalog = chartMetricKeys.value;
+  const grouped = useMemo(() => collectChartKeys(experiments, catalog), [experiments, catalog]);
   const allKeys = [...grouped.metrics, ...grouped.nested, ...grouped.meta, ...grouped.timing];
 
   const setMetric = isClone

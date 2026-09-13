@@ -49,7 +49,7 @@ def size() -> int:
         return len(_cache)
 
 
-def cached_response(key_fn: Callable[..., tuple]):
+def cached_response(key_fn: Callable[..., tuple], version_fn=None):
     """Cache a route's return value, keyed by key_fn(*args, **kwargs) + store.version.
 
     The wrapped function is called only on a miss. On hit the cached value is
@@ -66,8 +66,8 @@ def cached_response(key_fn: Callable[..., tuple]):
             # (deps is initialised from app.py, which imports route modules).
             from . import deps
             store = deps.store
-            version = store.version if store is not None else 0
-            key = (fn.__name__, key_fn(*args, **kwargs), version)
+            version = version_fn(store) if version_fn and store is not None else (store.version if store is not None else 0)
+            key = (id(store), fn.__name__, key_fn(*args, **kwargs), version)
 
             # Fast path + coalescing decision, all under a single lock
             event: threading.Event | None = None

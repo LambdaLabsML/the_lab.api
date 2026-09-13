@@ -7,6 +7,7 @@
  */
 import { backlogData, allIdeas } from "../state/signals";
 import { wsCatchingUp, wsConnected, wsAuthFailed } from "../state/ws";
+import { chartHistory, chartHistoryLimit } from "../state/chart-query";
 
 export function Topbar() {
   const data = backlogData.value;
@@ -36,6 +37,11 @@ export function Topbar() {
         </span>
       )}
       <span class="slim-topbar-spacer" />
+      {chartHistory.value.has_more && <span>
+        Charts/table: newest {chartHistory.value.loaded} of {chartHistory.value.total} completed runs ·
+        <button onClick={() => { chartHistoryLimit.value += 250; }}>Load 250 older</button>
+        <button onClick={() => { chartHistoryLimit.value = 0; }}>Load all</button>
+      </span>}
     </header>
   );
 }

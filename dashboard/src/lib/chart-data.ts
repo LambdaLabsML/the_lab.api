@@ -86,8 +86,8 @@ function collectNumericPaths(
 }
 
 /** Collect all chartable keys from experiments, grouped by source. */
-export function collectChartKeys(experiments: Experiment[]): GroupedKeys {
-  const metricSet = new Set<string>();
+export function collectChartKeys(experiments: Experiment[], catalog: string[] = []): GroupedKeys {
+  const metricSet = new Set<string>(catalog);
   const metaSet = new Set<string>();
 
   for (const exp of experiments) {

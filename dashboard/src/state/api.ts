@@ -51,8 +51,10 @@ export async function getGraph(): Promise<GraphResponse> {
 }
 
 /** GET /api/v1/chart-data */
-export async function getChartData(): Promise<ChartDataResponse> {
-  return fetchJson<ChartDataResponse>("/api/v1/chart-data");
+export async function getChartData(limit = 0, metrics?: string): Promise<ChartDataResponse> {
+  const params = new URLSearchParams({ limit: String(limit), compact: "true" });
+  if (metrics !== undefined) params.set("metrics", metrics);
+  return fetchJson<ChartDataResponse>(`/api/v1/chart-data?${params}`);
 }
 
 // ---------------------------------------------------------------------------

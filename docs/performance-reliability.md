@@ -21,3 +21,23 @@ complete network transfer. Correlate it with browser timings and loop lag.
 Validation: `python -m unittest discover -s tests -v` includes a real ASGI
 request test that injects slow experiment writes while probing health, a
 write/reload check, bounded worker concurrency, and error propagation.
+
+## 2. Reduce dashboard refresh work
+
+Completed chart rows have a separate revision/cache; updates to running jobs
+do not rebuild completed history. `/chart-data` accepts `limit`, `metrics`, and
+`compact`; omitted options preserve full history. Metric discovery always
+includes the full completed history. The UI initially requests 250 completed
+runs and the metrics needed by its open charts/table, plus running progress.
+The top bar identifies the partial window and offers older/all history. Chart
+improvement comparisons apply to the loaded window; load all for global history.
+Table columns still default to all available top-level metrics; hiding columns
+reduces that view's requested metric set. Running progress is included in the
+chart response, eliminating a per-running-experiment request fanout.
+
+Dashboard requests bypass notification injection/buffering. Agent requests
+retain notifications. Validation covers metric projection, history limits,
+live progress freshness, completed-cache invalidation, and the dashboard bypass.
+The production dashboard build passes. Type checking has 42 existing baseline
+errors; this step adds none (compared by file and diagnostic, excluding shifted
+line numbers).

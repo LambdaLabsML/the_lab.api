@@ -1,6 +1,7 @@
 import { useRef, useEffect, useMemo, useState } from "preact/hooks";
 import { Chart } from "chart.js/auto";
 import { allExperiments, allIdeas, currentLayout, highlightedIdea, cloneChartPanel, updatePanelTitle } from "../../state/signals";
+import { chartMetricKeys, useRequestedMetrics } from "../../state/chart-query";
 import { chartNavClick } from "../../lib/hooks";
 import { IconButton } from "../ui";
 import {
@@ -100,7 +101,8 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric }: { i
   const experiments = allExperiments.value;
 
   // Compute chartable keys grouped by source
-  const grouped = useMemo(() => collectChartKeys(experiments), [experiments]);
+  const catalog = chartMetricKeys.value;
+  const grouped = useMemo(() => collectChartKeys(experiments, catalog), [experiments, catalog]);
   const metricKeys = [...grouped.metrics, ...grouped.nested, ...grouped.meta, ...grouped.timing];
   const ideas = allIdeas.value;
   const layout = currentLayout.value;
@@ -116,6 +118,7 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric }: { i
 
   const xMetric = isClone ? localX : scatterXMetric.value;
   const yMetric = isClone ? localY : scatterYMetric.value;
+  useRequestedMetrics([xMetric, yMetric, selectedMetric.value]);
 
   const setX = isClone
     ? (v: string) => { setLocalX(v); if (instanceId && updatePanelTitle) updatePanelTitle(instanceId, `Scatter: ${v} vs ${yMetric || "?"}`); }

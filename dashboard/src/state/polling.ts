@@ -25,7 +25,10 @@
 //   costs       60 s         60 s   (pull-sampled server-side; no events)
 // ------------------------------------------------------------
 
-import { getBacklog, getGraph, getChartData, getAllIdeas, getExperimentProgress } from "./api";
+import { getBacklog, getGraph, getChartData, getAllIdeas } from "./api";
+import { effect } from "@preact/signals";
+import { chartMetricKeys, chartHistoryLimit, chartHistory, chartRequestedMetrics } from "./chart-query";
+let stopChartQueryEffect: (() => void) | undefined;
 import { resetGlobalBestBeforeCache } from "../lib/colors";
 import {
   backlogData,
@@ -136,7 +139,18 @@ function pollChartData(): Promise<void> {
   if (chartInflight) return chartInflight;
   chartInflight = (async () => {
     try {
-      const data = await getChartData();
+      let limit: number;
+      let metrics: string;
+      let data;
+      // A selection can change while a request is in flight. Never publish
+      // the old metric selection over the new one; fetch the latest query.
+      do {
+        limit = chartHistoryLimit.peek();
+        metrics = chartRequestedMetrics.peek();
+        data = await getChartData(limit, metrics);
+      } while (limit !== chartHistoryLimit.peek() || metrics !== chartRequestedMetrics.peek());
+      chartMetricKeys.value = data.metric_keys ?? [];
+      chartHistory.value = data.history ?? { loaded: data.experiments.length, total: data.experiments.length, has_more: false };
       // Mark running experiments with a synthetic flag (matches dashboard.html behaviour).
       const running: Experiment[] = data.running.map((e) => ({
         ...e,
@@ -147,23 +161,12 @@ function pollChartData(): Promise<void> {
       resetGlobalBestBeforeCache();
       allExperiments.value = merged;
 
-      // Fetch progress for running experiments
-      const runningLabels = running.map((e) => e.label || String(e.id)).filter(Boolean);
-      if (runningLabels.length > 0) {
-        const progress: Record<string, number> = {};
-        await Promise.all(
-          runningLabels.map(async (label) => {
-            try {
-              const resp = await getExperimentProgress(label);
-              const pct = resp.progress?.pct_complete ?? resp.progress?.pct;
-              if (typeof pct === "number") progress[label] = pct;
-            } catch { /* ignore */ }
-          }),
-        );
-        runningProgress.value = progress;
-      } else {
-        runningProgress.value = {};
+      const progress: Record<string, number> = {};
+      for (const exp of running) {
+        const pct = exp.metrics?.pct_complete ?? exp.metrics?.pct;
+        if (typeof pct === "number") progress[exp.label || String(exp.id)] = pct;
       }
+      runningProgress.value = progress;
     } catch {
       // Network error — keep stale data.
     } finally {
@@ -460,6 +463,11 @@ export function refreshBacklogData(): Promise<void> {
 export function startPolling(): void {
   if (pollersStarted) return; // already running
   pollersStarted = true;
+  stopChartQueryEffect = effect(() => {
+    chartHistoryLimit.value;
+    chartRequestedMetrics.value;
+    queueMicrotask(() => { if (pollersStarted) pollChartData().then(() => pollLog()); });
+  });
 
   // Immediate initial fetches — run in parallel, then build log once chart
   // data is available so it can be joined against allExperiments.
@@ -514,6 +522,8 @@ function onVisibility(): void {
 /** Stop all polling intervals. */
 export function stopPolling(): void {
   pollersStarted = false;
+  stopChartQueryEffect?.();
+  stopChartQueryEffect = undefined;
   for (const t of pollTimers) clearTimeout(t);
   pollTimers = [];
   document.removeEventListener("visibilitychange", onVisibility);

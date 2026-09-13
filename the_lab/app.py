@@ -723,7 +723,7 @@ async def inject_notifications(request, call_next):
     ``X-Notifications-Count`` header instead so agents know to fetch
     ``GET /api/v1/notifications`` for the full payload.
     """
-    if _DEMO:
+    if _DEMO or request.headers.get("x-the-lab-source") == "dashboard":
         # Read-only demo: no agents, so no notifications — and skipping this
         # middleware entirely avoids buffering + re-serializing every JSON
         # response body just to (not) append a field.

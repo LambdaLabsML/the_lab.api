@@ -1101,8 +1101,50 @@ def _read_progress_cached(path) -> dict | None:
     return parsed
 
 
+@cached_response(lambda: (), version_fn=lambda s: s.completed_version)
+def _completed_chart_data():
+    rows = _chart_rows(store.list_experiments_by_status("completed"))["experiments"]
+    rows.sort(key=lambda e: (e.get("finished_at") or e.get("created_at") or "", str(e["id"])), reverse=True)
+    keys = sorted({key for row in rows for key in row["metrics"]})
+    return rows, keys
+
+
 @router.get("/chart-data")
-def get_chart_data():
+def get_chart_data(
+    limit: int = Query(default=0, ge=0, description="Newest completed rows; 0 returns all history."),
+    metrics: str | None = Query(default=None, description="Comma-separated metric keys; omit for all."),
+    compact: bool = False,
+):
+    """Completed history is cached separately from fresh running progress.
+
+    Metric discovery covers all history, even when a recent window is requested.
+    Omitting parameters preserves the full-history API. The dashboard requests
+    a compact window and explicitly increases it when older history is needed.
+    """
+    completed, keys = _completed_chart_data()
+    running = _chart_rows(store.list_experiments_by_status("running"))["running"]
+    keys = sorted(set(keys) | {k for row in running for k in row["metrics"]})
+    selected = set(metrics.split(",")) if metrics is not None else None
+
+    def project(row):
+        result = dict(row)
+        if selected is not None:
+            result["metrics"] = {k: v for k, v in row["metrics"].items() if k in selected}
+        if compact:
+            result["description"] = (row.get("description") or "")[:160]
+            result["idea_description"] = (row.get("idea_description") or "")[:160]
+        return result
+
+    window = completed[:limit] if limit else completed
+    return {
+        "experiments": [project(row) for row in window],
+        "running": [project(row) for row in running],
+        "metric_keys": keys,
+        "history": {"loaded": len(window), "total": len(completed), "has_more": len(window) < len(completed)},
+    }
+
+
+def _chart_rows(all_exps):
     """Get all data for the dashboard metrics chart in one request.
 
     .. note::
@@ -1121,7 +1163,6 @@ def get_chart_data():
         -> {"experiments": [{"id": 4, "metrics": {"acc": 0.91}, "idea_description": "...", ...}],
             "running": [{"id": 6, "metrics": {...}, "_running": true, "idea_description": "...", ...}]}
     """
-    all_exps = store.list_all_experiments()
     completed_exps = []
     running_progress = []
     # Build idea lookup once

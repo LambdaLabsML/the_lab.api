@@ -71,6 +71,8 @@ export interface Experiment {
 export interface ChartDataResponse {
   experiments: Experiment[];
   running: Experiment[];
+  metric_keys?: string[];
+  history?: { loaded: number; total: number; has_more: boolean };
 }
 
 /** A note attached to an idea */

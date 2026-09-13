@@ -126,6 +126,7 @@ class Store:
         # entries by (endpoint, params, version), so any write naturally
         # invalidates all cached reads.
         self._version = 0
+        self._completed_version = 0
 
         self._load_all()
 
@@ -143,6 +144,11 @@ class Store:
     def version(self) -> int:
         """Monotonic version counter — bumped on every state-mutating write."""
         return self._version
+
+    @property
+    def completed_version(self) -> int:
+        """Revision of completed chart rows (live progress does not invalidate it)."""
+        return self._completed_version
 
     def _ensure_gitignore(self):
         """Make sure .the_lab/ is gitignored on ALL branches."""
@@ -307,6 +313,7 @@ class Store:
         is_new = idea_id not in self._ideas
         with self._lock:
             self._ideas[idea_id] = idea
+            self._completed_version += 1
             if idea_id not in self._notes:
                 self._notes[idea_id] = []
             if idea_id not in self._exp_by_idea:
@@ -339,6 +346,7 @@ class Store:
             idea = {**cur, **fields}
             _write_json(self._idea_dir(idea_id) / "idea.json", idea)
             self._ideas[idea_id] = idea
+            self._completed_version += 1
             self._version += 1
         # Determine change type for WebSocket emit.
         new_status = idea.get("status")
@@ -560,6 +568,8 @@ class Store:
             self._experiments[label] = exp
             if renderable_changed:
                 self._version += 1
+                if cur.get("status") == "completed" or exp.get("status") == "completed":
+                    self._completed_version += 1
         return exp
 
     def _safe_cleanup_path(self, value, *, key: str, label: str) -> Path | None:
@@ -639,6 +649,8 @@ class Store:
 
         with self._lock:
             self._experiments.pop(label, None)
+            if exp.get("status") == "completed":
+                self._completed_version += 1
             labels = self._exp_by_idea.get(idea_id)
             if labels is not None:
                 labels.discard(label)
