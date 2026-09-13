@@ -26,15 +26,7 @@ import type {
 // Helpers
 // ---------------------------------------------------------------------------
 
-async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const headers = new Headers(init?.headers);
-  headers.set("X-The-Lab-Source", "dashboard");
-  const res = await fetch(url, { ...init, headers });
-  if (!res.ok) {
-    throw new Error(`${init?.method ?? "GET"} ${url} returned ${res.status}`);
-  }
-  return res.json() as Promise<T>;
-}
+import { requestJson as fetchJson, requestText } from "./request";
 
 // ---------------------------------------------------------------------------
 // Orientation
@@ -43,6 +35,22 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
 /** GET /api/v1/backlog */
 export async function getBacklog(): Promise<BacklogResponse> {
   return fetchJson<BacklogResponse>("/api/v1/backlog");
+}
+
+export async function getTask<T>(): Promise<T> {
+  return fetchJson<T>("/api/v1/task");
+}
+
+export async function updateTask<T>(text: string): Promise<T> {
+  return fetchJson<T>("/api/v1/task", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+}
+
+export async function getServerConfig<T>(): Promise<T> {
+  return fetchJson<T>("/api/v1/config");
 }
 
 /** GET /api/v1/graph */
@@ -266,6 +274,18 @@ export async function deletePromptRole(role: string): Promise<{ status: string; 
 /** GET /api/v1/agents */
 export async function listAgents(): Promise<AgentEntry[]> {
   return fetchJson<AgentEntry[]>("/api/v1/agents");
+}
+
+export async function getAgentHistory<T>(agentId: string, signal?: AbortSignal): Promise<T> {
+  return fetchJson<T>(`/api/v1/agents/${encodeURIComponent(agentId)}/history`, { signal });
+}
+
+export async function getPastAgents<T>(): Promise<T> {
+  return fetchJson<T>("/api/v1/agents/past");
+}
+
+export async function getAgentOutput(agentId: string, signal?: AbortSignal): Promise<string> {
+  return requestText(`/api/v1/agents/${encodeURIComponent(agentId)}/output`, { signal });
 }
 
 /** GET /api/v1/messages */

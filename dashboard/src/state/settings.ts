@@ -11,6 +11,7 @@
 // ------------------------------------------------------------
 
 import { signal, type Signal, effect } from "@preact/signals";
+import { getServerConfig } from "./api";
 
 const PREFIX = "the-lab:";
 
@@ -135,9 +136,7 @@ export const serverDemoMode = signal(false);
 
 export async function applyServerDefaults(): Promise<void> {
   try {
-    const resp = await fetch("/api/v1/config");
-    if (!resp.ok) return;
-    const config = await resp.json();
+    const config = await getServerConfig<Record<string, unknown>>();
     if (config.demo === true) serverDemoMode.value = true;
     for (const [key, sig] of Object.entries(CONFIG_KEYS)) {
       if (config[key] === undefined) continue;

@@ -41,3 +41,18 @@ live progress freshness, completed-cache invalidation, and the dashboard bypass.
 The production dashboard build passes. Type checking has 42 existing baseline
 errors; this step adds none (compared by file and diagnostic, excluding shifted
 line numbers).
+
+## 3. Bound dashboard requests and recover visibly
+
+Ordinary API requests have a 15-second deadline covering both headers and body.
+Transient GET failures retry at most twice with bounded backoff; authentication
+and JSON parse failures do not retry. Mutations are attempted exactly once.
+A mutation timeout explicitly warns that its outcome is unknown: refresh state
+before deciding whether to repeat it. Intentional streaming requests retain
+their streaming lifecycle rather than an ordinary JSON-request deadline.
+
+Recurring requests coalesce while in flight, release their guard on failure,
+and resume on later ticks. Component-owned requests can be cancelled on cleanup.
+Existing data remains visible after a failed refresh; the top bar shows failed
+endpoints, the last successful API update, and a manual retry action.
+Run the bundled TypeScript behavior tests with `cd dashboard && npm test`.

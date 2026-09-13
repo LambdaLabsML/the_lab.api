@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
-import { listAgents, unregisterAgent } from "../state/api";
+import { getAgentHistory, getAgentOutput, getPastAgents, listAgents, unregisterAgent } from "../state/api";
+import { createInFlightGuard } from "../state/request";
 import { AgentSpendChart } from "../components/agent-spend-chart";
 import type { AgentEntry } from "../lib/types";
 import { agentCostMap } from "../state/signals";
@@ -66,13 +67,11 @@ function AgentHistoryLightbox({ agentId, onClose }: { agentId: string; onClose: 
   useEscape(onClose);
 
   useEffect(() => {
-    fetch(`/api/v1/agents/${agentId}/history`)
-      .then(async (r) => {
-        if (!r.ok) throw new Error(await r.text());
-        return r.json() as Promise<HistoryData>;
-      })
+    const controller = new AbortController();
+    getAgentHistory<HistoryData>(agentId, controller.signal)
       .then(setData)
-      .catch((e) => setError(e.message));
+      .catch((e) => { if (!controller.signal.aborted) setError(e.message); });
+    return () => controller.abort();
   }, [agentId]);
 
   return (
@@ -174,25 +173,33 @@ function AgentOutputLightbox({ agentId, onClose }: { agentId: string; onClose: (
   const { open: follow, toggle: toggleFollow } = useDisclosure(true);
   const bodyRef = useRef<HTMLPreElement>(null);
   const pollRef = useRef<number | null>(null);
+  const requestRef = useRef<AbortController | null>(null);
   useEscape(onClose);
 
-  async function load() {
-    try {
-      const resp = await fetch(`/api/v1/agents/${agentId}/output`);
-      if (resp.ok) {
-        setText(await resp.text());
-      } else if (resp.status === 404) {
-        setText("(no output log yet — agent may not have started)");
-      }
-    } catch {
-      setText("(failed to load output)");
-    }
-  }
-
   useEffect(() => {
+    const load = createInFlightGuard(async () => {
+      const controller = new AbortController();
+      requestRef.current = controller;
+      try {
+        const output = await getAgentOutput(agentId, controller.signal);
+        if (!controller.signal.aborted) setText(output);
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        if ((error as { status?: number }).status === 404) {
+          setText("(no output log yet — agent may not have started)");
+          return;
+        }
+        setText("(failed to load output)");
+      } finally {
+        if (requestRef.current === controller) requestRef.current = null;
+      }
+    });
     load();
     pollRef.current = window.setInterval(load, 3000);
-    return () => { if (pollRef.current) window.clearInterval(pollRef.current); };
+    return () => {
+      if (pollRef.current) window.clearInterval(pollRef.current);
+      requestRef.current?.abort();
+    };
   }, [agentId]);
 
   useEffect(() => {
@@ -291,7 +298,7 @@ export function AgentsView() {
     try {
       const [list, past] = await Promise.all([
         listAgents(),
-        fetch("/api/v1/agents/past").then((r) => r.ok ? r.json() : []).catch(() => []) as Promise<PastAgent[]>,
+        getPastAgents<PastAgent[]>().catch(() => []),
       ]);
       if (cancelledRef.current) return null;
       setAgents(list);

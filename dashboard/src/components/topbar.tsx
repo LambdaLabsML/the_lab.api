@@ -8,8 +8,18 @@
 import { backlogData, allIdeas } from "../state/signals";
 import { wsCatchingUp, wsConnected, wsAuthFailed } from "../state/ws";
 import { chartHistory, chartHistoryLimit } from "../state/chart-query";
+import { apiFailures, lastApiSuccess } from "../state/request-health";
+import { retryDashboard } from "../state/polling";
+import { useEffect, useState } from "preact/hooks";
 
 export function Topbar() {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 5000);
+    return () => clearInterval(timer);
+  }, []);
+  const failures = Object.entries(apiFailures.value);
+  const updated = lastApiSuccess.value;
   const data = backlogData.value;
   const ideas = allIdeas.value;
 
@@ -37,6 +47,11 @@ export function Topbar() {
         </span>
       )}
       <span class="slim-topbar-spacer" />
+      <span role="status" title={failures.map(([path, error]) => `${path}: ${error}`).join("\n")}>
+        {failures.length ? "Some data is stale · " : ""}
+        {updated ? `Last API update ${Math.max(0, Math.floor((now - updated) / 1000))}s ago` : "Loading data…"}
+        {failures.length > 0 && <button onClick={() => { void retryDashboard(); }}>Retry refresh</button>}
+      </span>
       {chartHistory.value.has_more && <span>
         Charts/table: newest {chartHistory.value.loaded} of {chartHistory.value.total} completed runs ·
         <button onClick={() => { chartHistoryLimit.value += 250; }}>Load 250 older</button>

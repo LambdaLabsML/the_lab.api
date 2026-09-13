@@ -25,7 +25,7 @@
 //   costs       60 s         60 s   (pull-sampled server-side; no events)
 // ------------------------------------------------------------
 
-import { getBacklog, getGraph, getChartData, getAllIdeas } from "./api";
+import { getBacklog, getGraph, getChartData, getAllIdeas, getAgentCosts } from "./api";
 import { effect } from "@preact/signals";
 import { chartMetricKeys, chartHistoryLimit, chartHistory, chartRequestedMetrics } from "./chart-query";
 let stopChartQueryEffect: (() => void) | undefined;
@@ -280,9 +280,7 @@ function pollAgentCosts(): Promise<void> {
   if (agentCostInflight) return agentCostInflight;
   agentCostInflight = (async () => {
     try {
-      const resp = await fetch("/api/v1/agents/costs");
-      if (!resp.ok) return;
-      const data = await resp.json() as Record<string, AgentCostEntry>;
+      const data = await getAgentCosts() as Record<string, AgentCostEntry>;
       agentCostMap.value = data;
       recomputeTotals(data);
     } catch { /* network error — keep stale data */ }
@@ -519,6 +517,10 @@ function onVisibility(): void {
   }
 }
 
+export async function retryDashboard(): Promise<void> {
+  await Promise.allSettled([pollBacklog(), pollGraph(), pollChartData().then(pollLog), pollAgentCosts()]);
+}
+
 /** Stop all polling intervals. */
 export function stopPolling(): void {
   pollersStarted = false;
@@ -528,3 +530,22 @@ export function stopPolling(): void {
   pollTimers = [];
   document.removeEventListener("visibilitychange", onVisibility);
 }
+
+/** Narrow test hooks for the two recovery invariants that are otherwise
+ * private implementation details: shared in-flight poll requests must clear
+ * after a failure, and an obsolete chart query must never publish. */
+export const __pollingTest = {
+  pollBacklog,
+  pollChartData,
+  backlog: () => backlogData.peek(),
+  experiments: () => allExperiments.peek(),
+  setChartHistoryLimit: (limit: number) => { chartHistoryLimit.value = limit; },
+  reset(): void {
+    backlogInflight = null;
+    graphInflight = null;
+    chartInflight = null;
+    logInflight = null;
+    agentCostInflight = null;
+    ideasListInflight = null;
+  },
+};

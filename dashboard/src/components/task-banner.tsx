@@ -1,4 +1,5 @@
 import { useState, useEffect } from "preact/hooks";
+import { getTask, updateTask } from "../state/api";
 
 interface Task {
   text: string;
@@ -12,11 +13,7 @@ export function TaskBanner() {
 
   async function load() {
     try {
-      const resp = await fetch("/api/v1/task", { headers: { "X-The-Lab-Source": "dashboard" } });
-      if (resp.ok) {
-        const data = await resp.json();
-        setTask(data);
-      }
+      setTask(await getTask<Task>());
     } catch { /* ignore */ }
   }
 
@@ -30,15 +27,7 @@ export function TaskBanner() {
     setEditing(false);
     const text = draft.trim();
     try {
-      const resp = await fetch("/api/v1/task", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json", "X-The-Lab-Source": "dashboard" },
-        body: JSON.stringify({ text }),
-      });
-      if (resp.ok) {
-        const data = await resp.json();
-        setTask(data);
-      }
+      setTask(await updateTask<Task>(text));
     } catch { /* ignore */ }
   }
 
