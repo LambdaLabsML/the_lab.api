@@ -58,13 +58,20 @@ export const IDEA_PALETTE: string[] = [
   '#a5d6ff', '#7ee787', '#e078f0', '#ffa198', '#d8b4fe',
 ];
 
-/** Stable per-agent color: hash the agent id into the shared palette so an
+/** Identity palette for agents: cool hues only, so identity can never collide
+ *  with the status color language (no red=failed / green=done / yellow=running
+ *  / strong purple=milestone). See DESIGN.md § Status color language. */
+export const AGENT_PALETTE: string[] = [
+  '#58a6ff', '#39c5cf', '#79c0ff', '#f778ba', '#b392f0', '#56d4dd',
+];
+
+/** Stable per-agent color: hash the agent id into the identity palette so an
  *  agent keeps the same color across renders and components. */
 export function agentColor(id: string | null | undefined): string {
   if (!id) return 'var(--text-faint)';
   let h = 0;
   for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
-  return IDEA_PALETTE[h % IDEA_PALETTE.length];
+  return AGENT_PALETTE[h % AGENT_PALETTE.length];
 }
 
 /** 1–2 char initials for an agent avatar. */

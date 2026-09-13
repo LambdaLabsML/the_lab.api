@@ -59,6 +59,44 @@
   color: var(--badge-red-fg);
 }
 
+/* Sandbox-unavailable banner: what's missing, why it's needed, how to install. */
+.sandbox-warning-head { font-weight: 600; }
+.sandbox-warning-body { margin-top: var(--space-2); opacity: 0.85; }
+.sandbox-warning-reqs {
+  margin: var(--space-2) 0 0;
+  padding-left: 18px;
+  line-height: 1.55;
+
+  code { font-weight: 600; }
+}
+.sandbox-warning-pkg { opacity: 0.7; }
+.sandbox-warning-install {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+
+  code {
+    flex: 1;
+    min-width: 0;
+    overflow-x: auto;
+    white-space: pre;
+    padding: 4px 8px;
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, currentColor 12%, transparent);
+  }
+}
+.sandbox-warning-copy { flex: 0 0 auto; }
+.sandbox-warning-raw {
+  margin: var(--space-2) 0 0;
+  padding: var(--space-2) 8px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  white-space: pre-wrap;
+  font-size: var(--text-xs);
+  overflow-x: auto;
+}
+
 .sandbox-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from "preact/hooks";
-import { getApiStats } from "../state/api";
+import { getApiStats, getAgentCosts } from "../state/api";
 import type { ApiStatsResponse } from "../state/api";
 import { useSelection, useDisclosure } from "../lib/hooks";
 import { Stat, Toggle, IconButton, EmptyState } from "../components/ui";
@@ -53,22 +53,77 @@ function findExamples(
   return results;
 }
 
+// Period presets for filtering stats + costs. null = all time.
+const PERIODS: { id: string; label: string; hours: number | null }[] = [
+  { id: "1h", label: "1h", hours: 1 },
+  { id: "6h", label: "6h", hours: 6 },
+  { id: "24h", label: "24h", hours: 24 },
+  { id: "7d", label: "7d", hours: 168 },
+  { id: "all", label: "all", hours: null },
+];
+
+/** Cost spent within the window per agent: live agents diff their readings
+ *  series; completed agents count fully when they finished inside it. */
+function costInWindow(
+  rec: { cost?: number; ts?: string; live?: boolean; readings?: { ts: string; cost: number }[] },
+  sinceMs: number | null,
+): number {
+  if (rec.readings && rec.readings.length > 0) {
+    const last = rec.readings[rec.readings.length - 1].cost;
+    if (sinceMs == null) return last;
+    let before = 0;
+    for (const r of rec.readings) {
+      if (Date.parse(r.ts) < sinceMs) before = r.cost;
+      else break;
+    }
+    return Math.max(0, last - before);
+  }
+  if (typeof rec.cost === "number") {
+    if (sinceMs == null) return rec.cost;
+    return rec.ts && Date.parse(rec.ts) >= sinceMs ? rec.cost : 0;
+  }
+  return 0;
+}
+
 export function StatsView() {
   const [stats, setStats] = useState<StatsData | null>(null);
   const [patternLen, setPatternLen] = useState(1);
+  const [period, setPeriod] = useState("all");
+  const [unit, setUnit] = useState<"kb" | "tok">("kb");
+  // kB → estimated tokens at ~4 bytes/token (same estimate as the call cards)
+  const kb2tok = (kb: number) => kb * 256;
+  const fmtUnit = (kb: number) =>
+    unit === "kb"
+      ? kb.toLocaleString()
+      : kb2tok(kb) >= 1_000_000 ? `${(kb2tok(kb) / 1_000_000).toFixed(1)}M`
+        : kb2tok(kb) >= 1000 ? `${(kb2tok(kb) / 1000).toFixed(0)}k`
+          : String(Math.round(kb2tok(kb)));
+  const [costs, setCosts] = useState<Awaited<ReturnType<typeof getAgentCosts>> | null>(null);
   // single-select pattern row (click again to clear)
   const { selected, select, clear: clearSelected } = useSelection<string>();
 
+  const hours = PERIODS.find((p) => p.id === period)?.hours ?? null;
+
   useEffect(() => {
-    getApiStats(Math.max(patternLen, 2)).then(setStats).catch(() => {});
-  }, [patternLen]);
+    getApiStats(Math.max(patternLen, 2), hours).then(setStats).catch(() => {});
+    getAgentCosts().then(setCosts).catch(() => {});
+  }, [patternLen, hours]);
 
   useEffect(() => {
     const timer = setInterval(() => {
-      getApiStats(Math.max(patternLen, 2)).then(setStats).catch(() => {});
+      getApiStats(Math.max(patternLen, 2), hours).then(setStats).catch(() => {});
+      getAgentCosts().then(setCosts).catch(() => {});
     }, 15_000);
     return () => clearInterval(timer);
-  }, [patternLen]);
+  }, [patternLen, hours]);
+
+  // Period-filtered costs (client-side — cost records carry timestamps).
+  const sinceMs = hours == null ? null : Date.now() - hours * 3_600_000;
+  const costRows = Object.entries(costs ?? {})
+    .map(([id, rec]) => ({ id, cost: costInWindow(rec, sinceMs), live: !!rec.live }))
+    .filter((r) => r.cost > 0.005)
+    .sort((a, b) => b.cost - a.cost);
+  const costTotal = costRows.reduce((s, r) => s + r.cost, 0);
 
   // Unified list: n=1 uses calls, n>1 uses patterns
   const rows = useMemo(() => {
@@ -98,8 +153,53 @@ export function StatsView() {
     <div class="stats-view">
       <div class="pane-bar">
         <span class="ui-eyebrow pane-bar-title">Stats</span>
-        <span class="pane-bar-count">{stats.total_calls.toLocaleString()} calls</span>
+        <span class="pane-bar-count">
+          {stats.total_calls.toLocaleString()} calls{hours != null ? ` · last ${period}` : ""}
+        </span>
+        <div class="pane-bar-actions">
+          {/* size unit: raw kB or estimated tokens (~4 B/tok) */}
+          <span class="review-disclosure-switch" role="group" aria-label="Size unit">
+            {(["kb", "tok"] as const).map((u) => (
+              <button key={u} type="button" class={`rds-opt${unit === u ? " is-on" : ""}`}
+                onClick={() => setUnit(u)}>{u === "kb" ? "kB" : "tok"}</button>
+            ))}
+          </span>
+          {/* period filter — call counts come from hourly buckets; costs from
+              the timestamped per-agent records */}
+          <span class="review-disclosure-switch" role="group" aria-label="Period">
+            {PERIODS.map((p) => (
+              <button key={p.id} type="button"
+                class={`rds-opt${period === p.id ? " is-on" : ""}`}
+                onClick={() => setPeriod(p.id)}>{p.label}</button>
+            ))}
+          </span>
+        </div>
       </div>
+
+      {/* Cost in the selected period (per-agent records are timestamped) */}
+      {costRows.length > 0 && (
+        <div class="stats-costs">
+          <div class="stats-costs-head">
+            <span class="ui-eyebrow">Cost{hours != null ? ` · last ${period}` : " · all time"}</span>
+            <span class="stats-costs-total">${costTotal.toFixed(2)}</span>
+          </div>
+          <div class="stats-costs-rows">
+            {costRows.slice(0, 8).map((r) => (
+              <div class="stats-costs-row" key={r.id}>
+                <span class="aa-msg-pill">{r.id}</span>
+                <span class="stats-costs-val">${r.cost.toFixed(2)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {hours != null && (
+        <div class="stats-period-note">
+          {(stats as { period_hours?: number | null }).period_hours != null
+            ? <>call counts &amp; response sizes use hourly buckets (recorded going forward) · patterns are all-time</>
+            : <>⚠ the running server predates period filtering — call counts shown are all-time (costs are period-filtered)</>}
+        </div>
+      )}
 
       {/* Quick glance summary */}
       <div class="stats-summary-row">
@@ -118,7 +218,9 @@ export function StatsView() {
             <Stat
               size="sm"
               tone="accent"
-              value={totalKB > 1000 ? `${(totalKB/1000).toFixed(0)}MB` : `${totalKB.toFixed(0)}KB`}
+              value={unit === "kb"
+                ? (totalKB > 1000 ? `${(totalKB / 1000).toFixed(0)}MB` : `${totalKB.toFixed(0)}KB`)
+                : `${(kb2tok(totalKB) / 1_000_000).toFixed(1)}M tok`}
               sub="total transferred"
             />
           </div>
@@ -129,13 +231,13 @@ export function StatsView() {
       {stats.response_sizes && stats.response_sizes.length > 0 && (
         <div class="stats-card stats-card-sizes">
           <div class="stats-card-title">
-            <span class="ui-eyebrow">Response sizes · MCP calls only (KB)</span>
+            <span class="ui-eyebrow">Response sizes · MCP calls only ({unit === "kb" ? "kB" : "≈ tokens"})</span>
           </div>
           <div class="stats-card-body stats-sizes-body">
             <table class="stats-size-table">
               <thead>
                 <tr>
-                  {["endpoint", "calls", "total KB", "avg KB", "max KB"].map((h) => (
+                  {["endpoint", "measured / all calls", `total ${unit === "kb" ? "KB" : "tok"}`, `avg ${unit === "kb" ? "KB" : "tok"}`, `max ${unit === "kb" ? "KB" : "tok"}`].map((h) => (
                     <th key={h} class={h === "endpoint" ? "" : "num"}>{h}</th>
                   ))}
                 </tr>
@@ -144,10 +246,18 @@ export function StatsView() {
                 {stats.response_sizes.slice(0, 20).map((r) => (
                   <tr key={r.endpoint}>
                     <td class="stats-size-endpoint">{r.endpoint.replace(/^(GET|POST|PUT|PATCH|DELETE) /, "")}</td>
-                    <td class="num muted">{r.calls}</td>
-                    <td class="num" style={{ color: r.total_kb > 1000 ? "var(--red)" : r.total_kb > 100 ? "var(--yellow)" : "var(--text)" }}>{r.total_kb.toLocaleString()}</td>
-                    <td class="num" style={{ color: r.avg_kb > 20 ? "var(--yellow)" : "var(--text-muted)" }}>{r.avg_kb}</td>
-                    <td class="num muted">{r.max_kb}</td>
+                    <td class="num muted"
+                      title={r.all_calls != null && r.all_calls > r.calls
+                        ? `${r.calls} measured of ${r.all_calls} total calls (rest are curl / dashboard polling — not size-tracked)`
+                        : undefined}>
+                      {r.calls}
+                      {r.all_calls != null && r.all_calls > r.calls && (
+                        <span class="stats-size-oftotal"> / {r.all_calls}</span>
+                      )}
+                    </td>
+                    <td class="num" style={{ color: r.total_kb > 1000 ? "var(--red)" : r.total_kb > 100 ? "var(--yellow)" : "var(--text)" }}>{fmtUnit(r.total_kb)}</td>
+                    <td class="num" style={{ color: r.avg_kb > 20 ? "var(--yellow)" : "var(--text-muted)" }}>{fmtUnit(r.avg_kb)}</td>
+                    <td class="num muted">{fmtUnit(r.max_kb)}</td>
                   </tr>
                 ))}
               </tbody>
