@@ -38,11 +38,143 @@ def _ask_yn(question: str, default: bool = True) -> bool:
         return default
     return answer in ("y", "yes")
 
+
+def _ask_multiline(first_prompt: str, cont_prompt: str) -> str:
+    """Read a possibly multi-line answer.
+
+    Terminates on EOF (Ctrl-D) or two consecutive blank lines, so pasted text
+    containing paragraph breaks survives intact. Returns "" if the user gives
+    nothing (or interrupts).
+    """
+    lines: list[str] = []
+    blanks = 0
+    while True:
+        prompt = first_prompt if not lines else cont_prompt
+        try:
+            line = input(prompt)
+        except EOFError:
+            print()
+            break
+        except KeyboardInterrupt:
+            print()
+            return ""
+        if not line.strip():
+            # First blank line before any content = skip the question entirely.
+            if not lines:
+                break
+            blanks += 1
+            if blanks >= 2:
+                break
+            lines.append("")
+            continue
+        blanks = 0
+        lines.append(line)
+    return "\n".join(lines).strip()
+
+
+# ---------------------------------------------------------------------------
+# Spinner — animated progress for long-running steps
+# ---------------------------------------------------------------------------
+
+class _Spinner:
+    """Braille spinner with elapsed seconds, animated on a daemon thread.
+
+    Falls back to a single static line when stdout is not a TTY.
+    """
+
+    _FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+    def __init__(self, message: str):
+        self.message = message
+        self._stop = None
+        self._thread = None
+
+    def __enter__(self):
+        import threading
+        import time
+
+        if not sys.stdout.isatty():
+            print(f"  {self.message}", flush=True)
+            return self
+
+        self._stop = threading.Event()
+
+        def _spin():
+            i = 0
+            start = time.monotonic()
+            while not self._stop.is_set():
+                frame = self._FRAMES[i % len(self._FRAMES)]
+                elapsed = int(time.monotonic() - start)
+                sys.stdout.write(
+                    f"\r  {_blue(frame)} {self.message} {_dim(f'({elapsed}s)')}\033[K"
+                )
+                sys.stdout.flush()
+                i += 1
+                self._stop.wait(0.08)
+            sys.stdout.write("\r\033[K")
+            sys.stdout.flush()
+
+        self._thread = threading.Thread(target=_spin, daemon=True)
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc):
+        if self._stop is not None:
+            self._stop.set()
+            self._thread.join()
+        return False
+
 # ---------------------------------------------------------------------------
 # Template for PROMPT.md
 # ---------------------------------------------------------------------------
 
 _PROMPT_TEMPLATE = Path(__file__).parent / "PROMPT_template.md"
+
+def _ensure_dashboard() -> None:
+    """Make sure this installation has a compiled dashboard (init step 7).
+
+    Deliberately quiet and non-fatal: `the-lab init` is about setting up a
+    project, so a missing dashboard is worth fixing silently but never worth
+    aborting setup over.
+
+    Skipped entirely for source checkouts — there the local dashboard/ sources
+    are authoritative and the server builds them on startup, so downloading a
+    release build would shadow the developer's own work.
+    """
+    if dashboard_installed():
+        print(f"  {_green(chr(10003))} Dashboard already installed")
+        return
+
+    if _find_dashboard_dir() is not None:
+        # Running from a clone: the server builds dashboard/ on startup.
+        print(f"  {_dim('-')} Dashboard not built yet — building from local "
+              f"dashboard/ sources on server start")
+        print(f"    {_dim('Build it now with:')} ./build-dashboard.sh")
+        return
+
+    # Prefer the newest tagged release; fall back to the rolling main build so a
+    # repo with no tagged release yet still yields a working UI.
+    last_error = "no release found"
+    for tag in (None, "main"):
+        label = tag or "latest release"
+        release, error = _fetch_release(_RELEASE_REPO, tag)
+        if release is None:
+            last_error = error
+            continue
+        with _Spinner(f"Fetching dashboard ({release.get('tag_name')})..."):
+            ok, message = _install_dashboard_from_release(release)
+        if ok:
+            print(f"  {_green(chr(10003))} Downloaded prebuilt dashboard ({message})")
+            return
+        last_error = f"{label}: {message}"
+
+    print(f"  {_yellow('!')} Could not download the prebuilt dashboard "
+          f"({last_error})")
+    print(f"    {_dim('The API works; only the web UI is missing. Retry later with:')}")
+    print(f"    {_dim('  the-lab fetch-dashboard')}")
+    if not (os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")):
+        print(f"    {_dim('Private repo? GITHUB_TOKEN=$(gh auth token) the-lab fetch-dashboard')}")
+
 
 # ---------------------------------------------------------------------------
 # init subcommand
@@ -232,7 +364,9 @@ def cmd_init(target: str | None = None):
     lines = existing.splitlines()
 
     entries_to_add = []
-    for entry in [".the_lab/", ".claude/", ".mcp.json", "PROMPT.md", ".the_lab.agentid"]:
+    # .the_lab.link is the per-worktree symlink to the main .the_lab/ (added by
+    # a companion fix) — ignore it for new projects too.
+    for entry in [".the_lab/", ".claude/", ".mcp.json", "PROMPT.md", ".the_lab.agentid", ".the_lab.link"]:
         if not any(line.strip() == entry or line.strip() == entry.rstrip("/") for line in lines):
             entries_to_add.append(entry)
 
@@ -250,7 +384,14 @@ def cmd_init(target: str | None = None):
     else:
         print(f"  {_green(chr(10003))} .gitignore already includes .the_lab/ and .claude/")
 
-    # 7. Pre-fill PROMPT.md with Claude --------------------------------
+    # 7. Dashboard ------------------------------------------------------------
+    # the_lab/static/ is compiled build output and gitignored, so an install
+    # from git has no dashboard and the UI would show "Dashboard not built".
+    # Fetch the prebuilt bundle now rather than leaving that for the user to
+    # discover. Best-effort: setup must not fail because GitHub is unreachable.
+    _ensure_dashboard()
+
+    # 8. Pre-fill PROMPT.md with Claude --------------------------------
     # Pick the active prompt file: prefer .the_lab/PROMPT.md (canonical),
     # fall back to legacy <repo>/PROMPT.md if the user declined migration.
     active_prompt = canonical_prompt if canonical_prompt.exists() else legacy_prompt
@@ -258,14 +399,10 @@ def cmd_init(target: str | None = None):
     claude_bin = _shutil.which("claude")
     if claude_bin and active_prompt.exists():
         print(f"\n  {_blue('?')} Describe your research goal so Claude can pre-fill PROMPT.md.")
+        print(f"    {_dim('Multi-line paste is fine. Press Enter twice (or Ctrl-D) when done.')}")
         print(f"    {_dim('Leave blank to skip and edit the file yourself.')}")
-        try:
-            user_goal = input(f"    {_dim('>')} ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print()
-            user_goal = ""
+        user_goal = _ask_multiline(f"    {_dim('>')} ", f"    {_dim('|')} ")
         if user_goal:
-            print(f"  {_dim('...')} Claude is analyzing the repo...\n")
             prefill_prompt = (
                 "You are helping set up a research project for The Lab, an experiment "
                 "management system. The user described their goal as:\n\n"
@@ -278,18 +415,25 @@ def cmd_init(target: str | None = None):
                 "If you can't determine something, leave a [TODO: ...] marker.\n\n"
                 f"Edit the file: {active_prompt}"
             )
-            result = subprocess.run(
-                [claude_bin, "--dangerously-skip-permissions", "-p", prefill_prompt],
-                cwd=str(repo),
-            )
+            print()
+            with _Spinner("Claude is analyzing the repo and writing PROMPT.md..."):
+                result = subprocess.run(
+                    [claude_bin, "--dangerously-skip-permissions", "-p", prefill_prompt],
+                    cwd=str(repo),
+                    capture_output=True,
+                    text=True,
+                )
             if result.returncode == 0:
-                print(f"\n  {_green(chr(10003))} Claude pre-filled PROMPT.md — review and adjust as needed")
+                print(f"  {_green(chr(10003))} Claude pre-filled PROMPT.md — review and adjust as needed")
             else:
-                print(f"\n  {_yellow('!')} Claude exited with code {result.returncode} — check PROMPT.md manually")
+                print(f"  {_yellow('!')} Claude exited with code {result.returncode} — check PROMPT.md manually")
+                tail = (result.stderr or result.stdout or "").strip()
+                if tail:
+                    print(_dim("    " + tail[-500:].replace("\n", "\n    ")))
         else:
             print(f"  {_dim('-')} Skipped — edit PROMPT.md manually")
 
-    # 8. Next steps ----------------------------------------------------------
+    # 9. Next steps ----------------------------------------------------------
     print(f"\n{_bold('Next steps:')}\n")
     print(f"  1. Review {_blue('PROMPT.md')}")
     print(f"  2. Start the server:")
@@ -298,6 +442,64 @@ def cmd_init(target: str | None = None):
     print(f"     {_dim('$')} {_green('the-lab-agent')}")
     print(f"  4. Open the dashboard at {_blue('http://localhost:8000')}")
     print()
+
+
+# Messages uvicorn logs on the "uvicorn.error" logger that are about a *client*
+# doing something malformed, not about this server being unhealthy.
+_NOISY_UVICORN_WARNINGS = (
+    "Invalid HTTP request received.",   # h11.RemoteProtocolError — usually TLS bytes on a plain-HTTP port
+    "Invalid HTTP request received",    # (no trailing period in some versions)
+)
+
+
+def _apply_log_filters() -> None:
+    """Optionally drop uvicorn's per-connection "Invalid HTTP request" warnings.
+
+    Uvicorn logs one warning per malformed connection and offers no setting to
+    silence just those — the only knob is log_level, which would also hide real
+    warnings. Anything speaking non-HTTP at the port triggers it: a browser or
+    agent using https:// against the plain-HTTP port, a port scanner, a stale
+    HSTS redirect. Harmless, but it can flood the log.
+
+    Off by default (the warnings do point at a misconfigured client). Enable with
+    THE_LAB_QUIET_INVALID_HTTP=1.
+    """
+    if os.environ.get("THE_LAB_QUIET_INVALID_HTTP", "").lower() not in ("1", "true", "yes", "on"):
+        return
+
+    import logging
+
+    class _DropInvalidHTTP(logging.Filter):
+        def filter(self, record: logging.LogRecord) -> bool:
+            try:
+                msg = record.getMessage()
+            except Exception:
+                return True
+            return not any(msg.startswith(noise) for noise in _NOISY_UVICORN_WARNINGS)
+
+    # The protocol classes fetch this logger by name per connection, so one
+    # filter on the shared logger object covers every connection.
+    logging.getLogger("uvicorn.error").addFilter(_DropInvalidHTTP())
+    print("[log] suppressing uvicorn 'Invalid HTTP request received.' warnings "
+          "(THE_LAB_QUIET_INVALID_HTTP)", file=sys.stderr)
+
+
+def _is_loopback_host(host: str) -> bool:
+    """True when *host* only accepts connections from this machine.
+
+    Anything else (0.0.0.0, ::, a LAN/public address) is reachable off-box and
+    so must not be served without authentication.
+    """
+    import ipaddress
+
+    h = (host or "").strip().strip("[]")
+    if h in ("localhost", "localhost.localdomain"):
+        return True
+    try:
+        return ipaddress.ip_address(h).is_loopback
+    except ValueError:
+        # A hostname we can't classify — treat as non-loopback (fail closed).
+        return False
 
 
 def _find_dashboard_dir() -> Path | None:
@@ -609,64 +811,342 @@ def cmd_wait():
 
     exp = result.get("experiment") or {}
     status = exp.get("status") or result.get("status") or result.get("event", "unknown")
+    terminal = status in ("completed", "failed", "cancelled")
     out = {
-        "status":     status,
-        "label":      exp.get("label") or exp.get("id") or exp_id,
-        "metrics":    exp.get("metrics"),
-        "error":      exp.get("error"),
-        "runtime":    exp.get("runtime"),
-        "finished_at": exp.get("finished_at"),
+        "status": status,
+        "label":  exp.get("label") or exp.get("id") or exp_id,
+        # Explicit so a retry loop never has to infer terminality from prose.
+        "done":   terminal,
     }
+    # Null-valued keys are omitted. An always-present '"error": null' made naive
+    # matchers loop forever: a retry wrapper globbing the payload for *error*
+    # matched every successful result, so its wait never exited and one shell
+    # per experiment accumulated for days.
+    for key, value in (
+        ("metrics", exp.get("metrics")),
+        ("error", exp.get("error")),
+        ("runtime", exp.get("runtime")),
+        ("finished_at", exp.get("finished_at")),
+    ):
+        if value is not None:
+            out[key] = value
+    if status == "message":
+        out["messages"] = len(result.get("messages") or [])
     print(_json.dumps(out))
-    sys.exit(0 if status == "completed" else 1)
+    # Exit codes are the contract for retry loops — do not parse the text:
+    #   0 = completed             (terminal, success)
+    #   1 = failed / cancelled    (terminal, no point retrying)
+    #   2 = not finished yet      (timeout or messages arrived — wait again)
+    # Previously timeout also exited 1, indistinguishable from a real failure,
+    # which is what pushed callers into substring-matching the JSON.
+    sys.exit(0 if status == "completed" else (1 if terminal else 2))
+
+
+# ---------------------------------------------------------------------------
+# Raw WebSocket client (stdlib only)
+#
+# Just enough of RFC 6455 for `the-lab messages` to hold the server's
+# agent-scoped listener socket open. Mirrors the technique in
+# agent_skills/skills/lab_api_mcp.py (do not import from there — it's a
+# standalone MCP bridge). Read-mostly: server→client frames are never masked;
+# our few client→server frames (pong) are masked as the spec requires.
+# ---------------------------------------------------------------------------
+
+def _ws_handshake(host, port, path_qs, use_ssl, ctx, extra_headers=None):
+    """Open a raw TCP (or TLS) socket and complete the WebSocket handshake.
+
+    Returns the connected socket with the upgrade confirmed, or raises on error.
+    ``extra_headers`` is a dict of additional request headers (X-Agent-Id,
+    Authorization) sent during the handshake.
+    """
+    import base64 as _b64, hashlib as _hashlib, os as _os
+    import socket as _socket, ssl as _ssl
+
+    key = _b64.b64encode(_os.urandom(16)).decode()
+    accept_expected = _b64.b64encode(
+        _hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()
+    ).decode()
+
+    sock = _socket.create_connection((host, port), timeout=10)
+    if use_ssl:
+        sctx = ctx or _ssl.create_default_context()
+        sock = sctx.wrap_socket(sock, server_hostname=host)
+    sock.settimeout(None)
+
+    lines = [
+        f"GET {path_qs} HTTP/1.1",
+        f"Host: {host}:{port}",
+        "Upgrade: websocket",
+        "Connection: Upgrade",
+        f"Sec-WebSocket-Key: {key}",
+        "Sec-WebSocket-Version: 13",
+    ]
+    for k, v in (extra_headers or {}).items():
+        lines.append(f"{k}: {v}")
+    req = "\r\n".join(lines) + "\r\n\r\n"
+    sock.sendall(req.encode())
+
+    buf = b""
+    while b"\r\n\r\n" not in buf:
+        chunk = sock.recv(4096)
+        if not chunk:
+            raise RuntimeError("server closed connection during WS handshake")
+        buf += chunk
+    head = buf.split(b"\r\n\r\n", 1)[0].decode(errors="replace")
+    if "101 Switching Protocols" not in head:
+        raise RuntimeError(f"WS upgrade rejected: {head[:120]}")
+    if accept_expected not in head:
+        raise RuntimeError("WS handshake: Sec-WebSocket-Accept mismatch")
+    return sock
+
+
+def _ws_recv_frame(sock):
+    """Read one WebSocket frame. Returns (opcode, payload_bytes)."""
+    import struct as _struct
+
+    def _read_exact(n):
+        b = b""
+        while len(b) < n:
+            chunk = sock.recv(n - len(b))
+            if not chunk:
+                raise ConnectionResetError("WebSocket closed by server")
+            b += chunk
+        return b
+
+    header = _read_exact(2)
+    opcode = header[0] & 0x0F
+    length = header[1] & 0x7F
+    if length == 126:
+        length = _struct.unpack("!H", _read_exact(2))[0]
+    elif length == 127:
+        length = _struct.unpack("!Q", _read_exact(8))[0]
+    payload = _read_exact(length)
+    return opcode, payload
+
+
+def _ws_send_pong(sock, payload=b""):
+    """Send a masked pong frame (client→server frames must be masked)."""
+    import os as _os
+    mask = _os.urandom(4)
+    masked = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+    frame = bytes([0x8A, 0x80 | len(payload)]) + mask + masked
+    sock.sendall(frame)
 
 
 def cmd_messages():
-    """the-lab messages [--port N] [--timeout N] [--url URL] [--poll N]
+    """the-lab messages [--port N] [--timeout N] [--url URL] [--once] [--no-notifications]
 
-    Long-poll until at least one unread message is available, print them as
-    JSON, and exit.  Designed to be run in the background by Claude Code:
+    PERSISTENT BACKGROUND LISTENER. Connects to the server's agent-scoped
+    WebSocket (``/api/v1/messages/ws``) and stays connected, printing each
+    incoming inter-agent message and notification as one NDJSON line as it
+    arrives, until --timeout elapses or it's interrupted. Meant to be run in the
+    background:
 
         Bash("the-lab messages --port 9009", run_in_background=True)
 
-    Claude Code is notified automatically when the command exits, then reads
-    the printed JSON array to get the messages.  Uses THE_LAB_AGENT_ID,
-    THE_LAB_USER, and THE_LAB_PASSWORD from the environment when set.
+    N1: messages delivered over this socket are CLAIMED on delivery, so the same
+    message is never also piggybacked on the agent's other API responses (no
+    blanket suppression — an unread socket can't starve the agent).
+
+    Output: one JSON object per line (NDJSON). Each line is one of::
+
+        {"messages": [...]}          # unread messages addressed to this agent
+        {"notifications": [...]}     # non-message notifications (failures, ...)
+        {"experiment": {...}}        # experiment lifecycle event (M3 fold-in)
+
+    the first line is the initial snapshot of current unread + notifications.
+
+    Flags:
+      --once             restore the old behavior: print the first batch of
+                         unread/notifications, then exit (for callers that rely
+                         on exit-to-notify).
+      --peek             show messages but leave them unread (passed to server).
+      --no-notifications ignore the notifications stream (messages only).
+      --timeout N        max seconds to stay connected (default 300).
+      --poll N           polling interval used ONLY by the HTTP fallback.
+
+    If the WebSocket connect fails (older server without the endpoint, handshake
+    error), falls back to the legacy HTTP polling loop so it still works. Uses
+    THE_LAB_AGENT_ID, THE_LAB_USER, THE_LAB_PASSWORD from the environment.
     """
     import argparse as _ap, json as _json, time as _time
-    import urllib.request as _urlreq, urllib.error as _urlerr, base64 as _b64
+    import urllib.parse as _uparse, base64 as _b64
+    import socket as _socket_mod
+    _socket_timeout = getattr(_socket_mod, "timeout", TimeoutError)
 
     p = _ap.ArgumentParser(prog="the-lab messages")
     p.add_argument("--port", type=int, default=8000)
-    p.add_argument("--timeout", type=float, default=300, help="Max seconds to wait (default 300)")
-    p.add_argument("--poll", type=float, default=3, help="Polling interval in seconds (default 3)")
+    p.add_argument("--timeout", type=float, default=300, help="Max seconds to stay connected (default 300)")
+    p.add_argument("--poll", type=float, default=3, help="Polling interval for the HTTP fallback (default 3)")
     p.add_argument("--url", default=None, help="Override API base URL")
     p.add_argument("--https", action="store_true", help="Talk to the API over HTTPS (auto-detected when launched by the agent).")
     p.add_argument("--peek", action="store_true",
                    help="Show the messages but leave them unread (don't mark them read).")
+    p.add_argument("--once", action="store_true",
+                   help="Print the first batch of unread/notifications, then exit (legacy exit-to-notify mode).")
+    p.add_argument("--no-notifications", dest="notifications", action="store_false",
+                   help="Ignore the notifications stream; surface inter-agent messages only.")
     args = p.parse_args(sys.argv[2:])
 
     api_base, _ssl_ctx = _client_api(args)
 
-    headers: dict[str, str] = {}
     agent_id = os.environ.get("THE_LAB_AGENT_ID", "").strip()
-    if agent_id:
-        headers["X-Agent-Id"] = agent_id
     _user = os.environ.get("THE_LAB_USER", "").strip()
     _pw   = os.environ.get("THE_LAB_PASSWORD", "").strip()
+    _basic = ""
     if _user and _pw:
-        headers["Authorization"] = "Basic " + _b64.b64encode(
-            f"{_user}:{_pw}".encode()
-        ).decode()
+        _basic = _b64.b64encode(f"{_user}:{_pw}".encode()).decode()
+
+    headers: dict[str, str] = {}
+    if agent_id:
+        headers["X-Agent-Id"] = agent_id
+    if _basic:
+        headers["Authorization"] = "Basic " + _basic
+
+    # ── Try the WebSocket listener first ────────────────────────────────────
+    # Derive scheme/host/port from the resolved api base.
+    parsed = _uparse.urlparse(api_base)  # api_base ends in /api/v1
+    use_ssl = parsed.scheme == "https"
+    host = parsed.hostname or "localhost"
+    port = parsed.port or (443 if use_ssl else 80)
+
+    def _emit(obj) -> None:
+        sys.stdout.write(_json.dumps(obj) + "\n")
+        sys.stdout.flush()
+
+    def _run_ws() -> bool:
+        """Connect and stream. Returns True on success (do not fall back),
+        False if the connection could not be established (fall back to poll)."""
+        # Build the WS path with token (parity with /ws) + agent_id fallback + peek.
+        qs = {}
+        if _basic:
+            qs["token"] = _basic
+        if agent_id:
+            qs["agent_id"] = agent_id
+        if args.peek:
+            qs["peek"] = "1"
+        path_qs = "/api/v1/messages/ws"
+        if qs:
+            path_qs += "?" + _uparse.urlencode(qs)
+
+        # Handshake headers: X-Agent-Id + Authorization (Basic) as the task
+        # requires; token is also on the query string for parity with /ws.
+        hs_headers = dict(headers)
+
+        try:
+            sock = _ws_handshake(host, port, path_qs, use_ssl, _ssl_ctx, hs_headers)
+        except Exception:
+            return False  # connect/handshake failed → caller falls back to poll
+
+        deadline = _time.monotonic() + args.timeout
+        got_first = False
+        try:
+            fragmented: list[bytes] = []
+            while True:
+                remaining = deadline - _time.monotonic()
+                if remaining <= 0:
+                    break
+                sock.settimeout(min(5.0, max(0.1, remaining)))
+                try:
+                    opcode, payload = _ws_recv_frame(sock)
+                except (TimeoutError, _socket_timeout):
+                    continue
+                except (ConnectionResetError, OSError):
+                    break
+
+                if opcode == 0x9:      # ping
+                    _ws_send_pong(sock, payload)
+                    continue
+                if opcode == 0x8:      # close
+                    break
+                if opcode in (0x1, 0x2):
+                    fragmented = [payload]
+                elif opcode == 0x0:
+                    fragmented.append(payload)
+                else:
+                    continue
+
+                try:
+                    event = _json.loads(b"".join(fragmented).decode())
+                except (ValueError, UnicodeDecodeError):
+                    continue
+
+                etype = event.get("type")
+                if etype == "ping":
+                    continue
+
+                # init frame: emit the initial snapshot (messages + notifications).
+                if etype == "init":
+                    msgs = event.get("messages") or []
+                    notifs = event.get("notifications") or []
+                    if msgs:
+                        _emit({"messages": msgs})
+                    if notifs and args.notifications:
+                        _emit({"notifications": notifs})
+                    got_first = got_first or bool(msgs or (notifs and args.notifications))
+                    if args.once:
+                        # Legacy exit-to-notify: emit combined batch and stop.
+                        if not (msgs or (notifs and args.notifications)):
+                            _emit({"messages": [], "notifications": []})
+                        return True
+                    continue
+
+                if etype == "message":
+                    msgs = event.get("messages") or []
+                    if msgs:
+                        _emit({"messages": msgs})
+                    continue
+
+                if etype == "notifications":
+                    if args.notifications:
+                        notifs = event.get("notifications") or []
+                        if notifs:
+                            _emit({"notifications": notifs})
+                    continue
+
+                # M3 fold-in: experiment lifecycle frames. Emit the payload
+                # (minus the frame envelope) as its own NDJSON line. These are a
+                # distinct stream, so --no-notifications does not suppress them.
+                if etype == "experiment":
+                    _emit({"experiment": {
+                        k: v for k, v in event.items() if k != "type"
+                    }})
+                    continue
+
+                # Unknown frame type — ignore it (forward-compat, don't choke).
+                continue
+            return True
+        finally:
+            try:
+                sock.close()
+            except OSError:
+                pass
+
+    try:
+        if _run_ws():
+            sys.exit(0)
+    except KeyboardInterrupt:
+        sys.exit(0)
+    except Exception:
+        pass  # fall through to the HTTP polling fallback
+
+    # ── HTTP polling fallback (older server / no WS endpoint) ────────────────
+    _cmd_messages_poll(args, api_base, _ssl_ctx, agent_id, headers)
+
+
+def _cmd_messages_poll(args, api_base, _ssl_ctx, agent_id, headers):
+    """Legacy HTTP polling loop: long-poll GET /messages (+ /notifications)
+    until there is at least one unread message OR notification, print them as a
+    single JSON object, and exit. Kept as a fallback for servers without the
+    /api/v1/messages/ws endpoint.
+    """
+    import json as _json, time as _time
+    import urllib.request as _urlreq, urllib.error as _urlerr
 
     def _get(url: str) -> dict:
         return _api_get_json(url, headers, _ssl_ctx)
 
     def _mark_read(ids: list) -> None:
-        # Consume the inbox so the same messages aren't re-delivered on the next
-        # poll. Safe to auto-do here *because the full message is printed above*
-        # — never mark read when only a snippet is shown. Needs X-Agent-Id;
-        # best-effort, never fail delivery if marking fails.
         if args.peek or not agent_id:
             return
         for mid in ids:
@@ -683,19 +1163,24 @@ def cmd_messages():
         try:
             qs = "limit=50&for_me=1" if agent_id else "limit=50"
             if agent_id and args.peek:
-                qs += "&peek=1"   # don't let the server mark them read on fetch
+                qs += "&peek=1"
             data = _get(f"{api_base}/messages?{qs}")
             msgs = data.get("messages", [])
-            # "Unread for me" = my id isn't in read_by. This is version-robust
-            # (works whether the server's for_me already filters read or not) and
-            # correct for broadcasts another agent has read but I haven't. Without
-            # an id, fall back to "nobody has read it yet" as the proxy.
             if agent_id:
                 unread = [m for m in msgs if agent_id not in (m.get("read_by") or [])]
             else:
                 unread = [m for m in msgs if not m.get("read_by")]
-            if unread:
-                print(_json.dumps(unread))          # full content, then consume
+
+            notifs = []
+            if args.notifications:
+                try:
+                    ndata = _get(f"{api_base}/notifications")
+                    notifs = ndata.get("notifications", []) or []
+                except Exception:
+                    notifs = []
+
+            if unread or notifs:
+                print(_json.dumps({"messages": unread, "notifications": notifs}))
                 _mark_read([m["id"] for m in unread if "id" in m])
                 sys.exit(0)
         except _urlerr.URLError as e:
@@ -706,14 +1191,190 @@ def cmd_messages():
             sys.exit(1)
 
         if _time.monotonic() >= deadline:
-            print(_json.dumps([]))
+            print(_json.dumps({"messages": [], "notifications": []}))
             sys.exit(0)
 
         _time.sleep(args.poll)
 
 
+# ---------------------------------------------------------------------------
+# fetch-dashboard subcommand
+# ---------------------------------------------------------------------------
+
+# Override for forks: THE_LAB_RELEASE_REPO=owner/name
+_RELEASE_REPO = os.environ.get("THE_LAB_RELEASE_REPO", "LambdaLabsML/the_lab.api")
+_DASHBOARD_ASSET = "dashboard-static.tar.gz"
+
+
+def _github_request(url: str, accept: str):
+    """Open a GitHub API/asset URL, using a token when one is in the environment
+    (required for private repos)."""
+    import urllib.request as _req
+
+    headers = {"Accept": accept, "User-Agent": "the-lab-cli"}
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return _req.urlopen(_req.Request(url, headers=headers), timeout=60)
+
+
+def _safe_extract(tar, dest: Path) -> None:
+    """Extract a tar archive, rejecting members that would escape *dest*.
+
+    tarfile's ``filter="data"`` only exists on newer Pythons, so validate by
+    hand: no absolute paths, no ``..`` traversal, no links.
+    """
+    dest = dest.resolve()
+    for member in tar.getmembers():
+        if member.issym() or member.islnk():
+            raise ValueError(f"refusing to extract link member: {member.name}")
+        target = (dest / member.name).resolve()
+        if target != dest and dest not in target.parents:
+            raise ValueError(f"refusing to extract outside destination: {member.name}")
+    tar.extractall(dest)
+
+
+def dashboard_installed() -> bool:
+    """True when a compiled dashboard is present in this installation."""
+    return (Path(__file__).parent / "static" / "index.html").exists()
+
+
+def _fetch_release(repo: str, tag: str | None) -> tuple[dict | None, str]:
+    """Look up a release. Returns (release, error_message)."""
+    import json as _json
+    import urllib.error as _urlerr
+
+    api = (f"https://api.github.com/repos/{repo}/releases/tags/{tag}" if tag else
+           f"https://api.github.com/repos/{repo}/releases/latest")
+    try:
+        with _github_request(api, "application/vnd.github+json") as resp:
+            return _json.loads(resp.read().decode()), ""
+    except _urlerr.HTTPError as e:
+        hint = ""
+        if e.code == 404:
+            hint = (f"no release '{tag or 'latest'}' in {repo}"
+                    " (private repo? export GITHUB_TOKEN)")
+        elif e.code in (401, 403):
+            hint = "authentication failed or rate-limited (export GITHUB_TOKEN)"
+        return None, f"{e.code} {e.reason}{f' — {hint}' if hint else ''}"
+    except Exception as e:
+        return None, f"could not reach GitHub: {e}"
+
+
+def _install_dashboard_from_release(release: dict) -> tuple[bool, str]:
+    """Download the dashboard asset from *release* and swap it into the package.
+
+    Returns (ok, message). Never raises — callers decide how loud to be.
+    """
+    import io
+    import shutil as _shutil
+    import tarfile
+    import tempfile
+
+    asset = next((a for a in release.get("assets", [])
+                  if a.get("name") == _DASHBOARD_ASSET), None)
+    if asset is None:
+        names = ", ".join(a.get("name", "?") for a in release.get("assets", [])) or "none"
+        return False, (f"release {release.get('tag_name')} has no {_DASHBOARD_ASSET} "
+                       f"(assets: {names})")
+
+    # Private-repo downloads need the API asset URL + octet-stream, which also
+    # works for public repos, so use it unconditionally.
+    try:
+        with _github_request(asset["url"], "application/octet-stream") as resp:
+            blob = resp.read()
+    except Exception as e:
+        return False, f"download failed: {e}"
+
+    pkg_dir = Path(__file__).parent
+    static_dir = pkg_dir / "static"
+
+    # Extract to a temp dir first, then swap — a failure part-way through must
+    # not leave a half-written dashboard behind.
+    try:
+        with tempfile.TemporaryDirectory(dir=str(pkg_dir)) as tmp:
+            tmp_path = Path(tmp)
+            try:
+                with tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz") as tar:
+                    _safe_extract(tar, tmp_path)
+            except Exception as e:
+                return False, f"could not unpack {_DASHBOARD_ASSET}: {e}"
+
+            new_static = tmp_path / "static"
+            if not (new_static / "index.html").exists():
+                return False, "archive has no static/index.html — wrong asset?"
+
+            backup = pkg_dir / "static.previous"
+            try:
+                _shutil.rmtree(backup, ignore_errors=True)  # stale backup from a prior run
+                if static_dir.exists():
+                    static_dir.rename(backup)
+                new_static.rename(static_dir)
+            except PermissionError:
+                return False, f"no write permission for {pkg_dir}"
+            finally:
+                _shutil.rmtree(backup, ignore_errors=True)
+    except OSError as e:
+        return False, f"could not write to {pkg_dir}: {e}"
+
+    files = sum(1 for p in static_dir.rglob("*") if p.is_file())
+    return True, f"{files} files from {release.get('tag_name')}"
+
+
+def cmd_fetch_dashboard(argv: list[str]) -> None:
+    """Download the prebuilt dashboard from a GitHub release.
+
+    Installing from git (``pipx install git+…``) yields a package with no
+    dashboard, because the_lab/static/ is build output and gitignored. Rather
+    than requiring Node.js to fix that, pull the compiled bundle that CI
+    attached to a release.
+    """
+    parser = argparse.ArgumentParser(
+        prog="the-lab fetch-dashboard",
+        description="Download the prebuilt dashboard from a GitHub release into "
+                    "this installation (no Node.js required).",
+        epilog="Default is the latest tagged release. Pair '--tag main' with an "
+               "install from the main branch: the rolling 'main' prerelease "
+               "always carries a dashboard built from main's HEAD.",
+    )
+    parser.add_argument("--tag", default=None,
+                        help="Release tag to fetch, e.g. v0.1.1, or 'main' for the "
+                             "rolling build of the main branch (default: latest "
+                             "tagged release, which excludes prereleases)")
+    parser.add_argument("--repo", default=_RELEASE_REPO,
+                        help=f"GitHub repo to fetch from (default: {_RELEASE_REPO})")
+    args = parser.parse_args(argv)
+
+    print(f"\n{_bold('The Lab')} -- fetch dashboard\n")
+    print(f"  {_dim('repo:')}    {args.repo}")
+    print(f"  {_dim('release:')} {args.tag or 'latest'}")
+
+    release, error = _fetch_release(args.repo, args.tag)
+    if release is None:
+        print(f"\n  {_yellow('!')} Could not read the release ({error}).")
+        print(f"    {_dim('For a private repo:')}")
+        print(f"    {_dim('  GITHUB_TOKEN=$(gh auth token) the-lab fetch-dashboard')}")
+        sys.exit(1)
+
+    ok, message = False, ""
+    with _Spinner(f"Downloading dashboard from {release.get('tag_name')}..."):
+        ok, message = _install_dashboard_from_release(release)
+
+    if not ok:
+        print(f"  {_yellow('!')} {message}")
+        sys.exit(1)
+
+    static_dir = Path(__file__).parent / "static"
+    print(f"  {_green(chr(10003))} Installed dashboard to {static_dir} ({message})")
+    print(f"\n  {_dim('Restart the server to pick it up:')} {_green('the-lab .')}\n")
+
+
 def main():
     # Handle subcommands before argparse (server mode)
+    if len(sys.argv) >= 2 and sys.argv[1] == "fetch-dashboard":
+        cmd_fetch_dashboard(sys.argv[2:])
+        return
+
     if len(sys.argv) >= 2 and sys.argv[1] == "init":
         target = sys.argv[2] if len(sys.argv) >= 3 else None
         cmd_init(target)
@@ -734,9 +1395,24 @@ def main():
         default=".",
         help="Path to the git repository to manage experiments in (default: current directory)",
     )
-    parser.add_argument("--host", default="0.0.0.0", help="Host to bind to (default: 0.0.0.0)")
+    # Loopback by default: this server runs agent-submitted shell scripts, moves
+    # git branches and (with a Slurm resource) SSHes to a cluster. Binding it to
+    # every interface out of the box meant an unauthenticated box on a shared or
+    # cloud-reachable network exposed all of that. Widening is now explicit.
+    parser.add_argument("--host", default="127.0.0.1",
+                        help="Host to bind to (default: 127.0.0.1). Binding a "
+                             "non-loopback address requires auth (THE_LAB_USER + "
+                             "THE_LAB_PASSWORD) or --insecure-public.")
+    parser.add_argument("--insecure-public", action="store_true",
+                        help="Allow binding a non-loopback address with no "
+                             "authentication configured. Every route becomes "
+                             "world-writable — only for a trusted private network.")
     parser.add_argument("--port", type=int, default=8000, help="Port to bind to (default: 8000)")
     parser.add_argument("--dev", action="store_true", help="Development mode: auto-reload on code changes, hold requests during restart")
+    parser.add_argument("--demo", action="store_true",
+                        help="Read-only demo mode: block all mutations, don't start the "
+                             "scheduler or reconcile experiments, and never write to "
+                             ".the_lab/ — safe for showing a lab DB to an audience.")
     parser.add_argument("--https", action="store_true", help="Enable HTTPS with a self-signed certificate")
     parser.add_argument(
         "--http-redirect-port",
@@ -767,6 +1443,9 @@ def main():
     load_dotenv(Path(__file__).parent.parent / ".env")
 
     os.environ["THE_LAB_REPO"] = str(repo_path)
+    if args.demo:
+        os.environ["THE_LAB_DEMO"] = "1"
+        print("[demo] read-only mode: mutations blocked, scheduler off, no disk writes", file=sys.stderr)
 
     if args.perf is not None:
         perf_path = Path(args.perf).resolve() if args.perf else (repo_path / ".the_lab" / "api_perf.csv")
@@ -791,27 +1470,52 @@ def main():
     else:
         scheme = "http"
 
-    save_runtime_info(
-        repo_path,
-        {
-            "api_scheme": scheme,
-            "api_host": args.host,
-            "api_port": args.port,
-        },
-    )
+    if not args.demo:  # demo never writes into the inspected repo
+        save_runtime_info(
+            repo_path,
+            {
+                "api_scheme": scheme,
+                "api_host": args.host,
+                "api_port": args.port,
+            },
+        )
 
     # Announce auth status so operators know whether the UI is open.
     _auth_user = os.environ.get("THE_LAB_USER", "").strip()
     _auth_pass = os.environ.get("THE_LAB_PASSWORD", "").strip()
-    if _auth_user and _auth_pass:
+    _auth_on = bool(_auth_user and _auth_pass)
+    if _auth_on:
         print(f"[auth] HTTP Basic Auth enabled (user: {_auth_user})", file=sys.stderr)
     else:
         print("[auth] No authentication — set THE_LAB_USER + THE_LAB_PASSWORD to enable", file=sys.stderr)
+
+    # Fail closed: never expose an unauthenticated server beyond loopback unless
+    # the operator says so in as many words. Refusing to start is deliberately
+    # louder than a warning nobody reads in a scrollback buffer.
+    if not _is_loopback_host(args.host) and not _auth_on and not args.insecure_public:
+        print(
+            f"\n[auth] refusing to bind {args.host} with no authentication.\n"
+            "  This server runs agent-submitted shell scripts and can reach your\n"
+            "  git repo and any configured Slurm cluster. Unauthenticated on a\n"
+            "  non-loopback address means anyone who can route to this port can\n"
+            "  do all of that.\n\n"
+            "  Pick one:\n"
+            "    THE_LAB_USER=<user> THE_LAB_PASSWORD=<pass> the-lab .   # add auth\n"
+            "    the-lab .                                              # loopback only\n"
+            "    the-lab . --host " + args.host + " --insecure-public    # trusted private net\n",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    if not _is_loopback_host(args.host) and not _auth_on:
+        print(f"[auth] WARNING: {args.host} is exposed with NO authentication "
+              f"(--insecure-public)", file=sys.stderr)
 
     # Auto-build dashboard if sources changed
     dashboard_dir = _find_dashboard_dir()
     if dashboard_dir:
         _build_dashboard(dashboard_dir)
+
+    _apply_log_filters()
 
     if args.dev:
         import asyncio

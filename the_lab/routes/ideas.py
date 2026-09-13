@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 
 from ..cache import cached_response
 from ..deps import (
+    sanitize_error,
     store,
     REPO_DIR,
     agent_cwd,
@@ -137,7 +138,7 @@ def create_idea(req: NewIdeaRequest, request: Request):
         return _new_idea_response(idea, similar=similar, checked_out=checked_out)
     except GitError as e:
         store.release_unused_idea_id(idea_id)
-        raise HTTPException(500, str(e))
+        raise HTTPException(500, sanitize_error(e))
 
 
 @router.post("/ideas/{idea_id}/checkout")
@@ -188,11 +189,11 @@ def checkout_idea_endpoint(idea_id: int, request: Request):
             "idea_description": idea["description"],
         }
     except GitError as e:
-        raise HTTPException(500, str(e))
+        raise HTTPException(500, sanitize_error(e))
 
 
 @router.get("/ideas")
-@cached_response(lambda status=None, source=None, fields=None: (status, source, fields))
+@cached_response(lambda status=None, source=None, fields=None, page=None, page_size=10: (status, source, fields, page, page_size))
 def list_ideas(
     status: str | None = None,
     source: str | None = None,
@@ -202,6 +203,12 @@ def list_ideas(
                     "Use 'description_short' for the first line truncated to 120 chars. "
                     "Reduces response size dramatically for agents under a context budget.",
     ),
+    page: int | None = Query(
+        default=None,
+        description="1-based page number. OPT-IN: omit for the existing bare-list "
+                    "shape (dashboard-safe); supply to get a paged envelope.",
+    ),
+    page_size: int = Query(default=10, description="Items per page when paginating."),
 ):
     """List all ideas with their notes and a compact experiment summary.
 
@@ -219,12 +226,22 @@ def list_ideas(
              "notes": [...], "experiment_summary": {"total": 5, "completed": 3, ...}}, ...]
     """
     ideas = store.list_ideas(status=status, source=source)
+    # Pager feedback (OPT-IN): when `page` is given, sort newest-first and slice
+    # to the page *before* enrichment so we only build notes/summaries for the
+    # page we return. Filters (status/source) already applied above. When `page`
+    # is None the existing bare-list shape is preserved unchanged (dashboard-safe).
+    total = len(ideas)
+    if page is not None:
+        ideas = sorted(ideas, key=lambda i: (i.get("created_at", ""), i.get("id", 0)), reverse=True)
+        start = max(page - 1, 0) * page_size
+        ideas = ideas[start:start + page_size]
     # Skip per-idea note + summary enrichment when those fields aren't asked
     # for — building them dominates response time and is wasted work if the
     # caller will drop them in the projection.
     requested = {f.strip() for f in (fields or "").split(",") if f.strip()}
     want_notes = not requested or "notes" in requested
     want_summary = not requested or "experiment_summary" in requested
+    ideas = [dict(i) for i in ideas]  # copies — never annotate live store records
     for idea in ideas:
         if want_notes:
             idea["notes"] = store.get_notes(idea["id"], levels=Store.LISTING_LEVELS)
@@ -240,6 +257,16 @@ def list_ideas(
                 "latest_metrics": latest["metrics"] if latest else None,
                 "latest_experiment_id": latest["id"] if latest else None,
             }
+    # Paged envelope (opt-in). Field projection still applies to the sliced page.
+    if page is not None:
+        import math
+        return {
+            "ideas": project_fields(ideas, fields),
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+            "total_pages": math.ceil(total / page_size) if page_size > 0 else 0,
+        }
     # When filtering for suggested ideas and none exist, include the
     # current task so agents always have direction.
     if status == "suggested" and not ideas:
@@ -591,10 +618,12 @@ def get_idea_tree(idea_id: int):
         visited.add(cid)
         child = store.get_idea(cid)
         if child:
+            child = dict(child)
             child["notes"] = store.get_notes(cid, levels=Store.LISTING_LEVELS)
             descendants.append(child)
             queue_ids.extend(i["id"] for i in all_ideas if cid in i.get("parent_ids", []))
 
+    idea = dict(idea)
     idea["experiments"] = store.list_experiments(idea_id)
     idea["notes"] = store.get_notes(idea_id, levels=Store.DETAIL_LEVELS)
     return {"idea": idea, "ancestors": ancestors, "descendants": descendants}
@@ -750,6 +779,12 @@ def add_note(idea_id: int, req: NoteRequest):
 def get_notes(
     idea_id: int,
     level: str | None = Query(default=None, description="Filter by note level: insight, milestone, observation, debug"),
+    page: int | None = Query(
+        default=None,
+        description="1-based page number. OPT-IN: omit for the existing bare-list "
+                    "shape; supply to get a newest-first paged envelope.",
+    ),
+    page_size: int = Query(default=10, description="Items per page when paginating."),
 ):
     """Get all notes for an idea.
 
@@ -765,7 +800,21 @@ def get_notes(
     if not idea:
         raise HTTPException(404, "idea not found")
     levels = {level} if level else None
-    return store.get_notes(idea_id, levels=levels)
+    notes = store.get_notes(idea_id, levels=levels)
+    # Pager feedback (OPT-IN): page is None -> unchanged bare-list shape.
+    if page is not None:
+        import math
+        total = len(notes)
+        ordered = sorted(notes, key=lambda n: n.get("created_at", ""), reverse=True)
+        start = max(page - 1, 0) * page_size
+        return {
+            "notes": ordered[start:start + page_size],
+            "page": page,
+            "page_size": page_size,
+            "total": total,
+            "total_pages": math.ceil(total / page_size) if page_size > 0 else 0,
+        }
+    return notes
 
 
 @router.post("/ideas/{idea_id}/adopt")
@@ -848,4 +897,4 @@ def adopt_idea(idea_id: int, request: Request, req: AdoptRequest | None = None):
         result["checkout"] = checkout_result
         return result
     except GitError as e:
-        raise HTTPException(500, str(e))
+        raise HTTPException(500, sanitize_error(e))

@@ -1,14 +1,17 @@
 """Operational endpoints: task, config, sandbox, stats, chat, debug."""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
+import time as _time
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import HTMLResponse, StreamingResponse
 
+from .. import jsonio
 from ..deps import (
     store,
     api_stats,
@@ -161,13 +164,17 @@ def get_dashboard_config():
     Example ``.the_lab/dashboard.json``:
         {"tagFilters": ["held-out"], "selectedMetric": "accuracy_per_mtoken"}
     """
+    from ..deps import DEMO_MODE
     config_path = REPO_DIR / ".the_lab" / "dashboard.json"
+    out: dict = {}
     if config_path.exists():
         try:
-            return json.loads(config_path.read_text())
+            out = json.loads(config_path.read_text())
         except (json.JSONDecodeError, OSError):
-            pass
-    return {}
+            out = {}
+    if DEMO_MODE:
+        out["demo"] = True
+    return out
 
 
 # --- Metric directions ---
@@ -204,7 +211,7 @@ def set_metric_directions(directions: dict):
             raise HTTPException(400, f"Invalid direction '{v}' for key '{k}': must be 'minimize' or 'maximize'")
     path = REPO_DIR / ".the_lab" / "metric_directions.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(directions, indent=2) + "\n")
+    jsonio.write_json(path, directions)
     return directions
 
 
@@ -229,16 +236,34 @@ def update_sandbox_state(req: SandboxConfigRequest):
     if current.get("enabled") and not req.enabled:
         if not verify_disable_password(REPO_DIR, req.disable_password or ""):
             raise HTTPException(403, "Incorrect disable password")
-    config = save_sandbox_config(
-        REPO_DIR,
-        {
-            "enabled": req.enabled,
-            "allowlist": req.allowlist,
-            "denylist": req.denylist,
-            "file_rw": req.file_rw,
-            "file_ro": req.file_ro,
-        },
-    )
+    # Widening the FILE rules is the same category of risk as switching the
+    # sandbox off — a new file_rw entry hands agent-authored experiment code
+    # write access outside the repo, and the old code gated only the
+    # enabled->disabled transition. Adding paths therefore needs the same
+    # password. Removing paths (tightening) stays free.
+    if current.get("enabled"):
+        added = (set(req.file_rw or []) - set(current.get("file_rw") or [])) | \
+                (set(req.file_ro or []) - set(current.get("file_ro") or []))
+        if added and not verify_disable_password(REPO_DIR, req.disable_password or ""):
+            raise HTTPException(
+                403,
+                "Adding sandbox file rules requires the disable password "
+                f"(new entries: {sorted(added)}). Removing rules does not.",
+            )
+    try:
+        config = save_sandbox_config(
+            REPO_DIR,
+            {
+                "enabled": req.enabled,
+                "allowlist": req.allowlist,
+                "denylist": req.denylist,
+                "file_rw": req.file_rw,
+                "file_ro": req.file_ro,
+            },
+        )
+    except ValueError as exc:
+        # Rejected by the bind denylist (mounting /, a home dir, a system root).
+        raise HTTPException(400, str(exc))
     # When enabling, store the new disable password (required by convention from the UI).
     if req.enabled and req.disable_password:
         set_disable_password(REPO_DIR, req.disable_password)
@@ -254,9 +279,85 @@ def update_sandbox_state(req: SandboxConfigRequest):
 
 # --- API Stats ---
 
+@router.get("/api/v1/events")
+async def get_events(
+    since: int = Query(default=0, ge=0, description="Return only events with seq > since. 0 = everything still buffered."),
+    timeout: float = Query(default=25.0, ge=0, le=60, description="Long-poll: seconds to wait when no newer events exist yet. 0 = return immediately."),
+    types: str | None = Query(default=None, description="Comma-separated event types to include (e.g. experiment_finished,message_received). Others are filtered out."),
+):
+    """Drain the server event stream over plain HTTP — the WS fallback.
+
+    Same events, same ``seq``/``ts`` envelope, same ring buffer as
+    ``/api/v1/ws``: push and pull are two drains of one stream, so any
+    client that can't hold a WebSocket (proxy strips upgrades, older
+    runtime, curl) can long-poll this instead::
+
+        GET /api/v1/events?since=0            -> {"events":[...], "seq": 42, ...}
+        GET /api/v1/events?since=42&timeout=25  (blocks until something new)
+
+    Pass the returned ``seq`` as the next ``since``. ``oldest`` is the
+    oldest seq still buffered — if your ``since`` is older than that, you
+    missed events and should resnapshot via the REST endpoints.
+    """
+    from .. import ws as ws_mod
+
+    broadcaster = ws_mod.broadcaster
+    type_filter = None
+    if types:
+        type_filter = {t.strip() for t in types.split(",") if t.strip()}
+
+    def _visible(evs: list[dict]) -> list[dict]:
+        if type_filter is None:
+            return evs
+        return [e for e in evs if e.get("type") in type_filter]
+
+    def _envelope(events: list[dict], last_seq: int) -> dict:
+        ring = broadcaster.replay_since(0)
+        return {
+            "events": events,
+            "seq": last_seq,
+            "oldest": ring[0]["seq"] if ring else None,
+            "now": _time.time(),
+        }
+
+    # Subscribe BEFORE replaying so an event landing in between reaches the
+    # queue instead of falling into the gap; dedupe by seq afterwards.
+    q = broadcaster.subscribe()
+    try:
+        replayed = await asyncio.get_event_loop().run_in_executor(
+            None, broadcaster.replay_with_journal, since)
+        events = _visible(replayed)
+        last_seq = events[-1]["seq"] if events else since
+        if events or timeout <= 0:
+            return _envelope(events, last_seq)
+
+        deadline = asyncio.get_event_loop().time() + timeout
+        while True:
+            remaining = deadline - asyncio.get_event_loop().time()
+            if remaining <= 0:
+                return _envelope([], since)
+            try:
+                ev = await asyncio.wait_for(q.get(), timeout=remaining)
+            except asyncio.TimeoutError:
+                return _envelope([], since)
+            batch = [ev]
+            while True:  # drain whatever arrived in the same burst
+                try:
+                    batch.append(q.get_nowait())
+                except asyncio.QueueEmpty:
+                    break
+            fresh = _visible([e for e in batch if e.get("seq", 0) > since])
+            if fresh:
+                return _envelope(fresh, fresh[-1]["seq"])
+            # everything was filtered out — keep waiting for a match
+    finally:
+        broadcaster.unsubscribe(q)
+
+
 @router.get("/api/v1/stats")
 def get_api_stats(
     pattern_length: int = Query(default=2, ge=2, le=5, description="Length of call patterns to return (2=pairs, 3=triples, etc.)"),
+    since_hours: float | None = Query(default=None, gt=0, description="Filter call counts to the last N hours (hourly-bucketed; patterns/sizes stay all-time)."),
 ):
     """Get API endpoint usage statistics.
 
@@ -270,7 +371,7 @@ def get_api_stats(
             "calls": [{"endpoint": "GET /api/v1/digest", "count": 420}, ...],
             "patterns": [{"sequence": "digest -> suggested -> new", "count": 80}, ...]}
     """
-    result = api_stats.get_stats(pattern_length=pattern_length)
+    result = api_stats.get_stats(pattern_length=pattern_length, since_hours=since_hours)
     result["history"] = api_stats.get_history(limit=100)
     return result
 

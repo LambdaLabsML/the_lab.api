@@ -24,6 +24,27 @@ from ..git_ops import get_current_branch
 router = APIRouter(prefix="/api/v1")
 
 
+# key_insights are returned as short EXCERPTS to keep the leaderboard/digest
+# cheap on tokens. The previous _description_short cut mid-word; this cuts on a
+# word boundary and, when clipped, points at the dedicated notes endpoint for
+# the full text instead of inlining the whole (potentially huge) note.
+_INSIGHT_EXCERPT_CHARS = 200
+
+
+def _insight_excerpt(text: str | None, idea_id: int) -> dict:
+    full = (text or "").strip()
+    if len(full) <= _INSIGHT_EXCERPT_CHARS:
+        return {"text": full}
+    head = full[:_INSIGHT_EXCERPT_CHARS]
+    cut = head.rfind(" ")
+    excerpt = (head[:cut] if cut > 0 else head).rstrip() + "…"
+    return {
+        "text": excerpt,
+        "truncated": True,
+        "full_text_via": f"GET /api/v1/ideas/{idea_id}/notes",
+    }
+
+
 # --- Leaderboard helper (used only by leaderboard + digest) ---
 
 def _build_leaderboard_response(
@@ -157,7 +178,7 @@ def _build_leaderboard_response(
         best_exp = by_value[0]
         idea = idea_by_id.get(best_exp["idea_id"])
         if idea:
-            insights = [_description_short(n["text"], limit=200) for n in store.get_notes(idea["id"], levels={"insight"})]
+            insights = [_insight_excerpt(n["text"], idea["id"]) for n in store.get_notes(idea["id"], levels={"insight"})]
             best_idea = {
                 "id": idea["id"],
                 "description": _description_short(idea["description"]),
@@ -198,7 +219,7 @@ def _build_leaderboard_response(
     for idea in all_ideas:
         for note in store.get_notes(idea["id"], levels={"insight"}):
             key_insights.append({
-                "text": _description_short(note["text"], limit=200),
+                **_insight_excerpt(note["text"], idea["id"]),
                 "idea_id": idea["id"],
                 "created_at": note.get("created_at"),
             })
@@ -1051,6 +1072,34 @@ def get_graph():
     return {"nodes": nodes, "edges": edges}
 
 
+# Progress files are re-read on every /chart-data call (one per running
+# experiment). mtime-keyed cache: the NFS read + JSON parse happens only when
+# the script actually wrote new progress. Pruned when it outgrows the set of
+# running experiments by a wide margin.
+_progress_read_cache: dict[str, tuple[int, dict | None]] = {}
+
+
+def _read_progress_cached(path) -> dict | None:
+    try:
+        mtime = path.stat().st_mtime_ns
+    except OSError:
+        return None
+    key = str(path)
+    hit = _progress_read_cache.get(key)
+    if hit is not None and hit[0] == mtime:
+        return hit[1]
+    try:
+        parsed = json.loads(path.read_text())
+        if not isinstance(parsed, (dict, list)):
+            parsed = None
+    except (json.JSONDecodeError, OSError):
+        parsed = None
+    if len(_progress_read_cache) > 256:
+        _progress_read_cache.clear()
+    _progress_read_cache[key] = (mtime, parsed)
+    return parsed
+
+
 @router.get("/chart-data")
 def get_chart_data():
     """Get all data for the dashboard metrics chart in one request.
@@ -1116,12 +1165,7 @@ def get_chart_data():
             completed_exps.append(base)
         elif exp.get("status") == "running":
             progress_path = REPO_DIR / exp["script"].replace(".sh", ".progress")
-            progress = None
-            if progress_path.exists():
-                try:
-                    progress = json.loads(progress_path.read_text())
-                except (json.JSONDecodeError, OSError):
-                    pass
+            progress = _read_progress_cached(progress_path)
             if progress and len(progress) > 0:
                 base["metrics"] = _numeric_metrics(progress) if isinstance(progress, dict) else progress
                 base["_running"] = True

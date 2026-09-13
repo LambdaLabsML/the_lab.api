@@ -120,7 +120,180 @@ def _build_launch_command(
     return cmd
 
 
+# ---------------------------------------------------------------------------
+# list subcommand — resumable Claude Code sessions
+# ---------------------------------------------------------------------------
+
+# Claude Code writes one JSONL per session under a per-cwd project directory,
+# named by replacing every non-alphanumeric character of the absolute path with
+# "-". The file stem IS the session id that --resume takes. That encoding is
+# lossy (dashes are ambiguous), so the real path is read from the "cwd" field
+# inside the session instead of decoded from the directory name.
+# Reuse the CLI's TTY-aware colour helpers rather than duplicating them
+# (cli.py has no server deps and does not import this module).
+from .cli import _bold, _dim
+
+_SESSION_ROOT = Path.home() / ".claude" / "projects"
+
+# Agent worktrees live at <repo>/.the_lab/agents/<agent_id>.
+_AGENT_WT_RE = __import__("re").compile(r"[/\\]\.the_lab[/\\]agents[/\\]([^/\\]+)")
+
+
+def _read_session(jsonl: Path) -> dict:
+    """Summarise one session JSONL: id, cwd, agent, activity, turns, tokens."""
+    import json as _json
+    import re as _re
+
+    info = {
+        "session_id": jsonl.stem,
+        "project_dir": jsonl.parent.name,
+        "cwd": None,          # most recent cwd — where the session lives now
+        "started_in": None,   # first cwd — a resumed session moves worktrees
+        "resumes": 0,         # number of worktree transitions seen
+        "agent_id": None,
+        "started_at": None,
+        "last_at": None,
+        "turns": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "size_bytes": 0,
+        "modified": 0.0,
+    }
+    try:
+        st = jsonl.stat()
+        info["size_bytes"], info["modified"] = st.st_size, st.st_mtime
+    except OSError:
+        return info
+
+    try:
+        with open(jsonl, "r", errors="replace") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = _json.loads(line)
+                except ValueError:
+                    continue
+                # A resumed session continues in a NEW worktree, so its
+                # transcript carries several cwds. The LAST one is where it
+                # lives now (and what --resume will reuse); the first is only
+                # where it originally started.
+                cwd = entry.get("cwd")
+                if cwd:
+                    if not info["started_in"]:
+                        info["started_in"] = cwd
+                    if cwd != info["cwd"]:
+                        if info["cwd"]:
+                            info["resumes"] += 1
+                        info["cwd"] = cwd
+                ts = entry.get("timestamp") or entry.get("created_at")
+                if ts:
+                    if not info["started_at"]:
+                        info["started_at"] = ts
+                    info["last_at"] = ts
+                msg = entry.get("message")
+                usage = (msg.get("usage") if isinstance(msg, dict) else None) or entry.get("usage") or {}
+                info["input_tokens"] += usage.get("input_tokens", 0) or 0
+                info["output_tokens"] += usage.get("output_tokens", 0) or 0
+                if entry.get("type") in ("user", "assistant"):
+                    info["turns"] += 1
+    except OSError:
+        pass
+
+    # Agent id from the real cwd, else from the project-dir name suffix.
+    if info["cwd"]:
+        m = _AGENT_WT_RE.search(info["cwd"])
+        if m:
+            info["agent_id"] = m.group(1)
+    if not info["agent_id"]:
+        m = _re.search(r"the-lab-agents-([A-Za-z0-9]+)$", info["project_dir"])
+        if m:
+            info["agent_id"] = m.group(1)
+    info["worktree_exists"] = bool(info["cwd"]) and Path(info["cwd"]).exists()
+    return info
+
+
+def _fmt_age(epoch: float) -> str:
+    import time
+    if not epoch:
+        return "?"
+    secs = max(0, time.time() - epoch)
+    for unit, n in (("d", 86400), ("h", 3600), ("m", 60)):
+        if secs >= n:
+            return f"{int(secs // n)}{unit} ago"
+    return "just now"
+
+
+def _fmt_tokens(n: int) -> str:
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 1000:
+        return f"{n / 1000:.0f}k"
+    return str(n)
+
+
+def cmd_list_sessions(argv: list[str]) -> None:
+    """List Claude Code sessions that ``--resume`` can pick up."""
+    import json as _json
+
+    parser = argparse.ArgumentParser(
+        prog="the-lab-agent list",
+        description="List resumable agent sessions (Claude Code JSONL transcripts).",
+        epilog="Resume one with:  the-lab-agent loop --resume <session-id>   "
+               "(the launcher reuses that session's worktree and branch).",
+    )
+    parser.add_argument("--all", action="store_true",
+                        help="Include sessions outside lab agent worktrees, and empty ones")
+    parser.add_argument("--limit", type=int, default=20, help="Max rows (default 20)")
+    parser.add_argument("--json", action="store_true", dest="as_json",
+                        help="Emit raw JSON instead of a table")
+    args = parser.parse_args(argv)
+
+    if not _SESSION_ROOT.exists():
+        print(f"No Claude Code sessions found ({_SESSION_ROOT} does not exist).", file=sys.stderr)
+        sys.exit(1)
+
+    rows = [_read_session(p) for p in _SESSION_ROOT.glob("*/*.jsonl")]
+    if not args.all:
+        # Default view is what --resume is actually for: lab agent sessions that
+        # got far enough to have content.
+        rows = [r for r in rows if r["agent_id"] and (r["turns"] or r["output_tokens"])]
+    rows.sort(key=lambda r: r["modified"], reverse=True)
+    shown, total = rows[: args.limit], len(rows)
+
+    if args.as_json:
+        print(_json.dumps({"sessions": shown, "total": total,
+                           "session_root": str(_SESSION_ROOT)}, indent=2))
+        return
+
+    if not shown:
+        print(f"No resumable sessions found under {_SESSION_ROOT}")
+        print("  (use --all to include non-agent and empty sessions)")
+        return
+
+    print(f"\n{_bold('Resumable sessions')}  {_dim(str(_SESSION_ROOT))}\n")
+    print(f"  {'SESSION':38} {'AGENT':8} {'LAST ACTIVITY':14} {'TURNS':>6} {'TOKENS':>8}  PROJECT")
+    for r in shown:
+        wt = "" if r["worktree_exists"] else _dim(" (worktree gone)")
+        proj = r["cwd"] or r["project_dir"]
+        if len(proj) > 46:
+            proj = "…" + proj[-45:]
+        print(f"  {r['session_id']:38} {(r['agent_id'] or '-'):8} "
+              f"{_fmt_age(r['modified']):14} {r['turns']:>6} "
+              f"{_fmt_tokens(r['input_tokens'] + r['output_tokens']):>8}  {proj}{wt}")
+    if total > len(shown):
+        print(f"\n  {_dim(f'... {total - len(shown)} more (use --limit)')}")
+    print(f"\n  {_dim('Resume:')} the-lab-agent loop --resume {shown[0]['session_id']}")
+    print(f"  {_dim('A cleaned-up worktree is fine — the launcher recreates one from the session.')}\n")
+
 def main():
+    # Subcommands are handled before argparse: the positional 'command'
+    # argument only understands 'loop', anything else is a prompt file.
+    if len(sys.argv) >= 2 and sys.argv[1] in ("list", "sessions"):
+        cmd_list_sessions(sys.argv[2:])
+        return
+
     parser = argparse.ArgumentParser(
         description="Launch Claude Code or Codex using a prompt file",
     )
@@ -128,7 +301,8 @@ def main():
         "command",
         nargs="?",
         default=None,
-        help="Use 'loop' to run in loop mode. Omit for a single run.",
+        help="Use 'loop' to run in loop mode, or 'list' to show resumable "
+             "sessions. Omit for a single run.",
     )
     parser.add_argument(
         "prompt_file",
@@ -658,9 +832,30 @@ def main():
         # Capabilities check deferred to here so it only runs when needed.
         capabilities = sandbox_capabilities()
         if not capabilities.get("available"):
+            # details is a multi-line explanation (what each missing program does,
+            # how to install it) — print it as its own block, not squashed onto
+            # one "Error:" line.
             details = capabilities.get("details") or "sandbox runtime unavailable"
-            print(f"Error: sandbox is unavailable: {details}", file=sys.stderr)
+            _tty = sys.stderr.isatty()
+            _red = "\033[31m" if _tty else ""
+            _dim = "\033[2m" if _tty else ""
+            _off = "\033[0m" if _tty else ""
+            print(f"\n{_red}Cannot start: the sandbox is unavailable.{_off}\n",
+                  file=sys.stderr)
+            print(details, file=sys.stderr)
+            print(f"\n{_dim}Or launch this agent without isolation: "
+                  f"the-lab-agent --sandbox off …{_off}", file=sys.stderr)
             sys.exit(1)
+        # Driver loaded but no device nodes in this namespace: CUDA will fail and
+        # it is not fixable from inside. Warn at launch instead of letting the
+        # agent discover it as an opaque "Failed to infer device type" later.
+        _gpu_warning = (capabilities.get("gpu") or {}).get("warning")
+        if _gpu_warning:
+            _tty = sys.stderr.isatty()
+            _yellow = "\033[33m" if _tty else ""
+            _off = "\033[0m" if _tty else ""
+            print(f"\n{_yellow}⚠  No GPU available to this container.{_off}\n"
+                  f"{_gpu_warning}\n", file=sys.stderr)
         cmd = build_sandbox_command(
             repo_root, args.agent, prompt_path.name, cmd,
             cwd=str(agent_worktree) if agent_worktree else os.getcwd(),

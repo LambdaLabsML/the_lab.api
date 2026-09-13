@@ -10,8 +10,10 @@ Layout::
 
     .the_lab/agents/
         registry.json                 -- {agent_id: {role, branch, pid, ...}}
+        archive/<agent_id>/           -- durable data kept after worktree removal
         <agent_id>/                   -- the worktree (git worktree add ...)
-            .the_lab.agentid          -- 5-char hex, gitignored
+            .the_lab.agentid          -- 5-char id, locally untracked
+            .the_lab.link -> ../../../.the_lab   -- read main-checkout logs
             .claude -> ../../../.claude
             .mcp.json -> ../../../.mcp.json
             (project source files at the chosen branch)
@@ -27,14 +29,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import git_ops
+from . import jsonio
 
 _ID_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789"
 AGENTID_FILE = ".the_lab.agentid"
 
-# An agent is "listening" if it polled its own inbox (the-lab messages, which
-# hits GET /messages?for_me=1) within this many seconds. The CLI default poll
-# interval is ~3s, so this tolerates a few missed polls / a slower --poll.
-LISTENING_WINDOW_SEC = 20
+# An agent is "listening" if it polled its own inbox (the-lab messages) within
+# this many seconds. Warm sources: the ~3s HTTP poll loop, or the messages
+# WebSocket, whose keep-alive re-warms only every 30s — so the window must sit
+# comfortably ABOVE that ping cadence (2 pings + slack) or a WS-connected
+# agent's flag oscillates 20s-on/10s-off and the dashboard row flickers.
+LISTENING_WINDOW_SEC = 75
 _listening_lock = threading.Lock()
 
 
@@ -48,18 +53,36 @@ def _registry_path(repo_dir: Path) -> Path:
     return _agents_dir(repo_dir) / "registry.json"
 
 
+# In-memory single-slot caches (one repo per process). The notifications
+# middleware consults the registry, listening map, and history on every
+# dict-shaped API response — serving them from memory removes several NFS
+# reads per response. Disk stays the durable form (written atomically via
+# jsonio); memory is authoritative between writes.
+_registry_lock = threading.Lock()
+_registry_cache: dict | None = None
+_registry_cache_path: Path | None = None
+
+
 def _read_registry(repo_dir: Path) -> dict:
+    global _registry_cache, _registry_cache_path
     path = _registry_path(repo_dir)
-    if not path.exists():
-        return {}
-    try:
-        return json.loads(path.read_text())
-    except (json.JSONDecodeError, OSError):
-        return {}
+    with _registry_lock:
+        if _registry_cache is None or _registry_cache_path != path:
+            try:
+                loaded = json.loads(path.read_text()) if path.exists() else {}
+            except (json.JSONDecodeError, OSError):
+                loaded = {}
+            _registry_cache = loaded
+            _registry_cache_path = path
+        return _registry_cache
 
 
 def _write_registry(repo_dir: Path, data: dict) -> None:
-    _registry_path(repo_dir).write_text(json.dumps(data, indent=2) + "\n")
+    global _registry_cache, _registry_cache_path
+    with _registry_lock:
+        _registry_cache = data
+        _registry_cache_path = _registry_path(repo_dir)
+    jsonio.write_json(_registry_path(repo_dir), data)
 
 
 def _generate_agent_id(existing: set[str]) -> str:
@@ -98,6 +121,61 @@ def _ensure_symlink(link: Path, target: Path) -> None:
         pass  # filesystem doesn't support symlinks; not fatal
 
 
+# Worktree-local scaffolding that must never participate in git tracking/merges.
+_WORKTREE_LOCAL_PATHS = (AGENTID_FILE, ".the_lab.link", ".claude", ".mcp.json")
+
+
+def _make_worktree_local_untracked(worktree: Path) -> None:
+    """Ensure our per-worktree scaffolding is git-ignored *locally* and untracked.
+
+    Feedback (.the_lab.agentid UU CONFLICT): AGENTID_FILE is committed/tracked in
+    the shared tree, so agents sharing lineage hit a guaranteed UU conflict on
+    every create_idea auto-checkout. We fix it per-worktree (no repo commit):
+
+      1. Append the scaffolding names to this worktree's own exclude file so a
+         fresh copy is never re-staged. A worktree has its *own* gitdir, so we
+         resolve the real path via ``git rev-parse --git-path info/exclude``
+         rather than assuming ``.git/info/exclude``.
+      2. If any name is already tracked, ``git rm --cached`` it in this worktree
+         so it stops causing merge conflicts (leaves the file on disk).
+
+    Fail-soft: any git/IO error is swallowed — this is best-effort hardening.
+    """
+    try:
+        result = git_ops._run(
+            ["rev-parse", "--git-path", "info/exclude"], cwd=worktree, check=False,
+        )
+        exclude_rel = result.stdout.strip() if result.returncode == 0 else ""
+    except Exception:
+        exclude_rel = ""
+    if exclude_rel:
+        try:
+            exclude_path = Path(exclude_rel)
+            if not exclude_path.is_absolute():
+                exclude_path = worktree / exclude_path
+            exclude_path.parent.mkdir(parents=True, exist_ok=True)
+            existing = exclude_path.read_text() if exclude_path.exists() else ""
+            have = set(existing.splitlines())
+            additions = [p for p in _WORKTREE_LOCAL_PATHS if p not in have]
+            if additions:
+                prefix = "" if (not existing or existing.endswith("\n")) else "\n"
+                with exclude_path.open("a") as fh:
+                    fh.write(prefix + "\n".join(additions) + "\n")
+        except OSError:
+            pass
+
+    # Drop any already-tracked copies from this worktree's index so shared
+    # lineage stops conflicting. --cached keeps the on-disk file intact.
+    for name in _WORKTREE_LOCAL_PATHS:
+        try:
+            git_ops._run(
+                ["rm", "--cached", "--quiet", "--ignore-unmatch", name],
+                cwd=worktree, check=False,
+            )
+        except Exception:
+            pass
+
+
 def register_agent(
     repo_dir: Path,
     store,
@@ -124,10 +202,23 @@ def register_agent(
     # Symlinks — let the agent's tooling find configs without absolute paths.
     _ensure_symlink(worktree / ".claude", Path("../../../.claude"))
     _ensure_symlink(worktree / ".mcp.json", Path("../../../.mcp.json"))
+    # Feedback (WORKTREE .the_lab LINK): a worktree is a checkout of an idea
+    # branch, so it can't see experiment logs / world-dumps that live only in
+    # the main checkout's .the_lab/. Link to it under a distinct name so tooling
+    # run inside the worktree can read them without clobbering a worktree-local
+    # .the_lab if the branch happens to commit one.
+    _ensure_symlink(worktree / ".the_lab.link", Path("../../../.the_lab"))
 
-    # The id file is gitignored (see init); useful for scripts running inside
+    # The id file is gitignored (see below); useful for scripts running inside
     # the worktree that need to look up the agent's id without an env var.
     (worktree / AGENTID_FILE).write_text(agent_id + "\n")
+
+    # Feedback (.the_lab.agentid UU CONFLICT): AGENTID_FILE is tracked in the
+    # committed tree, so sharing lineage across agents guarantees a UU conflict
+    # on every create_idea auto-checkout. Make our worktree-local scaffolding
+    # untracked *regardless of the repo's committed state*: add it to this
+    # worktree's own git exclude file, and drop it from the index if tracked.
+    _make_worktree_local_untracked(worktree)
 
     entry = {
         "agent_id": agent_id,
@@ -155,34 +246,44 @@ def list_agents(repo_dir: Path) -> list[dict]:
 # Recorded in a separate file from the registry so the high-frequency poll
 # writes never race with register/unregister.
 
-def _listening_path(repo_dir: Path) -> Path:
-    return _agents_dir(repo_dir) / "listening.json"
+# Listening state is purely in-memory: it is pure recency data (an agent
+# counts as listening only if it polled within LISTENING_WINDOW_SEC), so
+# after a restart the map rebuilds itself within seconds from the poll/WS
+# traffic. The old listening.json write-per-poll was a full NFS write every
+# ~3s per listening agent for data that expires in 75s.
+_listening_state: dict[str, str] = {}
 
 
 def note_message_poll(repo_dir: Path, agent_id: str) -> None:
-    """Record that *agent_id* just polled its own inbox (the-lab messages loop)."""
+    """Record that *agent_id* just polled its own inbox (the-lab messages loop).
+
+    Emits an ``agent_changed`` event only on the silence→listening
+    transition, so WS clients can flip the listening dot without polling
+    the roster; steady-state polls stay silent.
+    """
     if not agent_id:
         return
-    path = _listening_path(Path(repo_dir).resolve())
+    now_iso = datetime.now(timezone.utc).isoformat()
     with _listening_lock:
+        prev = _listening_state.get(agent_id)
+        _listening_state[agent_id] = now_iso
+    if prev is None or not is_listening(prev):
         try:
-            data = json.loads(path.read_text()) if path.exists() else {}
-        except (json.JSONDecodeError, OSError):
-            data = {}
-        data[agent_id] = datetime.now(timezone.utc).isoformat()
-        try:
-            path.write_text(json.dumps(data, indent=2))
-        except OSError:
+            from . import ws as ws_mod
+            ws_mod.broadcaster.broadcast_soon({
+                "type": "agent_changed",
+                "agent_id": agent_id,
+                "change": "listening",
+                "last_message_poll": now_iso,
+            })
+        except Exception:
             pass
 
 
 def read_listening(repo_dir: Path) -> dict:
     """Map of agent_id -> last inbox-poll ISO timestamp."""
-    path = _listening_path(Path(repo_dir).resolve())
-    try:
-        return json.loads(path.read_text()) if path.exists() else {}
-    except (json.JSONDecodeError, OSError):
-        return {}
+    with _listening_lock:
+        return dict(_listening_state)
 
 
 def is_listening(last_poll_iso: str | None, window_sec: int = LISTENING_WINDOW_SEC) -> bool:
@@ -205,30 +306,114 @@ def _history_path(repo_dir: Path) -> Path:
     return _agents_dir(repo_dir) / _HISTORY_FILE
 
 
+_history_lock = threading.Lock()
+_history_cache: list | None = None
+
+
+def _load_history(repo_dir: Path) -> list:
+    global _history_cache
+    if _history_cache is None:
+        hist_path = _history_path(repo_dir)
+        try:
+            _history_cache = json.loads(hist_path.read_text()) if hist_path.exists() else []
+        except Exception:
+            _history_cache = []
+    return _history_cache
+
+
 def record_completed_agent(repo_dir: Path, entry: dict, completed_at: str | None = None) -> None:
     """Append a completed agent entry to the history log."""
-    hist_path = _history_path(repo_dir)
-    try:
-        history = json.loads(hist_path.read_text()) if hist_path.exists() else []
-    except Exception:
-        history = []
+    global _history_cache
     record = dict(entry)
     record["completed_at"] = completed_at or datetime.now(timezone.utc).isoformat()
-    # Keep last 200 entries
-    history = [record] + history
-    history = history[:200]
-    hist_path.write_text(json.dumps(history, indent=2))
+    with _history_lock:
+        history = [record] + _load_history(repo_dir)
+        history = history[:200]  # keep last 200 entries
+        _history_cache = history
+        jsonio.write_json(_history_path(repo_dir), history)
 
 
 def list_past_agents(repo_dir: Path) -> list[dict]:
     """Return the history of completed agents, newest first."""
-    hist_path = _history_path(repo_dir)
-    if not hist_path.exists():
-        return []
+    with _history_lock:
+        return list(_load_history(repo_dir))
+
+
+def _claude_projects_dir_for(worktree: Path) -> Path:
+    """Path to the agent's Claude session-history dir under ~/.claude/projects.
+
+    Claude Code names the project dir by replacing every non-alphanumeric char
+    in the absolute worktree path with '-' — the same scheme agent_cli.py uses
+    to move sessions on resume. Kept in sync with that logic.
+    """
+    import re
+    name = re.sub(r"[^a-zA-Z0-9]", "-", str(Path(worktree).resolve()))
+    return Path.home() / ".claude" / "projects" / name
+
+
+def _archive_agent_data(repo_dir: Path, agent_id: str, entry: dict) -> None:
+    """Archive an agent's durable data before its worktree is deleted.
+
+    Feedback (PRESERVE FILES ON CLOSE): removing the worktree orphaned the
+    agent's Claude session history (~/.claude/projects/<hash>/*.jsonl, keyed off
+    the worktree path) and any agent-specific lab stats in the worktree's
+    .the_lab/. We keep the *data* — not the whole worktree checkout — under
+    ``.the_lab/agents/archive/<agent_id>/`` so it survives cleanup.
+
+    Fail-soft throughout: archiving must never block unregistration.
+    """
+    import shutil
     try:
-        return json.loads(hist_path.read_text())
+        worktree = Path(entry.get("worktree", "")).resolve()
+        archive_dir = _agents_dir(repo_dir) / "archive" / agent_id
+        archive_dir.mkdir(parents=True, exist_ok=True)
+
+        # (a) Claude session history. Record its source path always, and copy the
+        # jsonl session files if the dir is still present.
+        proj_dir = _claude_projects_dir_for(worktree)
+        meta = {
+            "agent_id": agent_id,
+            "worktree": str(worktree),
+            "branch": entry.get("branch"),
+            "claude_projects_dir": str(proj_dir),
+            "archived_at": datetime.now(timezone.utc).isoformat(),
+        }
+        try:
+            if proj_dir.is_dir():
+                dst = archive_dir / "claude_projects"
+                dst.mkdir(parents=True, exist_ok=True)
+                copied = 0
+                for f in proj_dir.iterdir():
+                    if f.is_file():
+                        try:
+                            shutil.copy2(f, dst / f.name)
+                            copied += 1
+                        except OSError:
+                            pass
+                meta["claude_sessions_copied"] = copied
+        except OSError:
+            pass
+
+        # (b) Agent-specific lab stats living in the worktree's own .the_lab/
+        # (real dir, not the .the_lab.link symlink to the main checkout). Copy
+        # it wholesale — it's the branch-local per-agent state.
+        try:
+            wt_lab = worktree / ".the_lab"
+            if wt_lab.is_dir() and not wt_lab.is_symlink():
+                shutil.copytree(
+                    wt_lab, archive_dir / "the_lab",
+                    symlinks=True, dirs_exist_ok=True,
+                )
+                meta["worktree_the_lab_copied"] = True
+        except OSError:
+            pass
+
+        try:
+            jsonio.write_json(archive_dir / "meta.json", meta)
+        except OSError:
+            pass
     except Exception:
-        return []
+        pass  # archiving is best-effort; never block cleanup
 
 
 def unregister_agent(repo_dir: Path, agent_id: str, *, keep_branch: bool = True) -> bool:
@@ -238,6 +423,9 @@ def unregister_agent(repo_dir: Path, agent_id: str, *, keep_branch: bool = True)
     if entry is None:
         return False
     record_completed_agent(repo_dir, entry)
+    # Preserve durable data (Claude history + worktree lab stats) BEFORE the
+    # worktree checkout is deleted, otherwise it's orphaned/lost. See feedback.
+    _archive_agent_data(repo_dir, agent_id, entry)
     worktree = Path(entry["worktree"])
     git_ops.remove_worktree(worktree, cwd=repo_dir)
     git_ops.prune_worktrees(cwd=repo_dir)
