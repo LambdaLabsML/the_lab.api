@@ -79,10 +79,11 @@ def _read_registry(repo_dir: Path) -> dict:
 
 def _write_registry(repo_dir: Path, data: dict) -> None:
     global _registry_cache, _registry_cache_path
+    path = _registry_path(repo_dir)
+    jsonio.write_json(path, data)
     with _registry_lock:
         _registry_cache = data
-        _registry_cache_path = _registry_path(repo_dir)
-    jsonio.write_json(_registry_path(repo_dir), data)
+        _registry_cache_path = path
 
 
 def _generate_agent_id(existing: set[str]) -> str:
@@ -329,8 +330,8 @@ def record_completed_agent(repo_dir: Path, entry: dict, completed_at: str | None
     with _history_lock:
         history = [record] + _load_history(repo_dir)
         history = history[:200]  # keep last 200 entries
-        _history_cache = history
         jsonio.write_json(_history_path(repo_dir), history)
+        _history_cache = history
 
 
 def list_past_agents(repo_dir: Path) -> list[dict]:

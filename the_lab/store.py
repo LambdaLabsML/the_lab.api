@@ -37,6 +37,10 @@ from . import jsonio
 logger = logging.getLogger(__name__)
 
 
+class StoreDegradedError(RuntimeError):
+    """Writes are unsafe because authoritative records could not be read."""
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -109,14 +113,17 @@ class Store:
       _notes:        {idea_id: list[dict]} — notes per idea
     """
 
-    def __init__(self, repo_dir: Path):
+    def __init__(self, repo_dir: Path, read_only: bool = False):
         self.repo_dir = repo_dir
         self.lab_dir = repo_dir / ".the_lab" / "experiments"
-        self.lab_dir.mkdir(parents=True, exist_ok=True)
+        self.read_only = read_only
+        if not read_only:
+            self.lab_dir.mkdir(parents=True, exist_ok=True)
         self.instance_id = self._load_or_create_instance_id()
         self._ensure_gitignore()
         self._lock = threading.Lock()
         self._next_idea_id = 1
+        self._next_seq_by_idea: dict[int, int] = {}
         # In-memory caches — experiments keyed by label string ("10.1")
         self._ideas: dict[int, dict] = {}
         self._experiments: dict[str, dict] = {}
@@ -127,6 +134,10 @@ class Store:
         # invalidates all cached reads.
         self._version = 0
         self._completed_version = 0
+        # Structured diagnostics, keyed by authoritative pathname.  We never
+        # rewrite a malformed record during recovery: fixing it is an explicit
+        # operator action, after which ``reconcile()`` can be called.
+        self._load_errors: dict[str, str] = {}
 
         self._load_all()
 
@@ -135,10 +146,32 @@ class Store:
         id_path = self.repo_dir / ".the_lab" / "instance.id"
         if id_path.exists():
             return id_path.read_text().strip()
+        if self.read_only:
+            return "readonly"
         import secrets
         instance_id = secrets.token_hex(4)  # 8 hex chars
         id_path.write_text(instance_id + "\n")
         return instance_id
+
+    @property
+    def load_errors(self) -> dict[str, str]:
+        """Copy of startup/reconciliation problems in authoritative files."""
+        # Reconciliation swaps this dict atomically; never wait behind a slow
+        # authoritative write merely to answer readiness/liveness.
+        return dict(self._load_errors)
+
+    @property
+    def is_ready(self) -> bool:
+        return not self._load_errors
+
+    def assert_writable(self) -> None:
+        if self.read_only:
+            raise StoreDegradedError("store is read-only")
+        if self._load_errors:
+            raise StoreDegradedError(
+                "authoritative experiment files have load errors; repair them "
+                "and reconcile before mutating state"
+            )
 
     @property
     def version(self) -> int:
@@ -152,6 +185,8 @@ class Store:
 
     def _ensure_gitignore(self):
         """Make sure .the_lab/ is gitignored on ALL branches."""
+        if self.read_only:
+            return
         exclude_file = self.repo_dir / ".git" / "info" / "exclude"
         exclude_file.parent.mkdir(parents=True, exist_ok=True)
         entry = ".the_lab/"
@@ -167,6 +202,15 @@ class Store:
         artifacts_dir.mkdir(parents=True, exist_ok=True)
 
     def _load_all(self):
+        """Initial authoritative scan.  See ``reconcile`` for later scans."""
+        self.reconcile(initial=True)
+
+    @staticmethod
+    def _record_error(errors: dict[str, str], path: Path, exc: Exception | str) -> None:
+        errors[str(path)] = f"{type(exc).__name__}: {exc}" if isinstance(exc, Exception) else str(exc)
+        logger.warning("The Lab record skipped: %s: %s", path, errors[str(path)])
+
+    def reconcile(self, *, initial: bool = False) -> bool:
         """Scan filesystem once on startup to populate all caches.
 
         Experiments are identified by label "{idea_id}.{file_stem}".
@@ -174,10 +218,28 @@ class Store:
         new projects use per-idea seq (e.g. 1.json). Both work —
         the file stem IS the seq number in the label.
         """
+        with self._lock:
+            scan_version = self._version
+        ideas: dict[int, dict] = {}
+        experiments: dict[str, dict] = {}
+        exp_by_idea: dict[int, set[str]] = {}
+        notes: dict[int, list[dict]] = {}
+        next_seq_by_idea: dict[int, int] = {}
+        errors: dict[str, str] = {}
+        scan_failed = False
         if not self.lab_dir.exists():
-            return
+            self._record_error(errors, self.lab_dir, "authoritative experiments directory is missing")
+            scan_failed = True
+            entries = []
+        else:
+            try:
+                entries = list(self.lab_dir.iterdir())
+            except OSError as exc:
+                self._record_error(errors, self.lab_dir, exc)
+                entries = []
+                scan_failed = True
         max_idea = 0
-        for d in self.lab_dir.iterdir():
+        for d in entries:
             if not d.is_dir():
                 continue
             try:
@@ -185,52 +247,139 @@ class Store:
             except ValueError:
                 continue
             max_idea = max(max_idea, idea_id)
+            seq_marker = d / ".next_seq.json"
+            try:
+                marker = _read_json(seq_marker).get("next", 1) if seq_marker.exists() else 1
+                if not isinstance(marker, int) or marker < 1:
+                    raise ValueError("next experiment seq must be a positive integer")
+                next_seq_by_idea[idea_id] = marker
+            except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+                self._record_error(errors, seq_marker, exc)
 
             # Load idea
             idea_path = d / "idea.json"
             if idea_path.exists():
-                self._ideas[idea_id] = json.loads(idea_path.read_text())
+                try:
+                    value = _read_json(idea_path)
+                    if not isinstance(value, dict):
+                        raise ValueError("idea.json must contain an object")
+                    if value.get("id", idea_id) != idea_id or not isinstance(value.get("description", ""), str):
+                        raise ValueError("idea id/description does not match required schema")
+                    if not isinstance(value.get("parent_ids", []), list):
+                        raise ValueError("idea parent_ids must be a list")
+                    ideas[idea_id] = value
+                except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+                    self._record_error(errors, idea_path, exc)
 
             # Load notes
             notes_path = d / "notes.json"
             if notes_path.exists():
-                self._notes[idea_id] = json.loads(notes_path.read_text())
+                try:
+                    value = _read_json(notes_path)
+                    if not isinstance(value, list):
+                        raise ValueError("notes.json must contain a list")
+                    if any(not isinstance(n, dict) or not isinstance(n.get("text", ""), str) for n in value):
+                        raise ValueError("notes entries must be objects with text")
+                    notes[idea_id] = value
+                except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+                    self._record_error(errors, notes_path, exc)
 
             # Load experiments — supports both old flat layout and new subfolder layout
             exp_labels: set[str] = set()
             # New layout: {seq}/experiment.json (subfolder per experiment)
-            for sub in d.iterdir():
+            try:
+                children = list(d.iterdir())
+            except OSError as exc:
+                self._record_error(errors, d, exc)
+                scan_failed = True
+                continue
+            for sub in children:
                 if sub.is_dir() and sub.name.isdigit():
                     exp_json = sub / "experiment.json"
                     if exp_json.exists():
                         seq = int(sub.name)
                         label = f"{idea_id}.{seq}"
-                        exp = _enrich_experiment(json.loads(exp_json.read_text()))
+                        try:
+                            exp = _read_json(exp_json)
+                            if not isinstance(exp, dict):
+                                raise ValueError("experiment.json must contain an object")
+                            if not isinstance(exp.get("status", "pending"), str) or not isinstance(exp.get("meta", {}), dict):
+                                raise ValueError("experiment status/meta does not match required schema")
+                            if exp.get("metrics") is not None and not isinstance(exp.get("metrics"), dict):
+                                raise ValueError("experiment metrics must be an object or null")
+                            exp = _enrich_experiment(exp)
+                        except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+                            self._record_error(errors, exp_json, exc)
+                            continue
                         exp["id"] = label
                         exp["seq"] = seq
                         exp["label"] = label
                         exp["idea_id"] = idea_id
                         exp["script"] = f".the_lab/experiments/{idea_id}/{seq}/script.sh"
-                        self._experiments[label] = exp
+                        experiments[label] = exp
                         exp_labels.add(label)
             # Old layout: {seq}.json (flat files in idea dir)
-            for f in d.glob("*.json"):
+            for f in children:
+                if not (f.is_file() and f.suffix == ".json"):
+                    continue
                 if f.stem.isdigit():
                     seq = int(f.stem)
                     label = f"{idea_id}.{seq}"
                     if label in exp_labels:
                         continue  # already loaded from subfolder
-                    exp = _enrich_experiment(json.loads(f.read_text()))
+                    try:
+                        exp = _read_json(f)
+                        if not isinstance(exp, dict):
+                            raise ValueError("legacy experiment record must contain an object")
+                        if not isinstance(exp.get("status", "pending"), str) or not isinstance(exp.get("meta", {}), dict):
+                            raise ValueError("legacy experiment status/meta does not match required schema")
+                        exp = _enrich_experiment(exp)
+                    except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+                        self._record_error(errors, f, exc)
+                        continue
                     exp["id"] = label
                     exp["seq"] = seq
                     exp["label"] = label
                     exp["idea_id"] = idea_id
                     exp["script"] = f".the_lab/experiments/{idea_id}/{seq}.sh"
-                    self._experiments[label] = exp
+                    experiments[label] = exp
                     exp_labels.add(label)
-            self._exp_by_idea[idea_id] = exp_labels
+            exp_by_idea[idea_id] = exp_labels
 
-        self._next_idea_id = max_idea + 1
+        highwater = self.lab_dir / ".next_idea_id.json"
+        try:
+            high = _read_json(highwater).get("next", 1) if highwater.exists() else 1
+            if not isinstance(high, int) or high < 1:
+                raise ValueError("next idea id must be a positive integer")
+        except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+            self._record_error(errors, highwater, exc)
+            high = max_idea + 1
+        # A failed directory scan cannot safely imply deletions. Keep the last
+        # good cache rather than replacing it with an incomplete snapshot.
+        with self._lock:
+            if not initial and self._version != scan_version:
+                # Do not replace newer successful mutations with a scan that
+                # began before them.  The next periodic/manual reconcile will
+                # see a stable point-in-time snapshot.
+                return False
+            self._load_errors = errors
+            if scan_failed and not initial:
+                return False
+            self._ideas = ideas
+            self._experiments = experiments
+            self._exp_by_idea = exp_by_idea
+            self._notes = notes
+            self._next_idea_id = max(max_idea + 1, high)
+            self._next_seq_by_idea = {
+                idea: max(next_seq, max((int(x.rpartition(".")[2]) for x in labels), default=0) + 1)
+                for idea, (next_seq, labels) in {
+                    i: (next_seq_by_idea.get(i, 1), labels)
+                    for i, labels in exp_by_idea.items()
+                }.items()
+            }
+            self._version += 1
+            self._completed_version += 1
+        return not errors
 
     def _idea_dir(self, idea_id: int) -> Path:
         return self.lab_dir / str(idea_id)
@@ -275,7 +424,11 @@ class Store:
         resources: list[dict] | None = None,
     ) -> dict:
         with self._lock:
+            self.assert_writable()
             idea_id = self._next_idea_id
+            # Persist a high-water mark before handing out the ID.  A deleted
+            # directory therefore cannot make an ID reusable after restart.
+            _write_json(self.lab_dir / ".next_idea_id.json", {"next": idea_id + 1})
             self._next_idea_id += 1
 
         idea = {
@@ -304,14 +457,16 @@ class Store:
         """Write idea.json + initialize notes.json."""
         idea_id = idea["id"]
         idea_dir = self._idea_dir(idea_id)
-        idea_dir.mkdir(parents=True, exist_ok=True)
-        _write_json(idea_dir / "idea.json", idea)
-        notes_path = idea_dir / "notes.json"
-        if not notes_path.exists():
-            _write_json(notes_path, [])
-        # Update cache
-        is_new = idea_id not in self._ideas
         with self._lock:
+            self.assert_writable()
+            # Disk is authoritative: publish no portion of this record until
+            # all required files have been atomically written.
+            idea_dir.mkdir(parents=True, exist_ok=True)
+            _write_json(idea_dir / "idea.json", idea)
+            notes_path = idea_dir / "notes.json"
+            if not notes_path.exists():
+                _write_json(notes_path, [])
+            is_new = idea_id not in self._ideas
             self._ideas[idea_id] = idea
             self._completed_version += 1
             if idea_id not in self._notes:
@@ -340,6 +495,7 @@ class Store:
         # write stays inside the lock so two concurrent updates can't publish
         # memory in one order and disk in the other.
         with self._lock:
+            self.assert_writable()
             cur = self._ideas.get(idea_id)
             if not cur:
                 return None
@@ -395,10 +551,11 @@ class Store:
             note["resources"] = resources
         notes_path = self._idea_dir(idea_id) / "notes.json"
         with self._lock:
+            self.assert_writable()
             # Copy-on-write list: readers iterating the old list are unaffected.
             notes = [*self._notes.get(idea_id, []), note]
-            self._notes[idea_id] = notes
             _write_json(notes_path, notes)
+            self._notes[idea_id] = notes
             self._version += 1
         try:
             from . import ws as ws_mod
@@ -444,7 +601,7 @@ class Store:
                 rec = self._experiments.get(label)
                 if rec and isinstance(rec.get("seq"), int):
                     max_seq = max(max_seq, rec["seq"])
-        return max_seq + 1
+        return max(max_seq + 1, self._next_seq_by_idea.get(idea_id, 1))
 
     def resolve_experiment(self, ref: str) -> dict | None:
         """Look up experiment by label (e.g. '10.1' or '400.671').
@@ -488,19 +645,19 @@ class Store:
         if not trusted_meta:
             for key in self._SERVER_OWNED_META_KEYS:
                 meta.pop(key, None)
-        # Allocate the seq AND publish the label under one lock acquisition.
+        # Allocate and write under one lock.  In particular, an in-memory
+        # reservation is not visible before authoritative disk publication.
         # _next_seq derives from self._exp_by_idea, so releasing the lock before
         # registering the label left a window where a concurrent create for the
         # same idea computed the same seq and silently clobbered the first one's
         # record and script. Reserving here (rather than holding the lock across
         # the disk write below) closes the window without serialising file I/O.
         with self._lock:
+            self.assert_writable()
             seq = self._next_seq(idea_id)
             label = f"{idea_id}.{seq}"
-            self._exp_by_idea.setdefault(idea_id, set()).add(label)
-
-        script_rel = self._exp_script_rel(idea_id, seq, subfolder=True)
-        exp = {
+            script_rel = self._exp_script_rel(idea_id, seq, subfolder=True)
+            exp = {
             "id": label,
             "idea_id": idea_id,
             "seq": seq,
@@ -518,22 +675,13 @@ class Store:
             "finished_at": None,
         }
 
-        exp_dir = self._idea_dir(idea_id) / str(seq)
-        try:
+            exp_dir = self._idea_dir(idea_id) / str(seq)
             exp_dir.mkdir(parents=True, exist_ok=True)
+            _write_json(self._idea_dir(idea_id) / ".next_seq.json", {"next": seq + 1})
             _write_json(exp_dir / "experiment.json", exp)
-        except Exception:
-            # Release the reservation so the label isn't permanently burnt (and
-            # so _next_seq doesn't skip it) when the write fails.
-            with self._lock:
-                labels = self._exp_by_idea.get(idea_id)
-                if labels is not None:
-                    labels.discard(label)
-            raise
-        # Publish the record itself; the label was already reserved above.
-        with self._lock:
             self._experiments[label] = exp
             self._exp_by_idea.setdefault(idea_id, set()).add(label)
+            self._next_seq_by_idea[idea_id] = seq + 1
             self._version += 1
         return exp
 
@@ -549,6 +697,7 @@ class Store:
         # happens inside the lock so concurrent updates to the same label
         # can't publish memory in one order and disk in the other.
         with self._lock:
+            self.assert_writable()
             cur = self._experiments.get(label)
             if not cur:
                 return None
@@ -571,6 +720,36 @@ class Store:
                 if cur.get("status") == "completed" or exp.get("status") == "completed":
                     self._completed_version += 1
         return exp
+
+    def transition_experiment(self, exp_ref, allowed: set[str] | tuple[str, ...],
+                              **fields) -> dict | None:
+        """Atomically update only when the record is in an expected state.
+
+        Runner setup crosses many ``await`` boundaries.  This small compare and
+        swap is the authority for queued→starting→running and ensures a cancel
+        wins over a late completion/start write.
+        """
+        label = str(exp_ref)
+        allowed = set(allowed)
+        with self._lock:
+            self.assert_writable()
+            cur = self._experiments.get(label)
+            if not cur or cur.get("status") not in allowed:
+                return None
+            renderable_changed = any(
+                k in RENDERABLE_EXPERIMENT_FIELDS and cur.get(k) != v
+                for k, v in fields.items()
+            )
+            exp = _enrich_experiment({**cur, **fields})
+            json_path = self._exp_json_path(exp["idea_id"], exp["seq"])
+            json_path.parent.mkdir(parents=True, exist_ok=True)
+            _write_json(json_path, exp)
+            self._experiments[label] = exp
+            if renderable_changed:
+                self._version += 1
+                if cur.get("status") == "completed" or exp.get("status") == "completed":
+                    self._completed_version += 1
+            return exp
 
     def _safe_cleanup_path(self, value, *, key: str, label: str) -> Path | None:
         """Resolve *value* and return it only if it sits inside the repo.
@@ -720,6 +899,17 @@ class Store:
     def list_all_experiments(self) -> list[dict]:
         """List all experiments across all ideas."""
         return list(self._experiments.values())
+
+    def index_snapshot(self) -> dict:
+        """A copy-only view for rebuildable derived indexes (never authority)."""
+        with self._lock:
+            return {
+                "ideas": [dict(x) for x in self._ideas.values()],
+                "experiments": [dict(x) for x in self._experiments.values()],
+                "notes": {key: [dict(n) for n in value]
+                          for key, value in self._notes.items()},
+                "version": self._version,
+            }
 
     def search_ideas_by_keywords(
         self,

@@ -127,8 +127,10 @@ def _prune(data: dict) -> dict:
 def _write(repo_dir: Path, data: dict) -> None:
     """Persist and adopt *data* as the cache. Call while holding _lock."""
     global _cache, _cache_path
-    _cache, _cache_path = data, _path(repo_dir)
-    jsonio.write_json(_cache_path, _prune(data))
+    path = _path(repo_dir)
+    persisted = _prune(data)
+    jsonio.write_json(path, persisted)
+    _cache, _cache_path = persisted, path
 
 
 def _validate_to(to: str) -> None:

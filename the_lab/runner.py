@@ -9,6 +9,7 @@ import os
 import secrets
 import signal
 import shutil
+import socket
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -168,7 +169,8 @@ class ExperimentRunner:
         self._git_lock = None  # initialized as asyncio.Lock in reattach_running
         self._loop = None
         self._worktree_dir = store.repo_dir / ".the_lab" / "worktrees"
-        self._worktree_dir.mkdir(parents=True, exist_ok=True)
+        if not read_only:
+            self._worktree_dir.mkdir(parents=True, exist_ok=True)
 
         # Queue / scheduler state — populated lazily on the first schedule
         # tick so we don't need an event-loop at construction time.
@@ -176,6 +178,7 @@ class ExperimentRunner:
         self._scheduler_task: asyncio.Task | None = None
         self._scheduler_wake: asyncio.Event | None = None  # set when something queueable changes
         self._last_queue_broadcast: float = 0.0  # throttle for queue_changed events
+        self._stopping = False
 
         # Recover orphaned experiments on startup.
         # If the process is still alive, re-attach to it. Otherwise mark as failed.
@@ -185,7 +188,18 @@ class ExperimentRunner:
             # Demo mode: NEVER touch the DB — no stale-running reconcile (it
             # marks experiments failed), no worktree cleanup. The state is
             # someone else's snapshot; we only display it.
+            self._seen: set[int] = set()
             return
+        # ``starting`` has no durable child identity yet.  Never dispatch it
+        # again after a crash: mark it inconclusive/failed so an operator can
+        # explicitly requeue it rather than duplicate a possibly-submitted job.
+        for exp in self._store.list_experiments_by_status("starting"):
+            self._store.transition_experiment(
+                exp["id"], {"starting"}, status="failed", pid=None,
+                error="server restarted while experiment launch was in progress",
+                status_msg="error: launch outcome unknown after restart",
+                finished_at=datetime.now(timezone.utc).isoformat(),
+            )
         for exp in self._store.list_experiments_by_status("running"):
             pid = exp.get("pid")
             slurm_job_id = (exp.get("meta") or {}).get("slurm_job_id")
@@ -193,7 +207,10 @@ class ExperimentRunner:
                 # Slurm experiment — always reattach via _monitor_slurm_job,
                 # never mark as failed based on local PID (there is none).
                 self._reattach_running.append(exp)
-            elif pid and self._pid_alive(pid):
+                wt = (exp.get("meta") or {}).get("worktree")
+                if wt:
+                    running_worktrees.add(wt)
+            elif pid and self._pid_matches_record(pid, exp):
                 self._reattach_running.append(exp)
                 wt = (exp.get("meta") or {}).get("worktree")
                 if wt:
@@ -247,6 +264,25 @@ class ExperimentRunner:
             return True
         except (ProcessLookupError, PermissionError):
             return False
+
+    @staticmethod
+    def _process_identity(pid: int) -> dict | None:
+        """Identity stronger than a recycled/copied local PID."""
+        try:
+            boot_id = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+            start_ticks = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19]
+            return {"run_host": socket.gethostname(), "boot_id": boot_id,
+                    "pid_start_ticks": start_ticks}
+        except (OSError, IndexError):
+            return None
+
+    @classmethod
+    def _pid_matches_record(cls, pid: int, exp: dict) -> bool:
+        identity = cls._process_identity(pid)
+        meta = exp.get("meta") or {}
+        # Legacy records have no identity: do not attach/signal a random PID.
+        return bool(identity and all(meta.get(k) == identity[k]
+                                     for k in ("run_host", "boot_id", "pid_start_ticks")))
 
     @staticmethod
     def _signal_experiment(pid: int, sig: int) -> None:
@@ -370,7 +406,10 @@ class ExperimentRunner:
     def wake_scheduler(self) -> None:
         """Nudge the scheduler — call when an experiment is queued/finished."""
         if self._scheduler_wake is not None:
-            self._loop.call_soon_threadsafe(self._scheduler_wake.set)
+            if self._loop is not None:
+                self._loop.call_soon_threadsafe(self._scheduler_wake.set)
+            else:  # useful for isolated/unit-created runners
+                self._scheduler_wake.set()
         # Emit queue_changed at most once per second.
         import time as _time
         now = _time.monotonic()
@@ -383,7 +422,7 @@ class ExperimentRunner:
         """Tick on a configurable interval (or when woken) and dispatch
         queued experiments onto free resources.
         """
-        while True:
+        while not self._stopping:
             try:
                 resources, qc = (await run_blocking(load_config, self._store.repo_dir))
                 interval = max(0.5, qc.dispatch_interval_s)
@@ -398,6 +437,24 @@ class ExperimentRunner:
             except asyncio.TimeoutError:
                 pass
             self._scheduler_wake.clear()
+
+    async def shutdown(self) -> None:
+        """Stop local scheduler/monitor tasks without touching child jobs.
+
+        Children intentionally survive a server restart and are reattached by
+        the next writer; cancelling their monitor coroutines must not signal
+        their process groups.
+        """
+        self._stopping = True
+        if self._scheduler_wake is not None:
+            self._scheduler_wake.set()
+        tasks = [t for t in [self._scheduler_task, *self._tasks.values()] if t]
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._scheduler_task = None
+        self._tasks.clear()
 
     async def _dispatch_once(self, resources: list) -> None:
         """One scheduler pass: walk queued experiments and start what fits."""
@@ -694,11 +751,43 @@ class ExperimentRunner:
         timeout: float | None = None,
         env_extra: dict[str, str] | None = None,
     ) -> dict:
+        if self._read_only:
+            return {"status": "error", "reason": "runner is read-only"}
         exp = self._store.get_experiment(exp_id)
         if not exp:
             return {"status": "error", "reason": f"experiment {exp_id} not found"}
         if exp["status"] not in ("queued", "pending", "failed", "cancelled"):
             return {"status": "error", "reason": f"experiment is {exp['status']}, expected queued, failed, or cancelled"}
+
+        # Claim the state before the first await.  A cancellation can now
+        # change starting→cancelled, and every later launch/terminal write
+        # checks this CAS rather than resurrecting it.
+        claimed = await run_blocking(
+            self._store.transition_experiment, exp_id,
+            {"queued", "pending", "failed", "cancelled"}, status="starting",
+        )
+        if not claimed:
+            return {"status": "error", "reason": "experiment state changed before start"}
+        exp = claimed
+        worktree_path = None
+
+        async def _abort_launch(reason: str, *, token: str = "", log_file=None) -> None:
+            """Leave a claimed launch terminal without blocking the event loop."""
+            if log_file is not None:
+                try:
+                    await run_blocking(log_file.close)
+                except Exception:
+                    pass
+            if token:
+                token_registry.unregister(token)
+            if worktree_path:
+                await run_blocking(self._cleanup_worktree,
+                                   {"meta": {"worktree": str(worktree_path)}})
+            await run_blocking(
+                self._store.transition_experiment, exp_id, {"starting"},
+                status="failed", error=reason, status_msg=f"error: {reason}",
+                pid=None, finished_at=datetime.now(timezone.utc).isoformat(),
+            )
 
         script_path = self._store.repo_dir / exp["script"]
         if not (await run_blocking(script_path.exists)):
@@ -707,15 +796,14 @@ class ExperimentRunner:
                 f"Provide script_content when creating the experiment, or use "
                 f"POST /experiments/<source>/rerun on an experiment that has a script."
             )
-            (await run_blocking(self._store.update_experiment,
-                exp_id, status="failed", error=msg,
-                # M3 feedback: terminal-state reason line.
-                status_msg="error: script not found",
-                finished_at=datetime.now(timezone.utc).isoformat(),
-            ))
+            await _abort_launch(msg)
             return {"status": "error", "reason": msg}
 
-        await run_blocking(lambda: os.chmod(script_path, os.stat(script_path).st_mode | 0o755))
+        try:
+            await run_blocking(lambda: os.chmod(script_path, os.stat(script_path).st_mode | 0o755))
+        except Exception as exc:
+            await _abort_launch(f"unable to prepare experiment script: {exc}")
+            return {"status": "error", "reason": str(exc)}
 
         loop = asyncio.get_running_loop()
 
@@ -735,7 +823,6 @@ class ExperimentRunner:
         # this experiment runs in isolation (concurrent experiments don't
         # interfere with each other or the main checkout).
         idea = self._store.get_idea(exp["idea_id"])
-        worktree_path = None
         worktree_commit = None  # the actual commit the experiment runs on
         run_cwd = str(self._store.repo_dir)  # fallback
 
@@ -799,8 +886,19 @@ class ExperimentRunner:
         metrics_path = base.with_suffix(".metrics.jsonl")
 
         for p in (log_path, err_path, progress_path, metrics_path):
-            if (await run_blocking(p.exists)):
-                (await run_blocking(p.unlink))
+            try:
+                if (await run_blocking(p.exists)):
+                    (await run_blocking(p.unlink))
+            except Exception as exc:
+                await _abort_launch(f"unable to reset experiment sidecar {p.name}: {exc}")
+                return {"status": "error", "reason": str(exc)}
+
+        # Check before allocating external credentials or starting a child.
+        if (self._store.get_experiment(exp_id) or {}).get("status") != "starting":
+            if worktree_path:
+                await run_blocking(self._cleanup_worktree,
+                                   {"meta": {"worktree": str(worktree_path)}})
+            return {"status": "error", "reason": "experiment cancelled during start setup"}
 
         run_token = secrets.token_hex(16)
         token_registry.register(run_token)
@@ -817,9 +915,13 @@ class ExperimentRunner:
         command_script_path = script_path
         if worktree_path:
             command_script_path = worktree_path / ".the_lab" / "current_experiment" / "script.sh"
-            (await run_blocking(command_script_path.parent.mkdir, parents=True, exist_ok=True))
-            (await run_blocking(shutil.copy2, script_path, command_script_path))
-            await run_blocking(os.chmod, command_script_path, 0o755)
+            try:
+                (await run_blocking(command_script_path.parent.mkdir, parents=True, exist_ok=True))
+                (await run_blocking(shutil.copy2, script_path, command_script_path))
+                await run_blocking(os.chmod, command_script_path, 0o755)
+            except Exception as exc:
+                await _abort_launch(f"unable to prepare worktree script: {exc}", token=run_token)
+                return {"status": "error", "reason": str(exc)}
 
         command = ["bash", str(command_script_path)]
         try:
@@ -827,13 +929,21 @@ class ExperimentRunner:
         except Exception:
             uses_inner_arc_sandbox = False
 
-        sandbox_config = (await run_blocking(load_sandbox_config, self._store.repo_dir))
+        try:
+            sandbox_config = (await run_blocking(load_sandbox_config, self._store.repo_dir))
+        except Exception as exc:
+            await _abort_launch(f"unable to load sandbox configuration: {exc}", token=run_token)
+            return {"status": "error", "reason": str(exc)}
         if (
             sandbox_config.get("enabled", False)
             and not os.environ.get("THE_LAB_NO_SANDBOX")
             and not uses_inner_arc_sandbox
         ):
-            capabilities = (await run_blocking(sandbox_capabilities))
+            try:
+                capabilities = (await run_blocking(sandbox_capabilities))
+            except Exception as exc:
+                await _abort_launch(f"unable to inspect sandbox: {exc}", token=run_token)
+                return {"status": "error", "reason": str(exc)}
             if not capabilities.get("available"):
                 # Keep the stored reason to a few lines (it shows up in the
                 # experiment record), but still say what to install and how.
@@ -848,46 +958,93 @@ class ExperimentRunner:
                 )
                 # Newline-joined so the install command is not run together with
                 # the following sentence.
-                return {"status": "error", "reason": "\n".join(parts)}
+                reason = "\n".join(parts)
+                await _abort_launch(reason, token=run_token)
+                return {"status": "error", "reason": reason}
             env["THE_LAB_SANDBOX_TARGET_UID"] = str(os.getuid())
             env["THE_LAB_SANDBOX_TARGET_GID"] = str(os.getgid())
-            command = (await run_blocking(build_sandbox_command,
-                self._store.repo_dir,
-                "experiment",
-                f"exp-{exp_id}",
-                command,
-                config=sandbox_config,
-                cwd=run_cwd,
-            ))
+            try:
+                command = (await run_blocking(build_sandbox_command,
+                    self._store.repo_dir, "experiment", f"exp-{exp_id}", command,
+                    config=sandbox_config, cwd=run_cwd,
+                ))
+            except Exception as exc:
+                await _abort_launch(f"unable to build sandbox command: {exc}", token=run_token)
+                return {"status": "error", "reason": str(exc)}
 
         # Write stdout/stderr directly to the log file so it survives server restarts.
-        log_file = (await run_blocking(open, log_path, "w"))
+        try:
+            log_file = (await run_blocking(open, log_path, "w"))
+        except Exception as exc:
+            await _abort_launch(f"unable to open experiment log: {exc}", token=run_token)
+            return {"status": "error", "reason": str(exc)}
         # If the driver is loaded but this container has no GPU device nodes, CUDA
         # will fail with something opaque ("Failed to infer device type"). Say so
         # at the top of the log — this holds sandboxed or not, and cannot be fixed
         # from inside the container.
-        _gpu_warning = (await run_blocking(gpu_host_state)).get("warning")
+        try:
+            _gpu_warning = (await run_blocking(gpu_host_state)).get("warning")
+        except Exception as exc:
+            await _abort_launch(f"unable to inspect GPU host state: {exc}",
+                                token=run_token, log_file=log_file)
+            return {"status": "error", "reason": str(exc)}
         if _gpu_warning:
-            (await run_blocking(log_file.write, f"[the-lab] WARNING: {_gpu_warning}\n\n"))
-            (await run_blocking(log_file.flush))
-        process = await asyncio.create_subprocess_exec(
-            *command,
-            stdout=log_file,
-            stderr=asyncio.subprocess.STDOUT,
-            cwd=run_cwd,
-            env=env,
-            start_new_session=True,
-        )
+            try:
+                (await run_blocking(log_file.write, f"[the-lab] WARNING: {_gpu_warning}\n\n"))
+                (await run_blocking(log_file.flush))
+            except Exception as exc:
+                await _abort_launch(f"unable to write experiment log: {exc}",
+                                    token=run_token, log_file=log_file)
+                return {"status": "error", "reason": str(exc)}
+        # Cancellation may have happened while we prepared git/worktree state.
+        current = self._store.get_experiment(exp_id)
+        if not current or current.get("status") != "starting":
+            try:
+                await run_blocking(log_file.close)
+            finally:
+                token_registry.unregister(run_token)
+            if worktree_path:
+                await run_blocking(self._cleanup_worktree,
+                                   {"meta": {"worktree": str(worktree_path)}})
+            return {"status": "error", "reason": "experiment cancelled during start setup"}
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *command, stdout=log_file, stderr=asyncio.subprocess.STDOUT,
+                cwd=run_cwd, env=env, start_new_session=True,
+            )
+        except Exception as exc:
+            await _abort_launch(f"unable to launch experiment: {exc}",
+                                token=run_token, log_file=log_file)
+            return {"status": "error", "reason": str(exc)}
         (await run_blocking(log_file.close))  # the child process has inherited the fd
 
-        exp = (await run_blocking(self._store.update_experiment,
+        launch_meta = {**(exp.get("meta") or {}), **(self._process_identity(process.pid) or {})}
+
+        exp = (await run_blocking(self._store.transition_experiment,
             exp_id,
+            {"starting"},
             status="running",
             pid=process.pid,
+            meta=launch_meta,
             error=None,
             started_at=datetime.now(timezone.utc).isoformat(),
             finished_at=None,
         ))
+
+        if exp is None:
+            # A cancel won after the last check but before publication.  Do not
+            # leave an untracked child running.
+            self._signal_experiment(process.pid, signal.SIGTERM)
+            try:
+                await asyncio.wait_for(process.wait(), timeout=10)
+            except asyncio.TimeoutError:
+                self._signal_experiment(process.pid, signal.SIGKILL)
+                await process.wait()
+            token_registry.unregister(run_token)
+            if worktree_path:
+                await run_blocking(self._cleanup_worktree,
+                                   {"meta": {"worktree": str(worktree_path)}})
+            return {"status": "error", "reason": "experiment cancelled during launch"}
 
         # M3 feedback: lightweight started broadcast on the running transition.
         # We're post-await here, so use broadcast (not broadcast_soon).
@@ -964,8 +1121,8 @@ class ExperimentRunner:
             except (TypeError, ValueError):
                 pass
             if not _cancelled_now():
-                (await run_blocking(self._store.update_experiment,
-                    exp_id, status="failed", error=error,
+                (await run_blocking(self._store.transition_experiment,
+                    exp_id, {"running"}, status="failed", error=error,
                     status_msg=_msg, pid=None, finished_at=now,
                 ))
                 (await run_blocking(err_path.write_text, f"{error}\n\n{output[-2000:]}"))
@@ -979,8 +1136,8 @@ class ExperimentRunner:
                 metrics, result_meta = _metrics_from_result(result)
                 meta = {**exp.get("meta", {}), **result_meta}
                 if not _cancelled_now():
-                    (await run_blocking(self._store.update_experiment,
-                        exp_id, status="completed", metrics=metrics, meta=meta,
+                    (await run_blocking(self._store.transition_experiment,
+                        exp_id, {"running"}, status="completed", metrics=metrics, meta=meta,
                         pid=None, status_msg=None, finished_at=now,  # normal success
                     ))
                     if result_idx is not None:
@@ -992,8 +1149,8 @@ class ExperimentRunner:
                                                   "metrics": metrics})
             else:
                 if not _cancelled_now():
-                    (await run_blocking(self._store.update_experiment,
-                        exp_id, status="completed", metrics=None,
+                    (await run_blocking(self._store.transition_experiment,
+                        exp_id, {"running"}, status="completed", metrics=None,
                         pid=None, status_msg=None, finished_at=now,  # normal success
                     ))
                     ws_mod.broadcaster.broadcast({"type": "experiment_finished", "label": _label,
@@ -1006,8 +1163,8 @@ class ExperimentRunner:
             _tail = next((ln.strip() for ln in reversed(output.splitlines()) if ln.strip()), "")
             _msg = f"error: {_tail}" if _tail else f"error: {error}"
             if not _cancelled_now():
-                (await run_blocking(self._store.update_experiment,
-                    exp_id, status="failed", error=error,
+                (await run_blocking(self._store.transition_experiment,
+                    exp_id, {"running"}, status="failed", error=error,
                     status_msg=_msg, pid=None, finished_at=now,
                 ))
                 (await run_blocking(err_path.write_text, f"{error}\n\n{output[-2000:]}"))
@@ -1049,6 +1206,16 @@ class ExperimentRunner:
     ) -> dict:
         """Submit an experiment to Slurm via SSH and start monitoring."""
         from .executors.slurm import SlurmExecutor
+
+        # Atomic claim prevents two dispatch passes (or a manual start racing
+        # one) from submitting the same queued record twice.
+        claimed = await run_blocking(
+            self._store.transition_experiment, label, {"queued", "pending"},
+            status="starting",
+        )
+        if not claimed:
+            return {"status": "error", "reason": "experiment state changed before Slurm submit"}
+        exp = claimed
 
         ssh_host = resource.executor_config.get("ssh_host", "slurm")
         executor = SlurmExecutor(ssh_host, resource.executor_config, instance_id=self._store.instance_id)
@@ -1092,8 +1259,8 @@ class ExperimentRunner:
                 f"provide script_content when creating, or use "
                 f"POST /experiments/<source>/rerun on an experiment that has a script."
             )
-            (await run_blocking(self._store.update_experiment,
-                label, status="failed", error=msg,
+            (await run_blocking(self._store.transition_experiment,
+                label, {"starting"}, status="failed", error=msg,
                 # M3 feedback: terminal-state reason line.
                 status_msg="error: script file missing",
                 finished_at=datetime.now(timezone.utc).isoformat(),
@@ -1158,6 +1325,13 @@ class ExperimentRunner:
             )
         except Exception as e:
             print(f"[the-lab] slurm submit for {label} failed: {e}")
+            token_registry.unregister(run_token)
+            await run_blocking(
+                self._store.transition_experiment, exp["id"], {"starting"},
+                status="failed", error=f"Slurm submit failed: {e}",
+                status_msg="error: Slurm submit failed", pid=None,
+                finished_at=datetime.now(timezone.utc).isoformat(),
+            )
             return {"status": "error", "reason": str(e)}
 
         meta = {
@@ -1172,8 +1346,9 @@ class ExperimentRunner:
             **({"git_commit": git_commit} if git_commit else {}),
         }
         exp_id = exp["id"]
-        (await run_blocking(self._store.update_experiment,
+        published = (await run_blocking(self._store.transition_experiment,
             exp_id,
+            {"starting"},
             status="running",
             started_at=now,
             meta=meta,
@@ -1181,6 +1356,14 @@ class ExperimentRunner:
             error=None,
             finished_at=None,
         ))
+        if published is None:
+            # Cancellation happened during submit.  Best-effort scancel and
+            # token cleanup; never turn a cancelled record back to running.
+            try:
+                await run_blocking(executor.cancel, job_id)
+            finally:
+                token_registry.unregister(run_token)
+            return {"status": "error", "reason": "experiment cancelled during Slurm submit"}
 
         task = asyncio.create_task(
             self._monitor_slurm_job(exp_id, executor, job_id, label, local_exp_dir)
@@ -1582,10 +1765,11 @@ class ExperimentRunner:
         label = exp.get("label") or str(exp_id)
         idea_id = exp.get("idea_id")
         self._allocator.release(label)
-        if exp["status"] in ("queued", "pending"):
+        if exp["status"] in ("queued", "pending", "starting"):
             self.wake_scheduler()
-            result = (await run_blocking(self._store.update_experiment,
+            result = (await run_blocking(self._store.transition_experiment,
                 exp_id,
+                {"queued", "pending", "starting"},
                 status="cancelled",
                 status_msg="cancelled",  # M3: user cancelled before it ran
                 finished_at=datetime.now(timezone.utc).isoformat(),
@@ -1595,6 +1779,16 @@ class ExperimentRunner:
             return result
         if exp["status"] != "running":
             return exp
+
+        # Win the terminal state before awaiting an external cancel/signal.
+        # The monitor's running-only CAS can no longer publish completion.
+        pid_to_signal = exp.get("pid")
+        result = (await run_blocking(self._store.transition_experiment,
+            exp_id, {"running"}, status="cancelled", status_msg="sigterm",
+            pid=None, finished_at=datetime.now(timezone.utc).isoformat(),
+        ))
+        if result is None:
+            return self._store.get_experiment(exp_id)
 
         # Handle Slurm jobs
         slurm_job_id = (exp.get("meta") or {}).get("slurm_job_id")
@@ -1611,10 +1805,13 @@ class ExperimentRunner:
                     (await run_blocking(executor.cancel, slurm_job_id))
             except Exception as e:
                 print(f"[the-lab] scancel for {label} failed: {e}")
-        elif exp.get("pid"):
-            self._signal_experiment(exp["pid"], signal.SIGTERM)
+        elif pid_to_signal and self._pid_matches_record(pid_to_signal, exp):
+            self._signal_experiment(pid_to_signal, signal.SIGTERM)
             await asyncio.sleep(10)
-            self._signal_experiment(exp["pid"], signal.SIGKILL)
+            # A PID can be recycled while waiting; verify the durable launch
+            # identity again before escalating to SIGKILL.
+            if self._pid_matches_record(pid_to_signal, exp):
+                self._signal_experiment(pid_to_signal, signal.SIGKILL)
 
         # Clean up worktree
         wt = (exp.get("meta") or {}).get("worktree")
@@ -1624,14 +1821,6 @@ class ExperimentRunner:
             except Exception:
                 pass
 
-        result = (await run_blocking(self._store.update_experiment,
-            exp_id,
-            status="cancelled",
-            # M3: SIGTERM/SIGKILL sent to a running process by user cancel.
-            status_msg="sigterm",
-            pid=None,
-            finished_at=datetime.now(timezone.utc).isoformat(),
-        ))
         ws_mod.broadcaster.broadcast({"type": "experiment_cancelled",
                                       "label": label, "idea_id": idea_id})
         return result

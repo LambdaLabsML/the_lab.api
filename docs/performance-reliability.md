@@ -56,3 +56,30 @@ and resume on later ticks. Component-owned requests can be cancelled on cleanup.
 Existing data remains visible after a failed refresh; the top bar shows failed
 endpoints, the last successful API update, and a manual retry action.
 Run the bundled TypeScript behavior tests with `cd dashboard && npm test`.
+
+## 4. Protect persistence and restart recovery
+
+Writable servers hold `.the_lab/instance.lock` for their lifetime. Do not remove
+that file to bypass contention. The lock is advisory POSIX `flock`: on NFS it
+depends on the client/server implementing locks correctly, and is not a
+distributed-consensus guarantee. Use one writable server per lab. Demo mode
+does not claim the writer lock or repair source records.
+
+Malformed records are reported by path while valid siblings remain readable.
+`/api/v1/readiness` returns 503 for degraded authoritative state and mutations
+are blocked until repaired and reconciled. Liveness `/api/v1/health` remains
+filesystem-free. Atomic JSON replacement is retained; `THE_LAB_FSYNC=1` also
+requests file and parent-directory fsync for stronger crash durability.
+Caches are published after successful writes; stats flushes are serialized.
+
+Launches claim a durable `starting` state; cancellation and terminal completion
+use compare-and-set transitions. Incomplete starts after restart are marked
+failed with an unknown-outcome warning, not automatically submitted again.
+Local child reattachment requires matching host, boot ID, and process start
+time; legacy/copied PIDs are not trusted. Graceful shutdown stops monitoring
+without intentionally killing running children, flushes state, then releases
+the writer lock. Review uncertain launches before manually requeueing them.
+
+Websocket subscriptions precede replay, duplicate sequences are discarded,
+and gaps/overflow request a fresh snapshot. Journal buffering is bounded;
+the filesystem records, not websocket replay, are the recovery authority.

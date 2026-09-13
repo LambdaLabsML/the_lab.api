@@ -41,6 +41,7 @@ logger = logging.getLogger(__name__)
 
 from .store import Store
 from .runner import ExperimentRunner
+from .instance_lock import InstanceLock
 from .stats import ApiStats, normalize_path as _normalize_path
 from . import deps
 from . import jsonio
@@ -54,8 +55,19 @@ REPO_DIR = Path(os.environ.get("THE_LAB_REPO", os.getcwd())).resolve()
 
 from .deps import DEMO_MODE as _DEMO
 
-store = Store(REPO_DIR)
-runner = ExperimentRunner(store, read_only=_DEMO)
+instance_lock: InstanceLock | None = None
+# Acquire before Store/Runner construction because those constructors can
+# create metadata and reconcile stale records. Demo never claims the writer.
+if not _DEMO:
+    instance_lock = InstanceLock(REPO_DIR)
+    instance_lock.acquire()
+try:
+    store = Store(REPO_DIR, read_only=_DEMO)
+    runner = ExperimentRunner(store, read_only=_DEMO or not store.is_ready)
+except BaseException:
+    if instance_lock is not None:
+        instance_lock.release()
+    raise
 api_stats = ApiStats(REPO_DIR / ".the_lab" / "api_stats.json")
 api_stats.read_only = _DEMO
 
@@ -425,6 +437,19 @@ async def resolve_agent(request, call_next):
                 request.state.agent_unknown = True
         else:
             request.state.agent_unknown = True
+    return await call_next(request)
+
+
+@app.middleware("http")
+async def authoritative_store_gate(request: Request, call_next):
+    """Block unsafe mutations while malformed authoritative data is repaired."""
+    if (not store.is_ready and request.url.path.startswith("/api/")
+            and request.method.upper() not in {"GET", "HEAD", "OPTIONS"}
+            and request.url.path != "/api/v1/health"):
+        return Response(
+            content=_json.dumps({"detail": "store degraded", "load_errors": store.load_errors}),
+            status_code=503, media_type="application/json",
+        )
     return await call_next(request)
 
 
@@ -857,24 +882,31 @@ def get_notifications(request: Request):
 
 
 @app.get("/api/v1/health")
-def health():
+async def health():
     """Unauthenticated liveness probe (feedback: /health ENDPOINT).
 
     Exempted from both basic_auth and the notifications middleware so a
     monitor/bridge can poll it cheaply without credentials. Reports the live
     agent count and process uptime; fail-soft on the registry read.
     """
-    try:
-        from . import agents as agents_mod
-        agent_count = len(agents_mod.list_agents(REPO_DIR))
-    except Exception:
-        agent_count = 0
     return {
         "status": "ok",
-        "agents": agent_count,
+        # Liveness must not touch a potentially stalled NFS filesystem. The
+        # detailed agent count belongs on the normal operational endpoints.
+        "agents": None,
         "uptime_sec": int(_time_mod.monotonic() - _START_TIME),
         "event_loop_lag": runtime_health.snapshot(),
     }
+
+
+@app.get("/api/v1/readiness")
+def readiness():
+    """Readiness reflects authoritative-record integrity, unlike liveness."""
+    if not store.is_ready:
+        raise HTTPException(status_code=503, detail={
+            "status": "degraded", "load_errors": store.load_errors,
+        })
+    return {"status": "ready"}
 
 
 # GZip compression. Starlette's add_middleware() inserts at position 0 of the
@@ -950,11 +982,19 @@ async def startup():
 @app.on_event("shutdown")
 async def shutdown():
     import asyncio
-    task = getattr(app.state, "loop_monitor", None)
-    if task is not None:
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
-    await run_blocking(api_stats.flush)
+    try:
+        task = getattr(app.state, "loop_monitor", None)
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        try:
+            await runner.shutdown()
+        finally:
+            await run_blocking(_ws_mod.broadcaster.shutdown, timeout=2.0)
+            await run_blocking(api_stats.flush)
+    finally:
+        if instance_lock is not None:
+            instance_lock.release()
 
 
 # --- Static files ---
@@ -1089,22 +1129,39 @@ async def ws_endpoint(websocket: WebSocket, since: int = 0, token: str = ""):
             await websocket.close(code=1008)
             return
 
-    # Replay any missed events — journal-aware (reads files), so run the
-    # collection off-loop.
-    _loop = __import__("asyncio").get_running_loop()
-    replay = await _loop.run_in_executor(
-        None, _ws_mod.broadcaster.replay_with_journal, since)
-    for event in replay:
-        try:
-            await websocket.send_json(event)
-        except Exception:
-            return
-
+    # Subscribe *before* reading replay.  Events emitted while the journal is
+    # scanned land in q; sequence de-dup below makes the overlap harmless.
     q = _ws_mod.broadcaster.subscribe()
     try:
+        _loop = __import__("asyncio").get_running_loop()
+        replay, replay_gap, latest = await _loop.run_in_executor(
+            None, _ws_mod.broadcaster.replay_status, since)
+        last_seq = since
+        if replay_gap:
+            await websocket.send_json({"type": "resync", "reason": "gap", "seq": latest})
+            last_seq = latest
+        for event in replay:
+            await websocket.send_json(event)
+            last_seq = max(last_seq, int(event.get("seq", 0) or 0))
+    except BaseException:
+        _ws_mod.broadcaster.unsubscribe(q)
+        raise
+    try:
         async def _send_loop():
+            nonlocal last_seq
             while True:
                 event = await q.get()
+                if event.get("type") == "resync":
+                    await websocket.send_json(event)
+                    last_seq = max(last_seq, int(event.get("seq", 0) or 0))
+                    continue
+                event_seq = int(event.get("seq", 0) or 0)
+                if event_seq and event_seq <= last_seq:
+                    continue
+                if event_seq and last_seq and event_seq != last_seq + 1:
+                    await websocket.send_json({"type": "resync", "reason": "gap", "seq": event_seq})
+                if event_seq:
+                    last_seq = event_seq
                 await websocket.send_json(event)
 
         async def _recv_loop():

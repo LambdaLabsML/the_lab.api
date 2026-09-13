@@ -31,6 +31,8 @@ import {
   patchProgress,
   _setStreamHealthProbe,
 } from "./polling";
+import { HttpError, requestJson } from "./request";
+import { apiFailures } from "./request-health";
 import type { Experiment, IdeaNode } from "../lib/types";
 
 // ---------------------------------------------------------------------------
@@ -155,6 +157,19 @@ function applyEvent(event: WsEvent): void {
  *  server journal (P4) keeps seq monotonic across restarts. */
 let lastSeq = 0;
 
+/** A resync is a control frame, not an application event. While its canonical
+ * snapshot is loading, queue newer frames so a slow GET cannot overwrite a
+ * live update. The server subscribes before replay; the client additionally
+ * deduplicates by seq because reconnects can overlap at the boundary. */
+let resyncPromise: Promise<void> | null = null;
+let queuedDuringResync: WsEvent[] = [];
+let resyncGeneration = 0;
+let resyncRetryTimer: ReturnType<typeof setTimeout> | null = null;
+let resyncRetryMs = 1_000;
+let resyncStopped = false;
+let resyncActive = false;
+const MAX_RESYNC_QUEUE = 1_000;
+
 /** Events older than this are REPLAY (reconnect-after-sleep, fresh-load ring
  *  replay, journal catch-up), not live truth. Applying them as live patches
  *  makes experiments flicker through long-dead states — a phone waking after
@@ -173,15 +188,124 @@ function noteStaleReplay(): void {
   // burst is (mobile timer throttling included), we resnapshot exactly once.
   staleBurstTimer = setTimeout(() => {
     staleBurstTimer = null;
-    wsCatchingUp.value = false;
-    catchUp();
+    // A stale replay has the same correctness requirements as an explicit
+    // journal gap: do not claim success until canonical state is refreshed.
+    beginResync(lastSeq);
   }, 500);
+}
+
+function notifySubscribers(event: WsEvent): void {
+  for (const sub of _subscribers) {
+    try { sub(event); } catch { /* ignore subscriber error */ }
+  }
+}
+
+function discardCoveredQueuedEvents(seq?: number): void {
+  if (typeof seq !== "number") return;
+  // A newer server boundary includes everything through `seq`; retaining
+  // those frames would reapply stale state after the replacement snapshot.
+  queuedDuringResync = queuedDuringResync.filter((event) =>
+    typeof event.seq !== "number" || event.seq > seq,
+  );
+}
+
+function scheduleResyncRetry(): void {
+  if (resyncRetryTimer !== null) return;
+  resyncRetryTimer = setTimeout(() => {
+    resyncRetryTimer = null;
+    startResyncSnapshot();
+  }, resyncRetryMs);
+  resyncRetryMs = Math.min(resyncRetryMs * 2, 30_000);
+}
+
+function finishResync(): void {
+  const queued = queuedDuringResync;
+  queuedDuringResync = [];
+  for (const queuedEvent of queued) applyEvent(queuedEvent);
+  resyncRetryMs = 1_000;
+  resyncActive = false;
+  wsCatchingUp.value = false;
+}
+
+function startResyncSnapshot(): void {
+  if (resyncStopped) return;
+  if (resyncPromise) return;
+  const generation = resyncGeneration;
+  const snapshot = catchUp().then((ok) => {
+    if (resyncStopped) return;
+    if (generation !== resyncGeneration) {
+      // A later overflow/gap moved the canonical boundary while this snapshot
+      // was in flight. Never flush its queue; take a newer snapshot first.
+      if (resyncPromise === snapshot) resyncPromise = null;
+      startResyncSnapshot();
+      return;
+    }
+    if (!ok) {
+      // Keep stale UI data and queued live frames until a canonical snapshot
+      // succeeds. Claiming to be caught up here would hide a real outage.
+      scheduleResyncRetry();
+      return;
+    }
+    finishResync();
+  });
+  resyncPromise = snapshot;
+  void snapshot.finally(() => {
+    if (resyncPromise === snapshot) resyncPromise = null;
+  }).catch(() => { /* catchUp is defensive; avoid an unhandled fallback */ });
+}
+
+function beginResync(seq?: number): void {
+  resyncStopped = false;
+  resyncActive = true;
+  if (typeof seq === "number") lastSeq = seq;
+  else lastSeq = 0; // Do not reconnect with a cursor the server rejected.
+  discardCoveredQueuedEvents(seq);
+  resyncGeneration++;
+  if (staleBurstTimer !== null) {
+    clearTimeout(staleBurstTimer);
+    staleBurstTimer = null;
+  }
+  wsCatchingUp.value = true;
+  if (resyncRetryTimer !== null) {
+    clearTimeout(resyncRetryTimer);
+    resyncRetryTimer = null;
+  }
+  startResyncSnapshot();
+}
+
+function queueDuringResync(event: WsEvent): void {
+  if (queuedDuringResync.length >= MAX_RESYNC_QUEUE) {
+    // We cannot safely replay an unbounded in-memory queue. Drop it and force
+    // a snapshot after the current one; the HTTP snapshot is authoritative.
+    queuedDuringResync = [];
+    resyncGeneration++;
+  } else {
+    queuedDuringResync.push(event);
+  }
 }
 
 function handleRawEvent(event: WsEvent): void {
   wsLastMessageAt.value = Date.now();
-  if (typeof event.seq === "number" && event.seq > lastSeq) {
+  if (event.type === "resync") {
+    beginResync(typeof event.seq === "number" ? event.seq : undefined);
+    notifySubscribers(event);
+    return;
+  }
+  if (typeof event.seq === "number") {
+    if (event.seq <= lastSeq) return; // replay boundary / duplicate delivery
+    if (lastSeq > 0 && event.seq > lastSeq + 1) {
+      // A server predating the explicit control frame, or a transport race:
+      // recover from canonical HTTP state rather than applying partial truth.
+      beginResync(event.seq);
+      notifySubscribers(event);
+      return;
+    }
     lastSeq = event.seq;
+  }
+  if (resyncActive) {
+    queueDuringResync(event);
+    notifySubscribers(event);
+    return;
   }
   const tsMs = typeof event.ts === "number" ? event.ts * 1000 : null;
   if (tsMs !== null && Date.now() - tsMs > STALE_EVENT_MS) {
@@ -191,16 +315,18 @@ function handleRawEvent(event: WsEvent): void {
   }
   // Fan out the raw event to activity subscribers (never let one throw break
   // the stream or the other subscribers).
-  for (const sub of _subscribers) {
-    try { sub(event); } catch { /* ignore subscriber error */ }
-  }
+  notifySubscribers(event);
 }
 
-function catchUp(): void {
+async function catchUp(): Promise<boolean> {
   // Fill any gap accumulated while the stream was down.
-  refreshChartData();
-  refreshGraphData();
-  refreshBacklogData();
+  await Promise.allSettled([refreshChartData(), refreshGraphData(), refreshBacklogData()]);
+  const failed = apiFailures.peek();
+  return ![
+    "/api/v1/chart-data",
+    "/api/v1/graph",
+    "/api/v1/backlog",
+  ].some((path) => path in failed);
 }
 
 // ---------------------------------------------------------------------------
@@ -339,25 +465,26 @@ async function longPollLoop(abort: AbortSignal): Promise<void> {
   wsConnected.value = true;
   while (pollActive && started && !abort.aborted) {
     try {
-      const resp = await fetch(
+      const data = await requestJson<{ events?: WsEvent[]; seq?: number }>(
         `/api/v1/events?since=${lastSeq}&timeout=25`,
-        { signal: abort, headers: { "X-The-Lab-Source": "dashboard" } },
+        { signal: abort },
+        // The server intentionally holds this request for up to 25s. Leave
+        // margin for response body delivery while still releasing the loop.
+        { timeoutMs: 35_000 },
       );
-      if (resp.status === 401 || resp.status === 403) {
+      errorStreak = 0;
+      wsConnected.value = true;
+      if (transportMode.value !== "ws") transportMode.value = "poll";
+      for (const ev of data.events ?? []) handleRawEvent(ev);
+      if (typeof data.seq === "number" && data.seq > lastSeq) lastSeq = data.seq;
+    } catch (error) {
+      if (error instanceof HttpError && (error.status === 401 || error.status === 403)) {
         wsAuthFailed.value = true;
         wsConnected.value = false;
         transportMode.value = "down";
         stopLongPoll();
         return;
       }
-      if (!resp.ok) throw new Error(`events ${resp.status}`);
-      const data = await resp.json() as { events?: WsEvent[]; seq?: number };
-      for (const ev of data.events ?? []) handleRawEvent(ev);
-      if (typeof data.seq === "number" && data.seq > lastSeq) lastSeq = data.seq;
-      errorStreak = 0;
-      wsConnected.value = true;
-      if (transportMode.value !== "ws") transportMode.value = "poll";
-    } catch {
       if (abort.aborted) return;
       errorStreak++;
       if (errorStreak >= 2 && transportMode.value === "poll") {
@@ -406,6 +533,16 @@ export function stopWs(): void {
     staleBurstTimer = null;
     wsCatchingUp.value = false;
   }
+  if (resyncRetryTimer !== null) {
+    clearTimeout(resyncRetryTimer);
+    resyncRetryTimer = null;
+  }
+  resyncPromise = null;
+  queuedDuringResync = [];
+  resyncGeneration++;
+  resyncStopped = true;
+  resyncActive = false;
+  wsCatchingUp.value = false;
   if (reconnectTimer !== null) {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
@@ -419,3 +556,32 @@ export function stopWs(): void {
   wsConnected.value = false;
   transportMode.value = "down";
 }
+
+/** Test-only access to the protocol pump. Keeping transport construction out
+ * of these tests makes replay/gap coverage deterministic. */
+export const __wsTest = {
+  receive: handleRawEvent,
+  lastSeq: () => lastSeq,
+  queued: () => queuedDuringResync.length,
+  waitForSnapshot: async (): Promise<void> => {
+    const current = resyncPromise;
+    if (current) await current;
+  },
+  reset(): void {
+    if (staleBurstTimer !== null) clearTimeout(staleBurstTimer);
+    if (resyncRetryTimer !== null) clearTimeout(resyncRetryTimer);
+    staleBurstTimer = null;
+    resyncRetryTimer = null;
+    resyncPromise = null;
+    queuedDuringResync = [];
+    resyncGeneration = 0;
+    resyncRetryMs = 1_000;
+    resyncStopped = false;
+    resyncActive = false;
+    lastSeq = 0;
+    wsCatchingUp.value = false;
+    wsLastMessageAt.value = null;
+    apiFailures.value = {};
+    _subscribers.clear();
+  },
+};

@@ -34,6 +34,7 @@ class Broadcaster:
 
     _RING_SIZE = 500
     _QUEUE_MAX = 100
+    _JOURNAL_QUEUE_MAX = 2000
     _JOURNAL_MAX_BYTES = 5 * 1024 * 1024  # rotate to .1 past this
 
     def __init__(self) -> None:
@@ -43,6 +44,8 @@ class Broadcaster:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._journal_path: Path | None = None
         self._journal_q: _queue.Queue | None = None
+        self._journal_thread: threading.Thread | None = None
+        self.journal_drops = 0
 
     # ── Journal ────────────────────────────────────────────────────────────
 
@@ -64,9 +67,10 @@ class Broadcaster:
         if read_only:
             return
         path.parent.mkdir(parents=True, exist_ok=True)
-        self._journal_q = _queue.Queue()
-        threading.Thread(target=self._journal_writer, daemon=True,
-                         name="ws-journal").start()
+        self._journal_q = _queue.Queue(maxsize=self._JOURNAL_QUEUE_MAX)
+        self._journal_thread = threading.Thread(target=self._journal_writer, daemon=True,
+                                                name="ws-journal")
+        self._journal_thread.start()
 
     def _journal_files(self) -> list[Path]:
         """Journal files oldest-first (rotated .1 first, then current)."""
@@ -101,6 +105,8 @@ class Broadcaster:
         try:
             while True:
                 event = self._journal_q.get()
+                if event is None:
+                    return
                 try:
                     if fh is None:
                         fh = path.open("a")
@@ -148,6 +154,18 @@ class Broadcaster:
         out.extend(e for e in ring if e.get("seq", 0) > last)
         return out
 
+    def replay_status(self, seq: int) -> tuple[list[dict], bool, int]:
+        """Return events plus whether the requested sequence has a gap."""
+        events = self.replay_with_journal(seq)
+        latest = self._seq
+        expected = seq + 1
+        gap = bool(events and events[0].get("seq", 0) != expected)
+        # If history was requested but no source can cover it, make resync
+        # explicit rather than pretending the snapshot is current.
+        if seq and not events and latest > seq:
+            gap = True
+        return events, gap, latest
+
     def capture_loop(self) -> None:
         """Adopt the current running loop (call from app startup) so
         broadcast_soon() works before any WS subscriber has connected."""
@@ -179,7 +197,10 @@ class Broadcaster:
         event = {**event, "seq": self._seq, "ts": time.time()}
         self._ring.append(event)
         if self._journal_q is not None:
-            self._journal_q.put(event)  # persisted off-loop by the writer thread
+            try:
+                self._journal_q.put_nowait(event)  # persisted off-loop by writer
+            except _queue.Full:
+                self.journal_drops += 1
         # Cache the loop reference the first time broadcast() is called
         # from inside the loop (so broadcast_soon can use it later).
         self._get_loop()
@@ -188,6 +209,12 @@ class Broadcaster:
                 try:
                     q.get_nowait()
                 except asyncio.QueueEmpty:
+                    pass
+                # A dropped item makes incremental state unsafe.  The control
+                # frame is intentionally queued before the newest event.
+                try:
+                    q.put_nowait({"type": "resync", "reason": "overflow", "seq": self._seq})
+                except asyncio.QueueFull:
                     pass
             try:
                 q.put_nowait(event)
@@ -219,7 +246,7 @@ class Broadcaster:
 
     def subscribe(self) -> asyncio.Queue:
         """Register a new subscriber queue and return it."""
-        q: asyncio.Queue = asyncio.Queue()
+        q: asyncio.Queue = asyncio.Queue(maxsize=self._QUEUE_MAX)
         self._subscribers.append(q)
         # Capture the loop reference while we're definitely in async context.
         self._get_loop()
@@ -235,6 +262,18 @@ class Broadcaster:
     def replay_since(self, seq: int) -> list[dict]:
         """Return all buffered events with seq > given value (in order)."""
         return [e for e in self._ring if e.get("seq", 0) > seq]
+
+    def shutdown(self, timeout: float = 2.0) -> None:
+        """Flush journal best-effort with a finite shutdown bound."""
+        q, thread = self._journal_q, self._journal_thread
+        if q is None or thread is None:
+            return
+        try:
+            q.put(None, timeout=max(0.0, timeout))
+        except _queue.Full:
+            self.journal_drops += 1
+            return
+        thread.join(timeout=max(0.0, timeout))
 
 
 # ── Event entity payloads ─────────────────────────────────────────────────────

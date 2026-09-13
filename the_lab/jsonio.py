@@ -28,10 +28,21 @@ def read_json(path: Path, default=None):
     return {} if default is None else default
 
 
+def _durable_default() -> bool:
+    """Opt into fsync durability with THE_LAB_FSYNC=1.
+
+    Atomic replace prevents torn records either way.  fsync is deliberately
+    configurable because durable directory syncs can be expensive on NFS.
+    """
+    return os.environ.get("THE_LAB_FSYNC", "").lower() in {"1", "true", "yes"}
+
+
 def write_json(path: Path, data, *, indent: int = 2, sort_keys: bool = False,
-               fsync: bool = False) -> None:
+               fsync: bool | None = None) -> None:
     """Atomically write *data* as JSON to *path* (temp file + os.replace)."""
     path = Path(path)
+    if fsync is None:
+        fsync = _durable_default()
     path.parent.mkdir(parents=True, exist_ok=True)
     text = json.dumps(data, indent=indent, sort_keys=sort_keys) + "\n"
     fd, tmp = tempfile.mkstemp(
@@ -47,6 +58,13 @@ def write_json(path: Path, data, *, indent: int = 2, sort_keys: bool = False,
         # sibling processes sharing .the_lab/ keep read access.
         os.chmod(tmp, 0o644)
         os.replace(tmp, path)
+        if fsync:
+            # Persist the rename too, not only the new file contents.
+            dfd = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(dfd)
+            finally:
+                os.close(dfd)
     except BaseException:
         try:
             os.unlink(tmp)

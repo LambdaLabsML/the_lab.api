@@ -54,6 +54,9 @@ class ApiStats:
     def __init__(self, stats_path: Path):
         self._path = stats_path
         self._lock = threading.Lock()
+        # Serializes snapshots and disk publication so an older background
+        # flush can never replace a newer foreground/shutdown snapshot.
+        self._flush_lock = threading.Lock()
         self._calls: dict[str, int] = defaultdict(int)
         # patterns_by_n[n] = {"A → B → C": count}  for n=2..5
         self._patterns: dict[int, dict[str, int]] = {
@@ -75,6 +78,7 @@ class ApiStats:
         self._resp_hourly: dict[str, dict[str, list]] = {}
         self._last_flush = time.monotonic()
         self._dirty = False
+        self._generation = 0
         self._load()
 
     def _load(self):
@@ -125,6 +129,7 @@ class ApiStats:
                 cell[2] = size_bytes
             self._prune_buckets(self._resp_hourly)
             self._dirty = True
+            self._generation += 1
 
     # Demo mode: record() keeps working in memory (the Stats view stays
     # live for the current session) but nothing is ever persisted.
@@ -140,19 +145,33 @@ class ApiStats:
         if self.read_only:
             return
         """Write stats to disk."""
-        with self._lock:
-            if not self._dirty:
-                return
-            data: dict = {"calls": dict(self._calls)}
-            for n in range(2, MAX_NGRAM + 1):
-                data[f"patterns_{n}"] = dict(self._patterns[n])
-            data["resp_bytes_total"] = dict(self._resp_bytes_total)
-            data["resp_bytes_count"] = dict(self._resp_bytes_count)
-            data["resp_bytes_max"]   = dict(self._resp_bytes_max)
-            data["hourly"] = {k: dict(v) for k, v in self._hourly.items()}
-            data["resp_hourly"] = {k: dict(v) for k, v in self._resp_hourly.items()}
-            self._dirty = False
-        jsonio.write_json(self._path, data, sort_keys=True)
+        with self._flush_lock:
+            with self._lock:
+                if not self._dirty:
+                    return
+                generation = self._generation
+                data: dict = {"calls": dict(self._calls)}
+                for n in range(2, MAX_NGRAM + 1):
+                    data[f"patterns_{n}"] = dict(self._patterns[n])
+                data["resp_bytes_total"] = dict(self._resp_bytes_total)
+                data["resp_bytes_count"] = dict(self._resp_bytes_count)
+                data["resp_bytes_max"]   = dict(self._resp_bytes_max)
+                data["hourly"] = {k: dict(v) for k, v in self._hourly.items()}
+                data["resp_hourly"] = {
+                    k: {name: list(cell) for name, cell in values.items()}
+                    for k, values in self._resp_hourly.items()
+                }
+            try:
+                jsonio.write_json(self._path, data, sort_keys=True)
+            except Exception:
+                # Do not acknowledge an in-memory snapshot as persisted.  A later
+                # periodic/manual flush retries it (and includes newer updates).
+                with self._lock:
+                    self._dirty = True
+                raise
+            with self._lock:
+                # A request may have updated stats while IO was in flight.
+                self._dirty = self._generation != generation
 
     def record(self, method: str, path: str, client_ip: str = "",
                query: str = "", body_preview: str = "", status_code: int = 0,
@@ -193,6 +212,7 @@ class ApiStats:
                 pattern = " → ".join(ngram)
                 self._patterns[n][pattern] += 1
             self._dirty = True
+            self._generation += 1
         # Periodic flush (every 30s) — on a background thread so the request
         # path (and, via the stats middleware, the event loop) never waits on
         # the api_stats.json NFS write.
@@ -306,3 +326,4 @@ class ApiStats:
                         for k, v in pats.items():
                             self._patterns[n][k] += v
             self._dirty = True
+            self._generation += 1
