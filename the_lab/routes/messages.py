@@ -8,6 +8,8 @@ recipient is parked on.
 """
 from __future__ import annotations
 
+from ..blocking import run_blocking
+
 from fastapi import APIRouter, HTTPException, Request
 
 from .. import agents as agents_mod
@@ -49,13 +51,13 @@ async def send_message(req: MessageRequest, request: Request):
     """
     from_agent, from_role = _resolve_sender(request)
     try:
-        msg = messages_mod.add_message(
+        msg = (await run_blocking(messages_mod.add_message,
             REPO_DIR,
             from_agent=from_agent,
             from_role=from_role,
             to=req.to,
             text=req.text,
-        )
+        ))
     except ValueError as e:
         raise HTTPException(400, str(e))
     # add_message already broadcasts an (enriched) message_received event via

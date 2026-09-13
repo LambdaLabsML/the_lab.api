@@ -1,6 +1,8 @@
 """Experiment CRUD, start/cancel, timeseries, compare, and analyze endpoints."""
 from __future__ import annotations
 
+from ..blocking import run_blocking
+
 import asyncio
 import json
 import os
@@ -218,9 +220,9 @@ async def create_experiment(idea_id: int, req: NewExperimentRequest):
         extra_meta["depends_on_success"] = False
     merged_meta = {**(req.meta or {}), **extra_meta}
 
-    exp = _create_and_queue_experiment(
+    exp = (await run_blocking(_create_and_queue_experiment,
         idea_id, req.description, merged_meta, req.tags, req.script_content,
-    )
+    ))
 
     # Surface the queue position so callers know roughly when to expect it
     # to start. Best-effort — doesn't account for resource capacity.
@@ -298,13 +300,13 @@ async def batch_create_experiments(idea_id: int, request: Request):
         if m.get("label"):
             merged_meta.setdefault("requested_label", m["label"])
         description = m.get("description") or "batch experiment"
-        exp = _create_and_queue_experiment(
+        exp = (await run_blocking(_create_and_queue_experiment,
             idea_id,
             description,
             merged_meta,
             m.get("tags"),
             shared_script_content,
-        )
+        ))
         created.append({"id": exp["id"], "label": exp.get("label") or str(exp["id"])})
 
     return {"created": created, "count": len(created)}
@@ -673,60 +675,65 @@ async def analyze_experiments(req: AnalyzeRequest):
     if not req.experiment_ids:
         raise HTTPException(400, "no experiment IDs provided")
 
-    # Validate script name (prevent path traversal)
-    script_name = req.script.replace("/", "").replace("\\", "").replace("..", "")
-    tools_dir = REPO_DIR / ".the_lab" / "artifacts" / "trace_tools"
-    script_path = None
-    for ext in ("", ".py", ".sh"):
-        candidate = tools_dir / (script_name + ext)
-        if candidate.exists():
-            script_path = candidate
-            break
-    if not script_path:
-        available = [f.stem for f in tools_dir.glob("*") if f.is_file()] if tools_dir.exists() else []
-        raise HTTPException(404, f"script '{script_name}' not found in .the_lab/artifacts/trace_tools/. Available: {available}")
+    def prepare_manifest():
+        # Validate script name (prevent path traversal)
+        script_name = req.script.replace("/", "").replace("\\", "").replace("..", "")
+        tools_dir = REPO_DIR / ".the_lab" / "artifacts" / "trace_tools"
+        script_path = None
+        for ext in ("", ".py", ".sh"):
+            candidate = tools_dir / (script_name + ext)
+            if candidate.exists():
+                script_path = candidate
+                break
+        if not script_path:
+            available = [f.stem for f in tools_dir.glob("*") if f.is_file()] if tools_dir.exists() else []
+            raise HTTPException(404, f"script '{script_name}' not found in .the_lab/artifacts/trace_tools/. Available: {available}")
 
-    # Build manifest with experiment metadata and paths
-    experiments = []
-    for eid in req.experiment_ids:
-        exp = store.get_experiment(eid)
-        if not exp:
-            raise HTTPException(404, f"experiment {eid} not found")
-        idea = store.get_idea(exp["idea_id"])
-        exp_dir = str(store.lab_dir / str(exp["idea_id"]))
-        # Find rollout output dir from meta if available
-        rollout_dir = None
-        meta = exp.get("meta") or {}
-        for key in ("outdir", "rollout_outdir"):
-            if key in meta:
-                candidate = REPO_DIR / meta[key]
-                if candidate.exists():
-                    rollout_dir = str(candidate)
-                    break
-        # Also check standard location: {exp_id}_rollouts/
-        if not rollout_dir:
-            standard = store.lab_dir / str(exp["idea_id"]) / f"{eid}_rollouts"
-            if standard.exists():
-                rollout_dir = str(standard)
-        experiments.append({
-            "id": eid,
-            "idea_id": exp["idea_id"],
-            "idea_description": idea["description"] if idea else None,
-            "description": exp.get("description"),
-            "status": exp.get("status"),
-            "dir": exp_dir,
-            "rollout_dir": rollout_dir,
-            "script_path": str(REPO_DIR / exp["script"]) if exp.get("script") else None,
-            "log_path": str((REPO_DIR / exp["script"]).with_suffix(".log")) if exp.get("script") else None,
-            "meta": meta,
-            "metrics": exp.get("metrics"),
-            "tags": exp.get("tags", []),
-        })
+        # Build manifest with experiment metadata and paths
+        experiments = []
+        for eid in req.experiment_ids:
+            exp = store.get_experiment(eid)
+            if not exp:
+                raise HTTPException(404, f"experiment {eid} not found")
+            idea = store.get_idea(exp["idea_id"])
+            exp_dir = str(store.lab_dir / str(exp["idea_id"]))
+            # Find rollout output dir from meta if available
+            rollout_dir = None
+            meta = exp.get("meta") or {}
+            for key in ("outdir", "rollout_outdir"):
+                if key in meta:
+                    candidate = REPO_DIR / meta[key]
+                    if candidate.exists():
+                        rollout_dir = str(candidate)
+                        break
+            # Also check standard location: {exp_id}_rollouts/
+            if not rollout_dir:
+                standard = store.lab_dir / str(exp["idea_id"]) / f"{eid}_rollouts"
+                if standard.exists():
+                    rollout_dir = str(standard)
+            experiments.append({
+                "id": eid,
+                "idea_id": exp["idea_id"],
+                "idea_description": idea["description"] if idea else None,
+                "description": exp.get("description"),
+                "status": exp.get("status"),
+                "dir": exp_dir,
+                "rollout_dir": rollout_dir,
+                "script_path": str(REPO_DIR / exp["script"]) if exp.get("script") else None,
+                "log_path": str((REPO_DIR / exp["script"]).with_suffix(".log")) if exp.get("script") else None,
+                "meta": meta,
+                "metrics": exp.get("metrics"),
+                "tags": exp.get("tags", []),
+            })
 
-    # Write manifest to temp file
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, dir="/tmp") as f:
-        json.dump({"experiments": experiments}, f)
-        manifest_path = f.name
+        # Write manifest to temp file
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, dir="/tmp") as f:
+            json.dump({"experiments": experiments}, f)
+            manifest_path = f.name
+
+        return script_path, manifest_path
+
+    script_path, manifest_path = await run_blocking(prepare_manifest)
 
     try:
         # Determine how to run the script
@@ -775,7 +782,7 @@ async def analyze_experiments(req: AnalyzeRequest):
             "rows": result.get("rows", []),
         }
     finally:
-        Path(manifest_path).unlink(missing_ok=True)
+        await run_blocking(Path(manifest_path).unlink, missing_ok=True)
 
 
 @router.get("/experiments/compare-curves")
@@ -1032,14 +1039,14 @@ async def start_experiment(exp_ref: str, req: StartExperimentRequest | None = No
         meta_update["timeout"] = float(req.timeout)
     # Clear any leftover error / finished_at from a previous failed run so
     # the row reads cleanly as queued.
-    store.update_experiment(
+    (await run_blocking(store.update_experiment,
         label,
         status="queued",
         meta=meta_update,
         error=None,
         finished_at=None,
         queued_at=datetime.now(timezone.utc).isoformat(),
-    )
+    ))
     exp_queued = store.get_experiment(label) or exp_check
     try:
         from .. import ws as ws_mod
@@ -1099,9 +1106,9 @@ async def rerun_experiment(exp_ref: str):
 
     # Read the source experiment's script
     script_path = REPO_DIR / source["script"]
-    if not script_path.exists():
+    if not (await run_blocking(script_path.exists)):
         raise HTTPException(400, f"script file not found: {source['script']}")
-    script_content = script_path.read_text()
+    script_content = (await run_blocking(script_path.read_text))
 
     # Create the new experiment — strip stale "rerun: " prefixes so they don't accumulate
     base_desc = re.sub(r'^(rerun: )+', '', source['description'])
@@ -1111,25 +1118,25 @@ async def rerun_experiment(exp_ref: str):
     stale_keys = {"slurm_job_id", "worktree", "pid", "git_commit", "git_branch"}
     clean_meta = {k: v for k, v in (source.get("meta") or {}).items()
                   if k not in stale_keys}
-    new_exp = store.create_experiment(
+    new_exp = (await run_blocking(store.create_experiment,
         idea_id, desc, meta=clean_meta, tags=source.get("tags"),
-    )
+    ))
 
     # Write the script (reuse content as-is — it's already wrapped)
     new_script_path = REPO_DIR / new_exp["script"]
-    new_script_path.parent.mkdir(parents=True, exist_ok=True)
-    new_script_path.write_text(script_content)
-    os.chmod(new_script_path, 0o755)
+    (await run_blocking(new_script_path.parent.mkdir, parents=True, exist_ok=True))
+    (await run_blocking(new_script_path.write_text, script_content))
+    await run_blocking(os.chmod, new_script_path, 0o755)
 
     # Queue it — same pattern as create_experiment so reruns respect
     # resource capacity, priorities, and parallel-job caps instead of
     # racing past the scheduler.
     label = new_exp.get("label") or str(new_exp["id"])
-    store.update_experiment(
+    (await run_blocking(store.update_experiment,
         label,
         status="queued",
         queued_at=datetime.now(timezone.utc).isoformat(),
-    )
+    ))
     new_exp = store.get_experiment(label) or new_exp
     try:
         from .. import ws as ws_mod
@@ -1602,13 +1609,13 @@ async def requeue_experiment(exp_ref: str, req: RequeueRequest | None = None):
     meta["slurm_attempts"] = slurm_attempts
     meta.pop("slurm_job_id", None)
 
-    updated = store.update_experiment(
+    updated = (await run_blocking(store.update_experiment,
         label,
         status="queued",
         queued_at=now,
         meta=meta,
         error=None,
-    )
+    ))
     runner.wake_scheduler()
 
     try:
@@ -1642,13 +1649,13 @@ async def slurm_done(exp_ref: str, req: SlurmDoneRequest | None = None):
     now = datetime.now(timezone.utc).isoformat()
 
     if exit_code != 0:
-        updated = store.update_experiment(
+        updated = (await run_blocking(store.update_experiment,
             label,
             status="failed",
             error=f"slurm job exited with code {exit_code}",
             pid=None,
             finished_at=now,
-        )
+        ))
         runner.wake_scheduler()
         try:
             from .. import ws as ws_mod

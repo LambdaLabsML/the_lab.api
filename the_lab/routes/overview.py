@@ -1,5 +1,6 @@
 """Overview endpoints: leaderboard, digest, wait, backlog, orient, graph, chart-data."""
 from __future__ import annotations
+from ..blocking import run_blocking
 
 import json
 
@@ -680,7 +681,7 @@ async def wait_for_experiment(
     _agent_id = getattr(request.state, "agent_id", None)
     _agent_role = None
     if _agent_id:
-        _entry = _agents_mod.lookup_agent(REPO_DIR, _agent_id) or {}
+        _entry = await run_blocking(_agents_mod.lookup_agent, REPO_DIR, _agent_id) or {}
         _agent_role = _entry.get("role")
 
     result = await runner.wait_any(
@@ -690,13 +691,13 @@ async def wait_for_experiment(
         agent_id=_agent_id,
         agent_role=_agent_role,
     )
-    result["current_branch"] = get_current_branch(cwd=REPO_DIR)
+    result["current_branch"] = await run_blocking(get_current_branch, cwd=REPO_DIR)
     exp = result.get("experiment")
     if exp:
         result.update(_idea_context(exp.get("idea_id")))
         # Concise branch diff: which files changed and +/- line counts only.
         # Full patch available via GET /ideas/{id}/diff if needed.
-        diff_summary = _branch_diff_summary(exp.get("idea_id"))
+        diff_summary = await run_blocking(_branch_diff_summary, exp.get("idea_id"))
         if diff_summary:
             result["branch_diff"] = diff_summary
         exp_label = exp.get("label", str(exp["id"]))

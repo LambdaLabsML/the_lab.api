@@ -45,6 +45,8 @@ from .stats import ApiStats, normalize_path as _normalize_path
 from . import deps
 from . import jsonio
 from . import perf_log
+from .blocking import run_blocking
+from . import runtime_health
 from . import ws as _ws_mod
 
 # --- Configuration ---
@@ -413,11 +415,11 @@ async def resolve_agent(request, call_next):
     request.state.agent_cwd = None
     request.state.agent_unknown = False
     if agent_id:
-        entry = _agents_mod.lookup_agent(REPO_DIR, agent_id)
+        entry = await run_blocking(_agents_mod.lookup_agent, REPO_DIR, agent_id)
         if entry:
             from pathlib import Path as _P
             wt = _P(entry["worktree"])
-            if wt.exists():
+            if await run_blocking(wt.exists):
                 request.state.agent_cwd = wt
             else:
                 request.state.agent_unknown = True
@@ -506,7 +508,7 @@ async def track_api_stats(request, call_next):
             resp_bytes = int(resp_len_hdr) if resp_len_hdr else 0
         except ValueError:
             resp_bytes = 0
-        perf_log.log_request(
+        await run_blocking(perf_log.log_request,
             method=request.method,
             path=path,
             normalized_path=_normalize_path(path),
@@ -817,7 +819,7 @@ async def inject_notifications(request, call_next):
         resp_bytes=len(body),
         resp_keys=list(data.keys())[:8] if isinstance(data, dict) else None,
     )
-    notifications = build_notifications(request)
+    notifications = await run_blocking(build_notifications, request)
 
     if not notifications:
         _track_size(body)
@@ -871,6 +873,7 @@ def health():
         "status": "ok",
         "agents": agent_count,
         "uptime_sec": int(_time_mod.monotonic() - _START_TIME),
+        "event_loop_lag": runtime_health.snapshot(),
     }
 
 
@@ -913,6 +916,8 @@ app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 @app.on_event("startup")
 async def startup():
+    import asyncio
+    app.state.loop_monitor = asyncio.create_task(runtime_health.monitor_loop())
     # Capture the event loop for broadcast_soon() immediately — otherwise
     # events emitted from sync threads before the FIRST WebSocket subscriber
     # arrives are silently dropped (breaks /api/v1/events-only clients).
@@ -920,7 +925,7 @@ async def startup():
     # Persist events + continue seq across restarts (P4: the activity feed
     # and ?since= replay survive deploys).
     try:
-        _ws_mod.broadcaster.attach_journal(
+        await run_blocking(_ws_mod.broadcaster.attach_journal,
             REPO_DIR / ".the_lab" / "events.jsonl", read_only=_DEMO)
     except Exception as e:  # pragma: no cover
         logger.warning("event journal unavailable: %s", e)
@@ -932,7 +937,7 @@ async def startup():
     # crashed before unregistering). Safe to skip on errors.
     try:
         from . import agents as _agents_mod
-        removed = _agents_mod.prune_dead_agents(REPO_DIR)
+        removed = await run_blocking(_agents_mod.prune_dead_agents, REPO_DIR)
         if removed:
             logger.info(
                 "Pruned %d stale agent worktree(s): %s",
@@ -944,7 +949,12 @@ async def startup():
 
 @app.on_event("shutdown")
 async def shutdown():
-    api_stats.flush()
+    import asyncio
+    task = getattr(app.state, "loop_monitor", None)
+    if task is not None:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+    await run_blocking(api_stats.flush)
 
 
 # --- Static files ---
@@ -1233,7 +1243,7 @@ async def messages_ws_endpoint(websocket: WebSocket):
     from . import messages as messages_mod
     from . import agents as agents_mod
 
-    entry = agents_mod.lookup_agent(REPO_DIR, agent_id) or {}
+    entry = await run_blocking(agents_mod.lookup_agent, REPO_DIR, agent_id) or {}
     role = entry.get("role")
     shim = _NotifRequestShim(agent_id)
 
@@ -1260,16 +1270,16 @@ async def messages_ws_endpoint(websocket: WebSocket):
     # (agents.is_listening) lights up immediately, without waiting for a GET.
     # (N1: no listening-registry suppression anymore — dedup is claim-based.)
     try:
-        agents_mod.note_message_poll(REPO_DIR, agent_id)
+        await run_blocking(agents_mod.note_message_poll, REPO_DIR, agent_id)
     except Exception:
         pass
 
     q = None
     try:
         # ── Initial frame: current unread messages + current notifications ──
-        init_unread = _fetch_deliver()
+        init_unread = await run_blocking(_fetch_deliver)
         try:
-            init_notifs = build_notifications(shim)
+            init_notifs = await run_blocking(build_notifications, shim)
         except Exception:
             init_notifs = []
         await websocket.send_json({
@@ -1292,7 +1302,7 @@ async def messages_ws_endpoint(websocket: WebSocket):
                     # forward only what's addressed to it (is_for handles
                     # agent/role/all + self-exclusion). N1: claiming here dedups
                     # against the piggyback/poll channel.
-                    unread = _fetch_deliver()
+                    unread = await run_blocking(_fetch_deliver)
                     if unread:
                         await websocket.send_json({
                             "type": "message",
@@ -1311,7 +1321,7 @@ async def messages_ws_endpoint(websocket: WebSocket):
                     # agent (failures/lifecycle) — re-derive and push any.
                     if etype in _NOTIF_TRIGGER_TYPES:
                         try:
-                            notifs = build_notifications(shim)
+                            notifs = await run_blocking(build_notifications, shim)
                         except Exception:
                             notifs = []
                         if notifs:
@@ -1323,7 +1333,7 @@ async def messages_ws_endpoint(websocket: WebSocket):
                     # Non-experiment churn (idea_changed/note_added) that may have
                     # produced new notifications for this agent. Re-derive + push.
                     try:
-                        notifs = build_notifications(shim)
+                        notifs = await run_blocking(build_notifications, shim)
                     except Exception:
                         notifs = []
                     if notifs:
@@ -1337,7 +1347,7 @@ async def messages_ws_endpoint(websocket: WebSocket):
             while True:
                 await websocket.receive_text()
                 try:
-                    agents_mod.note_message_poll(REPO_DIR, agent_id)
+                    await run_blocking(agents_mod.note_message_poll, REPO_DIR, agent_id)
                 except Exception:
                     pass
 

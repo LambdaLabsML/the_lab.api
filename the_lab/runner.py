@@ -1,6 +1,8 @@
 """Experiment subprocess runner."""
 from __future__ import annotations
 
+from .blocking import run_blocking
+
 import asyncio
 import json
 import os
@@ -164,6 +166,7 @@ class ExperimentRunner:
         self._finished_queue: asyncio.Queue[int] = asyncio.Queue()
         self._tasks: dict[int, asyncio.Task] = {}
         self._git_lock = None  # initialized as asyncio.Lock in reattach_running
+        self._loop = None
         self._worktree_dir = store.repo_dir / ".the_lab" / "worktrees"
         self._worktree_dir.mkdir(parents=True, exist_ok=True)
 
@@ -314,6 +317,7 @@ class ExperimentRunner:
                 dst_bin.symlink_to(src_bin)
 
     async def reattach_running(self):
+        self._loop = asyncio.get_running_loop()
         if self._read_only:
             # Demo mode: no monitors, no scheduler loop, no dispatching.
             self._git_lock = asyncio.Lock()
@@ -330,7 +334,7 @@ class ExperimentRunner:
                 # Re-attach Slurm job monitor
                 from .executors.slurm import SlurmExecutor
                 from .queue import load_config
-                resources, _ = load_config(self._store.repo_dir)
+                resources, _ = (await run_blocking(load_config, self._store.repo_dir))
                 resource_name = meta.get("assigned_resource")
                 resource = next((r for r in resources if r.name == resource_name), None)
                 if resource and resource.kind == "slurm":
@@ -366,7 +370,7 @@ class ExperimentRunner:
     def wake_scheduler(self) -> None:
         """Nudge the scheduler — call when an experiment is queued/finished."""
         if self._scheduler_wake is not None:
-            self._scheduler_wake.set()
+            self._loop.call_soon_threadsafe(self._scheduler_wake.set)
         # Emit queue_changed at most once per second.
         import time as _time
         now = _time.monotonic()
@@ -381,7 +385,7 @@ class ExperimentRunner:
         """
         while True:
             try:
-                resources, qc = load_config(self._store.repo_dir)
+                resources, qc = (await run_blocking(load_config, self._store.repo_dir))
                 interval = max(0.5, qc.dispatch_interval_s)
                 if not qc.paused:
                     await self._dispatch_once(resources)
@@ -429,28 +433,28 @@ class ExperimentRunner:
                 dep = by_label.get(dep_label)
                 if not dep:
                     # Missing dependency — fail the experiment with a clear reason.
-                    self._store.update_experiment(
+                    (await run_blocking(self._store.update_experiment,
                         label,
                         status="failed",
                         error=f"depends_on references unknown experiment '{dep_label}'",
                         # M3 feedback: terminal-state reason line.
                         status_msg=f"error: depends_on references unknown experiment '{dep_label}'",
                         finished_at=datetime.now(timezone.utc).isoformat(),
-                    )
+                    ))
                     ready = False
                     break
                 if dep.get("status") in ("queued", "pending", "running"):
                     ready = False
                     break
                 if on_success and dep.get("status") in ("failed", "cancelled"):
-                    self._store.update_experiment(
+                    (await run_blocking(self._store.update_experiment,
                         label,
                         status="cancelled",
                         error=f"parent experiment '{dep_label}' {dep['status']}",
                         # M3 feedback: terminal-state reason line.
                         status_msg=f"cancelled: parent experiment '{dep_label}' {dep['status']}",
                         finished_at=datetime.now(timezone.utc).isoformat(),
-                    )
+                    ))
                     ready = False
                     break
             if not ready:
@@ -479,7 +483,7 @@ class ExperimentRunner:
                     "assigned_resource": resource.name,
                     "assigned_units": assigned,
                 }
-                self._store.update_experiment(label, meta=meta)
+                (await run_blocking(self._store.update_experiment, label, meta=meta))
             except Exception:
                 pass
 
@@ -655,25 +659,25 @@ class ExperimentRunner:
         if result is not None:
             metrics, result_meta = _metrics_from_result(result)
             meta = {**exp.get("meta", {}), **result_meta}
-            self._store.update_experiment(
+            (await run_blocking(self._store.update_experiment,
                 exp_id, status="completed", metrics=metrics, meta=meta,
                 pid=None, status_msg=None, finished_at=now,  # normal success
-            )
+            ))
             if result_idx is not None:
                 await asyncio.get_running_loop().run_in_executor(
                     None, self._strip_result_line, log_path, result_idx)
         else:
             # Metrics-optional: assume success if process was running normally
-            self._store.update_experiment(
+            (await run_blocking(self._store.update_experiment,
                 exp_id, status="completed", metrics=None,
                 pid=None, status_msg=None, finished_at=now,  # normal success
-            )
+            ))
 
         # Clean up worktree
         wt = (exp.get("meta") or {}).get("worktree")
-        if wt and Path(wt).exists():
+        if wt and (await run_blocking(Path(wt).exists)):
             try:
-                remove_worktree(wt, cwd=self._store.repo_dir)
+                (await run_blocking(remove_worktree, wt, cwd=self._store.repo_dir))
             except Exception:
                 pass
 
@@ -697,21 +701,21 @@ class ExperimentRunner:
             return {"status": "error", "reason": f"experiment is {exp['status']}, expected queued, failed, or cancelled"}
 
         script_path = self._store.repo_dir / exp["script"]
-        if not script_path.exists():
+        if not (await run_blocking(script_path.exists)):
             msg = (
                 f"script not found at {exp['script']!r}. "
                 f"Provide script_content when creating the experiment, or use "
                 f"POST /experiments/<source>/rerun on an experiment that has a script."
             )
-            self._store.update_experiment(
-                label, status="failed", error=msg,
+            (await run_blocking(self._store.update_experiment,
+                exp_id, status="failed", error=msg,
                 # M3 feedback: terminal-state reason line.
                 status_msg="error: script not found",
                 finished_at=datetime.now(timezone.utc).isoformat(),
-            )
+            ))
             return {"status": "error", "reason": msg}
 
-        os.chmod(script_path, os.stat(script_path).st_mode | 0o755)
+        await run_blocking(lambda: os.chmod(script_path, os.stat(script_path).st_mode | 0o755))
 
         loop = asyncio.get_running_loop()
 
@@ -784,7 +788,7 @@ class ExperimentRunner:
             }
             if worktree_path:
                 meta["worktree"] = str(worktree_path)
-            exp = self._store.update_experiment(exp_id, meta=meta) or exp
+            exp = (await run_blocking(self._store.update_experiment, exp_id, meta=meta)) or exp
         except Exception:
             pass
 
@@ -795,8 +799,8 @@ class ExperimentRunner:
         metrics_path = base.with_suffix(".metrics.jsonl")
 
         for p in (log_path, err_path, progress_path, metrics_path):
-            if p.exists():
-                p.unlink()
+            if (await run_blocking(p.exists)):
+                (await run_blocking(p.unlink))
 
         run_token = secrets.token_hex(16)
         token_registry.register(run_token)
@@ -813,9 +817,9 @@ class ExperimentRunner:
         command_script_path = script_path
         if worktree_path:
             command_script_path = worktree_path / ".the_lab" / "current_experiment" / "script.sh"
-            command_script_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(script_path, command_script_path)
-            os.chmod(command_script_path, 0o755)
+            (await run_blocking(command_script_path.parent.mkdir, parents=True, exist_ok=True))
+            (await run_blocking(shutil.copy2, script_path, command_script_path))
+            await run_blocking(os.chmod, command_script_path, 0o755)
 
         command = ["bash", str(command_script_path)]
         try:
@@ -823,13 +827,13 @@ class ExperimentRunner:
         except Exception:
             uses_inner_arc_sandbox = False
 
-        sandbox_config = load_sandbox_config(self._store.repo_dir)
+        sandbox_config = (await run_blocking(load_sandbox_config, self._store.repo_dir))
         if (
             sandbox_config.get("enabled", False)
             and not os.environ.get("THE_LAB_NO_SANDBOX")
             and not uses_inner_arc_sandbox
         ):
-            capabilities = sandbox_capabilities()
+            capabilities = (await run_blocking(sandbox_capabilities))
             if not capabilities.get("available"):
                 # Keep the stored reason to a few lines (it shows up in the
                 # experiment record), but still say what to install and how.
@@ -847,25 +851,25 @@ class ExperimentRunner:
                 return {"status": "error", "reason": "\n".join(parts)}
             env["THE_LAB_SANDBOX_TARGET_UID"] = str(os.getuid())
             env["THE_LAB_SANDBOX_TARGET_GID"] = str(os.getgid())
-            command = build_sandbox_command(
+            command = (await run_blocking(build_sandbox_command,
                 self._store.repo_dir,
                 "experiment",
                 f"exp-{exp_id}",
                 command,
                 config=sandbox_config,
                 cwd=run_cwd,
-            )
+            ))
 
         # Write stdout/stderr directly to the log file so it survives server restarts.
-        log_file = open(log_path, "w")
+        log_file = (await run_blocking(open, log_path, "w"))
         # If the driver is loaded but this container has no GPU device nodes, CUDA
         # will fail with something opaque ("Failed to infer device type"). Say so
         # at the top of the log — this holds sandboxed or not, and cannot be fixed
         # from inside the container.
-        _gpu_warning = gpu_host_state().get("warning")
+        _gpu_warning = (await run_blocking(gpu_host_state)).get("warning")
         if _gpu_warning:
-            log_file.write(f"[the-lab] WARNING: {_gpu_warning}\n\n")
-            log_file.flush()
+            (await run_blocking(log_file.write, f"[the-lab] WARNING: {_gpu_warning}\n\n"))
+            (await run_blocking(log_file.flush))
         process = await asyncio.create_subprocess_exec(
             *command,
             stdout=log_file,
@@ -874,16 +878,16 @@ class ExperimentRunner:
             env=env,
             start_new_session=True,
         )
-        log_file.close()  # the child process has inherited the fd
+        (await run_blocking(log_file.close))  # the child process has inherited the fd
 
-        exp = self._store.update_experiment(
+        exp = (await run_blocking(self._store.update_experiment,
             exp_id,
             status="running",
             pid=process.pid,
             error=None,
             started_at=datetime.now(timezone.utc).isoformat(),
             finished_at=None,
-        )
+        ))
 
         # M3 feedback: lightweight started broadcast on the running transition.
         # We're post-await here, so use broadcast (not broadcast_soon).
@@ -960,11 +964,11 @@ class ExperimentRunner:
             except (TypeError, ValueError):
                 pass
             if not _cancelled_now():
-                self._store.update_experiment(
+                (await run_blocking(self._store.update_experiment,
                     exp_id, status="failed", error=error,
                     status_msg=_msg, pid=None, finished_at=now,
-                )
-                err_path.write_text(f"{error}\n\n{output[-2000:]}")
+                ))
+                (await run_blocking(err_path.write_text, f"{error}\n\n{output[-2000:]}"))
                 ws_mod.broadcaster.broadcast({"type": "experiment_finished", "label": _label,
                                               "experiment_id": exp_id, "idea_id": _idea_id,
                                               "status": "failed", "status_msg": _msg,
@@ -975,10 +979,10 @@ class ExperimentRunner:
                 metrics, result_meta = _metrics_from_result(result)
                 meta = {**exp.get("meta", {}), **result_meta}
                 if not _cancelled_now():
-                    self._store.update_experiment(
+                    (await run_blocking(self._store.update_experiment,
                         exp_id, status="completed", metrics=metrics, meta=meta,
                         pid=None, status_msg=None, finished_at=now,  # normal success
-                    )
+                    ))
                     if result_idx is not None:
                         await asyncio.get_running_loop().run_in_executor(
                             None, self._strip_result_line, log_path, result_idx)
@@ -988,10 +992,10 @@ class ExperimentRunner:
                                                   "metrics": metrics})
             else:
                 if not _cancelled_now():
-                    self._store.update_experiment(
+                    (await run_blocking(self._store.update_experiment,
                         exp_id, status="completed", metrics=None,
                         pid=None, status_msg=None, finished_at=now,  # normal success
-                    )
+                    ))
                     ws_mod.broadcaster.broadcast({"type": "experiment_finished", "label": _label,
                                                   "experiment_id": exp_id, "idea_id": _idea_id,
                                                   "status": "completed", "status_msg": None,
@@ -1002,11 +1006,11 @@ class ExperimentRunner:
             _tail = next((ln.strip() for ln in reversed(output.splitlines()) if ln.strip()), "")
             _msg = f"error: {_tail}" if _tail else f"error: {error}"
             if not _cancelled_now():
-                self._store.update_experiment(
+                (await run_blocking(self._store.update_experiment,
                     exp_id, status="failed", error=error,
                     status_msg=_msg, pid=None, finished_at=now,
-                )
-                err_path.write_text(f"{error}\n\n{output[-2000:]}")
+                ))
+                (await run_blocking(err_path.write_text, f"{error}\n\n{output[-2000:]}"))
                 ws_mod.broadcaster.broadcast({"type": "experiment_finished", "label": _label,
                                               "experiment_id": exp_id, "idea_id": _idea_id,
                                               "status": "failed", "status_msg": _msg,
@@ -1014,9 +1018,9 @@ class ExperimentRunner:
 
         # Clean up worktree
         wt = (exp.get("meta") or {}).get("worktree")
-        if wt and Path(wt).exists():
+        if wt and (await run_blocking(Path(wt).exists)):
             try:
-                remove_worktree(wt, cwd=self._store.repo_dir)
+                (await run_blocking(remove_worktree, wt, cwd=self._store.repo_dir))
             except Exception:
                 pass
 
@@ -1081,19 +1085,19 @@ class ExperimentRunner:
 
         script_path = self._store.repo_dir / exp["script"]
         local_exp_dir = script_path.parent
-        if not script_path.exists():
+        if not (await run_blocking(script_path.exists)):
             msg = (
                 f"script file missing: {exp['script']!r}. "
                 f"The experiment was created without script_content — "
                 f"provide script_content when creating, or use "
                 f"POST /experiments/<source>/rerun on an experiment that has a script."
             )
-            self._store.update_experiment(
+            (await run_blocking(self._store.update_experiment,
                 label, status="failed", error=msg,
                 # M3 feedback: terminal-state reason line.
                 status_msg="error: script file missing",
                 finished_at=datetime.now(timezone.utc).isoformat(),
-            )
+            ))
             print(f"[the-lab] errored experiment {label}: {msg}")
             return {"status": "error", "reason": msg}
 
@@ -1106,13 +1110,13 @@ class ExperimentRunner:
         if not git_branch or not git_commit:
             try:
                 idea = self._store.get_idea(exp["idea_id"])
-                git_branch = idea["branch"] if idea else get_current_branch(cwd=self._store.repo_dir)
-                git_commit = resolve_branch_commit(git_branch, cwd=self._store.repo_dir)
+                git_branch = idea["branch"] if idea else (await run_blocking(get_current_branch, cwd=self._store.repo_dir))
+                git_commit = (await run_blocking(resolve_branch_commit, git_branch, cwd=self._store.repo_dir))
                 # Commit to auto-save any local changes on the idea branch.
                 try:
-                    auto_commit(cwd=self._store.repo_dir,
-                                message=f"exp {label}: pre-slurm submit")
-                    git_commit = resolve_branch_commit(git_branch, cwd=self._store.repo_dir)
+                    (await run_blocking(auto_commit, cwd=self._store.repo_dir,
+                                message=f"exp {label}: pre-slurm submit"))
+                    git_commit = (await run_blocking(resolve_branch_commit, git_branch, cwd=self._store.repo_dir))
                 except Exception:
                     pass
             except Exception as e:
@@ -1168,7 +1172,7 @@ class ExperimentRunner:
             **({"git_commit": git_commit} if git_commit else {}),
         }
         exp_id = exp["id"]
-        self._store.update_experiment(
+        (await run_blocking(self._store.update_experiment,
             exp_id,
             status="running",
             started_at=now,
@@ -1176,7 +1180,7 @@ class ExperimentRunner:
             pid=None,
             error=None,
             finished_at=None,
-        )
+        ))
 
         task = asyncio.create_task(
             self._monitor_slurm_job(exp_id, executor, job_id, label, local_exp_dir)
@@ -1226,7 +1230,7 @@ class ExperimentRunner:
             await asyncio.sleep(poll_interval)
 
             try:
-                state = executor.poll_status(job_id)
+                state = (await run_blocking(executor.poll_status, job_id))
             except Exception as e:
                 print(f"[the-lab] poll_status for job {job_id} failed: {e}")
                 state = ""  # treat as gone
@@ -1243,13 +1247,13 @@ class ExperimentRunner:
                         # even when the script doesn't write to $THE_LAB_PROGRESS.
                         _log_path = local_exp_dir / "script.log"
                         _prog_path = local_exp_dir / "script.progress"
-                        if _log_path.exists():
+                        if (await run_blocking(_log_path.exists)):
                             try:
                                 _lines = (await self._read_text_off_loop(_log_path)).splitlines()
                                 _snap = _parse_log_progress(_lines)
                                 if _snap:
                                     import json as _json
-                                    jsonio.write_json(_prog_path, _snap, indent=0)
+                                    (await run_blocking(jsonio.write_json, _prog_path, _snap, indent=0))
                             except Exception:
                                 pass
                         ws_mod.broadcaster.broadcast_soon({
@@ -1278,13 +1282,13 @@ class ExperimentRunner:
                     })
                     meta["slurm_attempts"] = slurm_attempts
                     meta.pop("slurm_job_id", None)
-                    self._store.update_experiment(
+                    (await run_blocking(self._store.update_experiment,
                         exp_id,
                         status="queued",
                         queued_at=now,
                         meta=meta,
                         error=None,
-                    )
+                    ))
                     self._allocator.release(label)
                     self.wake_scheduler()
                 self._tasks.pop(exp_id, None)
@@ -1326,10 +1330,10 @@ class ExperimentRunner:
                         if _remote and isinstance(_remote, str):
                             _name = Path(_remote).name
                             _local = local_exp_dir / _name
-                            if _local.exists():
+                            if (await run_blocking(_local.exists)):
                                 metrics[_key] = str(_local)
                     meta = {**(exp.get("meta") or {}), **result_meta}
-                    self._store.update_experiment(
+                    (await run_blocking(self._store.update_experiment,
                         exp_id,
                         status="completed",
                         metrics=metrics,
@@ -1337,14 +1341,14 @@ class ExperimentRunner:
                         pid=None,
                         status_msg=None,  # M3: normal success
                         finished_at=now,
-                    )
+                    ))
                     # Overwrite the progress file with final state so GET /progress
                     # never returns stale intermediate data after completion.
                     _progress_path = local_exp_dir / "script.progress"
                     try:
-                        jsonio.write_json(_progress_path, {
+                        (await run_blocking(jsonio.write_json, _progress_path, {
                             "_final": True, "pct_complete": 100, **(metrics or {})
-                        }, indent=0)
+                        }, indent=0))
                     except OSError:
                         pass
                     if result_idx is not None:
@@ -1372,14 +1376,14 @@ class ExperimentRunner:
                         # M3 feedback: best-effort reason from the last log line.
                         _tail = next((ln.strip() for ln in reversed(output.splitlines()) if ln.strip()), "")
                         _msg = f"error: {_tail}" if _tail else "error: fatal error detected in log (no metrics produced)"
-                        self._store.update_experiment(
+                        (await run_blocking(self._store.update_experiment,
                             exp_id,
                             status="failed",
                             error=f"fatal error detected in log (no metrics produced):\n{_last_lines}",
                             status_msg=_msg,
                             pid=None,
                             finished_at=now,
-                        )
+                        ))
                         ws_mod.broadcaster.broadcast_soon({
                             "type": "experiment_finished",
                             "label": label,
@@ -1390,14 +1394,14 @@ class ExperimentRunner:
                             "metrics": None,
                         })
                     else:
-                        self._store.update_experiment(
+                        (await run_blocking(self._store.update_experiment,
                             exp_id,
                             status="completed",
                             metrics=None,
                             pid=None,
                             status_msg=None,  # M3: normal success
                             finished_at=now,
-                        )
+                        ))
                         ws_mod.broadcaster.broadcast_soon({
                             "type": "experiment_finished",
                             "label": label,
@@ -1432,7 +1436,7 @@ class ExperimentRunner:
                 if result is not None:
                     metrics, result_meta = _metrics_from_result(result)
                     meta = {**(exp.get("meta") or {}), **result_meta}
-                    self._store.update_experiment(
+                    (await run_blocking(self._store.update_experiment,
                         exp_id,
                         status="completed",
                         metrics=metrics,
@@ -1440,7 +1444,7 @@ class ExperimentRunner:
                         pid=None,
                         status_msg=None,  # M3: metrics present despite slurm kill
                         finished_at=now,
-                    )
+                    ))
                     if result_idx is not None:
                         await asyncio.get_running_loop().run_in_executor(
                             None, self._strip_result_line, log_path, result_idx)
@@ -1463,7 +1467,7 @@ class ExperimentRunner:
                         error = f"{error}\n\n--- last log lines ---\n{log_tail}"
                     err_path = local_exp_dir / "script.err"
                     try:
-                        err_path.write_text(error)
+                        (await run_blocking(err_path.write_text, error))
                     except OSError:
                         pass
                     # M3 feedback: slurm TIMEOUT gets a timeout: reason line;
@@ -1472,14 +1476,14 @@ class ExperimentRunner:
                         _msg = f"timeout: slurm job {job_id} hit its time limit"
                     else:
                         _msg = f"error: slurm job {job_id} ended with state {state}"
-                    self._store.update_experiment(
+                    (await run_blocking(self._store.update_experiment,
                         exp_id,
                         status="failed",
                         error=error,
                         status_msg=_msg,
                         pid=None,
                         finished_at=now,
-                    )
+                    ))
                     from . import ws as ws_mod
                     ws_mod.broadcaster.broadcast_soon({
                         "type": "experiment_finished",
@@ -1580,12 +1584,12 @@ class ExperimentRunner:
         self._allocator.release(label)
         if exp["status"] in ("queued", "pending"):
             self.wake_scheduler()
-            result = self._store.update_experiment(
+            result = (await run_blocking(self._store.update_experiment,
                 exp_id,
                 status="cancelled",
                 status_msg="cancelled",  # M3: user cancelled before it ran
                 finished_at=datetime.now(timezone.utc).isoformat(),
-            )
+            ))
             ws_mod.broadcaster.broadcast({"type": "experiment_cancelled",
                                           "label": label, "idea_id": idea_id})
             return result
@@ -1598,13 +1602,13 @@ class ExperimentRunner:
             try:
                 from .executors.slurm import SlurmExecutor
                 from .queue import load_config
-                resources, _ = load_config(self._store.repo_dir)
+                resources, _ = (await run_blocking(load_config, self._store.repo_dir))
                 resource_name = (exp.get("meta") or {}).get("assigned_resource")
                 resource = next((r for r in resources if r.name == resource_name), None)
                 if resource and resource.kind == "slurm":
                     ssh_host = resource.executor_config.get("ssh_host", "slurm")
                     executor = SlurmExecutor(ssh_host, resource.executor_config, instance_id=self._store.instance_id)
-                    executor.cancel(slurm_job_id)
+                    (await run_blocking(executor.cancel, slurm_job_id))
             except Exception as e:
                 print(f"[the-lab] scancel for {label} failed: {e}")
         elif exp.get("pid"):
@@ -1614,20 +1618,20 @@ class ExperimentRunner:
 
         # Clean up worktree
         wt = (exp.get("meta") or {}).get("worktree")
-        if wt and Path(wt).exists():
+        if wt and (await run_blocking(Path(wt).exists)):
             try:
-                remove_worktree(wt, cwd=self._store.repo_dir)
+                (await run_blocking(remove_worktree, wt, cwd=self._store.repo_dir))
             except Exception:
                 pass
 
-        result = self._store.update_experiment(
+        result = (await run_blocking(self._store.update_experiment,
             exp_id,
             status="cancelled",
             # M3: SIGTERM/SIGKILL sent to a running process by user cancel.
             status_msg="sigterm",
             pid=None,
             finished_at=datetime.now(timezone.utc).isoformat(),
-        )
+        ))
         ws_mod.broadcaster.broadcast({"type": "experiment_cancelled",
                                       "label": label, "idea_id": idea_id})
         return result
@@ -1688,7 +1692,7 @@ class ExperimentRunner:
         if not resource_name:
             return False
         from .queue import load_config as _load_config
-        _resources, _ = _load_config(self._store.repo_dir)
+        _resources, _ = (await run_blocking(_load_config, self._store.repo_dir))
         resource = next(
             (r for r in _resources if r.name == resource_name),
             None,
@@ -1811,13 +1815,13 @@ class ExperimentRunner:
                 # route only sets agent_role when agent_id resolved, so in
                 # practice this is always the claiming path.
                 unread = (
-                    messages_mod.claim_unread_for(
+                    (await run_blocking(messages_mod.claim_unread_for,
                         repo_dir, agent_id=agent_id, role=agent_role, limit=20,
-                    )
+                    ))
                     if agent_id
-                    else messages_mod.unread_for(
+                    else (await run_blocking(messages_mod.unread_for,
                         repo_dir, agent_id=agent_id, role=agent_role, limit=20,
-                    )
+                    ))
                 )
                 if unread:
                     running = self._store.list_experiments_by_status("running")

@@ -1,5 +1,6 @@
 """Operational endpoints: task, config, sandbox, stats, chat, debug."""
 from __future__ import annotations
+from ..blocking import run_blocking
 
 import asyncio
 import json
@@ -488,17 +489,17 @@ async def chat(req: ChatRequest):
         import anthropic
     except ImportError:
         raise HTTPException(501, "anthropic package not installed")
-    context = _build_chat_context()
+    context = await run_blocking(_build_chat_context)
     system = _CHAT_SYSTEM_PROMPT + "\n---\n\n" + context
-    client = anthropic.Anthropic(api_key=api_key)
+    client = anthropic.AsyncAnthropic(api_key=api_key)
 
     async def _stream():
         try:
-            with client.messages.stream(
+            async with client, client.messages.stream(
                 model="claude-sonnet-4-20250514", max_tokens=4096,
                 system=system, messages=req.messages,
             ) as stream:
-                for text in stream.text_stream:
+                async for text in stream.text_stream:
                     yield f"data: {json.dumps({'type': 'text', 'text': text})}\n\n"
             yield 'data: {"type": "done"}\n\n'
         except Exception as e:
