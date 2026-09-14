@@ -42,7 +42,10 @@ executor_config keys
 """
 from __future__ import annotations
 
+import json
 import logging
+import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -99,7 +102,7 @@ class SlurmExecutor:
     # SSH / SCP helpers
     # ------------------------------------------------------------------
 
-    def _ssh(self, cmd: str, check: bool = True) -> subprocess.CompletedProcess:
+    def _ssh(self, cmd: str, check: bool = True, timeout: int = 120) -> subprocess.CompletedProcess:
         """Run cmd on the remote host via SSH, with SLURM_CONF prefixed."""
         # shlex.quote the config-derived value: ssh runs this string through
         # the remote user's shell, so an unquoted "…conf; <anything>" would
@@ -111,6 +114,7 @@ class SlurmExecutor:
         result = subprocess.run(
             argv,
             capture_output=True, text=True,
+            timeout=timeout,
         )
         if check and result.returncode != 0:
             raise RuntimeError(
@@ -335,9 +339,79 @@ class SlurmExecutor:
     # Wrapper script builder
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # Narrow runtime staging (gitignored but required by experiment scripts)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _script_runtime_requirements(script_path: Path) -> tuple[bool, bool]:
+        content = script_path.read_text(errors="replace")
+        needs_bin = bool(re.search(r"(?:^|[\s;&|])(?:_sandboxed|\.the_lab/bin/)", content))
+        bare_preamble = re.search(
+            r"(?m)^\s*(?:source|\.)\s+['\"]?\.the_lab/preamble\.sh['\"]?\s*$", content,
+        )
+        return bool(bare_preamble or needs_bin), needs_bin
+
+    def _stage_runtime_assets(self, local_repo_dir: Path, worktree_dir: str,
+                              script_path: Path) -> bool:
+        """Stage the explicit trusted runtime allowlist before sbatch."""
+        needs_preamble, needs_bin = self._script_runtime_requirements(script_path)
+        runtime_dir = local_repo_dir / ".the_lab"
+        preamble, bin_dir = runtime_dir / "preamble.sh", runtime_dir / "bin"
+        if needs_preamble and not preamble.exists():
+            raise RuntimeError(f"experiment requires .the_lab/preamble.sh (or _sandboxed), but no trusted preamble exists at {preamble}")
+        if needs_bin and ".the_lab/bin/" in script_path.read_text(errors="replace") and not bin_dir.is_dir():
+            raise RuntimeError(f"experiment references .the_lab/bin but no trusted bin directory exists at {bin_dir}")
+        self._ssh_plain(f"mkdir -p {shlex.quote(worktree_dir + '/.the_lab')}")
+        if preamble.exists():
+            destination = f"{worktree_dir}/.the_lab/preamble.sh"
+            if preamble.is_symlink():
+                target = str(preamble.resolve(strict=True))
+                if self._ssh_plain(f"test -r {shlex.quote(target)}", check=False).returncode != 0:
+                    raise RuntimeError(f"symlinked trusted preamble is not readable on the Slurm host: {target}")
+                self._ssh_plain(f"rm -f {shlex.quote(destination)} && ln -s {shlex.quote(target)} {shlex.quote(destination)}")
+            elif preamble.is_file():
+                self._scp_to_remote(preamble, destination)
+        if bin_dir.is_dir():
+            for asset in sorted(bin_dir.rglob("*")):
+                if asset.is_symlink() or not asset.is_file():
+                    continue
+                destination = f"{worktree_dir}/.the_lab/bin/{asset.relative_to(bin_dir).as_posix()}"
+                self._ssh_plain(f"mkdir -p {shlex.quote(str(Path(destination).parent))}")
+                self._scp_to_remote(asset, destination)
+                if asset.stat().st_mode & 0o111:
+                    self._ssh_plain(f"chmod +x {shlex.quote(destination)}")
+        return needs_preamble
+
+    def _stage_experiment_snapshot(self, remote_job_dir: str, record: dict) -> None:
+        """Write one immutable dispatch record for preamble/model configuration."""
+        if not isinstance(record, dict) or ("meta" in record and record["meta"] is not None
+                                            and not isinstance(record["meta"], dict)):
+            raise RuntimeError("experiment snapshot must be an object with meta as an object or null")
+        try:
+            frozen = json.loads(json.dumps(record, ensure_ascii=False, allow_nan=False))
+            meta = frozen.get("meta")
+            if isinstance(meta, dict):
+                meta.pop("slurm_run_token", None)
+            payload = json.dumps(frozen, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("experiment snapshot is not valid JSON; refusing Slurm submission") from exc
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", prefix="thelab_experiment_",
+                                         encoding="utf-8", delete=False) as tmp:
+            tmp.write(payload)
+            tmp_path = Path(tmp.name)
+        try:
+            os.chmod(tmp_path, 0o600)
+            self._scp_to_remote(tmp_path, f"{remote_job_dir}/experiment.json")
+            self._ssh_plain(f"chmod 600 {shlex.quote(remote_job_dir + '/experiment.json')}")
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
     def _build_wrapper(self, label: str, remote_job_dir: str,
                        worktree_dir: str, unit_kind: str = "gpu",
-                       env_vars: dict | None = None) -> str:
+                       env_vars: dict | None = None,
+                       requires_preamble: bool = False,
+                       requires_experiment_json: bool = False) -> str:
         gpu_line     = f"#SBATCH --gres=gpu:{self.gpus}" if unit_kind == "gpu" else ""
         mem_line     = f"#SBATCH --mem={self.mem}"        if self.mem        else ""
         time_line    = f"#SBATCH --time={self.time_limit}" if self.time_limit else ""
@@ -440,6 +514,17 @@ _cleanup_model() {{
 # ─────────────────────────────────────────────────────────────────────────────
 '''
 
+        preamble_preflight = f'''if [ ! -r "{worktree_dir}/.the_lab/preamble.sh" ]; then
+    echo "the-lab: required experiment preamble is unavailable in the Slurm worktree" >&2
+    exit 127
+fi
+''' if requires_preamble else ""
+        snapshot_preflight = f'''if [ ! -r "{remote_job_dir}/experiment.json" ] || ! python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); raise SystemExit(0 if isinstance(d, dict) and (d.get("meta") is None or isinstance(d.get("meta"), dict)) else 1)' "{remote_job_dir}/experiment.json"; then
+    echo "the-lab: required experiment.json is unavailable or malformed" >&2
+    exit 126
+fi
+''' if requires_experiment_json else ""
+
         return f"""#!/bin/bash
 #SBATCH --partition={self.partition}
 #SBATCH --job-name=thelab-{label}
@@ -457,18 +542,50 @@ _cleanup_model() {{
 # Inject env vars that must survive the sbatch → compute node hop.
 {env_exports}
 
+# Native Slurm requeue starts this wrapper again with the same job id.  Archive
+# mutable attempt outputs before startup; truncate the scheduler-opened log
+# rather than renaming it so its file descriptor stays with this generation.
+_THE_LAB_GENERATION="${{SLURM_RESTART_COUNT:-0}}"
+case "$_THE_LAB_GENERATION" in ''|*[!0-9]*) _THE_LAB_GENERATION=0;; esac
+export THE_LAB_RESTART_COUNT="$_THE_LAB_GENERATION"
+_THE_LAB_PREVIOUS_GENERATION="$(cat {remote_job_dir}/.the_lab_generation 2>/dev/null || true)"
+case "$_THE_LAB_PREVIOUS_GENERATION" in ''|*[!0-9]*) _THE_LAB_PREVIOUS_GENERATION="unknown";; esac
+if [ "$_THE_LAB_PREVIOUS_GENERATION" != "$_THE_LAB_GENERATION" ]; then
+    _THE_LAB_ARCHIVE="{remote_job_dir}/attempts/${{_THE_LAB_PREVIOUS_GENERATION:-unknown}}"
+    mkdir -p "$_THE_LAB_ARCHIVE"
+    for _the_lab_path in "{remote_job_dir}"/model.ready*.json "{remote_job_dir}"/script.progress "{remote_job_dir}"/script.metrics.jsonl "{remote_job_dir}"/exit-status.json "{remote_job_dir}"/script.err "{remote_job_dir}"/script.output.md "{remote_job_dir}"/script.output.html "{remote_job_dir}"/script.heartbeats; do
+        # mv moves a symlink itself, never its target.  Do not follow a stale
+        # script-produced link while resetting a native attempt.
+        [ -e "$_the_lab_path" ] || [ -L "$_the_lab_path" ] || continue
+        mv -f -- "$_the_lab_path" "$_THE_LAB_ARCHIVE/" || true
+    done
+    : > "{remote_job_dir}/script.log"
+    printf '%s\\n' "$_THE_LAB_GENERATION" > "{remote_job_dir}/.the_lab_generation"
+fi
+
+# Slurm owns native requeue. SIGTERM is also used by user cancellation, so it
+# must never manufacture a Lab retry.
+_PREEMPTED=0
+_lab_interrupted() {{
+    _PREEMPTED=1
+    [ -n "${{_SCRIPT_PID:-}}" ] && kill "$_SCRIPT_PID" 2>/dev/null || true
+    [ -n "${{_WATCHER_PID:-}}" ] && kill "$_WATCHER_PID" 2>/dev/null || true
+    [ -n "${{_MODEL_PID:-}}" ] && kill "$_MODEL_PID" 2>/dev/null || true
+    if declare -F _cleanup_model >/dev/null 2>&1; then _cleanup_model || true; fi
+    exit 143
+}}
+trap _lab_interrupted SIGTERM SIGUSR1
+
+# Validate runtime before a venv/model allocation is started.
+if ! cd "{worktree_dir}"; then
+    echo "the-lab: required experiment worktree is unavailable: {worktree_dir}" >&2
+    exit 1
+fi
+{preamble_preflight}
+{snapshot_preflight}
+
 {venv_setup}
 {model_setup}
-# Preemption handler — Slurm sends SIGTERM before killing the job
-_PREEMPTED=0
-_lab_requeue() {{
-    _PREEMPTED=1
-    curl -s -X POST "$THE_LAB_API_URL/experiments/{label}/requeue" \\
-         -H "Authorization: Bearer $THE_LAB_TOKEN" \\
-         -H "Content-Type: application/json" \\
-         -d '{{"reason":"preempted"}}' || true
-}}
-trap _lab_requeue SIGTERM SIGUSR1
 
 # Progress/metrics land in the job dir (not the worktree — it's read-only)
 export THE_LAB_PROGRESS="{remote_job_dir}/script.progress"
@@ -486,6 +603,8 @@ _push_progress() {{
                 curl -s -X POST "$THE_LAB_API_URL/experiments/{label}/progress" \\
                      -H "Authorization: Bearer $THE_LAB_TOKEN" \\
                      -H "Content-Type: application/json" \\
+                     -H "X-The-Lab-Slurm-Job-ID: ${{SLURM_JOB_ID:-}}" \\
+                     -H "X-The-Lab-Restart-Count: $_THE_LAB_GENERATION" \\
                      --data-binary "@$THE_LAB_PROGRESS" || true
             fi
         fi
@@ -495,14 +614,7 @@ _push_progress() {{
 _push_progress &
 _WATCHER_PID=$!
 
-# Run the experiment script from the worktree so relative paths
-# (python, hooks, prompts, ...) resolve against the committed code.  Do not
-# fall through to the job directory: a relative ``.the_lab/preamble.sh`` then
-# silently disappears and the script can look like a completed no-op.
-if ! cd "{worktree_dir}"; then
-    echo "the-lab: required experiment worktree is unavailable: {worktree_dir}" >&2
-    exit 1
-fi
+# Run the experiment script from the already-validated worktree.
 bash "{remote_job_dir}/script.sh" &
 _SCRIPT_PID=$!
 wait $_SCRIPT_PID
@@ -516,8 +628,10 @@ fi
 kill $_WATCHER_PID 2>/dev/null || true
 if [ -f "$THE_LAB_PROGRESS" ]; then
     curl -s -X POST "$THE_LAB_API_URL/experiments/{label}/progress" \\
-         -H "Authorization: Bearer $THE_LAB_TOKEN" \\
-         -H "Content-Type: application/json" \\
+        -H "Authorization: Bearer $THE_LAB_TOKEN" \\
+        -H "Content-Type: application/json" \\
+        -H "X-The-Lab-Slurm-Job-ID: ${{SLURM_JOB_ID:-}}" \\
+        -H "X-The-Lab-Restart-Count: $_THE_LAB_GENERATION" \\
          --data-binary "@$THE_LAB_PROGRESS" || true
 fi
 
@@ -540,21 +654,17 @@ if [ $_PREEMPTED -eq 0 ]; then
     }}
     _wait_stable "{remote_job_dir}" 120
 
-    # Trigger rsync on the lab server and wait for it to complete.
-    # The /pull endpoint blocks until rsync finishes, so when we get 200 back
-    # all artifacts are safely on the lab server.
-    # Only delete local files if the pull succeeded — otherwise keep them for recovery.
-    if curl -sf --max-time 1200 \\
+    # Best-effort early sync only. The monitor owns cleanup after authoritative
+    # terminal evidence; a late preemption must retain restart prerequisites.
+    curl -sf --max-time 1200 \\
          -X POST "$THE_LAB_API_URL/experiments/{label}/pull" \\
          -H "Authorization: Bearer $THE_LAB_TOKEN" \\
-         -H "Content-Type: application/json"; then
-        rm -rf "{remote_job_dir}/worktree" "{remote_job_dir}/venv" 2>/dev/null || true
-    fi
+         -H "Content-Type: application/json" || true
 
     curl -s -X POST "$THE_LAB_API_URL/experiments/{label}/slurm_done" \\
          -H "Authorization: Bearer $THE_LAB_TOKEN" \\
          -H "Content-Type: application/json" \\
-         -d "{{\\"exit_code\\":$_EXIT}}" || true
+         -d "{{\\"exit_code\\":$_EXIT,\\"job_id\\":\\"${{SLURM_JOB_ID:-}}\\",\\"restart_count\\":$_THE_LAB_GENERATION}}" || true
 fi
 
 exit $_EXIT
@@ -575,6 +685,7 @@ exit $_EXIT
         local_repo_dir: Path | None = None,
         git_branch: str | None = None,
         git_commit: str | None = None,
+        experiment_record: dict | None = None,
     ) -> str:
         """Submit an experiment to Slurm. Returns the job_id string.
 
@@ -593,9 +704,23 @@ exit $_EXIT
         # 1. Create remote job directory
         self._ssh_plain(f"mkdir -p {remote_job_dir}")
 
+        # The preamble reads this job-root file before model startup.  Lab
+        # dispatches must pass an explicit frozen record; the fallback exists
+        # only for direct backwards-compatible executor callers.
+        if experiment_record is None:
+            fallback = Path(local_exp_dir) / "experiment.json"
+            try:
+                experiment_record = json.loads(fallback.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise RuntimeError("experiment snapshot is required for Slurm submission") from exc
+        if not isinstance(experiment_record, dict):
+            raise RuntimeError("experiment snapshot must be a JSON object")
+        self._stage_experiment_snapshot(remote_job_dir, experiment_record)
+
         # 2. Git: push branch and create per-job worktree
         use_worktree = bool(local_repo_dir and git_branch and git_commit)
         abs_bare_path = None
+        requires_preamble = False
         if use_worktree:
             abs_bare_path = self.ensure_bare_repo()
             self.push_branch(local_repo_dir, git_branch)           # type: ignore[arg-type]
@@ -611,10 +736,16 @@ exit $_EXIT
             remote_script_in_wt = f"{worktree_dir}/{rel_script}"
             self._ssh_plain(f"mkdir -p $(dirname {remote_script_in_wt})")
             self._scp_to_remote(local_script_path, remote_script_in_wt)
+            requires_preamble = self._stage_runtime_assets(
+                Path(local_repo_dir), worktree_dir, local_script_path
+            )
             # Also copy script to job dir root for the wrapper to reference
             self._scp_to_remote(local_script_path, f"{remote_job_dir}/script.sh")
         else:
             # No git context — copy script directly (simple self-contained mode)
+            requires_preamble, _ = self._script_runtime_requirements(Path(local_script_path))
+            if requires_preamble:
+                raise RuntimeError("experiment requires .the_lab/preamble.sh (or _sandboxed), but Slurm runtime staging requires git worktree context")
             self._scp_to_remote(local_script_path, f"{remote_job_dir}/script.sh")
             worktree_dir = remote_job_dir  # fall back to job dir as cwd
 
@@ -629,7 +760,8 @@ exit $_EXIT
             self._scp_to_remote(launcher, f"{remote_job_dir}/model_server.sh")
         wrapper_content = self._build_wrapper(
             label, remote_job_dir, worktree_dir, unit_kind=unit_kind,
-            env_vars=merged_env,
+            env_vars=merged_env, requires_preamble=requires_preamble,
+            requires_experiment_json=True,
         )
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".sh", prefix="thelab_wrapper_", delete=False,
@@ -654,8 +786,9 @@ exit $_EXIT
 
     def cancel(self, job_id: str) -> None:
         try:
-            # Disable requeue before cancelling so the job doesn't restart
-            # (slurm's --requeue flag causes scancelled jobs to be resubmitted).
+            # Normal scancel is terminal; disable requeue defensively so an
+            # unusual site policy cannot turn an operator cancellation into a
+            # restart.
             self._ssh(f"scontrol update JobId={job_id} Requeue=0 2>/dev/null || true",
                       check=False)
             self._ssh(f"scancel {job_id}")
@@ -664,33 +797,135 @@ exit $_EXIT
 
     def poll_status(self, job_id: str) -> str:
         """Poll squeue. Returns state string or '' when job is gone."""
-        result = self._ssh(
-            f"squeue --noheader -j {job_id} -o %T", check=False,
-        )
+        result = self._ssh(f"squeue --noheader -j {job_id} -o %T", check=False, timeout=30)
         if result.returncode != 0:
-            return ""
+            raise RuntimeError(f"squeue failed for {job_id} (rc={result.returncode}): {result.stderr.strip()}")
         return result.stdout.strip()
 
-    def pull_results(self, label: str, local_exp_dir: str | Path) -> None:
-        """rsync the job dir back to the local experiment directory."""
-        local_dir = str(local_exp_dir).rstrip("/") + "/"
+    def accounting_status(self, job_id: str) -> dict | None:
+        """Return root-job accounting state, never an ``extern`` step.
+
+        squeue has a normal empty window between a preemption and its requeue;
+        sacct is consulted only to distinguish that window from a real terminal
+        job.  Prefer the root row over ``.batch``.
+        """
+        if not re.fullmatch(r"[0-9]+(?:_[0-9]+)?", str(job_id)):
+            return None
+        command = (f"SLURM_CONF={shlex.quote(self.slurm_conf)} sacct --noheader --parsable2 "
+                   f"--jobs={shlex.quote(str(job_id))} --format=JobIDRaw,State,ExitCode,Restarts")
+        result = self._ssh_plain(command, check=False, timeout=30)
+        if result.returncode != 0:
+            return None
+        root = batch = None
+        for line in result.stdout.splitlines():
+            fields = line.split("|")
+            if len(fields) < 3:
+                continue
+            raw, state, code = (x.strip() for x in fields[:3])
+            if raw not in (str(job_id), f"{job_id}.batch"):
+                continue
+            match = re.fullmatch(r"([0-9]+):([0-9]+)", code)
+            if not match:
+                continue
+            item = {"job_id": str(job_id), "state": state,
+                    "exit_code": int(match.group(1)), "signal": int(match.group(2))}
+            if len(fields) > 3 and fields[3].strip().isdigit():
+                item["restart_count"] = int(fields[3].strip())
+            if raw == str(job_id):
+                root = item
+            else:
+                batch = item
+        # A failing batch only invalidates a *matching completed* root.  A
+        # preempted/running root normally has an old batch exit 143, and sacct
+        # can retain a prior restart's batch row after the new root starts.
+        same_restart = (isinstance(root.get("restart_count"), int)
+                        and root.get("restart_count") == batch.get("restart_count")) if root and batch else False
+        root_state = str(root.get("state") or "").upper().split("+")[0] if root else ""
+        if (root and batch and root_state == "COMPLETED" and same_restart
+                and (batch["exit_code"] != 0 or batch["signal"])):
+            return {**root, "state": "FAILED", "exit_code": batch["exit_code"], "signal": batch["signal"]}
+        return root or batch
+
+    def restart_count(self, label: str) -> int | None:
+        """Read the wrapper generation, including during model warm-up."""
+        path = f"{self._resolve_remote_base()}/{label}/.the_lab_generation"
+        result = self._ssh_plain(f"cat {shlex.quote(path)}", check=False, timeout=15)
+        value = result.stdout.strip()
+        return int(value) if result.returncode == 0 and value.isdigit() else None
+
+    def pull_results(self, label: str, local_exp_dir: str | Path) -> int | None:
+        """Publish one verified generation of job-root results.
+
+        A native requeue can replace files while rsync runs.  Pull into a
+        sibling staging directory, verify the generation before/after, then
+        publish files.  Lifecycle-owned source files are never touched.
+        """
+        destination = Path(local_exp_dir)
+        destination.mkdir(parents=True, exist_ok=True)
         source = (f"{self._rsync_base}/{label}/" if self._is_local
                   else f"{self.ssh_host}:{self._rsync_base}/{label}/")
-        result = subprocess.run(
-            ["rsync", "-az",
-             # The worktree is git-tracked code the local machine already has —
-             # no need to sync it back. Only pull the job-root output files:
-             # script.log, script.progress, script.metrics.jsonl, *.gpu_stats,
-             # and any artifacts the script copies to the job root.
-             "--exclude=worktree/",
-             "--exclude=venv/",
-             source,
-             local_dir],
-            capture_output=True, text=True,
-        )
-        if result.returncode != 0:
-            logger.error("rsync pull for %s failed (rc=%d): %s",
-                         label, result.returncode, result.stderr.strip())
+        before = self.restart_count(label)
+        with tempfile.TemporaryDirectory(prefix=".thelab-pull-", dir=destination.parent) as staging_name:
+            staging = Path(staging_name)
+            result = subprocess.run(
+                ["rsync", "-az", "--exclude=worktree/", "--exclude=venv/",
+                 "--exclude=experiment.json", "--exclude=script.sh", source, str(staging) + "/"],
+                capture_output=True, text=True, timeout=1200,
+            )
+            if result.returncode != 0:
+                raise RuntimeError("rsync pull for %s failed (rc=%d): %s" %
+                                   (label, result.returncode, result.stderr.strip()))
+            staged_marker = staging / ".the_lab_generation"
+            staged_generation = (int(staged_marker.read_text().strip())
+                                 if staged_marker.is_file() and staged_marker.read_text().strip().isdigit() else None)
+            after = self.restart_count(label)
+            # A present staged marker must be corroborated by both remote
+            # reads. ``None`` is only tolerated for old wrappers which have
+            # no marker at all; a transport failure cannot bless generation 1.
+            if (staged_generation is not None and
+                    (before != staged_generation or after != staged_generation)) or \
+               (staged_generation is None and (before != after or before is not None)):
+                raise RuntimeError("Slurm generation changed while pulling results; retrying")
+
+            protected = {"experiment.json", "script.sh"}
+            managed = {"model.ready.json", "model.ready.json.smoke.json", "script.progress",
+                       "script.metrics.jsonl", "exit-status.json", "script.err", "script.output.md",
+                       "script.output.html", "script.heartbeats"}
+            # Reset only explicit current-attempt files that disappeared in the
+            # stable remote snapshot; never broadly delete a local experiment.
+            for name in managed:
+                if not (staging / name).exists() and not (staging / name).is_symlink():
+                    old = destination / name
+                    if old.is_file() or old.is_symlink():
+                        old.unlink()
+            for item in staging.iterdir():
+                if item.name in protected:
+                    continue
+                target = destination / item.name
+                if item.is_symlink():
+                    # Publish the link itself; never dereference an untrusted
+                    # experiment-produced target during a dashboard sync.
+                    fd, temporary_name = tempfile.mkstemp(prefix=f".{item.name}.", suffix=".pull-link", dir=destination)
+                    os.close(fd)
+                    temporary = Path(temporary_name)
+                    temporary.unlink()
+                    os.symlink(os.readlink(item), temporary)
+                    os.replace(temporary, target)
+                elif item.is_file():
+                    fd, temporary_name = tempfile.mkstemp(prefix=f".{item.name}.", suffix=".pull", dir=destination)
+                    os.close(fd)
+                    temporary = Path(temporary_name)
+                    shutil.copy2(item, temporary, follow_symlinks=False)
+                    os.replace(temporary, target)
+                elif item.is_dir():
+                    # Artifact directories are replaced from the verified
+                    # snapshot without following symlinks inside them.
+                    if target.is_symlink() or target.is_file():
+                        target.unlink()
+                    elif target.exists():
+                        shutil.rmtree(target)
+                    shutil.copytree(item, target, symlinks=True)
+            return before
 
     def cleanup_remote(self, label: str,
                        abs_bare_path: str | None = None) -> None:

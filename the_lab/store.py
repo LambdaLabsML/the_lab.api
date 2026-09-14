@@ -553,6 +553,14 @@ class Store:
                 k in RENDERABLE_EXPERIMENT_FIELDS and cur.get(k) != v
                 for k, v in fields.items()
             )
+            # These scheduler fields are intentionally surfaced by the detail
+            # view, unlike opaque executor bookkeeping such as run tokens.
+            if "meta" in fields:
+                old_meta, new_meta = cur.get("meta") or {}, fields["meta"] or {}
+                renderable_changed = renderable_changed or any(
+                    old_meta.get(key) != new_meta.get(key) for key in
+                    ("slurm_job_id", "slurm_state", "slurm_restart_count", "slurm_last_restart_at")
+                )
             exp = _enrich_experiment({**cur, **fields})
             json_path = self._exp_json_path(exp["idea_id"], exp["seq"])
             json_path.parent.mkdir(parents=True, exist_ok=True)
@@ -561,6 +569,56 @@ class Store:
             if renderable_changed:
                 self._version += 1
         return exp
+
+    def update_experiment_if(
+        self,
+        exp_ref,
+        *,
+        expected_status: str | tuple[str, ...] | None = None,
+        expected_job_id: str | None = None,
+        expected_generation: int | None = None,
+        **fields,
+    ) -> dict | None:
+        """Atomically update an experiment only if its Slurm owner is current.
+
+        A monitor/callback can be suspended while a replacement run is installed.
+        Checking the job id and native requeue generation under the same lock as
+        the write prevents that old actor from publishing a terminal result.
+        ``None`` means no condition for a particular field.
+        """
+        label = str(exp_ref)
+        with self._lock:
+            cur = self._experiments.get(label)
+            if not cur:
+                return None
+            if expected_status is not None:
+                statuses = (expected_status if isinstance(expected_status, tuple)
+                            else (expected_status,))
+                if cur.get("status") not in statuses:
+                    return None
+            meta = cur.get("meta") or {}
+            if expected_job_id is not None and str(meta.get("slurm_job_id") or "") != str(expected_job_id):
+                return None
+            if expected_generation is not None and int(meta.get("slurm_restart_count") or 0) != int(expected_generation):
+                return None
+            renderable_changed = any(
+                k in RENDERABLE_EXPERIMENT_FIELDS and cur.get(k) != v
+                for k, v in fields.items()
+            )
+            if "meta" in fields:
+                old_meta, new_meta = cur.get("meta") or {}, fields["meta"] or {}
+                renderable_changed = renderable_changed or any(
+                    old_meta.get(key) != new_meta.get(key) for key in
+                    ("slurm_job_id", "slurm_state", "slurm_restart_count", "slurm_last_restart_at")
+                )
+            exp = _enrich_experiment({**cur, **fields})
+            json_path = self._exp_json_path(exp["idea_id"], exp["seq"])
+            json_path.parent.mkdir(parents=True, exist_ok=True)
+            _write_json(json_path, exp)
+            self._experiments[label] = exp
+            if renderable_changed:
+                self._version += 1
+            return exp
 
     def _safe_cleanup_path(self, value, *, key: str, label: str) -> Path | None:
         """Resolve *value* and return it only if it sits inside the repo.

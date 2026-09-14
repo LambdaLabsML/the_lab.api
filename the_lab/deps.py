@@ -68,7 +68,22 @@ if [ -z "$THE_LAB_TOKEN" ]; then
 fi
 """
 
-PREAMBLE_SOURCE = 'source .the_lab/preamble.sh 2>/dev/null || true\n'
+PREAMBLE_SOURCE = """\
+# A project preamble is optional, but a readable one is part of the experiment
+# contract: never hide its diagnostics or continue after it explicitly fails.
+if [ -r .the_lab/preamble.sh ]; then
+  # Source as a plain command, never an ``if`` condition: Bash disables
+  # errexit for conditional bodies, which would silently change a project's
+  # intended preamble/body semantics.  If control returns, report an explicit
+  # non-zero return; with ``set -e`` the shell naturally stops at the failure.
+  source .the_lab/preamble.sh
+  _the_lab_preamble_rc=$?
+  if [ "$_the_lab_preamble_rc" -ne 0 ]; then
+    echo "ERROR: .the_lab/preamble.sh failed (exit $_the_lab_preamble_rc)" >&2
+    exit "$_the_lab_preamble_rc"
+  fi
+fi
+"""
 
 _LOWER_IS_BETTER_PATTERNS = (
     "loss", "bpb", "perplexity", "error", "mse", "mae", "rmse",

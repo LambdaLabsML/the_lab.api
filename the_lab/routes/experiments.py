@@ -6,6 +6,7 @@ import json
 import os
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 
 import mimetypes
 
@@ -819,15 +820,41 @@ def serve_repo_file(file_path: str):
     Used by the dashboard to load images embedded in output.md files.
     Path traversal outside the repo root is rejected with 403.
     """
+    # Validate the requested spelling before resolving symlinks.  This keeps
+    # the public URL namespace repository-relative even for the narrowly
+    # allowed shared image database below.
+    requested = Path(file_path)
+    if (requested.is_absolute() or ".." in requested.parts or "\\" in file_path):
+        raise HTTPException(403, "access denied")
     try:
-        full_path = (REPO_DIR / file_path).resolve()
+        full_path = (REPO_DIR / requested).resolve()
     except Exception:
         raise HTTPException(400, "invalid path")
     repo_root = REPO_DIR.resolve()
-    if not str(full_path).startswith(str(repo_root) + "/") and full_path != repo_root:
-        raise HTTPException(403, "access denied")
+    in_repo = full_path == repo_root or repo_root in full_path.parents
+    external_image = False
+    if not in_repo:
+        # Opt in explicitly: experiments may refer to content-addressed images
+        # stored on a shared NFS database, but no arbitrary external file is
+        # made reachable by a repository symlink.
+        configured_root = os.environ.get("THE_LAB_IMAGE_DB_ROOT", "").strip()
+        if configured_root:
+            try:
+                db_root = Path(configured_root).resolve()
+                relative = full_path.relative_to(db_root)
+            except (OSError, ValueError):
+                raise HTTPException(403, "access denied")
+            if (len(relative.parts) == 2
+                    and re.fullmatch(r"[A-Za-z0-9_-]+", relative.parts[0])
+                    and re.fullmatch(r"[0-9a-f]{16}\.png", relative.parts[1])):
+                external_image = True
+        if not external_image:
+            raise HTTPException(403, "access denied")
     if not full_path.exists() or not full_path.is_file():
         raise HTTPException(404, "file not found")
+    if external_image:
+        return FileResponse(str(full_path), media_type="image/png",
+                            headers={"X-Content-Type-Options": "nosniff"})
     content_type, _ = mimetypes.guess_type(str(full_path))
     return FileResponse(str(full_path), media_type=content_type or "application/octet-stream")
 
@@ -851,7 +878,7 @@ def _queue_position(exp_id) -> int | None:
 
 
 _META_STRIP = frozenset({
-    "slurm_run_token", "slurm_job_id", "slurm_attempts",
+    "slurm_run_token", "slurm_attempts",
     "worktree", "git_commit", "git_branch", "assigned_units",
 })
 
@@ -1456,30 +1483,58 @@ async def post_experiment_progress(exp_ref: str, request: Request):
     """
     from .. import ws as ws_mod
 
-    exp = _resolve_exp(exp_ref)
+    # Parse before taking the ownership lock.  The important invariant is that
+    # validation happens *after* this await, while holding the same lock as a
+    # monitor pull/finalization.
     try:
         body = await request.json()
     except Exception:
         raise HTTPException(400, "body must be valid JSON")
 
-    # Write to the local progress file so GET /progress still works, and
-    # record a heartbeat for beat timing — both on the threadpool: this
-    # handler is async (for request.json()) and progress posts arrive every
-    # few seconds per running experiment, so NFS writes must not ride the
-    # event loop.
-    progress_path = REPO_DIR / exp["script"].replace(".sh", ".progress")
-    loop = asyncio.get_running_loop()
-    try:
-        await loop.run_in_executor(
-            None, lambda: jsonio.write_json(progress_path, body, indent=0))
-    except OSError as exc:
-        raise HTTPException(500, f"could not write progress file: {sanitize_error(exc)}")
-    await loop.run_in_executor(None, _record_heartbeat, exp["script"])
+    exp = _resolve_exp(exp_ref)
+    label = exp.get("label") or str(exp["id"])
+    # Wrapper callbacks are generation-fenced.  A dying generation can still
+    # have a watcher in flight after Slurm has started the replacement.
+    callback_job = request.headers.get("X-The-Lab-Slurm-Job-ID", "")
+    callback_generation = request.headers.get("X-The-Lab-Restart-Count")
+    async with runner.label_lock(label):
+        # Re-read after the request-body await: a requeue/replacement may have
+        # happened while FastAPI was receiving the callback body.
+        exp = store.get_experiment(label)
+        if not exp or exp.get("status") != "running":
+            raise HTTPException(409, "experiment is no longer running")
+        meta = dict(exp.get("meta") or {})
+        if meta.get("slurm_native_requeue"):
+            if not callback_job or callback_generation is None:
+                raise HTTPException(409, "unfenced Slurm progress callback")
+        if callback_job:
+            if callback_job != str(meta.get("slurm_job_id") or ""):
+                raise HTTPException(409, "stale Slurm progress callback")
+            try:
+                generation = int(callback_generation) if callback_generation is not None else 0
+            except ValueError:
+                raise HTTPException(422, "invalid Slurm restart generation")
+            current_generation = int(meta.get("slurm_restart_count") or 0)
+            if generation != current_generation:
+                # Generation changes are learned from scheduler/accounting,
+                # never from a callback that could be an old attempt.
+                raise HTTPException(409, "stale Slurm progress generation")
+
+        # Keep the lock through the off-loop writes: a monitor cannot pull old
+        # output and then overwrite this generation's progress snapshot.
+        progress_path = REPO_DIR / exp["script"].replace(".sh", ".progress")
+        loop = asyncio.get_running_loop()
+        try:
+            await loop.run_in_executor(
+                None, lambda: jsonio.write_json(progress_path, body, indent=0))
+        except OSError as exc:
+            raise HTTPException(500, f"could not write progress file: {sanitize_error(exc)}")
+        await loop.run_in_executor(None, _record_heartbeat, exp["script"])
 
     # Broadcast immediately — no rsync lag.
     ws_mod.broadcaster.broadcast_soon({
         "type": "experiment_progress_updated",
-        "label": exp.get("label", exp_ref),
+        "label": label,
         "idea_id": exp.get("idea_id"),
         "progress": body,
     })
@@ -1491,14 +1546,17 @@ async def post_experiment_progress(exp_ref: str, request: Request):
 async def pull_experiment_results(exp_ref: str):
     """Trigger immediate rsync pull from the remote slurm job dir.
 
-    Called by the wrapper script on the compute node after the experiment
-    finishes and artifacts are stable — before the wrapper cleans up the
-    worktree and venv. Blocks until rsync completes so the caller knows
-    the data is safe before deleting local files.
+    Called by the wrapper as a best-effort live artifact refresh.  Native
+    Slurm requeue retains the remote job directory; the executor stages and
+    generation-verifies the pull before publishing it locally.
     """
     exp = _resolve_exp(exp_ref)
     label = exp.get("label") or str(exp["id"])
-    ok = await runner.pull_results_for_label(label)
+    async with runner.label_lock(label):
+        current = store.get_experiment(label)
+        if not current or current.get("status") != "running":
+            raise HTTPException(409, "experiment is no longer running")
+        ok = await runner.pull_results_for_label(label)
     return {"ok": ok, "label": label}
 
 
@@ -1581,34 +1639,43 @@ async def rerun_experiment_via_idea(idea_id: int, exp_ref: str):
 
 @router.post("/experiments/{exp_ref}/requeue")
 async def requeue_experiment(exp_ref: str, req: RequeueRequest | None = None):
-    """Mark a running or failed experiment as queued for re-dispatch.
+    """Legacy re-dispatch endpoint; live Slurm jobs are a native no-op.
 
-    Called by the Slurm wrapper when the job is preempted (SIGTERM received).
-    Records the event in meta.slurm_attempts, resets status to 'queued',
-    and wakes the scheduler.
+    Slurm owns REQUEUE for every record that still has a Slurm job id.  Only
+    historical non-Slurm/cleared-job records use the old Lab queue fallback.
     """
     exp = _resolve_exp(exp_ref)
     label = exp.get("label") or str(exp["id"])
     now = datetime.now(timezone.utc).isoformat()
     reason = (req.reason if req else None) or "preempted"
 
-    meta = dict(exp.get("meta") or {})
-    slurm_attempts = list(meta.get("slurm_attempts") or [])
-    slurm_attempts.append({
-        "job_id": meta.get("slurm_job_id"),
-        "reason": reason,
-        "at": now,
-    })
-    meta["slurm_attempts"] = slurm_attempts
-    meta.pop("slurm_job_id", None)
-
-    updated = store.update_experiment(
-        label,
-        status="queued",
-        queued_at=now,
-        meta=meta,
-        error=None,
-    )
+    async with runner.label_lock(label):
+        exp = store.get_experiment(label) or exp
+        meta = dict(exp.get("meta") or {})
+    # Modern wrappers use Slurm's native REQUEUE and never ask the Lab to
+    # submit again.  Treat even an unfenced old callback as an acknowledgement
+    # for native jobs: SIGTERM alone is not evidence of QoS preemption.
+        # Any record with a live Slurm job is owned by Slurm.  This includes
+        # records created before the explicit native flag was introduced: an
+        # old wrapper must never cause a second Lab submission.
+        if meta.get("slurm_native_requeue") or meta.get("slurm_job_id"):
+            if req and req.job_id and req.job_id != str(meta.get("slurm_job_id") or ""):
+                raise HTTPException(409, "stale Slurm requeue callback")
+            if req and req.restart_count is not None and req.restart_count != int(meta.get("slurm_restart_count") or 0):
+                raise HTTPException(409, "stale Slurm requeue generation")
+            return store.get_experiment(label) or exp
+        slurm_attempts = list(meta.get("slurm_attempts") or [])
+        slurm_attempts.append({
+            "job_id": meta.get("slurm_job_id"), "reason": reason, "at": now,
+        })
+        meta["slurm_attempts"] = slurm_attempts
+        meta.pop("slurm_job_id", None)
+        updated = store.update_experiment_if(
+            label, expected_status=("running", "failed"), status="queued",
+            queued_at=now, meta=meta, error=None,
+        )
+        if updated is None:
+            return store.get_experiment(label) or exp
     runner.wake_scheduler()
 
     try:
@@ -1634,21 +1701,35 @@ async def slurm_done(exp_ref: str, req: SlurmDoneRequest | None = None):
     is a fast-path hint so the lab marks failures quickly.
 
     - exit_code == 0: leave as-is (monitor will complete it after rsync)
-    - exit_code != 0: mark as failed with the exit code
+    - legacy exit_code != 0: mark as failed with the exit code
+    - native Slurm: always a fenced, non-authoritative acknowledgement
     """
     exp = _resolve_exp(exp_ref)
     label = exp.get("label") or str(exp["id"])
-    exit_code = (req.exit_code if req else None) or 0
-    now = datetime.now(timezone.utc).isoformat()
+    async with runner.label_lock(label):
+        exp = store.get_experiment(label) or exp
+        meta = dict(exp.get("meta") or {})
+        if meta.get("slurm_native_requeue"):
+        # Completion callbacks cannot terminalize an attempt: native requeue
+        # can race a late callback.  The monitor requires scheduler evidence.
+            if (not req or not req.job_id or
+                    req.job_id != str(meta.get("slurm_job_id") or "")):
+                raise HTTPException(409, "stale Slurm completion callback")
+            if req.restart_count is None or req.restart_count != int(meta.get("slurm_restart_count") or 0):
+                raise HTTPException(409, "stale Slurm completion generation")
+            return store.get_experiment(label) or exp
+        exit_code = (req.exit_code if req else None) or 0
+        now = datetime.now(timezone.utc).isoformat()
 
+        if exit_code != 0:
+            updated = store.update_experiment_if(
+                label, expected_status="running", status="failed",
+                error=f"slurm job exited with code {exit_code}", pid=None,
+                finished_at=now,
+            )
+        else:
+            updated = None
     if exit_code != 0:
-        updated = store.update_experiment(
-            label,
-            status="failed",
-            error=f"slurm job exited with code {exit_code}",
-            pid=None,
-            finished_at=now,
-        )
         runner.wake_scheduler()
         try:
             from .. import ws as ws_mod
