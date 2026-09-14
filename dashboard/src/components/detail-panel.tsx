@@ -159,7 +159,8 @@ export function DetailPanel({ embedded = false }: { embedded?: boolean } = {}) {
     const un = subscribeWsEvents((ev) => {
       if (ev.idea_id === ideaId &&
           ["idea_changed", "note_added", "experiment_queued", "experiment_started",
-           "experiment_finished", "experiment_cancelled", "experiment_deleted"].includes(ev.type)) {
+           "experiment_finished", "experiment_cancelled", "experiment_deleted",
+           "experiment_updated"].includes(ev.type)) {
         fetchData();
       }
     });
@@ -1712,6 +1713,15 @@ function ExperimentItem({
   const statusColor = getStatusColor(exp.status);
   const metricKey = selectedMetric.value;
   const highlights = metricKey ? [metricKey] : [];
+  const slurm = exp.meta;
+  const slurmState = typeof slurm?.slurm_state === "string" ? slurm.slurm_state.toUpperCase() : null;
+  const slurmJobId = typeof slurm?.slurm_job_id === "string" ? slurm.slurm_job_id : null;
+  const slurmRestartCount = typeof slurm?.slurm_restart_count === "number" ? slurm.slurm_restart_count : null;
+  const hasSlurmLifecycle = slurmState !== null || slurmJobId !== null || slurmRestartCount !== null;
+  const slurmLabel = slurmState === "PENDING"
+    ? slurmRestartCount && slurmRestartCount > 0 ? "waiting after preemption" : "waiting"
+    : slurmState === "RUNNING" ? "running"
+    : slurmState?.toLowerCase();
 
   // Experiment-header → graph navigation + hover-highlight via the shared hook.
   const nav = useEntityNav(exp.idea_id);
@@ -1753,6 +1763,15 @@ function ExperimentItem({
         <span dangerouslySetInnerHTML={{ __html: badgeHtml(exp.status, progress?.pct_complete ?? progress?.pct) }} />
       </div>
       <div class="exp-desc">{exp.description}</div>
+      {hasSlurmLifecycle && (
+        <div class="exp-slurm" title={slurmState ? `Slurm state: ${slurmState}` : "Native Slurm job"}>
+          <span>Slurm{slurmLabel ? ` · ${slurmLabel}` : ""}</span>
+          {slurmJobId && <span>job {slurmJobId}</span>}
+          {slurmRestartCount !== null && (
+            <span>{slurmRestartCount} {slurmRestartCount === 1 ? "restart" : "restarts"}</span>
+          )}
+        </div>
+      )}
       {exp.tags && exp.tags.length > 0 && (
         <div class="exp-tags">{exp.tags.map((t) => <span key={t} class="tag-pill">{t}</span>)}</div>
       )}
