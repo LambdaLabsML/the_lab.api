@@ -56,7 +56,7 @@ export interface Experiment {
   idea_status?: string;
   idea_description?: string;
   metrics?: Record<string, number>;
-  meta?: Record<string, unknown>;
+  meta?: ExperimentMeta;
   tags?: string[];
   started_at?: string;
   finished_at?: string;
@@ -65,6 +65,18 @@ export interface Experiment {
   has_output?: boolean;
   /** Synthetic flag added by loadChartData for running experiments */
   _running?: boolean;
+}
+
+/** Scheduler lifecycle fields persisted by the native Slurm executor. */
+export interface ExperimentMeta extends Record<string, unknown> {
+  /** Stable Slurm allocation ID; native requeues retain this ID. */
+  slurm_job_id?: string;
+  /** Current scheduler state, e.g. PENDING or RUNNING. */
+  slurm_state?: string;
+  /** Number of native Slurm restart generations observed by the wrapper. */
+  slurm_restart_count?: number;
+  /** ISO timestamp for the most recently observed native restart. */
+  slurm_last_restart_at?: string;
 }
 
 /** Response from GET /api/v1/chart-data */
