@@ -489,7 +489,7 @@ def _prepare_agent_home() -> str | None:
     # the namespace-mapped UID that we can't rmtree from the next invocation.
     agent_home = tempfile.mkdtemp(prefix="_lab_agent_home_")
 
-    copy_dirs = [".claude", ".config"]
+    copy_dirs = [".claude", ".codex", ".config"]
     copy_files = [".claude.json", ".gitconfig", ".gitignore_global"]
 
     for d in copy_dirs:

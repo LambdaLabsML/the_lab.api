@@ -68,6 +68,18 @@ def _agent_binary(agent: str) -> str:
     return shutil.which(name) or name
 
 
+def _api_curl_command(api_base: str, insecure: bool) -> str:
+    """Return a shell-safe API fallback command for the generated prompt."""
+    curl = "curl -k" if insecure else "curl"
+    # Do not interpolate credentials into the prompt: the agent process already
+    # inherits them when Basic Auth is configured, and quoted expansion safely
+    # preserves special characters in the password.
+    user = os.environ.get("THE_LAB_USER", "").strip()
+    password = os.environ.get("THE_LAB_PASSWORD", "").strip()
+    auth = ' -u "$THE_LAB_USER:$THE_LAB_PASSWORD"' if user and password else ""
+    return f"{curl}{auth} {api_base}/orient"
+
+
 def _build_launch_command(
     agent: str,
     agent_bin: str,
@@ -82,7 +94,8 @@ def _build_launch_command(
     """Build the agent launch command.
 
     mcp_config: raw JSON content — written to mcp_path (or a temp file if
-                mcp_path is None) and passed via --mcp-config.
+                mcp_path is None) and passed via --mcp-config for Claude.
+                Codex receives equivalent launch-scoped ``-c`` overrides.
     mcp_path:   destination path for the MCP config file.  Caller is
                 responsible for ensuring this path is visible inside the
                 sandbox (write it there, or inject it via bwrap --file).
@@ -111,13 +124,72 @@ def _build_launch_command(
         cmd.append(loop_prompt)
         return cmd
 
-    cmd = [agent_bin, "--yolo"]
+    # Codex does not understand Claude's JSON --mcp-config flag.  Its CLI
+    # accepts TOML overrides instead, which keeps this registration scoped to
+    # the launched session without modifying ~/.codex or the worktree.
+    cmd = [agent_bin]
+    if mcp_config:
+        cmd.extend(_codex_mcp_config_overrides(mcp_config))
+    cmd.append("--yolo")
     if model:
         cmd.extend(["--model", model])
     if extra_agent_args:
         cmd.extend(extra_agent_args)
     cmd.append(loop_prompt)
     return cmd
+
+
+def _codex_mcp_config_overrides(mcp_config: str) -> list[str]:
+    """Translate Claude-style MCP JSON into Codex launch-time TOML overrides.
+
+    Codex configures stdio servers under ``mcp_servers.<name>``.  We use
+    ``env_vars`` rather than embedding the bridge environment as TOML values:
+    API credentials therefore remain in the launched process environment and
+    never end up in a command argument, global config, or tracked worktree.
+    ``THE_LAB_AGENT_ID`` is inherited after isolated-worktree registration.
+    """
+    import json
+    import re
+
+    try:
+        servers = json.loads(mcp_config).get("mcpServers", {})
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(servers, dict):
+        return []
+
+    overrides: list[str] = []
+    for name, server in servers.items():
+        # Lab owns this generated config, but retaining this validation keeps
+        # a malformed local config from producing an invalid dotted TOML path.
+        if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", name):
+            continue
+        if not isinstance(server, dict):
+            continue
+        command = server.get("command")
+        args = server.get("args", [])
+        bridge_env = server.get("env", {})
+        if not isinstance(command, str) or not command:
+            continue
+        if not isinstance(args, list) or not all(isinstance(arg, str) for arg in args):
+            continue
+        if not isinstance(bridge_env, dict):
+            continue
+
+        # Only pass explicitly configured string variables.  Codex reads their
+        # values from its own environment when it starts the MCP subprocess.
+        env_vars = [key for key, value in bridge_env.items()
+                    if isinstance(key, str) and isinstance(value, str)]
+        if "THE_LAB_AGENT_ID" not in env_vars:
+            env_vars.append("THE_LAB_AGENT_ID")
+
+        prefix = f"mcp_servers.{name}"
+        overrides.extend([
+            "-c", f"{prefix}.command={json.dumps(command)}",
+            "-c", f"{prefix}.args={json.dumps(args)}",
+            "-c", f"{prefix}.env_vars={json.dumps(env_vars)}",
+        ])
+    return overrides
 
 
 # ---------------------------------------------------------------------------
@@ -423,8 +495,14 @@ def main():
     _api_repo = (Path(args.repo).resolve() if args.repo else _find_repo_root(Path.cwd())) or Path.cwd()
     api_base, _api_ssl_ctx, _api_insecure = _resolve_api(args, _api_repo)
     api_content = _PROMPT_API.read_text().strip() if _PROMPT_API.exists() else ""
-    _curl = "curl -k" if _api_insecure else "curl"  # -k: self-signed localhost cert
-    api_header = f"**Lab API base URL:** `{api_base}`\n\nAll API endpoints below are relative to this base URL. Use `{_curl} {api_base}/orient` to get started.\n\n"
+    _curl = _api_curl_command(api_base, _api_insecure)
+    api_root = api_base.removesuffix("/api/v1").removesuffix("/api/v1/")
+    api_header = (
+        f"**Lab API base URL:** `{api_base}`\n\n"
+        f"API endpoints below are relative to this base URL. Use `{_curl}` to get started. "
+        f"The OpenAPI spec and Swagger docs are server-root routes: `{api_root}/openapi.json` and `{api_root}/docs` "
+        f"(not under `/api/v1`).\n\n"
+    )
 
     # Resolve role → concrete prompt content.
     # Look under <repo>/.the_lab/PROMPT.<role>.md; fall back to the default
@@ -496,6 +574,7 @@ def main():
     # THE_LAB_LOCAL_MCP=1 to opt back into the local copy.
     import json as _json
     mcp_config = None
+    bridge_env: dict[str, str] = {}
     mcp_script = Path(__file__).parent / "agent_skills" / "skills" / "lab_api_mcp.py"
     if os.environ.get("THE_LAB_LOCAL_MCP") == "1":
         local = project_dir / ".claude" / "skills" / "lab_api_mcp.py"
@@ -505,18 +584,18 @@ def main():
     if mcp_script.exists():
         # Thread auth credentials through to the bridge so it can attach
         # Authorization headers when the API has Basic Auth enabled.
-        _bridge_env: dict[str, str] = {"PYTHONUNBUFFERED": "1", "THE_LAB_API_URL": api_base}
+        bridge_env = {"PYTHONUNBUFFERED": "1", "THE_LAB_API_URL": api_base}
         # Self-signed localhost https → tell the bridge to skip cert verification.
         if _api_insecure:
-            _bridge_env["THE_LAB_API_INSECURE"] = "1"
+            bridge_env["THE_LAB_API_INSECURE"] = "1"
         for _k in ("THE_LAB_USER", "THE_LAB_PASSWORD"):
             _v = os.environ.get(_k, "").strip()
             if _v:
-                _bridge_env[_k] = _v
+                bridge_env[_k] = _v
         mcp_config = _json.dumps({"mcpServers": {"labapi": {
             "command": "python3",
             "args": [str(mcp_script.resolve())],
-            "env": _bridge_env,
+            "env": bridge_env,
         }}})
         print(f"MCP bridge: labapi → {api_base}", file=sys.stderr)
 
@@ -623,6 +702,10 @@ def main():
     )
 
     env = dict(os.environ)
+    # Codex's MCP registration refers to these by name (env_vars), so pass the
+    # bridge's connection details to the launched Codex process.  Claude reads
+    # the same values from its generated --mcp-config file.
+    env.update(bridge_env)
     # Let `the-lab messages`/`wait` (and anything else the child agent runs)
     # reach a self-signed https server: surface the skip-verify hint so they
     # talk HTTPS and don't choke on the cert.
