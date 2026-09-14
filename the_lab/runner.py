@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import secrets
 import signal
@@ -29,6 +30,8 @@ from .sandbox import (
 )
 from .store import Store
 from . import token_registry
+
+logger = logging.getLogger(__name__)
 
 
 def _metrics_from_result(result: dict) -> tuple[dict, dict]:
@@ -163,6 +166,11 @@ class ExperimentRunner:
         self._read_only = read_only
         self._finished_queue: asyncio.Queue[int] = asyncio.Queue()
         self._tasks: dict[int, asyncio.Task] = {}
+        # One ownership mutex per experiment label.  It serializes monitor
+        # pulls/finalization with compute-node callbacks and explicit pulls;
+        # otherwise an old generation can write its just-pulled output after a
+        # replacement generation has begun.
+        self._label_locks: dict[str, asyncio.Lock] = {}
         self._git_lock = None  # initialized as asyncio.Lock in reattach_running
         self._worktree_dir = store.repo_dir / ".the_lab" / "worktrees"
         self._worktree_dir.mkdir(parents=True, exist_ok=True)
@@ -225,6 +233,39 @@ class ExperimentRunner:
             for exp in self._store.list_experiments_by_status(status):
                 self._seen.add(exp["id"])
 
+    def label_lock(self, label: str) -> asyncio.Lock:
+        """Return the event-loop-local ownership lock for *label*."""
+        lock = self._label_locks.get(str(label))
+        if lock is None:
+            lock = asyncio.Lock()
+            self._label_locks[str(label)] = lock
+        return lock
+
+    @staticmethod
+    def _slurm_owner(exp: dict | None, job_id: str, generation: int | None = None) -> bool:
+        if not exp:
+            return False
+        meta = exp.get("meta") or {}
+        if str(meta.get("slurm_job_id") or "") != str(job_id):
+            return False
+        return generation is None or int(meta.get("slurm_restart_count") or 0) == int(generation)
+
+    async def _pull_slurm_owned(self, exp_id, label, executor, local_exp_dir, job_id, generation) -> int | None:
+        """Pull only while this monitor still owns the Slurm generation."""
+        async with self.label_lock(label):
+            before = self._store.get_experiment(exp_id)
+            if not self._slurm_owner(before, job_id, generation) or before.get("status") != "running":
+                return None
+            pulled_generation = await asyncio.get_running_loop().run_in_executor(
+                None, lambda: executor.pull_results(label, local_exp_dir))
+            after = self._store.get_experiment(exp_id)
+            if not self._slurm_owner(after, job_id, generation) or after.get("status") != "running":
+                return None
+            try:
+                return int(pulled_generation) if pulled_generation is not None else generation
+            except (TypeError, ValueError):
+                return None
+
     @staticmethod
     async def _read_text_off_loop(path: Path) -> str:
         """Read a (possibly multi-MB, possibly NFS) file on the threadpool so
@@ -235,6 +276,29 @@ class ExperimentRunner:
             return path.read_text() if path.exists() else ""
 
         return await loop.run_in_executor(None, _read)
+
+    async def _retain_slurm_failure_metrics(self, exp_id, local_exp_dir, job_id, generation):
+        """Keep terminal measurements without upgrading a failed run to success.
+
+        Only call after a pull fenced to this terminal Slurm generation.
+        Failure status and scheduler identity remain authoritative.
+        """
+        output = await self._read_text_off_loop(local_exp_dir / "script.log")
+        result, _ = self._extract_json(output)
+        if result is None:
+            return None
+        metrics, _ = _metrics_from_result(result)
+        exp = self._store.get_experiment(exp_id)
+        if (not self._slurm_owner(exp, job_id, generation)
+                or exp.get("status") not in ("running", "failed")):
+            return None
+        # Do not import result metadata here: a failed process must not alter
+        # scheduler identity or overwrite the recorded failure diagnostics.
+        saved = self._store.update_experiment_if(
+            exp_id, expected_status=exp["status"], expected_job_id=job_id,
+            expected_generation=generation, metrics=metrics,
+        )
+        return metrics if saved else None
 
     @staticmethod
     def _pid_alive(pid: int) -> bool:
@@ -1133,9 +1197,22 @@ class ExperimentRunner:
             "THE_LAB_EXP_ID":  str(exp["id"]),
             "THE_LAB_IDEA_ID": str(exp.get("idea_id", "")),
             **{k: str(v) for k, v in env_extra.items()},
+            # Control-plane contract: user supplied env must not disable the
+            # required frozen snapshot for a Slurm dispatch.
+            "THE_LAB_EXPERIMENT_JSON_REQUIRED": "1",
         }
 
         now = datetime.now(timezone.utc).isoformat()
+        # Freeze the full persisted record before dispatch work leaves this
+        # process.  The snapshot is configuration, not a mutable live record.
+        try:
+            experiment_snapshot = json.loads(json.dumps(exp, ensure_ascii=False, allow_nan=False))
+        except (TypeError, ValueError) as e:
+            token_registry.unregister(run_token)
+            return {"status": "error", "reason": f"experiment snapshot is not valid JSON: {e}"}
+        snapshot_meta = experiment_snapshot.get("meta")
+        if isinstance(snapshot_meta, dict):
+            snapshot_meta.pop("slurm_run_token", None)
         try:
             # Run all SSH/git operations in a thread so the asyncio event loop
             # (and therefore the HTTP server) stays responsive during submission.
@@ -1150,15 +1227,20 @@ class ExperimentRunner:
                     local_repo_dir=self._store.repo_dir,
                     git_branch=git_branch,
                     git_commit=git_commit,
+                    experiment_record=experiment_snapshot,
                 ),
             )
         except Exception as e:
+            token_registry.unregister(run_token)
             print(f"[the-lab] slurm submit for {label} failed: {e}")
             return {"status": "error", "reason": str(e)}
 
         meta = {
             **(exp.get("meta") or {}),
             "slurm_job_id": job_id,
+            "slurm_native_requeue": True,
+            "slurm_state": "PENDING",
+            "slurm_restart_count": 0,
             "slurm_run_token": run_token,  # stored so monitor can unregister on completion
             "assigned_resource": resource.name,
             "assigned_units": assigned,
@@ -1225,33 +1307,80 @@ class ExperimentRunner:
         while True:
             await asyncio.sleep(poll_interval)
 
+            # The native Slurm job id remains stable across REQUEUE.  If a
+            # manual rerun has replaced it, this old monitor owns nothing.
+            current = self._store.get_experiment(exp_id)
+            if not current or (current.get("meta") or {}).get("slurm_job_id") != job_id:
+                return
+            # cancel() owns allocator release and terminal publication.  This
+            # monitor must stop rather than retrying a pull forever or cleaning
+            # up a subsequently replaced job.
+            if current.get("status") != "running":
+                self._tasks.pop(exp_id, None)
+                return
+            generation = int((current.get("meta") or {}).get("slurm_restart_count") or 0)
+
             try:
-                state = executor.poll_status(job_id)
+                state = await asyncio.get_running_loop().run_in_executor(
+                    None, lambda: executor.poll_status(job_id))
             except Exception as e:
                 print(f"[the-lab] poll_status for job {job_id} failed: {e}")
-                state = ""  # treat as gone
+                # Transport/scheduler errors are not evidence that a job ended.
+                poll_interval = min(60, max(15, poll_interval))
+                continue
 
             if state in ("RUNNING", "PENDING"):
                 poll_interval = 30
+                meta = dict(current.get("meta") or {})
+                generation_changed = False
+                generation_reader = getattr(executor, "restart_count", None)
+                if callable(generation_reader):
+                    try:
+                        detected_generation = await asyncio.get_running_loop().run_in_executor(
+                            None, lambda: generation_reader(label))
+                        if detected_generation is not None and detected_generation > generation:
+                            meta["slurm_restart_count"] = detected_generation
+                            meta["slurm_last_restart_at"] = datetime.now(timezone.utc).isoformat()
+                            generation_changed = True
+                    except Exception:
+                        pass
+                if meta.get("slurm_state") != state or generation_changed:
+                    meta["slurm_state"] = state
+                    async with self.label_lock(label):
+                        changed = self._store.update_experiment_if(
+                            exp_id, expected_status="running", expected_job_id=job_id,
+                            expected_generation=generation, meta=meta,
+                            status_msg=None if state == "RUNNING" else "Slurm requeue pending")
+                    if not changed:
+                        continue
+                    generation = int((changed.get("meta") or {}).get("slurm_restart_count") or generation)
+                    ws_mod.broadcaster.broadcast_soon({"type": "experiment_updated", "label": label,
+                        "experiment_id": exp_id, "idea_id": current.get("idea_id"), "status": "running",
+                        "slurm_state": state, "slurm_restart_count": meta.get("slurm_restart_count", 0)})
                 # Pull live logs every 30s so the dashboard shows progress
                 _live_pull_counter += 1
                 if _live_pull_counter % 1 == 0:
                     try:
-                        await asyncio.get_event_loop().run_in_executor(None, lambda: executor.pull_results(label, local_exp_dir))
+                        pulled_generation = await self._pull_slurm_owned(
+                            exp_id, label, executor, local_exp_dir, job_id, generation)
+                        if pulled_generation != generation:
+                            continue
                         # After pulling, synthesize a progress snapshot from the
                         # most recent log lines so GET /progress is always useful
                         # even when the script doesn't write to $THE_LAB_PROGRESS.
                         _log_path = local_exp_dir / "script.log"
                         _prog_path = local_exp_dir / "script.progress"
-                        if _log_path.exists():
-                            try:
-                                _lines = (await self._read_text_off_loop(_log_path)).splitlines()
-                                _snap = _parse_log_progress(_lines)
-                                if _snap:
-                                    import json as _json
-                                    jsonio.write_json(_prog_path, _snap, indent=0)
-                            except Exception:
-                                pass
+                        async with self.label_lock(label):
+                            if not self._slurm_owner(self._store.get_experiment(exp_id), job_id, generation):
+                                continue
+                            if _log_path.exists():
+                                try:
+                                    _lines = (await self._read_text_off_loop(_log_path)).splitlines()
+                                    _snap = _parse_log_progress(_lines)
+                                    if _snap and self._slurm_owner(self._store.get_experiment(exp_id), job_id, generation):
+                                        jsonio.write_json(_prog_path, _snap, indent=0)
+                                except Exception:
+                                    pass
                         ws_mod.broadcaster.broadcast_soon({
                             "type": "experiment_log_updated",
                             "label": label,
@@ -1264,41 +1393,107 @@ class ExperimentRunner:
                 poll_interval = 5
                 continue
             elif state == "PREEMPTED":
-                # Wrapper should have called /requeue already; handle it
-                # defensively in case the HTTP call failed.
-                exp = self._store.get_experiment(exp_id)
-                if exp and exp.get("status") == "running":
-                    now = datetime.now(timezone.utc).isoformat()
-                    meta = dict(exp.get("meta") or {})
-                    slurm_attempts = list(meta.get("slurm_attempts") or [])
-                    slurm_attempts.append({
-                        "job_id": job_id,
-                        "reason": "preempted",
-                        "at": now,
-                    })
-                    meta["slurm_attempts"] = slurm_attempts
-                    meta.pop("slurm_job_id", None)
-                    self._store.update_experiment(
-                        exp_id,
-                        status="queued",
-                        queued_at=now,
-                        meta=meta,
-                        error=None,
-                    )
-                    self._allocator.release(label)
-                    self.wake_scheduler()
-                self._tasks.pop(exp_id, None)
-                self._finished_queue.put_nowait(exp_id)
-                return
-            elif state in ("COMPLETED", ""):
+                # A QoS preemption is transient: Slurm itself requeues this
+                # exact job/allocation.  Do not release capacity, clear the id,
+                # or submit a competing job while squeue has its empty gap.
+                meta = dict(current.get("meta") or {})
+                meta["slurm_state"] = "PREEMPTED"
+                async with self.label_lock(label):
+                    self._store.update_experiment_if(
+                        exp_id, expected_status="running", expected_job_id=job_id,
+                        expected_generation=generation, meta=meta,
+                        status_msg="Slurm preempted; waiting for native requeue")
+                ws_mod.broadcaster.broadcast_soon({"type": "experiment_updated", "label": label,
+                    "experiment_id": exp_id, "idea_id": current.get("idea_id"), "status": "running",
+                    "slurm_state": "PREEMPTED", "slurm_restart_count": meta.get("slurm_restart_count", 0)})
+                poll_interval = 5
+                continue
+            elif state in ("COMPLETED", "", "FAILED", "TIMEOUT", "OUT_OF_MEMORY", "NODE_FAIL", "CANCELLED"):
+                # Empty squeue is not terminal evidence.  Accounting selects
+                # root/batch only (never extern) and is allowed to lag.  We
+                # also require it for COMPLETED so a non-zero batch exit or a
+                # restart that finished between squeue polls cannot be lost.
+                accounting = getattr(executor, "accounting_status", None)
+                try:
+                    evidence = (await asyncio.get_running_loop().run_in_executor(
+                        None, lambda: accounting(job_id))) if callable(accounting) else None
+                except Exception as e:
+                    print(f"[the-lab] accounting for job {job_id} failed: {e}")
+                    poll_interval = 15
+                    continue
+                evidence_text = str((evidence or {}).get("state") or "").upper()
+                evidence_state = (evidence_text.split()[0].split("+")[0]
+                                  if evidence_text else "")
+                if not evidence_state:
+                    poll_interval = 15
+                    continue
+                evidence_generation = (evidence or {}).get("restart_count")
+                if evidence_generation is None and generation > 0:
+                    # Accounting that cannot identify an attempt is not safe
+                    # terminal evidence once the job has been requeued.
+                    poll_interval = 15
+                    continue
+                try:
+                    evidence_generation = int(evidence_generation) if evidence_generation is not None else generation
+                except (TypeError, ValueError):
+                    evidence_generation = generation
+                # Never let accounting from an older attempt complete the
+                # current record.  Conversely, a newer attempt is learned
+                # first and observed on the next poll before finalization.
+                if evidence_generation < generation:
+                    poll_interval = 5
+                    continue
+                if evidence_generation > generation:
+                    meta = {**(current.get("meta") or {}),
+                            "slurm_restart_count": evidence_generation,
+                            "slurm_last_restart_at": datetime.now(timezone.utc).isoformat(),
+                            "slurm_state": "PENDING"}
+                    async with self.label_lock(label):
+                        advanced = self._store.update_experiment_if(
+                            exp_id, expected_status="running", expected_job_id=job_id,
+                            expected_generation=generation, meta=meta,
+                            status_msg=f"Slurm restart generation {evidence_generation}")
+                    if advanced:
+                        poll_interval = 5
+                    continue
+                if evidence_state == "PREEMPTED":
+                    meta = dict(current.get("meta") or {})
+                    meta["slurm_state"] = "PREEMPTED"
+                    async with self.label_lock(label):
+                        self._store.update_experiment_if(
+                            exp_id, expected_status="running", expected_job_id=job_id,
+                            expected_generation=generation, meta=meta,
+                            status_msg="Slurm preempted; waiting for native requeue")
+                    poll_interval = 5
+                    continue
+                if evidence_state not in ("COMPLETED", "FAILED", "TIMEOUT", "OUT_OF_MEMORY", "NODE_FAIL", "CANCELLED"):
+                    poll_interval = 15
+                    continue
+                # sacct's state is authoritative over a successful but stale
+                # squeue row.  A nonzero script exit/signal is a failure even
+                # when Slurm calls the root allocation COMPLETED.
+                state = evidence_state
+                if state == "COMPLETED" and (int((evidence or {}).get("exit_code") or 0)
+                                            or int((evidence or {}).get("signal") or 0)):
+                    state = "FAILED"
                 # Pull results from remote
-                await asyncio.get_event_loop().run_in_executor(None, lambda: executor.pull_results(label, local_exp_dir))
+                try:
+                    pulled_generation = await self._pull_slurm_owned(
+                        exp_id, label, executor, local_exp_dir, job_id, generation)
+                except Exception as e:
+                    print(f"[the-lab] result pull for job {job_id} failed: {e}")
+                    poll_interval = 15
+                    continue
+                if pulled_generation != generation:
+                    continue
                 exp = self._store.get_experiment(exp_id)
                 # If slurm_done already marked the experiment failed (non-zero exit
                 # code), trust it — Slurm reports COMPLETED for the *job* even when
                 # the *script* exits non-zero, so the monitor must not overwrite a
                 # failure that slurm_done recorded from the actual exit code.
                 if exp and exp.get("status") == "failed":
+                    await self._retain_slurm_failure_metrics(
+                        exp_id, local_exp_dir, job_id, generation)
                     asyncio.get_event_loop().run_in_executor(None, lambda: executor.cleanup_remote(label, abs_bare_path=getattr(executor, "_resolved_bare_path", None)))
                     self._allocator.release(label)
                     self.wake_scheduler()
@@ -1312,11 +1507,35 @@ class ExperimentRunner:
                     self._tasks.pop(exp_id, None)
                     self._finished_queue.put_nowait(exp_id)
                     return
+                # An empty squeue row backed by terminal accounting is never
+                # a successful run merely because old output contains metrics.
+                if state != "COMPLETED":
+                    failure_metrics = await self._retain_slurm_failure_metrics(
+                        exp_id, local_exp_dir, job_id, generation)
+                    now = datetime.now(timezone.utc).isoformat()
+                    msg = (f"timeout: slurm job {job_id} hit its time limit" if state == "TIMEOUT"
+                           else f"error: slurm job {job_id} ended with state {state}")
+                    terminal_meta = {**(exp.get("meta") or {}), "slurm_state": state}
+                    if not self._store.update_experiment_if(
+                        exp_id, expected_status="running", expected_job_id=job_id,
+                        expected_generation=generation, status="failed", error=msg,
+                        meta=terminal_meta, status_msg=msg, pid=None, finished_at=now):
+                        continue
+                    ws_mod.broadcaster.broadcast_soon({"type": "experiment_finished", "label": label,
+                        "experiment_id": exp_id, "idea_id": exp.get("idea_id"), "status": "failed", "metrics": failure_metrics})
+                    if not self._slurm_owner(self._store.get_experiment(exp_id), job_id, generation):
+                        return
+                    asyncio.get_event_loop().run_in_executor(None, lambda: executor.cleanup_remote(label, abs_bare_path=getattr(executor, "_resolved_bare_path", None)))
+                    self._allocator.release(label)
+                    self.wake_scheduler()
+                    self._tasks.pop(exp_id, None)
+                    self._finished_queue.put_nowait(exp_id)
+                    return
                 now = datetime.now(timezone.utc).isoformat()
                 log_path = local_exp_dir / "script.log"
                 output = await self._read_text_off_loop(log_path)
                 result, result_idx = self._extract_json(output)
-                if result is not None:
+                if result is not None and state not in ("CANCELLED", "TIMEOUT"):
                     metrics, result_meta = _metrics_from_result(result)
                     # Rewrite remote artifact paths to local pulled copies.
                     # Job root is the only sync target now (worktree excluded).
@@ -1328,25 +1547,41 @@ class ExperimentRunner:
                             _local = local_exp_dir / _name
                             if _local.exists():
                                 metrics[_key] = str(_local)
-                    meta = {**(exp.get("meta") or {}), **result_meta}
-                    self._store.update_experiment(
-                        exp_id,
+                    # Result JSON is user-controlled output; it must not be
+                    # able to replace the scheduler identity/fence recorded
+                    # by the server.
+                    _slurm_owned = {
+                        "slurm_job_id", "slurm_restart_count",
+                        "slurm_native_requeue", "slurm_run_token", "slurm_state",
+                    }
+                    safe_result_meta = {k: v for k, v in result_meta.items()
+                                        if k not in _slurm_owned}
+                    meta = {**(exp.get("meta") or {}), **safe_result_meta,
+                            "slurm_state": "COMPLETED"}
+                    if not self._store.update_experiment_if(
+                        exp_id, expected_status="running", expected_job_id=job_id,
+                        expected_generation=generation,
                         status="completed",
                         metrics=metrics,
                         meta=meta,
                         pid=None,
                         status_msg=None,  # M3: normal success
                         finished_at=now,
-                    )
+                    ):
+                        continue
                     # Overwrite the progress file with final state so GET /progress
                     # never returns stale intermediate data after completion.
                     _progress_path = local_exp_dir / "script.progress"
-                    try:
-                        jsonio.write_json(_progress_path, {
-                            "_final": True, "pct_complete": 100, **(metrics or {})
-                        }, indent=0)
-                    except OSError:
-                        pass
+                    async with self.label_lock(label):
+                        final_owner = self._store.get_experiment(exp_id)
+                        if not self._slurm_owner(final_owner, job_id, generation):
+                            continue
+                        try:
+                            jsonio.write_json(_progress_path, {
+                                "_final": True, "pct_complete": 100, **(metrics or {})
+                            }, indent=0)
+                        except OSError:
+                            pass
                     if result_idx is not None:
                         await asyncio.get_running_loop().run_in_executor(
                             None, self._strip_result_line, log_path, result_idx)
@@ -1368,7 +1603,6 @@ class ExperimentRunner:
                     _fatal_patterns = (
                         "FATAL", "\nError:", "Traceback (most recent",
                         "error: command", "command not found",
-                        "No such file or directory",
                     )
                     _log_has_fatal = any(p in output for p in _fatal_patterns)
                     if _log_has_fatal:
@@ -1376,14 +1610,17 @@ class ExperimentRunner:
                         # M3 feedback: best-effort reason from the last log line.
                         _tail = next((ln.strip() for ln in reversed(output.splitlines()) if ln.strip()), "")
                         _msg = f"error: {_tail}" if _tail else "error: fatal error detected in log (no metrics produced)"
-                        self._store.update_experiment(
-                            exp_id,
+                        if not self._store.update_experiment_if(
+                            exp_id, expected_status="running", expected_job_id=job_id,
+                            expected_generation=generation,
                             status="failed",
                             error=f"fatal error detected in log (no metrics produced):\n{_last_lines}",
+                            meta={**(exp.get("meta") or {}), "slurm_state": "FAILED"},
                             status_msg=_msg,
                             pid=None,
                             finished_at=now,
-                        )
+                        ):
+                            continue
                         ws_mod.broadcaster.broadcast_soon({
                             "type": "experiment_finished",
                             "label": label,
@@ -1394,14 +1631,17 @@ class ExperimentRunner:
                             "metrics": None,
                         })
                     else:
-                        self._store.update_experiment(
-                            exp_id,
+                        if not self._store.update_experiment_if(
+                            exp_id, expected_status="running", expected_job_id=job_id,
+                            expected_generation=generation,
                             status="completed",
                             metrics=None,
+                            meta={**(exp.get("meta") or {}), "slurm_state": "COMPLETED"},
                             pid=None,
                             status_msg=None,  # M3: normal success
                             finished_at=now,
-                        )
+                        ):
+                            continue
                         ws_mod.broadcaster.broadcast_soon({
                             "type": "experiment_finished",
                             "label": label,
@@ -1411,89 +1651,11 @@ class ExperimentRunner:
                             "status_msg": None,
                             "metrics": None,
                         })
-                asyncio.get_event_loop().run_in_executor(None, lambda: executor.cleanup_remote(label, abs_bare_path=getattr(executor, "_resolved_bare_path", None)))
-                self._allocator.release(label)
-                self.wake_scheduler()
-                self._tasks.pop(exp_id, None)
-                self._finished_queue.put_nowait(exp_id)
-                return
-            elif state in ("FAILED", "TIMEOUT", "OUT_OF_MEMORY", "NODE_FAIL", "CANCELLED"):
-                await asyncio.get_event_loop().run_in_executor(None, lambda: executor.pull_results(label, local_exp_dir))
-                exp = self._store.get_experiment(exp_id)
-                if not exp or exp.get("status") == "cancelled":
-                    asyncio.get_event_loop().run_in_executor(None, lambda: executor.cleanup_remote(label, abs_bare_path=getattr(executor, "_resolved_bare_path", None)))
-                    self._allocator.release(label)
-                    self.wake_scheduler()
-                    self._tasks.pop(exp_id, None)
-                    self._finished_queue.put_nowait(exp_id)
+                # A manual replacement may have installed a different job
+                # while we were reading/stripping output.  Never clean up or
+                # release that replacement's allocation.
+                if not self._slurm_owner(self._store.get_experiment(exp_id), job_id, generation):
                     return
-                now = datetime.now(timezone.utc).isoformat()
-                log_path = local_exp_dir / "script.log"
-                output = await self._read_text_off_loop(log_path)
-                # Try to extract JSON metrics — the script may have completed
-                # successfully before Slurm killed/cancelled the wrapper.
-                result, result_idx = self._extract_json(output)
-                if result is not None:
-                    metrics, result_meta = _metrics_from_result(result)
-                    meta = {**(exp.get("meta") or {}), **result_meta}
-                    self._store.update_experiment(
-                        exp_id,
-                        status="completed",
-                        metrics=metrics,
-                        meta=meta,
-                        pid=None,
-                        status_msg=None,  # M3: metrics present despite slurm kill
-                        finished_at=now,
-                    )
-                    if result_idx is not None:
-                        await asyncio.get_running_loop().run_in_executor(
-                            None, self._strip_result_line, log_path, result_idx)
-                    ws_mod.broadcaster.broadcast_soon({
-                        "type": "experiment_finished",
-                        "label": label,
-                        "experiment_id": exp_id,  # M3 feedback
-                        "idea_id": exp.get("idea_id"),
-                        "status": "completed",
-                        "status_msg": None,
-                        "metrics": metrics,
-                    })
-                else:
-                    # No metrics — mark as failed with the last lines of the log
-                    # so the dashboard shows why the script died (not just the
-                    # Slurm state which is always vague).
-                    log_tail = "\n".join(output.splitlines()[-30:]) if output else ""
-                    error = f"slurm job {job_id} ended with state {state}"
-                    if log_tail:
-                        error = f"{error}\n\n--- last log lines ---\n{log_tail}"
-                    err_path = local_exp_dir / "script.err"
-                    try:
-                        err_path.write_text(error)
-                    except OSError:
-                        pass
-                    # M3 feedback: slurm TIMEOUT gets a timeout: reason line;
-                    # every other terminal slurm state is a generic error:.
-                    if state == "TIMEOUT":
-                        _msg = f"timeout: slurm job {job_id} hit its time limit"
-                    else:
-                        _msg = f"error: slurm job {job_id} ended with state {state}"
-                    self._store.update_experiment(
-                        exp_id,
-                        status="failed",
-                        error=error,
-                        status_msg=_msg,
-                        pid=None,
-                        finished_at=now,
-                    )
-                    from . import ws as ws_mod
-                    ws_mod.broadcaster.broadcast_soon({
-                        "type": "experiment_finished",
-                        "label": label,
-                        "experiment_id": exp_id,  # M3 feedback
-                        "idea_id": exp.get("idea_id"),
-                        "status": "failed",
-                        "status_msg": _msg,
-                        "metrics": None,
-                    })
                 asyncio.get_event_loop().run_in_executor(None, lambda: executor.cleanup_remote(label, abs_bare_path=getattr(executor, "_resolved_bare_path", None)))
                 self._allocator.release(label)
                 self.wake_scheduler()
@@ -1684,10 +1846,14 @@ class ExperimentRunner:
         """Trigger an immediate rsync pull for a slurm experiment. Used by
         the compute-node wrapper to confirm data is safe before cleanup."""
         from .executors.slurm import SlurmExecutor
+        # The API route holds label_lock for explicit pulls; the monitor uses
+        # _pull_slurm_owned.  Keep an ownership check before and after rsync.
         exp = self._store.get_experiment(label)
-        if not exp:
+        if not exp or exp.get("status") != "running":
             return False
         meta = exp.get("meta") or {}
+        job_id = meta.get("slurm_job_id")
+        generation = int(meta.get("slurm_restart_count") or 0)
         resource_name = meta.get("assigned_resource")
         if not resource_name:
             return False
@@ -1710,7 +1876,8 @@ class ExperimentRunner:
             await asyncio.get_event_loop().run_in_executor(
                 None, lambda: executor.pull_results(label, local_exp_dir)
             )
-            return True
+            current = self._store.get_experiment(label)
+            return bool(not job_id or self._slurm_owner(current, job_id, generation))
         except Exception as e:
             logger.warning("pull_results_for_label %s failed: %s", label, e)
             return False

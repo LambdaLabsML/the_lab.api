@@ -135,7 +135,11 @@ class MessageRequest(BaseModel):
 
 class RequeueRequest(BaseModel):
     reason: str = "preempted"
+    job_id: str | None = None
+    restart_count: int | None = None
 
 
 class SlurmDoneRequest(BaseModel):
     exit_code: int = 0
+    job_id: str | None = None
+    restart_count: int | None = None
