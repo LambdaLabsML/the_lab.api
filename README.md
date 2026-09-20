@@ -83,7 +83,13 @@ the-lab . --perf                # write .the_lab/api_perf.csv
 the-lab-agent --role instructor # use .the_lab/PROMPT.instructor.md
 the-lab-agent --sandbox on      # enable network + file sandbox
 the-lab-agent --agent codex     # Codex instead of Claude
+the-lab-agent --agent codex resume <session-id>  # continue a saved Codex conversation
 ```
+
+Codex resume keeps its rollout in `$CODEX_HOME/sessions` (normally
+`~/.codex/sessions`). The launcher reuses the session's registered worktree
+when available; if it was cleaned up, it resumes the conversation in a new
+agent worktree. Conversation history does not restore deleted, uncommitted files.
 
 To enable HTTP Basic Auth, set credentials before starting the server — the agent and MCP bridge pick them up automatically from the same env vars:
 
