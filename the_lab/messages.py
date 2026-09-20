@@ -151,6 +151,9 @@ def add_message(
     from_role: str | None,
     to: str,
     text: str,
+    in_reply_to: int | None = None,
+    thread_id: int | None = None,
+    references: list[dict] | None = None,
 ) -> dict:
     """Persist a new message and wake any /wait listeners."""
     _validate_to(to)
@@ -167,7 +170,15 @@ def add_message(
             "text": text,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "read_by": [],
+            "delivered_by": [],
+            "notified_by": [],
         }
+        if in_reply_to is not None:
+            msg["in_reply_to"] = in_reply_to
+        if thread_id is not None:
+            msg["thread_id"] = thread_id
+        if references:
+            msg["references"] = references
         data["next_id"] = msg["id"] + 1
         data["messages"].append(msg)
         _write(repo_dir, data)
@@ -205,6 +216,15 @@ def list_messages(
     return msgs, total
 
 
+def get_message(repo_dir: Path, msg_id: int) -> dict | None:
+    """Return a message by id without changing any acknowledgement state."""
+    with _lock:
+        for m in _read(repo_dir)["messages"]:
+            if m.get("id") == msg_id:
+                return m
+    return None
+
+
 def is_for(msg: dict, *, agent_id: str | None, role: str | None) -> bool:
     """True if *msg* is addressed to this agent (directly, by role, or 'all').
 
@@ -221,12 +241,49 @@ def is_for(msg: dict, *, agent_id: str | None, role: str | None) -> bool:
     return False
 
 
+def can_see(msg: dict, *, agent_id: str | None, role: str | None) -> bool:
+    """Whether an identity can see a message (recipient or original sender)."""
+    return bool(is_for(msg, agent_id=agent_id, role=role) or (
+        agent_id and msg.get("from_agent") == agent_id
+    ))
+
+
+def _created_at_for(repo_dir: Path, agent_id: str) -> str | None:
+    """Registration timestamp, kept here to make automatic delivery new-only."""
+    try:
+        from . import agents as agents_mod
+        return (agents_mod.lookup_agent(repo_dir, agent_id) or {}).get("created_at")
+    except Exception:  # registry is deliberately a best-effort dependency
+        return None
+
+
+def automatic_delivery_eligible(
+    repo_dir: Path, msg: dict, agent_id: str, *, registered_at: str | None = None,
+) -> bool:
+    """Automatic role/all delivery is limited to messages after registration.
+
+    Direct messages remain available regardless of age.  Explicit inbox/history
+    listing is intentionally not subject to this cutoff.
+    """
+    if msg.get("to", "").startswith("agent:"):
+        return True
+    registered = registered_at if registered_at is not None else _created_at_for(repo_dir, agent_id)
+    return not registered or (msg.get("created_at") or "") >= registered
+
+
+def _delivered(m: dict, agent_id: str) -> bool:
+    # read_by is the old on-disk delivery marker.  Treat it as delivered forever
+    # so upgrading does not replay every historical message.
+    return agent_id in (m.get("delivered_by") or []) or agent_id in (m.get("read_by") or [])
+
+
 def unread_for(
     repo_dir: Path,
     *,
     agent_id: str | None,
     role: str | None,
     limit: int | None = None,
+    automatic_only: bool = False,
 ) -> list[dict]:
     """Messages addressed to this agent that they haven't marked read.
 
@@ -236,6 +293,7 @@ def unread_for(
         return []
     with _lock:
         all_msgs = list(_read(repo_dir)["messages"])
+    registered_at = _created_at_for(repo_dir, agent_id) if automatic_only and agent_id else None
     out = []
     for m in reversed(all_msgs):
         if not is_for(m, agent_id=agent_id, role=role):
@@ -243,6 +301,28 @@ def unread_for(
         if m.get("from_agent") and m["from_agent"] == agent_id:
             continue
         if agent_id and agent_id in (m.get("read_by") or []):
+            continue
+        if automatic_only and agent_id and not automatic_delivery_eligible(repo_dir, m, agent_id, registered_at=registered_at):
+            continue
+        out.append(m)
+        if limit is not None and len(out) >= limit:
+            break
+    return out
+
+
+def undelivered_for(repo_dir: Path, *, agent_id: str | None, role: str | None,
+                    limit: int | None = None) -> list[dict]:
+    """Inbox messages awaiting automatic delivery (read status is irrelevant)."""
+    if not agent_id:
+        return []
+    with _lock:
+        all_msgs = list(_read(repo_dir)["messages"])
+    registered_at = _created_at_for(repo_dir, agent_id)
+    out = []
+    for m in reversed(all_msgs):
+        if not is_for(m, agent_id=agent_id, role=role) or m.get("from_agent") == agent_id:
+            continue
+        if _delivered(m, agent_id) or not automatic_delivery_eligible(repo_dir, m, agent_id, registered_at=registered_at):
             continue
         out.append(m)
         if limit is not None and len(out) >= limit:
@@ -257,7 +337,7 @@ def claim_unread_for(
     role: str | None,
     limit: int | None = None,
 ) -> list[dict]:
-    """Atomically select AND claim (mark-read) this agent's unread messages.
+    """Atomically select AND claim delivery without marking messages read.
 
     N1: cross-channel dedup rests on claim-on-delivery. Selecting the unread
     set and marking it read happen inside ONE ``_lock`` acquisition, so two
@@ -265,10 +345,9 @@ def claim_unread_for(
     deliver the same message — whichever claims it first wins, the other sees
     it already in ``read_by`` and skips it.
 
-    Selection predicate is identical to ``unread_for`` (is_for(agent) AND
-    agent_id not already in read_by AND not self-sent); returns the claimed
-    messages newest-first. ``agent_id`` is required to claim (a role-only
-    caller has no id to record in ``read_by``).
+    Selection excludes already-delivered (including legacy ``read_by``) and
+    applies the new-registration cutoff for role/all broadcasts. ``agent_id``
+    is required because delivery acknowledgement is per agent.
     """
     if not agent_id:
         return []
@@ -276,21 +355,79 @@ def claim_unread_for(
     with _lock:
         data = _read(repo_dir)
         changed = False
+        registered_at = _created_at_for(repo_dir, agent_id)
         for m in reversed(data["messages"]):
             # Same predicate as unread_for (kept in lock-step to avoid drift).
             if not is_for(m, agent_id=agent_id, role=role):
                 continue
             if m.get("from_agent") and m["from_agent"] == agent_id:
                 continue
-            rb = m.get("read_by") or []
-            if agent_id in rb:
+            if _delivered(m, agent_id):
+                continue
+            if not automatic_delivery_eligible(repo_dir, m, agent_id, registered_at=registered_at):
                 continue
             out.append(m)
-            # Claim it: append agent_id to read_by (same mark logic as mark_read).
-            rb = m.setdefault("read_by", [])
-            rb.append(agent_id)
+            m.setdefault("delivered_by", []).append(agent_id)
             changed = True
             if limit is not None and len(out) >= limit:
+                break
+        if changed:
+            _write(repo_dir, data)
+    return out
+
+
+def mark_delivered_many(repo_dir: Path, ids, agent_id: str) -> int:
+    """Acknowledge rendered/delivered messages without treating them as read."""
+    want = {i for i in ids}
+    if not want or not agent_id:
+        return 0
+    n = 0
+    with _lock:
+        data = _read(repo_dir)
+        for m in data["messages"]:
+            if m.get("id") in want and not _delivered(m, agent_id):
+                m.setdefault("delivered_by", []).append(agent_id)
+                n += 1
+        if n:
+            _write(repo_dir, data)
+    return n
+
+
+def mark_delivered(repo_dir: Path, msg_id: int, agent_id: str) -> dict | None:
+    """Acknowledge one delivered message; idempotent."""
+    with _lock:
+        data = _read(repo_dir)
+        for m in data["messages"]:
+            if m.get("id") == msg_id:
+                if not _delivered(m, agent_id):
+                    m.setdefault("delivered_by", []).append(agent_id)
+                    _write(repo_dir, data)
+                return m
+    return None
+
+
+def claim_notifications_for(
+    repo_dir: Path, *, agent_id: str | None, role: str | None, limit: int = 20,
+) -> list[dict]:
+    """Claim preview notifications only; this neither delivers nor reads text."""
+    if not agent_id:
+        return []
+    out: list[dict] = []
+    with _lock:
+        data = _read(repo_dir)
+        changed = False
+        registered_at = _created_at_for(repo_dir, agent_id)
+        for m in reversed(data["messages"]):
+            if not is_for(m, agent_id=agent_id, role=role) or m.get("from_agent") == agent_id:
+                continue
+            if _delivered(m, agent_id) or agent_id in (m.get("notified_by") or []):
+                continue
+            if not automatic_delivery_eligible(repo_dir, m, agent_id, registered_at=registered_at):
+                continue
+            out.append(m)
+            m.setdefault("notified_by", []).append(agent_id)
+            changed = True
+            if len(out) >= limit:
                 break
         if changed:
             _write(repo_dir, data)
@@ -330,14 +467,28 @@ def mark_read_many(repo_dir: Path, ids, agent_id: str) -> int:
     return n
 
 
-def mark_all_read(repo_dir: Path, agent_id: str, role: str | None) -> int:
-    """Mark every currently-unread message for this recipient as read. Returns count."""
+def mark_all_read(
+    repo_dir: Path, agent_id: str, role: str | None,
+    *, before_id: int | None = None, older_than: datetime | None = None,
+) -> int:
+    """Mark bounded currently-unread inbox messages read. Returns count."""
     n = 0
     with _lock:
         data = _read(repo_dir)
         for m in data["messages"]:
             if not is_for(m, agent_id=agent_id, role=role):
                 continue
+            if before_id is not None and m.get("id", 0) >= before_id:
+                continue
+            if older_than is not None:
+                try:
+                    created = datetime.fromisoformat(m.get("created_at", ""))
+                    if created.tzinfo is None:
+                        created = created.replace(tzinfo=timezone.utc)
+                    if created >= older_than:
+                        continue
+                except (TypeError, ValueError):
+                    continue
             rb = m.setdefault("read_by", [])
             if agent_id not in rb:
                 rb.append(agent_id)

@@ -8,7 +8,7 @@ import os
 import time as _time
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 
 from .. import jsonio
@@ -281,9 +281,12 @@ def update_sandbox_state(req: SandboxConfigRequest):
 
 @router.get("/api/v1/events")
 async def get_events(
+    request: Request,
     since: int = Query(default=0, ge=0, description="Return only events with seq > since. 0 = everything still buffered."),
     timeout: float = Query(default=25.0, ge=0, le=60, description="Long-poll: seconds to wait when no newer events exist yet. 0 = return immediately."),
     types: str | None = Query(default=None, description="Comma-separated event types to include (e.g. experiment_finished,message_received). Others are filtered out."),
+    after_seq: int | None = Query(default=None, ge=0, description="Resume cursor; takes precedence over since and Last-Event-ID."),
+    tail: bool = Query(default=False, description="Start at the current event sequence, without replaying history."),
 ):
     """Drain the server event stream over plain HTTP — the WS fallback.
 
@@ -302,6 +305,17 @@ async def get_events(
     from .. import ws as ws_mod
 
     broadcaster = ws_mod.broadcaster
+    if after_seq is not None:
+        since = after_seq
+    elif "since" not in request.query_params and request.headers.get("last-event-id"):
+        try:
+            since = int(request.headers["last-event-id"])
+            if since < 0:
+                raise ValueError
+        except ValueError:
+            raise HTTPException(422, "Last-Event-ID must be a nonnegative integer")
+    if tail:
+        since = broadcaster.sequence
     type_filter = None
     if types:
         type_filter = {t.strip() for t in types.split(",") if t.strip()}
@@ -327,7 +341,7 @@ async def get_events(
         replayed = await asyncio.get_event_loop().run_in_executor(
             None, broadcaster.replay_with_journal, since)
         events = _visible(replayed)
-        last_seq = events[-1]["seq"] if events else since
+        last_seq = max([since, *(e.get("seq", 0) for e in replayed)])
         if events or timeout <= 0:
             return _envelope(events, last_seq)
 
@@ -335,20 +349,21 @@ async def get_events(
         while True:
             remaining = deadline - asyncio.get_event_loop().time()
             if remaining <= 0:
-                return _envelope([], since)
+                return _envelope([], last_seq)
             try:
                 ev = await asyncio.wait_for(q.get(), timeout=remaining)
             except asyncio.TimeoutError:
-                return _envelope([], since)
+                return _envelope([], last_seq)
             batch = [ev]
             while True:  # drain whatever arrived in the same burst
                 try:
                     batch.append(q.get_nowait())
                 except asyncio.QueueEmpty:
                     break
-            fresh = _visible([e for e in batch if e.get("seq", 0) > since])
+            fresh = _visible([e for e in batch if e.get("seq", 0) > last_seq])
+            last_seq = max([last_seq, *(e.get("seq", 0) for e in batch)])
             if fresh:
-                return _envelope(fresh, fresh[-1]["seq"])
+                return _envelope(fresh, last_seq)
             # everything was filtered out — keep waiting for a match
     finally:
         broadcaster.unsubscribe(q)

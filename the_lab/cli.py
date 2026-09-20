@@ -693,7 +693,8 @@ def _detect_api_scheme(start: Path) -> str:
 def _client_api(args):
     """Resolve (api_base, ssl_ctx) for the lightweight CLI clients (wait/messages).
 
-    Scheme precedence: --url > --https > THE_LAB_API_INSECURE env (set by the
+    URL precedence: --url > THE_LAB_API_URL > --https/local runtime discovery.
+    Scheme precedence: --url/THE_LAB_API_URL > --https > THE_LAB_API_INSECURE env (set by the
     agent launcher for a self-signed localhost server) > api_scheme in the
     server's runtime.json (walked up from CWD) > http. A localhost self-signed
     https endpoint gets an unverified SSL context; remote https keeps normal
@@ -702,7 +703,11 @@ def _client_api(args):
     import ssl as _ssl, urllib.parse as _uparse
 
     insecure_env = os.environ.get("THE_LAB_API_INSECURE", "").strip() in ("1", "true", "yes")
-    url = getattr(args, "url", None)
+    # Agent launchers already export the full API URL.  Respect it here as well
+    # so `the-lab messages` and `the-lab wait` don't accidentally talk to a
+    # localhost server from inside a remote/isolated worktree.  An explicit
+    # command-line URL remains the deliberate override.
+    url = getattr(args, "url", None) or os.environ.get("THE_LAB_API_URL", "").strip()
     if url:
         base = url.rstrip("/")
         # Foot-gun guard: a base URL without the /api/v1 prefix (e.g. the
@@ -719,13 +724,69 @@ def _client_api(args):
         base = f"{scheme}://localhost:{args.port}/api/v1"
 
     host = _uparse.urlparse(base).hostname or "localhost"
-    insecure = insecure_env or (scheme == "https" and host in ("localhost", "127.0.0.1", "0.0.0.0"))
+    # THE_LAB_API_INSECURE is an agent-launcher convention for our local
+    # self-signed server.  Do not let an inherited value silently turn off TLS
+    # verification for a remote endpoint.
+    is_local = host in ("localhost", "127.0.0.1", "0.0.0.0", "::1")
+    insecure = scheme == "https" and is_local and (insecure_env or is_local)
     ctx = None
     if insecure:
         ctx = _ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = _ssl.CERT_NONE
     return base, ctx
+
+
+def _worktree_agent_id(start: Path | None = None) -> str:
+    """Read the worktree-local identity marker, if this cwd has one."""
+    cur = (start or Path.cwd()).resolve()
+    for candidate in (cur, *cur.parents):
+        marker = candidate / ".the_lab.agentid"
+        try:
+            value = marker.read_text().strip()
+        except OSError:
+            continue
+        if value:
+            return value
+    return ""
+
+
+def _effective_agent_id(explicit: str | None = None) -> tuple[str, str, str]:
+    """Return (id, source, local_marker), without ever exposing credentials."""
+    marker = _worktree_agent_id()
+    if explicit and explicit.strip():
+        return explicit.strip(), "explicit", marker
+    env_id = os.environ.get("THE_LAB_AGENT_ID", "").strip()
+    if env_id:
+        return env_id, "environment", marker
+    if marker:
+        return marker, "worktree marker", marker
+    return "", "none", marker
+
+
+class _MessageDeduper:
+    """Bounded stable-ID deduplication for replayed WS snapshots."""
+
+    def __init__(self, limit: int = 2048):
+        from collections import deque
+        self.limit = limit
+        self._seen: set[str] = set()
+        self._order = deque()
+
+    def fresh(self, messages: list) -> list:
+        result = []
+        for message in messages:
+            mid = message.get("id") if isinstance(message, dict) else None
+            key = str(mid) if mid is not None else None
+            if key is not None and key in self._seen:
+                continue
+            result.append(message)
+            if key is not None:
+                self._seen.add(key)
+                self._order.append(key)
+                if len(self._order) > self.limit:
+                    self._seen.discard(self._order.popleft())
+        return result
 
 
 def _api_get_json(url: str, headers: dict, ctx, timeout: float = 15):
@@ -852,6 +913,25 @@ def cmd_wait():
 # our few client→server frames (pong) are masked as the spec requires.
 # ---------------------------------------------------------------------------
 
+class _BufferedWebSocket:
+    """Socket facade retaining bytes read with an HTTP upgrade response."""
+
+    def __init__(self, sock, initial: bytes = b""):
+        self._sock = sock
+        self._initial = bytearray(initial)
+        self._ws_buffer = bytearray()
+
+    def recv(self, size: int) -> bytes:
+        if self._initial:
+            chunk = bytes(self._initial[:size])
+            del self._initial[:size]
+            return chunk
+        return self._sock.recv(size)
+
+    def __getattr__(self, name):
+        return getattr(self._sock, name)
+
+
 def _ws_handshake(host, port, path_qs, use_ssl, ctx, extra_headers=None):
     """Open a raw TCP (or TLS) socket and complete the WebSocket handshake.
 
@@ -892,35 +972,51 @@ def _ws_handshake(host, port, path_qs, use_ssl, ctx, extra_headers=None):
         if not chunk:
             raise RuntimeError("server closed connection during WS handshake")
         buf += chunk
-    head = buf.split(b"\r\n\r\n", 1)[0].decode(errors="replace")
+    raw_head, remainder = buf.split(b"\r\n\r\n", 1)
+    head = raw_head.decode(errors="replace")
     if "101 Switching Protocols" not in head:
         raise RuntimeError(f"WS upgrade rejected: {head[:120]}")
     if accept_expected not in head:
         raise RuntimeError("WS handshake: Sec-WebSocket-Accept mismatch")
-    return sock
+    # Servers may coalesce the first WS frame into the final handshake recv.
+    # Preserve those bytes rather than dropping the initial message snapshot.
+    return _BufferedWebSocket(sock, remainder)
 
 
 def _ws_recv_frame(sock):
     """Read one WebSocket frame. Returns (opcode, payload_bytes)."""
     import struct as _struct
 
-    def _read_exact(n):
-        b = b""
-        while len(b) < n:
-            chunk = sock.recv(n - len(b))
+    # Do not remove bytes until a complete frame is available. This retains a
+    # partially-read frame across a socket timeout, instead of corrupting the
+    # next reconnect/read cycle.
+    buffer = getattr(sock, "_ws_buffer", None)
+    if buffer is None:
+        buffer = bytearray()
+        setattr(sock, "_ws_buffer", buffer)
+
+    def _ensure(n):
+        while len(buffer) < n:
+            chunk = sock.recv(n - len(buffer))
             if not chunk:
                 raise ConnectionResetError("WebSocket closed by server")
-            b += chunk
-        return b
+            buffer.extend(chunk)
 
-    header = _read_exact(2)
-    opcode = header[0] & 0x0F
-    length = header[1] & 0x7F
+    _ensure(2)
+    opcode = buffer[0] & 0x0F
+    length = buffer[1] & 0x7F
+    header_len = 2
     if length == 126:
-        length = _struct.unpack("!H", _read_exact(2))[0]
+        _ensure(4)
+        length = _struct.unpack("!H", bytes(buffer[2:4]))[0]
+        header_len = 4
     elif length == 127:
-        length = _struct.unpack("!Q", _read_exact(8))[0]
-    payload = _read_exact(length)
+        _ensure(10)
+        length = _struct.unpack("!Q", bytes(buffer[2:10]))[0]
+        header_len = 10
+    _ensure(header_len + length)
+    payload = bytes(buffer[header_len:header_len + length])
+    del buffer[:header_len + length]
     return opcode, payload
 
 
@@ -944,9 +1040,9 @@ def cmd_messages():
 
         Bash("the-lab messages --port 9009", run_in_background=True)
 
-    N1: messages delivered over this socket are CLAIMED on delivery, so the same
-    message is never also piggybacked on the agent's other API responses (no
-    blanket suppression — an unread socket can't starve the agent).
+    Messages use explicit delivery acknowledgements: the server may replay an
+    unacknowledged message after a disconnect, and this client deduplicates its
+    stable ID before writing stdout. Reading remains a separate user action.
 
     Output: one JSON object per line (NDJSON). Each line is one of::
 
@@ -979,6 +1075,8 @@ def cmd_messages():
     p.add_argument("--timeout", type=float, default=300, help="Max seconds to stay connected (default 300)")
     p.add_argument("--poll", type=float, default=3, help="Polling interval for the HTTP fallback (default 3)")
     p.add_argument("--url", default=None, help="Override API base URL")
+    p.add_argument("--agent-id", default=None,
+                   help="Identity to receive as (overrides THE_LAB_AGENT_ID and worktree marker).")
     p.add_argument("--https", action="store_true", help="Talk to the API over HTTPS (auto-detected when launched by the agent).")
     p.add_argument("--peek", action="store_true",
                    help="Show the messages but leave them unread (don't mark them read).")
@@ -990,7 +1088,7 @@ def cmd_messages():
 
     api_base, _ssl_ctx = _client_api(args)
 
-    agent_id = os.environ.get("THE_LAB_AGENT_ID", "").strip()
+    agent_id, _identity_source, _marker = _effective_agent_id(args.agent_id)
     _user = os.environ.get("THE_LAB_USER", "").strip()
     _pw   = os.environ.get("THE_LAB_PASSWORD", "").strip()
     _basic = ""
@@ -1014,18 +1112,48 @@ def cmd_messages():
         sys.stdout.write(_json.dumps(obj) + "\n")
         sys.stdout.flush()
 
+    # A reconnect can replay its initial snapshot.  IDs are stable server-side,
+    # so retain a small rolling set for the lifetime of this invocation.
+    deduper = _MessageDeduper()
+
+    def _status(message: str) -> None:
+        print(f"the-lab messages: {message}", file=sys.stderr, flush=True)
+
+    def _ack_delivered(messages) -> None:
+        """Acknowledge printed (or replay-deduplicated) messages, best effort."""
+        if args.peek or not agent_id:
+            return
+        import urllib.request as _urlreq
+        for message in messages:
+            if not isinstance(message, dict) or "id" not in message:
+                continue
+            try:
+                req = _urlreq.Request(f"{api_base}/messages/{message['id']}/delivered",
+                                      data=b"", method="POST", headers=headers)
+                with _urlreq.urlopen(req, timeout=10, context=_ssl_ctx) as response:
+                    response.read()
+            except Exception:
+                # It remains eligible for replay; stable ID dedup prevents a
+                # repeated stdout record and this retries the acknowledgement.
+                pass
+
     def _run_ws() -> bool:
         """Connect and stream. Returns True on success (do not fall back),
         False if the connection could not be established (fall back to poll)."""
-        # Build the WS path with token (parity with /ws) + agent_id fallback + peek.
+        # Build the WS path with token (parity with /ws), identity, and explicit
+        # post-print delivery acknowledgement mode.
         qs = {}
         if _basic:
             qs["token"] = _basic
         if agent_id:
             qs["agent_id"] = agent_id
+        if not args.peek:
+            qs["ack"] = "1"
         if args.peek:
             qs["peek"] = "1"
-        path_qs = "/api/v1/messages/ws"
+        # Preserve any reverse-proxy API prefix selected by --url/env, rather
+        # than silently reconnecting to a different root-level endpoint.
+        path_qs = parsed.path.rstrip("/") + "/messages/ws"
         if qs:
             path_qs += "?" + _uparse.urlencode(qs)
 
@@ -1033,94 +1161,119 @@ def cmd_messages():
         # requires; token is also on the query string for parity with /ws.
         hs_headers = dict(headers)
 
-        try:
-            sock = _ws_handshake(host, port, path_qs, use_ssl, _ssl_ctx, hs_headers)
-        except Exception:
-            return False  # connect/handshake failed → caller falls back to poll
-
         deadline = _time.monotonic() + args.timeout
-        got_first = False
-        try:
-            fragmented: list[bytes] = []
-            while True:
-                remaining = deadline - _time.monotonic()
-                if remaining <= 0:
-                    break
-                sock.settimeout(min(5.0, max(0.1, remaining)))
-                try:
-                    opcode, payload = _ws_recv_frame(sock)
-                except (TimeoutError, _socket_timeout):
-                    continue
-                except (ConnectionResetError, OSError):
-                    break
-
-                if opcode == 0x9:      # ping
-                    _ws_send_pong(sock, payload)
-                    continue
-                if opcode == 0x8:      # close
-                    break
-                if opcode in (0x1, 0x2):
-                    fragmented = [payload]
-                elif opcode == 0x0:
-                    fragmented.append(payload)
-                else:
-                    continue
-
-                try:
-                    event = _json.loads(b"".join(fragmented).decode())
-                except (ValueError, UnicodeDecodeError):
-                    continue
-
-                etype = event.get("type")
-                if etype == "ping":
-                    continue
-
-                # init frame: emit the initial snapshot (messages + notifications).
-                if etype == "init":
-                    msgs = event.get("messages") or []
-                    notifs = event.get("notifications") or []
-                    if msgs:
-                        _emit({"messages": msgs})
-                    if notifs and args.notifications:
-                        _emit({"notifications": notifs})
-                    got_first = got_first or bool(msgs or (notifs and args.notifications))
-                    if args.once:
-                        # Legacy exit-to-notify: emit combined batch and stop.
-                        if not (msgs or (notifs and args.notifications)):
-                            _emit({"messages": [], "notifications": []})
-                        return True
-                    continue
-
-                if etype == "message":
-                    msgs = event.get("messages") or []
-                    if msgs:
-                        _emit({"messages": msgs})
-                    continue
-
-                if etype == "notifications":
-                    if args.notifications:
-                        notifs = event.get("notifications") or []
-                        if notifs:
-                            _emit({"notifications": notifs})
-                    continue
-
-                # M3 fold-in: experiment lifecycle frames. Emit the payload
-                # (minus the frame envelope) as its own NDJSON line. These are a
-                # distinct stream, so --no-notifications does not suppress them.
-                if etype == "experiment":
-                    _emit({"experiment": {
-                        k: v for k, v in event.items() if k != "type"
-                    }})
-                    continue
-
-                # Unknown frame type — ignore it (forward-compat, don't choke).
-                continue
-            return True
-        finally:
+        connected_once = False
+        attempts = 0
+        while _time.monotonic() < deadline:
+            sock = None
             try:
-                sock.close()
-            except OSError:
-                pass
+                sock = _ws_handshake(host, port, path_qs, use_ssl, _ssl_ctx, hs_headers)
+                connected_once = True
+                attempts = 0
+                _status("WebSocket connected")
+            except Exception as exc:
+                if not connected_once:
+                    return False  # no WS support / cannot establish → poll fallback
+                attempts += 1
+                delay = min(5.0, 0.25 * (2 ** min(attempts, 4)))
+                _status(f"WebSocket reconnect failed; retrying in {delay:g}s")
+                _time.sleep(min(delay, max(0, deadline - _time.monotonic())))
+                continue
+            try:
+                fragmented: list[bytes] = []
+                disconnected = False
+                while True:
+                    remaining = deadline - _time.monotonic()
+                    if remaining <= 0:
+                        return True
+                    sock.settimeout(min(5.0, max(0.1, remaining)))
+                    try:
+                        opcode, payload = _ws_recv_frame(sock)
+                    except (TimeoutError, _socket_timeout):
+                        continue
+                    except (ConnectionResetError, OSError):
+                        disconnected = True
+                        break
+
+                    if opcode == 0x9:      # ping
+                        _ws_send_pong(sock, payload)
+                        _status("WebSocket heartbeat received")
+                        continue
+                    if opcode == 0x8:      # close
+                        disconnected = True
+                        break
+                    if opcode in (0x1, 0x2):
+                        fragmented = [payload]
+                    elif opcode == 0x0:
+                        fragmented.append(payload)
+                    else:
+                        continue
+
+                    try:
+                        event = _json.loads(b"".join(fragmented).decode())
+                    except (ValueError, UnicodeDecodeError):
+                        continue
+
+                    etype = event.get("type")
+                    if etype == "ping":
+                        _status("WebSocket heartbeat received")
+                        continue
+
+                    # init frame: emit the initial snapshot (messages + notifications).
+                    if etype == "init":
+                        received = event.get("messages") or []
+                        msgs = deduper.fresh(received)
+                        notifs = event.get("notifications") or []
+                        if msgs:
+                            _emit({"messages": msgs})
+                        if notifs and args.notifications:
+                            _emit({"notifications": notifs})
+                        _ack_delivered(received)
+                        if args.once:
+                            # Legacy exit-to-notify: emit combined batch and stop.
+                            if not (msgs or (notifs and args.notifications)):
+                                _emit({"messages": [], "notifications": []})
+                            return True
+                        continue
+
+                    if etype == "message":
+                        received = event.get("messages") or []
+                        msgs = deduper.fresh(received)
+                        if msgs:
+                            _emit({"messages": msgs})
+                        _ack_delivered(received)
+                        continue
+
+                    if etype == "notifications":
+                        if args.notifications:
+                            notifs = event.get("notifications") or []
+                            if notifs:
+                                _emit({"notifications": notifs})
+                        continue
+
+                    # M3 fold-in: experiment lifecycle frames. Emit the payload
+                    # (minus the frame envelope) as its own NDJSON line. These are a
+                    # distinct stream, so --no-notifications does not suppress them.
+                    if etype == "experiment":
+                        _emit({"experiment": {
+                        k: v for k, v in event.items() if k != "type"
+                        }})
+                        continue
+
+                    # Unknown frame type — ignore it (forward-compat, don't choke).
+                    continue
+                if disconnected:
+                    attempts += 1
+                    delay = min(5.0, 0.25 * (2 ** min(attempts, 4)))
+                    _status(f"WebSocket disconnected; reconnecting in {delay:g}s")
+                    _time.sleep(min(delay, max(0, deadline - _time.monotonic())))
+            finally:
+                if sock is not None:
+                    try:
+                        sock.close()
+                    except OSError:
+                        pass
+        return True
 
     try:
         if _run_ws():
@@ -1131,27 +1284,29 @@ def cmd_messages():
         pass  # fall through to the HTTP polling fallback
 
     # ── HTTP polling fallback (older server / no WS endpoint) ────────────────
-    _cmd_messages_poll(args, api_base, _ssl_ctx, agent_id, headers)
+    _cmd_messages_poll(args, api_base, _ssl_ctx, agent_id, headers, deduper=deduper)
 
 
-def _cmd_messages_poll(args, api_base, _ssl_ctx, agent_id, headers):
-    """Legacy HTTP polling loop: long-poll GET /messages (+ /notifications)
-    until there is at least one unread message OR notification, print them as a
-    single JSON object, and exit. Kept as a fallback for servers without the
-    /api/v1/messages/ws endpoint.
+def _cmd_messages_poll(args, api_base, _ssl_ctx, agent_id, headers, *, deduper=None):
+    """HTTP fallback: fetch undelivered messages, print, then acknowledge.
+
+    Delivery is deliberately distinct from read state, matching the WebSocket
+    client and preventing a failed print/read from silently consuming content.
     """
     import json as _json, time as _time
-    import urllib.request as _urlreq, urllib.error as _urlerr
+    import urllib.request as _urlreq
+
+    deduper = deduper or _MessageDeduper()
 
     def _get(url: str) -> dict:
         return _api_get_json(url, headers, _ssl_ctx)
 
-    def _mark_read(ids: list) -> None:
+    def _ack_delivered(ids: list) -> None:
         if args.peek or not agent_id:
             return
         for mid in ids:
             try:
-                req = _urlreq.Request(f"{api_base}/messages/{mid}/read",
+                req = _urlreq.Request(f"{api_base}/messages/{mid}/delivered",
                                       data=b"", method="POST", headers=headers)
                 with _urlreq.urlopen(req, timeout=10, context=_ssl_ctx) as r:
                     r.read()
@@ -1161,13 +1316,13 @@ def _cmd_messages_poll(args, api_base, _ssl_ctx, agent_id, headers):
     deadline = _time.monotonic() + args.timeout
     while True:
         try:
-            qs = "limit=50&for_me=1" if agent_id else "limit=50"
-            if agent_id and args.peek:
-                qs += "&peek=1"
+            # Delivery and read state are separate. Fetch undelivered messages
+            # without mutation, print them, then acknowledge delivery only.
+            qs = "limit=50&for_me=1&undelivered=1&peek=1" if agent_id else "limit=50"
             data = _get(f"{api_base}/messages?{qs}")
             msgs = data.get("messages", [])
             if agent_id:
-                unread = [m for m in msgs if agent_id not in (m.get("read_by") or [])]
+                unread = msgs
             else:
                 unread = [m for m in msgs if not m.get("read_by")]
 
@@ -1179,22 +1334,34 @@ def _cmd_messages_poll(args, api_base, _ssl_ctx, agent_id, headers):
                 except Exception:
                     notifs = []
 
-            if unread or notifs:
-                print(_json.dumps({"messages": unread, "notifications": notifs}))
-                _mark_read([m["id"] for m in unread if "id" in m])
-                sys.exit(0)
-        except _urlerr.URLError as e:
-            print(_json.dumps({"error": str(e)}))
-            sys.exit(1)
+            fresh = deduper.fresh(unread)
+            if fresh or notifs:
+                # stdout is an NDJSON transport: make the record visible to a
+                # supervising process before acknowledging delivery.  Ack all
+                # received rows, including replay-deduplicated ones, so a lost
+                # prior ACK cannot keep a message pending forever.
+                sys.stdout.write(_json.dumps({"messages": fresh, "notifications": notifs}) + "\n")
+                sys.stdout.flush()
+                if args.once:
+                    _ack_delivered([m["id"] for m in unread if isinstance(m, dict) and "id" in m])
+                    sys.exit(0)
+            # A replay may have been deduplicated above, but it was previously
+            # flushed; retry its ACK without writing a duplicate stdout line.
+            if unread:
+                _ack_delivered([m["id"] for m in unread if isinstance(m, dict) and "id" in m])
         except Exception as e:
-            print(_json.dumps({"error": str(e)}))
-            sys.exit(1)
+            # Polling is the resilience path; a transient outage should not
+            # turn a background listener into a dead process.  Keep stdout
+            # JSON-only and leave diagnostics on stderr.
+            print(f"the-lab messages: polling error; retrying: {e}", file=sys.stderr, flush=True)
 
         if _time.monotonic() >= deadline:
-            print(_json.dumps({"messages": [], "notifications": []}))
+            if args.once:
+                sys.stdout.write(_json.dumps({"messages": [], "notifications": []}) + "\n")
+                sys.stdout.flush()
             sys.exit(0)
 
-        _time.sleep(args.poll)
+        _time.sleep(min(args.poll, max(0, deadline - _time.monotonic())))
 
 
 # ---------------------------------------------------------------------------
@@ -1369,6 +1536,48 @@ def cmd_fetch_dashboard(argv: list[str]) -> None:
     print(f"\n  {_dim('Restart the server to pick it up:')} {_green('the-lab .')}\n")
 
 
+def cmd_whoami():
+    """Show the identity this CLI will attach to agent-scoped API calls."""
+    import argparse as _ap, base64 as _b64, json as _json
+
+    p = _ap.ArgumentParser(prog="the-lab whoami")
+    p.add_argument("--port", type=int, default=8000)
+    p.add_argument("--url", default=None, help="Override API base URL")
+    p.add_argument("--https", action="store_true")
+    p.add_argument("--agent-id", default=None,
+                   help="Identity to inspect (overrides environment and worktree marker).")
+    args = p.parse_args(sys.argv[2:])
+    endpoint, ctx = _client_api(args)
+    agent_id, source, marker = _effective_agent_id(args.agent_id)
+    headers: dict[str, str] = {}
+    if agent_id:
+        headers["X-Agent-Id"] = agent_id
+    user = os.environ.get("THE_LAB_USER", "").strip()
+    password = os.environ.get("THE_LAB_PASSWORD", "").strip()
+    if user and password:
+        headers["Authorization"] = "Basic " + _b64.b64encode(
+            f"{user}:{password}".encode()
+        ).decode()
+
+    registry = None
+    if agent_id:
+        try:
+            agents = _api_get_json(f"{endpoint}/agents", headers, ctx)
+            entry = next((item for item in agents if item.get("agent_id") == agent_id), None)
+            if entry:
+                registry = {key: entry[key] for key in ("role", "current_idea", "current_branch") if key in entry}
+        except Exception:
+            # whoami remains useful offline; never print headers or credentials.
+            pass
+    print(_json.dumps({
+        "endpoint": endpoint,
+        "effective_agent_id": agent_id or None,
+        "identity_source": source,
+        "local_marker": marker or None,
+        "registry": registry,
+    }))
+
+
 def main():
     # Handle subcommands before argparse (server mode)
     if len(sys.argv) >= 2 and sys.argv[1] == "fetch-dashboard":
@@ -1386,6 +1595,10 @@ def main():
 
     if len(sys.argv) >= 2 and sys.argv[1] == "messages":
         cmd_messages()
+        return
+
+    if len(sys.argv) >= 2 and sys.argv[1] == "whoami":
+        cmd_whoami()
         return
 
     parser = argparse.ArgumentParser(description="The Lab — Experiment Management API")

@@ -1,6 +1,7 @@
 """The Lab — Experiment Management API."""
 from __future__ import annotations
 
+import asyncio
 import base64
 import json as _json
 import logging
@@ -535,12 +536,8 @@ def build_notifications(request) -> list[dict]:
 
     agent_id = getattr(request.state, "agent_id", None)
 
-    # N1: NO blanket WS-presence suppression. Piggybacked _notifications are
-    # always built; cross-channel dedup rests on read/seen state instead — the
-    # message-preview block below uses unread_for (previews stop the instant the
-    # WS claims a message via claim_unread_for), and the shown-once seen-store
-    # dedups failures/suggestions/lifecycle. This avoids starving an agent whose
-    # socket is open but not being read.
+    # Preview notification state is independent of delivered/read state. An
+    # open socket does not suppress previews until it acknowledges delivery.
 
     # ── Shown-once notifications (failures / suggestions / agent lifecycle) ──
     # Each gets a STABLE key so the per-agent seen-store can deliver it exactly
@@ -646,10 +643,9 @@ def build_notifications(request) -> list[dict]:
         try:
             entry = agents_mod.lookup_agent(REPO_DIR, agent_id) or {}
             role = entry.get("role")
-            unread = messages_mod.unread_for(
+            unread = messages_mod.claim_notifications_for(
                 REPO_DIR, agent_id=agent_id, role=role, limit=20,
             )
-            fully_shown: list[int] = []
             for idx, m in enumerate(unread):
                 origin = m.get("from_role") or m.get("from_agent") or "system"
                 text = m.get("text") or ""
@@ -674,17 +670,8 @@ def build_notifications(request) -> list[dict]:
                         "run `the-lab messages` in the background to receive these"
                     )
                 notifications.append(notif)
-                if not truncated:
-                    fully_shown.append(m["id"])
-            # A short message is delivered in full right here, so mark it read —
-            # otherwise it lingers as unread even after the agent has clearly
-            # seen (and answered) it. Long messages keep a preview and are marked
-            # read when the agent fetches their full text via GET /messages.
-            if fully_shown:
-                try:
-                    messages_mod.mark_read_many(REPO_DIR, fully_shown, agent_id)
-                except Exception:
-                    pass
+            # A preview is a notification, not a read acknowledgement. The
+            # full message remains available to inbox listeners and GET /messages.
         except Exception:
             pass
     # Mild nudge when a git-touching route ran in the main repo because no
@@ -817,7 +804,7 @@ async def inject_notifications(request, call_next):
         resp_bytes=len(body),
         resp_keys=list(data.keys())[:8] if isinstance(data, dict) else None,
     )
-    notifications = build_notifications(request)
+    notifications = await asyncio.to_thread(build_notifications, request)
 
     if not notifications:
         _track_size(body)
@@ -1079,23 +1066,25 @@ async def ws_endpoint(websocket: WebSocket, since: int = 0, token: str = ""):
             await websocket.close(code=1008)
             return
 
-    # Replay any missed events — journal-aware (reads files), so run the
-    # collection off-loop.
-    _loop = __import__("asyncio").get_running_loop()
-    replay = await _loop.run_in_executor(
-        None, _ws_mod.broadcaster.replay_with_journal, since)
-    for event in replay:
-        try:
-            await websocket.send_json(event)
-        except Exception:
-            return
-
+    # Subscribe before replay so events arriving during journal reads or
+    # socket writes cannot fall between replay and live delivery.
     q = _ws_mod.broadcaster.subscribe()
     try:
+        cursor = since
+        replay = await _asyncio.to_thread(
+            _ws_mod.broadcaster.replay_with_journal, since)
+        for event in replay:
+            if event.get("seq", 0) > cursor:
+                await websocket.send_json(event)
+                cursor = event["seq"]
+
         async def _send_loop():
+            nonlocal cursor
             while True:
                 event = await q.get()
-                await websocket.send_json(event)
+                if event.get("seq", 0) > cursor:
+                    await websocket.send_json(event)
+                    cursor = event["seq"]
 
         async def _recv_loop():
             while True:
@@ -1172,9 +1161,8 @@ _NOTIF_TRIGGER_TYPES = frozenset({
 async def messages_ws_endpoint(websocket: WebSocket):
     """Agent-scoped listening WebSocket for `the-lab messages`.
 
-    N1: messages are delivered here by CLAIMING them (claim_unread_for) so a
-    message can't also arrive on the piggyback/poll channel — there is no
-    blanket suppression anymore; dedup rests on claim-on-delivery + read state.
+    The CLI uses explicit delivery acknowledgements so disconnected clients
+    can recover pending messages. Legacy clients retain claim-on-delivery.
 
     Connect with ``ws[s]://host/api/v1/messages/ws``. The agent is identified by
     the ``X-Agent-Id`` request header (our CLI sends it in the handshake), with a
@@ -1190,8 +1178,10 @@ async def messages_ws_endpoint(websocket: WebSocket):
                      (M3 fold-in: experiment lifecycle events forwarded verbatim)
       * ping       — ``{"type":"ping","seq":-1}`` every 30 s keep-alive
 
-    Pass ``?peek=1`` to leave delivered messages unread — then unread_for is used
-    (select without claiming) so previews still fall through the other channels.
+    Pass ``?ack=1`` for retryable delivery: messages remain pending until the
+    client POSTs /messages/{id}/delivered after consuming the frame. Reconnects
+    can replay unacknowledged IDs; clients should deduplicate them.
+    ``?peek=1`` selects explicit unread history without claiming delivery.
     """
     import asyncio as _asyncio
     if _DEMO:
@@ -1208,6 +1198,7 @@ async def messages_ws_endpoint(websocket: WebSocket):
     qp = websocket.query_params
     token = qp.get("token", "") or ""
     peek = qp.get("peek", "") in ("1", "true", "yes")
+    acknowledged_delivery = qp.get("ack", "") in ("1", "true", "yes")
 
     # Auth gate — mirror /ws (token query param) but also accept the standard
     # Authorization: Basic handshake header the CLI sends for parity.
@@ -1240,12 +1231,16 @@ async def messages_ws_endpoint(websocket: WebSocket):
     def _fetch_deliver() -> list[dict]:
         """Select this agent's unread messages for delivery.
 
-        N1: normally CLAIM them (select + mark read atomically) so the same
+        Normally CLAIM them (select + mark delivered atomically) so the same
         message can't also be delivered via the piggyback/poll channel. When
         ?peek=1, select WITHOUT claiming (unread_for) so the caller sees them
         but they remain deliverable elsewhere.
         """
         try:
+            if acknowledged_delivery:
+                return messages_mod.undelivered_for(
+                    REPO_DIR, agent_id=agent_id, role=role, limit=50,
+                )
             if peek:
                 return messages_mod.unread_for(
                     REPO_DIR, agent_id=agent_id, role=role, limit=50,
@@ -1266,10 +1261,13 @@ async def messages_ws_endpoint(websocket: WebSocket):
 
     q = None
     try:
+        # Subscribe before the snapshot: a message arriving while sending the
+        # initial frame must still wake the listener.
+        q = _ws_mod.broadcaster.subscribe()
         # ── Initial frame: current unread messages + current notifications ──
-        init_unread = _fetch_deliver()
+        init_unread = await _asyncio.to_thread(_fetch_deliver)
         try:
-            init_notifs = build_notifications(shim)
+            init_notifs = await _asyncio.to_thread(build_notifications, shim)
         except Exception:
             init_notifs = []
         await websocket.send_json({
@@ -1277,11 +1275,6 @@ async def messages_ws_endpoint(websocket: WebSocket):
             "messages": init_unread,
             "notifications": init_notifs,
         })
-
-        # Subscribe AFTER the initial snapshot so we don't miss events that land
-        # between the snapshot read and the subscribe (they'll be re-derived on
-        # the next relevant broadcast anyway).
-        q = _ws_mod.broadcaster.subscribe()
 
         async def _send_loop():
             while True:
@@ -1292,7 +1285,7 @@ async def messages_ws_endpoint(websocket: WebSocket):
                     # forward only what's addressed to it (is_for handles
                     # agent/role/all + self-exclusion). N1: claiming here dedups
                     # against the piggyback/poll channel.
-                    unread = _fetch_deliver()
+                    unread = await _asyncio.to_thread(_fetch_deliver)
                     if unread:
                         await websocket.send_json({
                             "type": "message",
@@ -1311,7 +1304,7 @@ async def messages_ws_endpoint(websocket: WebSocket):
                     # agent (failures/lifecycle) — re-derive and push any.
                     if etype in _NOTIF_TRIGGER_TYPES:
                         try:
-                            notifs = build_notifications(shim)
+                            notifs = await _asyncio.to_thread(build_notifications, shim)
                         except Exception:
                             notifs = []
                         if notifs:
@@ -1323,7 +1316,7 @@ async def messages_ws_endpoint(websocket: WebSocket):
                     # Non-experiment churn (idea_changed/note_added) that may have
                     # produced new notifications for this agent. Re-derive + push.
                     try:
-                        notifs = build_notifications(shim)
+                        notifs = await _asyncio.to_thread(build_notifications, shim)
                     except Exception:
                         notifs = []
                     if notifs:
@@ -1346,6 +1339,14 @@ async def messages_ws_endpoint(websocket: WebSocket):
                 await _asyncio.sleep(30)
                 await websocket.send_json({"type": "ping", "seq": -1})
                 # Keep the poll-heuristic warm while the socket is held open.
+                if acknowledged_delivery:
+                    # Retry unacknowledged frames and drain additional pages
+                    # even when no new broadcast arrives.
+                    pending_messages = await _asyncio.to_thread(_fetch_deliver)
+                    if pending_messages:
+                        await websocket.send_json({
+                            "type": "message", "messages": pending_messages,
+                        })
                 try:
                     agents_mod.note_message_poll(REPO_DIR, agent_id)
                 except Exception:

@@ -236,6 +236,11 @@ class Broadcaster:
         """Return all buffered events with seq > given value (in order)."""
         return [e for e in self._ring if e.get("seq", 0) > seq]
 
+    @property
+    def sequence(self) -> int:
+        """Current high-water mark, including when no events remain buffered."""
+        return self._seq
+
 
 # ── Event entity payloads ─────────────────────────────────────────────────────
 # Events carry the changed entity (trimmed) so clients can PATCH their state

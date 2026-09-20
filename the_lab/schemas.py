@@ -131,6 +131,10 @@ class MessageRequest(BaseModel):
     # to: 'agent:<id>' | 'role:<role>' | 'all'
     to: str
     text: str
+    in_reply_to: int | None = None
+    # A thread id names an existing root message; replies normally inherit it.
+    thread_id: int | None = None
+    references: list[dict] = []
 
 
 class RequeueRequest(BaseModel):
