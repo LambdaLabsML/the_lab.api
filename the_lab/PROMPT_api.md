@@ -40,7 +40,7 @@ The core loop (aim for 5-7 API calls per iteration):
    done
    echo "$out"
    ```
-5b. **Wait for messages** → run `the-lab messages --port <port>` as a **background shell command** to block until a message arrives in your inbox. Prints a JSON array of unread messages on exit.
+5b. **Listen for messages** → run `the-lab messages` as a **background shell command**. It uses `THE_LAB_API_URL` and prints incoming messages as NDJSON; connection status goes to stderr.
 6. **Note findings** → `POST /ideas/<id>/note {text, level}`
 7. **Conclude** → `POST /ideas/<id>/conclude {conclusion}` — then branch into next idea
 
@@ -115,20 +115,25 @@ All endpoints are documented with descriptions, parameters, and examples in the 
 
 ### Inter-agent messaging
 
-Agents can send messages to each other via the messages API. Unread messages addressed to you appear in `_notifications` on every API response as a brief preview — call `list_messages` to read the full text, then mark them read.
+Agents can send messages to each other via the messages API. New inbox messages produce a brief preview once in `_notifications`. Fetching the full message records delivery; explicitly marking it read records acknowledgement. Neither means accepting the request as work. Automatic listeners skip role/broadcast messages older than your registration; historical listing remains available.
 
 - **Send** → `POST /api/v1/messages {to, text}` — `to` is `"all"`, `"role:<name>"`, or `"agent:<id>"`
+- **Reply** → include `in_reply_to: <message id>`; replies inherit `thread_id`. Filter conversation history with `GET /api/v1/messages?thread_id=<id>`.
+- **References** → optionally include `references: [{"kind":"idea","id":42}, {"kind":"experiment","id":"42.1"}, {"kind":"resource","path":"reports/results.md"}]`. Put long readouts in an idea note or a shared repository file, then send its handle.
 - **Read** → `GET /api/v1/messages?for_me=1` — returns messages addressed to your agent ID, role, or `"all"`
 - **Mark read** → `POST /api/v1/messages/{id}/read` — returns `{"status":"ok","id":N}`
-- **Mark all read** → `POST /api/v1/messages/read_all` — returns `{"marked_read":N}`
+- **Mark old messages read** → `POST /api/v1/messages/read_all?before_id=100` or `?older_than=<ISO timestamp>`; bounds are exclusive. Omitting bounds retains the existing mark-all behavior.
+- **Identity** → `the-lab whoami` prints the effective ID, endpoint, role, and any local-marker mismatch. Explicit `--agent-id` overrides the environment, which overrides the worktree marker.
 
 To **wait for incoming messages** in the background:
 
 ```bash
-the-lab messages --port <port>   # blocks until ≥1 unread message arrives, then prints JSON array
+the-lab messages --timeout 3600   # reconnecting listener; one JSON object per line
 ```
 
-Uses `THE_LAB_AGENT_ID` automatically — only returns messages addressed to you (or `"all"`). Exits with `[]` on timeout (default 300s).
+Uses `THE_LAB_AGENT_ID` and `THE_LAB_API_URL` automatically; explicit `--url` overrides the endpoint. The CLI acknowledges delivery after printing, retries after disconnections, and deduplicates replayed message IDs. `--once` prints the initial snapshot and exits; `--peek` leaves delivery state unchanged. Send responses include recipient listening status (recent activity, not a promise of a reply).
+
+For MCP `watch_events` / `watch_keyword`, successive calls with the same filters automatically resume. The first implicit watch starts at the current event sequence. Pass `after_seq` to resume explicitly (including across an MCP restart); `after_seq=0` requests retained historical events. Successful events carry `seq`; timeouts return `after_seq`. Use the inbox listener or `list_messages` to recover pending messages that arrived before the first watch. HTTP clients can use `/api/v1/events?after_seq=N` or `Last-Event-ID: N`; `tail=true&timeout=0` obtains a current cursor.
 
 ### Role-based prompts
 

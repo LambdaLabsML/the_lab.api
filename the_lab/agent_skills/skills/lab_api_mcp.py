@@ -379,6 +379,22 @@ def proxy_call(tool_name, arguments, tool_meta):
 # server-push event stream at /api/v1/ws.  Read-only — we only parse
 # server→client frames (which are never masked) and respond to pings.
 
+class _BufferedSocket:
+    """Socket proxy which yields bytes received alongside the WS handshake."""
+    def __init__(self, sock, buffered: bytes = b""):
+        self._sock = sock
+        self._buffered = buffered
+
+    def recv(self, size: int):
+        if self._buffered:
+            chunk, self._buffered = self._buffered[:size], self._buffered[size:]
+            return chunk
+        return self._sock.recv(size)
+
+    def __getattr__(self, name):
+        return getattr(self._sock, name)
+
+
 def _ws_connect(host: str, port: int, path_qs: str, use_ssl: bool):
     """Open a raw TCP (or TLS) socket and complete the WebSocket handshake.
 
@@ -417,12 +433,15 @@ def _ws_connect(host: str, port: int, path_qs: str, use_ssl: bool):
             raise RuntimeError("Server closed connection during WS handshake")
         buf += chunk
 
-    head = buf.split(b"\r\n\r\n", 1)[0].decode(errors="replace")
+    head_bytes, leftover = buf.split(b"\r\n\r\n", 1)
+    head = head_bytes.decode(errors="replace")
     if "101 Switching Protocols" not in head:
         raise RuntimeError(f"WS upgrade rejected: {head[:120]}")
     if accept_expected not in head:
         raise RuntimeError("WS handshake: Sec-WebSocket-Accept mismatch")
-    return sock
+    # A fast server may coalesce the first event frame with its HTTP 101
+    # response. Keep those bytes rather than silently dropping that event.
+    return _BufferedSocket(sock, leftover)
 
 
 def _ws_recv_frame(sock):
@@ -431,25 +450,52 @@ def _ws_recv_frame(sock):
     Returns ``(opcode, payload_bytes)``.  Handles 16-bit and 64-bit extended
     payload lengths.  Server→client frames are never masked.
     """
-    def _read_exact(n):
-        buf = b""
+    # Preserve partially received frames across socket timeouts.  The watch
+    # loop deliberately uses a short timeout to enforce its deadline, so a
+    # slow frame must not be mistaken for a new frame on the next iteration.
+    buf = getattr(sock, "_mcp_ws_frame_buffer", b"")
+
+    def _fill(n):
+        nonlocal buf
         while len(buf) < n:
-            chunk = sock.recv(n - len(buf))
+            try:
+                chunk = sock.recv(n - len(buf))
+            except Exception:
+                sock._mcp_ws_frame_buffer = buf
+                raise
             if not chunk:
+                sock._mcp_ws_frame_buffer = buf
                 raise ConnectionResetError("WebSocket connection closed by server")
             buf += chunk
-        return buf
 
-    header = _read_exact(2)
+    _fill(2)
+    header = buf[:2]
     # fin    = (header[0] & 0x80) != 0  # we handle fragmentation below
     opcode = header[0] & 0x0F
     # masked = (header[1] & 0x80) != 0  # server→client: always 0
     length = header[1] & 0x7F
+    header_len = 2
     if length == 126:
-        length = _struct.unpack("!H", _read_exact(2))[0]
+        _fill(4)
+        length = _struct.unpack("!H", buf[2:4])[0]
+        header_len = 4
     elif length == 127:
-        length = _struct.unpack("!Q", _read_exact(8))[0]
-    payload = _read_exact(length)
+        _fill(10)
+        length = _struct.unpack("!Q", buf[2:10])[0]
+        header_len = 10
+    # Server frames are not masked, but accepting a masked frame here costs
+    # little and keeps the parser correctly aligned with unusual test/proxy
+    # implementations.
+    masked = (header[1] & 0x80) != 0
+    if masked:
+        _fill(header_len + 4)
+        mask = buf[header_len:header_len + 4]
+        header_len += 4
+    _fill(header_len + length)
+    payload = buf[header_len:header_len + length]
+    if masked:
+        payload = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+    sock._mcp_ws_frame_buffer = buf[header_len + length:]
     return opcode, payload
 
 
@@ -491,34 +537,128 @@ def _ws_path_qs(since: int = 0) -> str:
     return f"/api/v1/ws{qs}"
 
 
+def _event_headers() -> dict:
+    """Headers shared by the events endpoint and its MCP HTTP fallback."""
+    headers = {"X-MCP-Proxy": "true"}
+    agent_id = os.environ.get("THE_LAB_AGENT_ID", "").strip()
+    if agent_id:
+        headers["X-Agent-Id"] = agent_id
+    user = os.environ.get("THE_LAB_USER", "").strip()
+    pw = os.environ.get("THE_LAB_PASSWORD", "").strip()
+    if user and pw:
+        headers["Authorization"] = "Basic " + _base64.b64encode(
+            f"{user}:{pw}".encode()
+        ).decode()
+    return headers
+
+
+def _event_seq(event: dict, after_seq: int) -> int | None:
+    """Return a newly consumed event's sequence number, if it is newer."""
+    try:
+        seq = int(event.get("seq"))
+    except (TypeError, ValueError):
+        return None
+    return seq if seq > after_seq else None
+
+
+_AGENT_ROLE: str | None = None
+_AGENT_ROLE_LOADED = False
+
+
+def _current_agent_role() -> str | None:
+    """Best-effort role lookup for directed message event filtering."""
+    global _AGENT_ROLE, _AGENT_ROLE_LOADED
+    if _AGENT_ROLE_LOADED:
+        return _AGENT_ROLE
+    _AGENT_ROLE_LOADED = True
+    agent_id = os.environ.get("THE_LAB_AGENT_ID", "").strip()
+    if not agent_id:
+        return None
+    req = urllib.request.Request(f"{_api_root()}/api/v1/agents/{agent_id}",
+                                 headers=_event_headers())
+    try:
+        with urllib.request.urlopen(req, timeout=10, context=_SSL_CTX) as resp:
+            _AGENT_ROLE = (json.loads(resp.read()).get("role") or None)
+    except (urllib.error.URLError, urllib.error.HTTPError, ConnectionError,
+            _socket.timeout, OSError, ValueError):
+        pass
+    return _AGENT_ROLE
+
+
+def _message_is_for_current_agent(event: dict) -> bool:
+    """Apply inbox semantics to generic-stream ``message_received`` events."""
+    agent_id = os.environ.get("THE_LAB_AGENT_ID", "").strip()
+    if not agent_id:  # operator/generic consumers intentionally see the stream
+        return True
+    if event.get("from_agent") == agent_id:
+        return False  # sending a message must not wake our inbox watcher
+    target = event.get("to")
+    if target == "all" or target == f"agent:{agent_id}":
+        return True
+    if isinstance(target, str) and target.startswith("role:"):
+        role = _current_agent_role()
+        # If registry lookup itself is unavailable, fail open: it is safer not
+        # to drop a legitimate role-addressed message from a generic watcher.
+        return role is None or target == f"role:{role}"
+    return False
+
+
+def _event_matches(event: dict, types: list[str] | None, keyword: str | None) -> bool:
+    if types and event.get("type") not in types:
+        return False
+    if event.get("type") == "message_received" and not _message_is_for_current_agent(event):
+        return False
+    return not keyword or keyword.lower() in json.dumps(event).lower()
+
+
+def _current_event_cursor(deadline: float) -> int | None:
+    """Read the stream's current cursor without exposing its old events.
+
+    A new implicit watch starts at this cursor, rather than replaying the
+    journal from zero.  The endpoint's envelope reports the newest sequence;
+    its events are deliberately discarded here.  ``None`` means that a safe
+    baseline could not be obtained.
+    """
+    import time
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        return 0
+    url = f"{_api_root()}/api/v1/events?" + urllib.parse.urlencode({
+        "tail": "true", "timeout": 0,
+    })
+    req = urllib.request.Request(url, headers=_event_headers())
+    try:
+        with urllib.request.urlopen(req, timeout=min(30, max(1, remaining)),
+                                    context=_SSL_CTX) as resp:
+            data = json.loads(resp.read())
+        seq = data.get("seq", 0)
+        return max(0, int(seq))
+    except (urllib.error.URLError, ConnectionError, _socket.timeout, OSError,
+            ValueError, TypeError):
+        return None
+
+
 def _events_longpoll(
     types: list[str] | None,
     keyword: str | None,
     deadline: float,
+    after_seq: int,
 ) -> dict:
     """WS-less fallback: drain GET /api/v1/events (same stream, same
     envelope) until a matching event arrives or the deadline passes. Used
     when the WebSocket handshake keeps failing (proxy strips upgrades,
     older server, restrictive network) — behaviour matches _watch()."""
     import time
-    headers = {}
-    _user = os.environ.get("THE_LAB_USER", "").strip()
-    _pw   = os.environ.get("THE_LAB_PASSWORD", "").strip()
-    if _user and _pw:
-        headers["Authorization"] = "Basic " + _base64.b64encode(
-            f"{_user}:{_pw}".encode()
-        ).decode()
-    since = 0
+    headers = _event_headers()
+    since = after_seq
     first = True
     while True:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            return {"timeout": True}
+            return {"timeout": True, "after_seq": since}
         wait = 0 if first else min(25, max(1, int(remaining)))
         first = False
         qs = {"since": since, "timeout": wait}
-        if types:
-            qs["types"] = ",".join(types)
         url = f"{_api_root()}/api/v1/events?" + urllib.parse.urlencode(qs)
         req = urllib.request.Request(url, headers=headers)
         try:
@@ -529,21 +669,23 @@ def _events_longpoll(
                 _socket.timeout, OSError, ValueError):
             time.sleep(min(5.0, max(0.5, remaining)))
             continue
-        since = data.get("seq", since)
-        if since == 0 and data.get("events"):
-            since = data["events"][-1].get("seq", 0)
         for event in data.get("events") or []:
-            if types and event.get("type") not in types:
+            seq = _event_seq(event, since)
+            if seq is None:
                 continue
-            if keyword and keyword.lower() not in json.dumps(event).lower():
-                continue
-            return event
+            # Advance one event at a time.  In particular, do not adopt the
+            # response envelope's final seq before returning the first match:
+            # another matching event may be later in this same response.
+            since = seq
+            if _event_matches(event, types, keyword):
+                return event
 
 
 def _watch(
     types: list[str] | None = None,
     keyword: str | None = None,
     timeout: float = 3600,
+    after_seq: int = 0,
 ) -> dict:
     """Block until a matching event arrives on the WebSocket stream.
 
@@ -554,26 +696,27 @@ def _watch(
     Returns the first matching event dict, or ``{"timeout": true}`` if
     *timeout* seconds elapse with no match. If the WebSocket handshake fails
     repeatedly, falls back to long-polling GET /api/v1/events — same stream,
-    same envelope.
+    same envelope. ``after_seq`` is the exclusive resume cursor.
     """
     import time
     host, port, use_ssl = _ws_url_parts()
     deadline = time.monotonic() + timeout
     ws_failures = 0
+    since = after_seq
 
     while True:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            return {"timeout": True}
+            return {"timeout": True, "after_seq": since}
 
         try:
-            sock = _ws_connect(host, port, _ws_path_qs(), use_ssl)
+            sock = _ws_connect(host, port, _ws_path_qs(since), use_ssl)
             ws_failures = 0
         except Exception as e:
             ws_failures += 1
             if ws_failures >= 2:
                 # WS path is not viable here — switch to the HTTP drain.
-                return _events_longpoll(types, keyword, deadline)
+                return _events_longpoll(types, keyword, deadline, since)
             # Brief pause before retry so we don't spin-loop on a down server.
             time.sleep(min(5.0, remaining))
             continue
@@ -584,7 +727,7 @@ def _watch(
             while True:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    return {"timeout": True}
+                    return {"timeout": True, "after_seq": since}
 
                 try:
                     opcode, payload = _ws_recv_frame(sock)
@@ -597,7 +740,8 @@ def _watch(
                     _ws_send_pong(sock, payload)
                     continue
                 if opcode == 0x8:   # close
-                    return {"timeout": True, "reason": "server closed connection"}
+                    return {"timeout": True, "reason": "server closed connection",
+                            "after_seq": since}
                 if opcode in (0x1, 0x2):  # text or binary frame (start)
                     fragmented = [payload]
                 elif opcode == 0x0:       # continuation frame
@@ -613,13 +757,12 @@ def _watch(
                 except (json.JSONDecodeError, UnicodeDecodeError):
                     continue
 
-                # Apply filters
-                if types and event.get("type") not in types:
+                seq = _event_seq(event, since)
+                if seq is None:
                     continue
-                if keyword:
-                    flat = json.dumps(event)
-                    if keyword.lower() not in flat.lower():
-                        continue
+                since = seq
+                if not _event_matches(event, types, keyword):
+                    continue
 
                 return event
         finally:
@@ -630,6 +773,14 @@ def _watch(
 
 
 # Hardcoded tool definitions for the two WS tools (not in OpenAPI).
+_IMPLICIT_WATCH_CURSORS: dict[tuple[tuple[str, ...], str], int] = {}
+
+
+def _watch_cursor_key(types: list[str] | None, keyword: str | None) -> tuple[tuple[str, ...], str]:
+    """Canonical key for a watch's matching subscription."""
+    return tuple(sorted(set(types or []))), (keyword or "").casefold()
+
+
 _WS_TOOLS = [
     {
         "name": "watch_events",
@@ -661,6 +812,14 @@ _WS_TOOLS = [
                     "default": 3600,
                     "description": "Maximum seconds to wait (default 3600).",
                 },
+                "after_seq": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Exclusive event cursor to resume from. Specify 0 to "
+                                   "replay available history. When omitted, this matching "
+                                   "watch resumes from its prior call (or starts at the "
+                                   "current stream tail).",
+                },
             },
         },
     },
@@ -691,6 +850,14 @@ _WS_TOOLS = [
                     "default": 3600,
                     "description": "Maximum seconds to wait (default 3600).",
                 },
+                "after_seq": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Exclusive event cursor to resume from. Specify 0 to "
+                                   "replay available history. When omitted, this matching "
+                                   "watch resumes from its prior call (or starts at the "
+                                   "current stream tail).",
+                },
             },
         },
     },
@@ -702,7 +869,35 @@ def _call_ws_tool(name: str, args: dict) -> str:
     types   = args.get("types") or None
     keyword = args.get("keyword") or None
     timeout = float(args.get("timeout") or 3600)
-    result  = _watch(types=types, keyword=keyword, timeout=timeout)
+    explicit_cursor = "after_seq" in args and args.get("after_seq") is not None
+    if explicit_cursor:
+        try:
+            after_seq = max(0, int(args["after_seq"]))
+        except (TypeError, ValueError):
+            return json.dumps({"error": "after_seq must be a non-negative integer"})
+        cursor_key = None
+    else:
+        cursor_key = _watch_cursor_key(types, keyword)
+        after_seq = _IMPLICIT_WATCH_CURSORS.get(cursor_key)
+        if after_seq is None:
+            deadline = __import__("time").monotonic() + timeout
+            after_seq = _current_event_cursor(deadline)
+            if after_seq is None:
+                return json.dumps({
+                    "error": "could not establish event cursor; retry or provide after_seq",
+                })
+
+    result = _watch(types=types, keyword=keyword, timeout=timeout,
+                    after_seq=after_seq)
+    if cursor_key is not None:
+        # A returned event's seq, or a timeout's after_seq, is exactly the
+        # consumed prefix. Never store an envelope's later cursor here.
+        next_seq = result.get("after_seq", result.get("seq"))
+        try:
+            if next_seq is not None:
+                _IMPLICIT_WATCH_CURSORS[cursor_key] = max(after_seq, int(next_seq))
+        except (TypeError, ValueError):
+            pass
     return json.dumps(result)
 
 

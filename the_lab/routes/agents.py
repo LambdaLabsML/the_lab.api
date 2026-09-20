@@ -55,6 +55,7 @@ def _enrich(entry: dict) -> dict:
     try:
         unread = messages_mod.unread_for(
             REPO_DIR, agent_id=entry.get("agent_id"), role=entry.get("role"),
+            automatic_only=True,
         )
         out["unread_messages"] = len(unread)
     except Exception:
