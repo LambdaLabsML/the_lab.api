@@ -90,6 +90,8 @@ def _build_launch_command(
     mcp_path: str | None = None,
     sandboxed: bool = False,
     extra_agent_args: list[str] | None = None,
+    resume_session_id: str | None = None,
+    resume_cwd: str | None = None,
 ) -> list[str]:
     """Build the agent launch command.
 
@@ -105,6 +107,11 @@ def _build_launch_command(
     extra_agent_args: additional flags forwarded verbatim to the agent binary,
                 inserted before the ``--`` / prompt separator so they are
                 parsed by the agent itself.  Example: ``['--resume', '<id>']``.
+    resume_session_id: Codex session id to resume using its native ``resume``
+                subcommand. Claude continues to receive resume flags through
+                ``extra_agent_args``.
+    resume_cwd: explicit working root for a resumed Codex session. This avoids
+                an old, removed worktree in the saved session metadata.
     """
     if agent == "claude":
         cmd = [agent_bin]
@@ -130,11 +137,17 @@ def _build_launch_command(
     cmd = [agent_bin]
     if mcp_config:
         cmd.extend(_codex_mcp_config_overrides(mcp_config))
+    if resume_session_id:
+        cmd.append("resume")
     cmd.append("--yolo")
     if model:
         cmd.extend(["--model", model])
+    if resume_cwd:
+        cmd.extend(["--cd", resume_cwd])
     if extra_agent_args:
         cmd.extend(extra_agent_args)
+    if resume_session_id:
+        cmd.append(resume_session_id)
     cmd.append(loop_prompt)
     return cmd
 
@@ -209,6 +222,82 @@ _SESSION_ROOT = Path.home() / ".claude" / "projects"
 
 # Agent worktrees live at <repo>/.the_lab/agents/<agent_id>.
 _AGENT_WT_RE = __import__("re").compile(r"[/\\]\.the_lab[/\\]agents[/\\]([^/\\]+)")
+
+
+def _extract_codex_resume_request(args, extra_agent_args: list[str]) -> tuple[str | None, list[str]]:
+    """Return a Codex resume id and agent flags after accepting both spellings.
+
+    ``argparse`` deliberately leaves unknown options alone, but its two broad
+    positional arguments consume ``resume <id>`` before that happens.  Handle
+    that native Codex spelling after parsing, alongside the older launcher
+    spelling ``loop --resume <id>``.
+    """
+    if args.agent != "codex":
+        return None, extra_agent_args
+
+    if args.command == "resume":
+        # With no id, prompt_file is argparse's default rather than a supplied
+        # positional value.  Let main issue a useful error instead of resuming
+        # a session named PROMPT.md.
+        if args.prompt_file == "PROMPT.md":
+            return "", extra_agent_args
+        session_id = args.prompt_file
+        args.command = None
+        args.prompt_file = "PROMPT.md"
+        return session_id, extra_agent_args
+
+    explicit_resume = getattr(args, "resume", None)
+    if explicit_resume:
+        return explicit_resume, extra_agent_args
+
+    normalized: list[str] = []
+    session_id: str | None = None
+    i = 0
+    while i < len(extra_agent_args):
+        value = extra_agent_args[i]
+        if value == "--resume" and i + 1 < len(extra_agent_args):
+            session_id = extra_agent_args[i + 1]
+            i += 2
+            continue
+        if value.startswith("--resume="):
+            session_id = value.partition("=")[2]
+            i += 1
+            continue
+        normalized.append(value)
+        i += 1
+    return session_id, normalized
+
+
+def _read_codex_session_meta(session_id: str, codex_home: Path | None = None) -> dict | None:
+    """Read the initial, compact Codex ``session_meta`` entry for a session.
+
+    Codex keeps rollouts globally under CODEX_HOME; they must never be moved to
+    a worktree.  The metadata is the first JSONL entry, so one bounded read is
+    enough to recover its original cwd for agent-registry matching.
+    """
+    import json
+
+    home = codex_home or Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
+    sessions = home / "sessions"
+    if not sessions.is_dir():
+        return None
+    # Codex rollout names end in the UUID, but use a suffix glob so timestamp
+    # formatting changes do not make a session unresumable.
+    for rollout in sessions.glob(f"**/*{session_id}.jsonl"):
+        try:
+            with rollout.open("r", encoding="utf-8", errors="replace") as fh:
+                line = fh.readline(1_048_576)
+            entry = json.loads(line)
+        except (OSError, ValueError):
+            continue
+        if not isinstance(entry, dict):
+            continue
+        payload = entry.get("payload")
+        if (entry.get("type") == "session_meta" and isinstance(payload, dict)
+                and payload.get("id", payload.get("session_id")) == session_id
+                and isinstance(payload.get("cwd"), str) and payload["cwd"]):
+            return payload
+    return None
 
 
 def _read_session(jsonl: Path) -> dict:
@@ -455,7 +544,22 @@ def main():
              "worktree (legacy behaviour). Default is isolated mode: a fresh "
              "worktree is created and removed automatically around the run.",
     )
+    parser.add_argument(
+        "--resume",
+        metavar="SESSION_ID",
+        help="Resume a prior agent session. Codex also accepts `resume SESSION_ID`.",
+    )
     args, extra_agent_args = parser.parse_known_args()
+    codex_resume_id, extra_agent_args = _extract_codex_resume_request(
+        args, extra_agent_args,
+    )
+    if codex_resume_id == "":
+        parser.error("codex resume requires a SESSION_ID")
+    if args.agent == "claude" and args.resume:
+        # Keep the established Claude invocation untouched while parsing the
+        # compatibility alias explicitly (so its value cannot become a broad
+        # positional argument).
+        extra_agent_args.extend(["--resume", args.resume])
 
     # --list-roles: handle and exit before any agent setup.
     if args.list_roles:
@@ -689,18 +793,6 @@ def main():
             mcp_path_in_sandbox = "/tmp/the-lab-mcp.json"
             extra_bwrap.extend(["--ro-bind", str(host_mcp), mcp_path_in_sandbox])
 
-    cmd = _build_launch_command(
-        args.agent,
-        agent_bin,
-        agent_prompt,
-        args.model,
-        args.no_skip_permissions,
-        mcp_config=mcp_config,
-        mcp_path=mcp_path_in_sandbox,  # None when not sandboxed → writes to /tmp itself
-        sandboxed=bool(sandbox_mode),
-        extra_agent_args=extra_agent_args or None,
-    )
-
     env = dict(os.environ)
     # Codex's MCP registration refers to these by name (env_vars), so pass the
     # bridge's connection details to the launched Codex process.  Claude reads
@@ -737,25 +829,33 @@ def main():
         # If --resume <session_id> is given, find the agent whose worktree
         # owns that session and reuse it instead of creating a fresh one.
         # This keeps the same branch and working state as the original run.
-        _resume_id: str | None = None
-        for _i, _a in enumerate(extra_agent_args or []):
-            if _a == "--resume" and _i + 1 < len(extra_agent_args):
-                _resume_id = extra_agent_args[_i + 1]
-                break
+        _resume_id: str | None = codex_resume_id
+        if not _resume_id:
+            for _i, _a in enumerate(extra_agent_args or []):
+                if _a == "--resume" and _i + 1 < len(extra_agent_args):
+                    _resume_id = extra_agent_args[_i + 1]
+                    break
 
         _resumed_from_old = False
         _stale_proj: "Path | None" = None
         _stale_agent_id: "str | None" = None
         if _resume_id:
             _projects_root = Path.home() / ".claude" / "projects"
-            # Find which project dir contains this session
+            # Claude stores transcripts in a cwd-encoded project directory;
+            # Codex stores global rollouts and records the real cwd in its
+            # initial session_meta payload.
             _session_proj: Path | None = None
-            if _projects_root.exists():
+            _resume_cwd: Path | None = None
+            if args.agent == "codex":
+                _meta = _read_codex_session_meta(_resume_id)
+                if _meta:
+                    _resume_cwd = Path(_meta["cwd"]).resolve()
+            elif _projects_root.exists():
                 for _proj in _projects_root.iterdir():
                     if (_proj / f"{_resume_id}.jsonl").exists():
                         _session_proj = _proj
                         break
-            if _session_proj:
+            if _session_proj or _resume_cwd:
                 # Match project dir name back to an agent worktree via the API.
                 # Check both live and past agents; worktree may no longer exist
                 # (agent was unregistered) so we skip the exists() guard here.
@@ -772,7 +872,10 @@ def main():
                             if not _wt:
                                 continue
                             _wt_path = Path(_wt).resolve()
-                            if _re.sub(r"[^a-zA-Z0-9]", "-", str(_wt_path)) != _session_proj.name:
+                            if args.agent == "codex":
+                                if _wt_path != _resume_cwd:
+                                    continue
+                            elif _re.sub(r"[^a-zA-Z0-9]", "-", str(_wt_path)) != _session_proj.name:
                                 continue
                             if _wt_path.exists():
                                 # Worktree still exists — reuse it directly
@@ -786,15 +889,23 @@ def main():
                                     file=sys.stderr,
                                 )
                             else:
-                                # Worktree gone — register fresh but move JSONL so
-                                # the new project dir can find the session
+                                # Worktree gone — register fresh. Claude's
+                                # cwd-keyed store needs its JSONL moved; Codex
+                                # rollouts remain in CODEX_HOME and resume by id.
                                 _stale_proj = _session_proj
                                 _stale_agent_id = _entry["agent_id"]
-                                print(
-                                    f"  session {_resume_id[:8]}… found (worktree was cleaned up)"
-                                    f" — will move to fresh worktree",
-                                    file=sys.stderr,
-                                )
+                                if args.agent == "codex":
+                                    print(
+                                        f"  Codex session {_resume_id[:8]}… found (worktree was cleaned up)"
+                                        f" — will resume it in a fresh worktree",
+                                        file=sys.stderr,
+                                    )
+                                else:
+                                    print(
+                                        f"  session {_resume_id[:8]}… found (worktree was cleaned up)"
+                                        f" — will move to fresh worktree",
+                                        file=sys.stderr,
+                                    )
                             break
                         if _resumed_from_old:
                             break
@@ -910,6 +1021,23 @@ def main():
                     else:
                         print(f"\n{_RED}Aborted.{_RESET}", file=sys.stderr)
                         sys.exit(1)
+
+    # Registration may have selected (or recreated) the session's worktree.
+    # Pass it explicitly to Codex resume: its saved cwd can point at a
+    # cleaned-up worktree, and --cd takes precedence over that stored cwd.
+    cmd = _build_launch_command(
+        args.agent,
+        agent_bin,
+        agent_prompt,
+        args.model,
+        args.no_skip_permissions,
+        mcp_config=mcp_config,
+        mcp_path=mcp_path_in_sandbox,  # None when not sandboxed → writes to /tmp itself
+        sandboxed=bool(sandbox_mode),
+        extra_agent_args=extra_agent_args or None,
+        resume_session_id=codex_resume_id,
+        resume_cwd=str(agent_worktree) if codex_resume_id and agent_worktree else None,
+    )
 
     if sandbox_mode:
         # Capabilities check deferred to here so it only runs when needed.
