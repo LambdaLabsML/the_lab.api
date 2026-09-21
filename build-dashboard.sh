@@ -6,6 +6,17 @@ set -e
 # re-evaluated from inside dashboard/.
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT/dashboard"
+
+# A fresh clone has no node_modules, so `npm run build` dies with
+# "vite: not recognized" before anything is built. Install first.
+if [ ! -x node_modules/.bin/vite ]; then
+  if [ -f package-lock.json ]; then
+    npm ci
+  else
+    npm install
+  fi
+fi
+
 npm run build
 
 ASSETS="$ROOT/the_lab/static/assets"
