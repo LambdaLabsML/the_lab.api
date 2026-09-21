@@ -9,6 +9,7 @@ import base64 as _base64
 import hashlib as _hashlib
 import json
 import os
+import pathlib
 import socket as _socket
 import ssl as _ssl
 import struct as _struct
@@ -18,7 +19,39 @@ import urllib.parse
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
-API_BASE = os.environ.get("THE_LAB_API_URL", "http://localhost:8000/api/v1")
+def _api_base_from_runtime():
+    """Read the live API endpoint the server recorded in the project.
+
+    `the-lab .` writes .the_lab/sandbox/runtime.json with the scheme/host/port
+    it actually bound. Walking up from the cwd finds it whenever the bridge is
+    started inside the project (that is how .mcp.json launches it), so a
+    non-default `--port` no longer leaves the bridge pointed at port 8000.
+    """
+    here = pathlib.Path.cwd().resolve()
+    for d in (here, *here.parents):
+        candidate = d / ".the_lab" / "sandbox" / "runtime.json"
+        if not candidate.is_file():
+            continue
+        try:
+            data = json.loads(candidate.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+        port = data.get("api_port")
+        if not port:
+            return None
+        scheme = data.get("api_scheme") or "http"
+        host = data.get("api_host") or "localhost"
+        if host in ("0.0.0.0", "::", ""):
+            host = "localhost"
+        return f"{scheme}://{host}:{int(port)}/api/v1"
+    return None
+
+
+API_BASE = (
+    os.environ.get("THE_LAB_API_URL")
+    or _api_base_from_runtime()
+    or "http://localhost:8000/api/v1"
+)
 
 # Self-signed localhost https can't be verified. The agent launcher sets
 # THE_LAB_API_INSECURE=1 when it points us at such an endpoint; in that case we
