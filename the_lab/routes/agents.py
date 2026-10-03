@@ -73,6 +73,8 @@ def _enrich(entry: dict) -> dict:
 class RegisterAgentRequest(BaseModel):
     role: str | None = None
     pid: int | None = None
+    # Hostname the agent process runs on (pid is only meaningful there).
+    host: str | None = None
     resume_agent_id: str | None = None
 
 
@@ -89,7 +91,10 @@ def register_agent(req: RegisterAgentRequest):
 
     A new registration branches ``agent_init_<id>`` from the most recent
     active idea branch (or main) and creates ``.the_lab/agents/<id>/``.
-    Supplying ``resume_agent_id`` reactivates that retained checkout instead.
+    Supplying ``resume_agent_id`` brings that agent back under the same id
+    (recreating its worktree at the same path if it was cleaned up); the
+    response then includes ``previous_pid``/``previous_host`` when the agent
+    was still registered as live.
     Returns ``{agent_id, worktree, branch, parent_branch, role}`` so the caller
     can ``cd`` into the worktree and pass the id via ``X-Agent-Id``.
 
@@ -130,10 +135,11 @@ def register_agent(req: RegisterAgentRequest):
                 req.resume_agent_id,
                 role=req.role,
                 pid=req.pid,
+                host=req.host,
             )
         else:
             result = agents_mod.register_agent(
-                REPO_DIR, store, role=req.role, pid=req.pid,
+                REPO_DIR, store, role=req.role, pid=req.pid, host=req.host,
             )
     except (KeyError, FileNotFoundError) as e:
         raise HTTPException(404, str(e))

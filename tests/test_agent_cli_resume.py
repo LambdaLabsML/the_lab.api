@@ -186,7 +186,8 @@ class CodexResumeTests(unittest.TestCase):
             stdout = io.StringIO()
             with patch.object(agent_cli, "_SESSION_ROOT", claude_root), patch.object(
                 agent_cli, "_codex_session_root", return_value=codex_root,
-            ), contextlib.redirect_stdout(stdout):
+            ), patch.object(agent_cli, "_find_repo_root", return_value=None), \
+                    contextlib.redirect_stdout(stdout):
                 agent_cli.cmd_list_sessions(["--json"])
 
         result = json.loads(stdout.getvalue())
@@ -196,6 +197,55 @@ class CodexResumeTests(unittest.TestCase):
         )
         self.assertIn("--agent codex resume", result["sessions"][0]["resume_command"])
         self.assertIn("--agent claude loop --resume", result["sessions"][1]["resume_command"])
+
+
+
+class ResumeOwnershipTests(unittest.TestCase):
+    """Resume resolves the owning agent and lab from the session itself."""
+
+    def _claude_session(self, root: Path, sid: str, cwd: str) -> Path:
+        project = root / "proj"
+        project.mkdir(parents=True, exist_ok=True)
+        f = project / f"{sid}.jsonl"
+        f.write_text(json.dumps({"type": "user", "cwd": cwd, "message": {}}) + "\n")
+        return f
+
+    def test_session_resolves_to_its_agent_and_lab(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._claude_session(root, SESSION_ID, "/labs/a/.the_lab/agents/r1rtv")
+            with patch.object(agent_cli, "_SESSION_ROOT", root):
+                row = agent_cli._resolve_resume_session("claude", SESSION_ID)
+                missing = agent_cli._resolve_resume_session("claude", "nope")
+        self.assertEqual(row["agent_id"], "r1rtv")
+        self.assertEqual(agent_cli._lab_of_cwd(row["cwd"]), Path("/labs/a"))
+        self.assertIsNone(missing)
+        # An agent worktree maps back to the lab that owns it.
+        self.assertEqual(agent_cli._lab_root(Path("/labs/a/.the_lab/agents/x")), Path("/labs/a"))
+        self.assertEqual(agent_cli._lab_root(Path("/labs/a")), Path("/labs/a"))
+
+    def test_list_defaults_to_the_current_lab(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            lab = root / "lab_a"
+            (lab / ".the_lab").mkdir(parents=True)
+            self._claude_session(root / "c", "11111111-1111-1111-1111-111111111111",
+                                 f"{lab}/.the_lab/agents/aaa01")
+            other = self._claude_session(root / "c", "22222222-2222-2222-2222-222222222222",
+                                         "/elsewhere/.the_lab/agents/bbb02")
+            os.utime(other, (5_000, 5_000))
+
+            def listed(*argv):
+                out = io.StringIO()
+                with patch.object(agent_cli, "_SESSION_ROOT", root / "c" ), patch.object(
+                    agent_cli, "_codex_session_root", return_value=root / "none",
+                ), patch.object(agent_cli, "_find_repo_root", return_value=lab), \
+                        contextlib.redirect_stdout(out):
+                    agent_cli.cmd_list_sessions(["--json", *argv])
+                return [r["agent_id"] for r in json.loads(out.getvalue())["sessions"]]
+
+            self.assertEqual(listed(), ["aaa01"])
+            self.assertEqual(sorted(listed("--all-labs")), ["aaa01", "bbb02"])
 
 
 if __name__ == "__main__":
