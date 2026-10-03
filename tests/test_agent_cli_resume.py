@@ -248,5 +248,23 @@ class ResumeOwnershipTests(unittest.TestCase):
             self.assertEqual(sorted(listed("--all-labs")), ["aaa01", "bbb02"])
 
 
+
+class McpConfigIsolationTests(unittest.TestCase):
+    def test_each_launch_gets_its_own_private_mcp_config(self):
+        cfg_a = json.dumps({"mcpServers": {"labapi": {"env": {"THE_LAB_API_URL": "https://a/api/v1"}}}})
+        cfg_b = json.dumps({"mcpServers": {"labapi": {"env": {"THE_LAB_API_URL": "https://b/api/v1"}}}})
+        cmd_a = agent_cli._build_launch_command("claude", "claude", "go", None, False, mcp_config=cfg_a)
+        cmd_b = agent_cli._build_launch_command("claude", "claude", "go", None, False, mcp_config=cfg_b)
+        path_a = Path(cmd_a[cmd_a.index("--mcp-config") + 1])
+        path_b = Path(cmd_b[cmd_b.index("--mcp-config") + 1])
+        try:
+            self.assertNotEqual(path_a, path_b)
+            # A later launch (another lab) must not change an earlier one's config.
+            self.assertIn("https://a/api/v1", path_a.read_text())
+            self.assertEqual(path_a.stat().st_mode & 0o777, 0o600)
+        finally:
+            path_a.unlink(missing_ok=True); path_b.unlink(missing_ok=True)
+
+
 if __name__ == "__main__":
     unittest.main()

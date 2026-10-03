@@ -124,11 +124,8 @@ def _build_launch_command(
         if extra_agent_args:
             cmd.extend(extra_agent_args)
         if mcp_config:
-            import tempfile
             if mcp_path is None:
-                dest = Path(tempfile.gettempdir()) / "the-lab-mcp.json"
-                dest.write_text(mcp_config)
-                mcp_path = str(dest)
+                mcp_path = str(_write_mcp_config(mcp_config))
             cmd.extend(["--mcp-config", mcp_path, "--"])
         cmd.append(loop_prompt)
         return cmd
@@ -152,6 +149,25 @@ def _build_launch_command(
         cmd.append(resume_session_id)
     cmd.append(loop_prompt)
     return cmd
+
+
+def _write_mcp_config(mcp_config: str, *, mode: int = 0o600) -> Path:
+    """Write this launch's MCP config to its own temp file.
+
+    The config names the lab API URL and credentials, so it must never be a
+    shared path: agents of different labs on one machine used to overwrite a
+    common /tmp/the-lab-mcp.json and end up talking to each other's server.
+    Owner-only by default (it holds the lab password); removed at exit.
+    """
+    import atexit
+    import tempfile
+
+    fd, name = tempfile.mkstemp(prefix="the-lab-mcp-", suffix=".json")
+    with os.fdopen(fd, "w") as fh:
+        fh.write(mcp_config)
+    os.chmod(name, mode)
+    atexit.register(lambda: Path(name).unlink(missing_ok=True))
+    return Path(name)
 
 
 def _codex_mcp_config_overrides(mcp_config: str) -> list[str]:
@@ -972,9 +988,10 @@ def main():
             extra_bwrap = ["--ro-bind", agent_prompt, agent_prompt]
 
         if mcp_config:
-            import tempfile
-            host_mcp = Path(tempfile.gettempdir()) / "the-lab-mcp.json"
-            host_mcp.write_text(mcp_config)
+            # Unique host file (see _write_mcp_config); inside the sandbox's
+            # private /tmp the fixed name is fine. World-readable as before:
+            # the sandbox reads it under a mapped uid.
+            host_mcp = _write_mcp_config(mcp_config, mode=0o644)
             mcp_path_in_sandbox = "/tmp/the-lab-mcp.json"
             extra_bwrap.extend(["--ro-bind", str(host_mcp), mcp_path_in_sandbox])
 
