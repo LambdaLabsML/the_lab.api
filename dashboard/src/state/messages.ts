@@ -114,10 +114,11 @@ function ingest(next: MessageEntry[]): void {
     if (isDashboardUserSender(m)) continue;
     const direct = isDirectToDashboardUser(m);
     const recentBroadcast = m.to === "all" && m.id > broadcastFloor;
-    // Only replies to a conversation in which the human was explicitly a
-    // sender/recipient qualify.  This prevents agent-to-agent chatter from
-    // leaking into the global badge.
-    const replyToMyThread = m.in_reply_to != null && userThreads.has(threadOf(m));
+    // Only replies or thread posts in a conversation in which the human was
+    // explicitly a sender/recipient qualify.  This prevents agent-to-agent
+    // chatter from leaking into the global badge.
+    const replyToMyThread =
+      (m.in_reply_to != null || m.to.startsWith("thread:")) && userThreads.has(threadOf(m));
     if ((direct || recentBroadcast || replyToMyThread) && !pendingUnreadIds.has(m.id)) {
       pendingUnreadIds.add(m.id);
       pendingChanged = true;

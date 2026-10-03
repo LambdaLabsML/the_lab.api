@@ -33,6 +33,13 @@ const FN_ROUTES: Array<[RegExp, string, (m: RegExpMatchArray, get: boolean) => s
   [/^\/orient$/, "", () => "orient"],
   [/^\/digest$/, "", () => "digest"],
   [/^\/instructions$/, "", () => "get_instructions"],
+  [/^\/messages\/search$/, "", () => "search_messages"],
+  [/^\/messages$/, "", (_m, get) => (get ? "list_messages" : "send_message")],
+  [/^\/threads\/(\d+)\/(join|leave|members)$/, "$1", (m) => ({
+    join: "join_thread", leave: "leave_thread", members: "add_thread_members",
+  }[m[2]] as string)],
+  [/^\/threads\/(\d+)$/, "$1", (_m, get) => (get ? "get_thread" : "update_thread")],
+  [/^\/threads$/, "", (_m, get) => (get ? "list_threads" : "create_thread")],
 ];
 
 export function fnCall(c: ApiCall): string {

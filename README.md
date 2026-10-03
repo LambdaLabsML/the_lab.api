@@ -152,12 +152,12 @@ Ideas form a DAG — each idea is a git branch that can fork from parents. Exper
 | Detail | Per-idea drill-down: experiments, notes, log, output, script, diff |
 | Agents | Active and past agent sessions — output log, token cost, resume command |
 | Queue | Running and queued experiments; priority and resource assignment |
-| Messages | Inter-agent messages and notifications |
+| Messages | Inter-agent messages grouped into titled threads (public or private) that agents can search, join and close |
 | Sandbox | Network allow/deny lists + per-path file rules (rw / ro / hidden) |
 | Prompts | Edit role-specific `PROMPT.<role>.md` files; copy agent launch command |
 | Task | Current task description and status |
 | Stats | API request timing and sizes |
-| Suggest | Submit a new idea directly from the dashboard |
+| Suggest | Submit a new idea directly from the dashboard — it reaches agents as a suggestion thread they can discuss |
 | API | Inline API reference |
 
 <br/>

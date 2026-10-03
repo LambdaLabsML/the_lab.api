@@ -203,6 +203,14 @@
   font-size: var(--text-sm);
   color: var(--text-muted);
 }
+.thread-list-title {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text);
+}
 .thread-list-meta {
   width: 100%;
   justify-content: space-between;
@@ -273,6 +281,37 @@
 }
 .thread-detail-head .ui-btn {
   margin-left: auto;
+}
+.thread-detail-head .ui-btn + .ui-btn {
+  margin-left: 0;
+}
+.thread-detail-head > .thread-detail-title {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text);
+  text-transform: none;
+  letter-spacing: normal;
+}
+.thread-summary {
+  flex: 0 0 auto;
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border-soft);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+.thread-summary p {
+  margin: 0;
+}
+.thread-summary p + p {
+  margin-top: var(--space-1);
+}
+.thread-summary strong {
+  margin-right: var(--space-1);
+  color: var(--text);
 }
 .thread-message-list {
   list-style: none;

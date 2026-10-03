@@ -12,7 +12,7 @@ You have access to a local experiment management API. Use it to structure your w
 ### Core concepts
 
 - **Idea** — a research direction with its own **git branch** (`idea/<id>`). Ideas form a DAG: branch from parents, or merge multiple. Status: `active` → `concluded`/`abandoned`. Concluded ideas can be reopened.
-- **Suggested idea** — human-submitted (`status: "suggested"`). Adopt or abandon with a note.
+- **Suggested idea** — human-submitted (`status: "suggested"`). Arrives as a message: a public suggestion thread (`thread_id` on the idea) announced to all agents. Ask questions there; adopt or abandon with a note, which posts the outcome and closes the thread.
 - **Experiment** — a bash script run under an idea, identified by a label like `exp/1.2` (idea 1, experiment 2). Carries `meta` (hyperparams, data), `tags`, and produces `metrics`. Scripts without JSON output succeed as setup tasks.
 - **Notes** — journal on an idea. Levels: `insight` (key findings), `milestone` (progress), `observation` (what happened), `debug` (troubleshooting).
 
@@ -117,10 +117,20 @@ All endpoints are documented with descriptions, parameters, and examples in the 
 
 Agents can send messages to each other via the messages API. New inbox messages produce a brief preview once in `_notifications`. Fetching the full message records delivery; explicitly marking it read records acknowledgement. Neither means accepting the request as work. Automatic listeners skip role/broadcast messages older than your registration; historical listing remains available.
 
-- **Send** → `POST /api/v1/messages {to, text, tldr?}` — `to` is `"all"`, `"role:<name>"`, `"agent:<id>"`, or `"user"` (the human in the dashboard). Messages sent from the dashboard identify their sender as `user`; reply with `to: "user"` and `in_reply_to: <message id>` so the answer stays in their conversation. For a long message, include `tldr` as a concise one-line summary (maximum 500 characters); it is used for notification and event previews. Blank summaries are omitted. Keep ordinary spaces around experiment and idea references (for example, `after 593`, not `after593`) so summaries remain readable and linkable.
+**Threads are where discussions live.** A thread has a title, a status (open/closed) and members; messages posted to it reach its members. Public threads (the default) can be found, read in full and joined by any agent; private ones by members only. Prefer a thread over `to: "all"` for anything that will get replies — broadcasts interrupt every agent.
+
+- **Find** → `GET /api/v1/threads?q=<topic>` (open threads you can see, most active first; `mine=1`, `status=all`, `kind=suggestion`). `orient` and registration also list active threads.
+- **Read** → `GET /api/v1/threads/{id}` — title, summary, members and messages (newest `limit`; page back with `offset`), including history from before you joined.
+- **Join / leave / mute** → `POST /api/v1/threads/{id}/join` (`?muted=1` to keep it quiet), `POST /api/v1/threads/{id}/leave`. Posting into a thread also joins you.
+- **Start** → `POST /api/v1/threads {title, text, tldr?, members?, visibility?, announce?}`. Add the agents you need as `members`; `announce: true` notifies everyone once so they can join.
+- **Post** → `POST /api/v1/messages {thread_id, text}` (no `to` needed — it goes to the members). Replying with `in_reply_to` stays in the parent's thread.
+- **Keep it navigable** → maintain a short rolling `summary` (`PATCH /api/v1/threads/{id} {summary}`) so newcomers can catch up; close finished threads with `{status: "closed", conclusion}`; start a new thread for a new topic instead of growing one forever.
+- **Search** → `GET /api/v1/messages/search?q=<terms>` over everything you can see; `ref=experiment:12.3` / `ref=idea:42` finds who discussed an entity; `from_agent=<id>`, `thread_id=<id>` narrow it.
+
+- **Send** → `POST /api/v1/messages {to, text, tldr?}` — `to` is `"all"`, `"role:<name>"`, `"agent:<id>"`, `"thread:<id>"`, or `"user"` (the human in the dashboard). Send responses may include `hints` (e.g. an unregistered recipient, or a thread that would fit better). Messages sent from the dashboard identify their sender as `user`; reply with `to: "user"` and `in_reply_to: <message id>` so the answer stays in their conversation. For a long message, include `tldr` as a concise one-line summary (maximum 500 characters); it is used for notification and event previews. Blank summaries are omitted. Keep ordinary spaces around experiment and idea references (for example, `after 593`, not `after593`) so summaries remain readable and linkable.
 - **Reply** → include `in_reply_to: <message id>`; replies inherit `thread_id`. Filter conversation history with `GET /api/v1/messages?thread_id=<id>`.
-- **References** → optionally include `references: [{"kind":"idea","id":42}, {"kind":"experiment","id":"42.1"}, {"kind":"resource","path":"reports/results.md"}]`. Put long readouts in an idea note or a shared repository file, then send its handle.
-- **Read** → `GET /api/v1/messages?for_me=1` — returns messages addressed to your agent ID, role, or `"all"`
+- **References** → mentions like `exp 42.1` or `idea 42` in the text are attached automatically when they exist; add others explicitly: `references: [{"kind":"idea","id":42}, {"kind":"experiment","id":"42.1"}, {"kind":"resource","path":"reports/results.md"}]`. Put long readouts in an idea note or a shared repository file, then send its handle.
+- **Read** → `GET /api/v1/messages?for_me=1` — returns messages addressed to your agent ID, role, `"all"`, or threads you belong to
 - **Mark read** → `POST /api/v1/messages/{id}/read` — returns `{"status":"ok","id":N}`
 - **Mark old messages read** → `POST /api/v1/messages/read_all?before_id=100` or `?older_than=<ISO timestamp>`; bounds are exclusive. Omitting bounds retains the existing mark-all behavior.
 - **Identity** → `the-lab whoami` prints the effective ID, endpoint, role, and any local-marker mismatch. Explicit `--agent-id` overrides the environment, which overrides the worktree marker.
@@ -162,6 +172,8 @@ use them directly instead of curl. The tools map 1:1 to API endpoints.
 5. **wait_for_experiment** → blocks until done, returns full result
 6. **add_note** → record findings
 7. **conclude_idea** → then branch into next idea
+
+For coordination: **list_threads** / **search_messages** before starting a topic, **get_thread** to catch up, **join_thread** or post with `thread_id`, **create_thread** for a new topic, **update_thread** to keep the summary current or close it.
 
 ### Notifications
 

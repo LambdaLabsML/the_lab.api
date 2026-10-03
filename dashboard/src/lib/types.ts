@@ -215,7 +215,7 @@ export interface MessageEntry {
   id: number;
   from_agent: string | null;
   from_role: string | null;
-  /** "agent:<id>" | "role:<role>" | "all" */
+  /** "agent:<id>" | "role:<role>" | "all" | "user" | "thread:<id>" */
   to: string;
   text: string;
   /** Optional compact one-line summary supplied by the sender. */
@@ -231,6 +231,32 @@ export interface MessageEntry {
     | { kind: "experiment"; id: string }
     | { kind: "resource"; path: string }
   >;
+}
+
+/** Thread metadata (GET /api/v1/threads). A thread id is its root message id. */
+export interface ThreadMeta {
+  id: number;
+  title: string;
+  visibility: "public" | "private";
+  status: "open" | "closed";
+  kind?: "discussion" | "suggestion";
+  idea_id?: number;
+  summary?: string;
+  conclusion?: string;
+  created_by?: string | null;
+  created_at?: string;
+  member_count: number;
+  joined: boolean;
+  muted: boolean;
+  message_count?: number;
+  last_activity?: string;
+}
+
+export interface ThreadPage {
+  threads: ThreadMeta[];
+  total: number;
+  limit: number;
+  offset: number;
 }
 
 export interface MessagePage {
