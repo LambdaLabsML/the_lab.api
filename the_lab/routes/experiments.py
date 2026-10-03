@@ -1691,6 +1691,98 @@ async def requeue_experiment(exp_ref: str, req: RequeueRequest | None = None):
     return updated or store.get_experiment(label) or exp
 
 
+@router.post("/experiments/{exp_ref}/recover-budget-completion")
+async def recover_budget_completion(exp_ref: str, dry_run: bool = True):
+    """Audit legacy worker budget exits; explicitly repair only proven completions.
+
+    Defaults to preview. Set dry_run=false to import final metrics and mark
+    completed. Preserves the old status/error and raw Slurm state in an audit
+    record. Never repairs cancelled runs, startup failures, mixed real failures,
+    missing watchdog evidence, or runs with a restart generation.
+    """
+    from ..budget_recovery import validate_budget_completion
+
+    exp = _resolve_exp(exp_ref)
+    label = exp["label"]
+    async with runner.label_lock(label):
+        exp = _resolve_exp(label)
+        meta = dict(exp.get("meta") or {})
+        if exp.get("status") == "completed" and meta.get("budget_completion_recovery"):
+            return {"label": label, "status": "completed", "already_recovered": True,
+                    "metrics": exp.get("metrics")}
+        path = REPO_DIR / ".the_lab" / "experiments" / str(exp["idea_id"]) / str(exp["seq"]) / "script.log"
+        try:
+            output = await asyncio.to_thread(path.read_text)
+            evidence = validate_budget_completion(exp, output)
+        except (OSError, ValueError, TypeError) as exc:
+            raise HTTPException(409, detail=str(exc)) from exc
+        if dry_run:
+            return {"label": label, "eligible": True, "dry_run": True, **evidence}
+        audit = {"recovered_at": datetime.now(timezone.utc).isoformat(),
+                 "original_status": exp["status"], "original_error": exp.get("error"),
+                 "original_slurm_state": meta.get("slurm_state"),
+                 **{k: v for k, v in evidence.items() if k != "metrics"}}
+        meta["budget_completion_recovery"] = audit
+        updated = store.update_experiment_if(
+            exp["id"], expected_status="failed", expected_job_id=meta.get("slurm_job_id"),
+            expected_generation=int(meta.get("slurm_restart_count") or 0),
+            status="completed", error=None, status_msg="Recovered expected budget completion",
+            metrics=evidence["metrics"], meta=meta,
+        )
+        if updated is None:
+            raise HTTPException(409, detail="experiment changed during recovery")
+    store.add_note(exp["idea_id"], f"Recovered {label} as expected budget completion; "
+                   f"original failure preserved in meta.budget_completion_recovery; "
+                   f"log SHA256 {evidence['log_sha256']}", level="milestone")
+    return {"label": label, "status": "completed", "metrics": evidence["metrics"], "audit": audit}
+
+
+@router.post("/experiments/{exp_ref}/recover-context-budget-completion")
+async def recover_context_budget_completion(exp_ref: str, dry_run: bool = True):
+    """Recover a legacy partial run whose only failures were strict context caps.
+
+    This is deliberately separate from budget-exit recovery.  It accepts code
+    1 only with exact per-worker ``ContextBudgetExceeded`` evidence and retains
+    the scheduler failure plus restart generation in an audit record.
+    """
+    from ..budget_recovery import validate_context_budget_completion
+
+    exp = _resolve_exp(exp_ref)
+    label = exp["label"]
+    async with runner.label_lock(label):
+        exp = _resolve_exp(label)
+        meta = dict(exp.get("meta") or {})
+        if exp.get("status") == "completed" and meta.get("context_budget_completion_recovery"):
+            return {"label": label, "status": "completed", "already_recovered": True,
+                    "metrics": exp.get("metrics")}
+        path = REPO_DIR / ".the_lab" / "experiments" / str(exp["idea_id"]) / str(exp["seq"]) / "script.log"
+        try:
+            output = await asyncio.to_thread(path.read_text)
+            evidence = validate_context_budget_completion(exp, output)
+        except (OSError, ValueError, TypeError) as exc:
+            raise HTTPException(409, detail=str(exc)) from exc
+        if dry_run:
+            return {"label": label, "eligible": True, "dry_run": True, **evidence}
+        audit = {"recovered_at": datetime.now(timezone.utc).isoformat(),
+                 "original_status": exp["status"], "original_error": exp.get("error"),
+                 "original_slurm_state": meta.get("slurm_state"),
+                 **{k: v for k, v in evidence.items() if k != "metrics"}}
+        meta["context_budget_completion_recovery"] = audit
+        updated = store.update_experiment_if(
+            exp["id"], expected_status="failed", expected_job_id=meta.get("slurm_job_id"),
+            expected_generation=int(meta.get("slurm_restart_count") or 0),
+            status="completed", error=None,
+            status_msg="Recovered partial completion after strict-context caps",
+            metrics=evidence["metrics"], meta=meta,
+        )
+        if updated is None:
+            raise HTTPException(409, detail="experiment changed during recovery")
+    store.add_note(exp["idea_id"], f"Recovered {label} after strict-context caps; "
+                   f"original failure preserved in meta.context_budget_completion_recovery; "
+                   f"log SHA256 {evidence['log_sha256']}", level="milestone")
+    return {"label": label, "status": "completed", "metrics": evidence["metrics"], "audit": audit}
+
+
 @router.post("/experiments/{exp_ref}/slurm_done")
 async def slurm_done(exp_ref: str, req: SlurmDoneRequest | None = None):
     """Hint from Slurm wrapper that the job completed normally.

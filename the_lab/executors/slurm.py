@@ -798,6 +798,11 @@ exit $_EXIT
     def poll_status(self, job_id: str) -> str:
         """Poll squeue. Returns state string or '' when job is gone."""
         result = self._ssh(f"squeue --noheader -j {job_id} -o %T", check=False, timeout=30)
+        # Once a finished job ages out of slurmctld (MinJobAge), squeue
+        # rejects its id instead of printing nothing.  That is "gone", and the
+        # monitor still requires sacct evidence before treating it as terminal.
+        if result.returncode != 0 and "invalid job id" in result.stderr.lower():
+            return ""
         if result.returncode != 0:
             raise RuntimeError(f"squeue failed for {job_id} (rc={result.returncode}): {result.stderr.strip()}")
         return result.stdout.strip()

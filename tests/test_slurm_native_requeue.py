@@ -171,6 +171,12 @@ class NativeRequeueWrapperTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "squeue failed"):
                 executor.poll_status("123")
 
+    def test_poll_status_treats_purged_job_id_as_gone(self):
+        executor = self._executor()
+        stderr = "slurm_load_jobs error: Invalid job id specified\n"
+        with patch.object(executor, "_ssh", return_value=CompletedProcess([], 1, "", stderr)):
+            self.assertEqual(executor.poll_status("123"), "")
+
     def test_accounting_rejects_invalid_job_id(self):
         self.assertIsNone(self._executor().accounting_status("123; scancel all"))
 
