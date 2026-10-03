@@ -79,6 +79,7 @@ See [LambdaLabsML/the_lab.api.demo](https://github.com/LambdaLabsML/the_lab.api.
 the-lab . --port 9009           # bind a different port
 the-lab . --host 127.0.0.1      # bind a different host
 the-lab . --https               # self-signed HTTPS
+the-lab . --serve-git           # authenticated, read-only Git clone/fetch
 the-lab . --perf                # write .the_lab/api_perf.csv
 the-lab-agent --role instructor # use .the_lab/PROMPT.instructor.md
 the-lab-agent --sandbox on      # enable network + file sandbox
@@ -99,6 +100,21 @@ export THE_LAB_PASSWORD=secret
 the-lab .                  # server enforces auth
 the-lab-agent              # agent authenticates automatically
 ```
+
+To clone the lab repository directly from an instance, add `--serve-git` and
+bind the server to a reachable authenticated address:
+
+```bash
+THE_LAB_USER=<user> THE_LAB_PASSWORD=<password> the-lab . \
+  --host 0.0.0.0 --https --serve-git
+git clone https://<user>@<host>:8000/git/repository.git
+```
+
+Git will prompt for the password; use a credential helper rather than putting
+it in the URL. The endpoint supports clone and fetch only. Pushes and direct
+object-file requests are rejected. It exposes every commit reachable from the
+repository's advertised refs—including secrets committed in older history—but
+does not serve untracked working-tree files.
 
 <br/>
 

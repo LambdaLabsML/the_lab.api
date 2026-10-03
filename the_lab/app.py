@@ -1024,6 +1024,7 @@ from .routes.prompts import router as prompts_router
 from .routes.agents import router as agents_router
 from .routes.queue import router as queue_router
 from .routes.messages import router as messages_router
+from .routes.git_http import router as git_http_router
 
 app.include_router(ideas_router)
 app.include_router(experiments_router)
@@ -1033,6 +1034,7 @@ app.include_router(prompts_router)
 app.include_router(agents_router)
 app.include_router(queue_router)
 app.include_router(messages_router)
+app.include_router(git_http_router)
 
 
 # --- WebSocket endpoint ---
