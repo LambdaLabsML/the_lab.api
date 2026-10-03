@@ -24,7 +24,13 @@ import {
 import { filterMetricExperiments, collectChartKeys, resolveNumericValue } from "../../lib/chart-data";
 import { IDEA_PALETTE, _colorForExp, isLowerBetter } from "../../lib/colors";
 import { resolveColor, getCssVar, getCssVarPx } from "../../lib/css-vars";
-import { fmtMetricName } from "../../lib/format";
+import { fmtMetricName, fmtScoreShort, scoreFormatter } from "../../lib/format";
+
+// Axis tick labels: one notation per axis, chosen from the ticks on screen
+// (scientific for tiny values or when a log axis spans many decades).
+function tickLabel(value: number | string, _i: number, ticks: { value: number }[]): string {
+  return scoreFormatter(ticks.map((t) => t.value))(Number(value));
+}
 import type { Experiment, IdeaNode, SubwayLayout } from "../../lib/types";
 
 /**
@@ -290,14 +296,14 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric }: { i
           x: {
             ...xBounds,
             title: { display: true, text: fmtMetricName(xMetric), color: getCssVar("--text-faint"), font: { size: getCssVarPx("--text-xs") } },
-            ticks: { color: getCssVar("--text-faint"), font: { size: getCssVarPx("--text-xs") } },
+            ticks: { color: getCssVar("--text-faint"), font: { size: getCssVarPx("--text-xs") }, callback: tickLabel },
             grid: { color: getCssVar("--border-soft") },
             border: { color: getCssVar("--border-soft") },
           },
           y: {
             ...yBounds,
             title: { display: true, text: fmtMetricName(yMetric), color: getCssVar("--text-faint"), font: { size: getCssVarPx("--text-xs") } },
-            ticks: { color: getCssVar("--text-faint"), font: { size: getCssVarPx("--text-xs") } },
+            ticks: { color: getCssVar("--text-faint"), font: { size: getCssVarPx("--text-xs") }, callback: tickLabel },
             grid: { color: getCssVar("--border-soft") },
             border: { color: getCssVar("--border-soft") },
           },
@@ -342,8 +348,8 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric }: { i
                 const xVal = d.metrics?.[scatterXMetric.value] ?? item.parsed.x;
                 const yVal = d.metrics?.[scatterYMetric.value] ?? item.parsed.y;
                 return [
-                  `${scatterXMetric.value} = ${typeof xVal === "number" ? xVal.toPrecision(4) : xVal}`,
-                  `${scatterYMetric.value} = ${typeof yVal === "number" ? yVal.toPrecision(4) : yVal}`,
+                  `${scatterXMetric.value} = ${typeof xVal === "number" ? fmtScoreShort(xVal) : xVal}`,
+                  `${scatterYMetric.value} = ${typeof yVal === "number" ? fmtScoreShort(yVal) : yVal}`,
                   d._ideaMean
                     ? `idea/${d.idea_id} mean (${d._meanCount} experiments)`
                     : "exp/" + (d.label || d.id) + ": " + (d.description || "").slice(0, 50),

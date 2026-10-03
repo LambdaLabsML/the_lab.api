@@ -8,7 +8,7 @@ import {
 import { collectChartKeys, resolveNumericValue } from "../lib/chart-data";
 import { _colorForExp, isLowerBetter } from "../lib/colors";
 import { navigateToIdea } from "../lib/navigate";
-import { badgeHtml, fmtMetricName } from "../lib/format";
+import { badgeHtml, fmtMetricName, prefersSci } from "../lib/format";
 import { useMultiSelection, useDisclosure } from "../lib/hooks";
 import { Badge, EmptyState, type BadgeTone } from "./ui";
 import type { Experiment } from "../lib/types";
@@ -17,9 +17,9 @@ import type { Experiment } from "../lib/types";
 // Number formatting
 // ---------------------------------------------------------------------------
 
-function fmtNum(n: number): string {
+function fmtNum(n: number, sci = false): string {
   if (Number.isInteger(n)) return String(n);
-  if (Math.abs(n) < 0.0001 && n !== 0) return n.toExponential(2);
+  if (sci || (Math.abs(n) < 0.0001 && n !== 0)) return n.toExponential(2).replace("e+", "e");
   return n.toFixed(4).replace(/0+$/, "").replace(/\.$/, "");
 }
 
@@ -226,6 +226,16 @@ export function TablePanel() {
     return arr;
   }, [filtered, sortKey, sortDir]);
 
+  // Per-column notation: a column of tiny/huge values renders all-scientific.
+  const sciCols = useMemo(() => {
+    const out = new Set<string>();
+    for (const mk of visibleMetrics) {
+      const vals = sorted.map((e) => resolveNumericValue(e, mk)).filter((v): v is number => v !== undefined);
+      if (prefersSci(vals)) out.add(mk);
+    }
+    return out;
+  }, [sorted, visibleMetrics]);
+
   // Toggle sort on column header click
   function handleSort(key: string) {
     if (sortKey === key) {
@@ -427,7 +437,7 @@ export function TablePanel() {
                         class={`metric-val${isSelected ? " metric-selected" : ""}`}
                         style={valColor ? { color: valColor, fontWeight: valColor === "var(--green)" ? "700" : undefined } : undefined}
                       >
-                        {v !== undefined ? fmtNum(v) : ""}
+                        {v !== undefined ? fmtNum(v, sciCols.has(mk)) : ""}
                       </td>
                     );
                   })}

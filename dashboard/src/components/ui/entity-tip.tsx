@@ -13,6 +13,7 @@ import type { ComponentChildren } from "preact";
 
 function fmtVal(v: number): string {
   if (!isFinite(v)) return String(v);
+  if (v !== 0 && (Math.abs(v) < 1e-2 || Math.abs(v) >= 1e6)) return v.toExponential(2).replace("e+", "e");
   if (Math.abs(v) >= 1000) return v.toFixed(0);
   if (Math.abs(v) >= 10) return v.toFixed(1);
   if (Math.abs(v) >= 1) return v.toFixed(2);
