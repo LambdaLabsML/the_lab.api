@@ -26,7 +26,7 @@
 // ------------------------------------------------------------
 
 import { getBacklog, getGraph, getChartData, getAllIdeas, getExperimentProgress } from "./api";
-import { resetGlobalBestBeforeCache } from "../lib/colors";
+import { resetGlobalBestBeforeCache, setMetricDirectionOverrides } from "../lib/colors";
 import {
   backlogData,
   graphData,
@@ -144,6 +144,7 @@ function pollChartData(): Promise<void> {
       }));
       const merged = [...data.experiments, ...running];
       merged.sort(compareExps);
+      setMetricDirectionOverrides(data.metric_directions);
       resetGlobalBestBeforeCache();
       allExperiments.value = merged;
 

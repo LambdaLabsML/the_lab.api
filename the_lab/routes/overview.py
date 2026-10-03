@@ -11,6 +11,7 @@ from ..deps import (
     runner,
     REPO_DIR,
     metric_direction,
+    _read_metric_directions,
     _idea_context,
     _agents_on_idea,
     _branch_diff_summary,
@@ -266,6 +267,13 @@ def _build_leaderboard_response(
 
 # --- Endpoints ---
 
+def _resolve_descending(metric: str, sort: str | None) -> bool:
+    """Explicit ``sort`` wins; otherwise follow the metric's configured direction."""
+    if sort:
+        return sort.lower() != "asc"
+    return metric_direction(metric) != "minimize"
+
+
 @router.get("/leaderboard")
 def get_leaderboard(
     metric: str = Query(..., description="Metric to rank by (e.g. accuracy, accuracy_per_mtoken)"),
@@ -273,7 +281,7 @@ def get_leaderboard(
     recent: int = Query(default=10, description="Number of most recent experiments to show"),
     tags: str | None = Query(default=None, description="Comma-separated tags — experiments must have ALL of them (AND filter)"),
     include_details: bool = Query(default=False, description="Include per-problem metrics and experiment settings/meta"),
-    sort: str = Query(default="desc", description="Sort order: 'desc' (highest first) or 'asc' (lowest first)"),
+    sort: str | None = Query(default=None, description="Sort order: 'desc' (highest first) or 'asc' (lowest first). Defaults to the metric's configured direction (see /config/metric-directions)."),
     max_open_ideas: int = Query(default=20, description="Cap on the open_ideas list (most recently active first)"),
     max_progression: int = Query(default=10, description="Cap on the progression list (most recent improvements)"),
 ):
@@ -284,8 +292,9 @@ def get_leaderboard(
     2. **Recent** -- most recent N experiments with their metric value
     3. **Progression** -- timeline of when the global best was beaten
 
-    Use ``sort=desc`` (default) for metrics where higher is better (e.g. score),
-    or ``sort=asc`` for metrics where lower is better (e.g. convergence_gap).
+    Without ``sort``, ranking follows the metric's direction (custom overrides
+    in /config/metric-directions, else name heuristics: loss/latency/... are
+    lower-is-better). Pass ``sort=asc``/``sort=desc`` to force an order.
 
     Plus: open ideas, running experiments, key insights, and the best idea
     for this metric. Use ``tags=`` to scope to a subset of experiments.
@@ -296,7 +305,7 @@ def get_leaderboard(
         GET /api/v1/leaderboard?metric=score&sort=desc
         GET /api/v1/leaderboard?metric=convergence_gap&sort=asc&top=5
     """
-    descending = sort.lower() != "asc"
+    descending = _resolve_descending(metric, sort)
     return _build_leaderboard_response(
         metric, top, recent, tags, include_details, descending=descending,
         max_open_ideas=max_open_ideas, max_progression=max_progression,
@@ -308,7 +317,7 @@ def leaderboard_with_search(
     metric: str = Query(default="score", description="Metric to rank by"),
     q: str = Query(default="", description="Comma-separated keywords to search for in idea descriptions"),
     top: int = Query(default=10, description="Number of top experiments to show"),
-    sort: str = Query(default="desc", description="Sort order: 'desc' (highest first) or 'asc' (lowest first)"),
+    sort: str | None = Query(default=None, description="Sort order: 'desc' (highest first) or 'asc' (lowest first). Defaults to the metric's configured direction (see /config/metric-directions)."),
     max_open_ideas: int = Query(default=5, description="Cap on the open_ideas list (most recently active first)"),
     max_progression: int = Query(default=5, description="Cap on the progression list (most recent improvements)"),
     max_search_results: int = Query(default=5, description="Cap on idea search_results when q is provided"),
@@ -346,7 +355,7 @@ def leaderboard_with_search(
         GET /api/v1/leaderboard/search?fields=leaderboard,best_idea
         GET /api/v1/leaderboard/search?q=think&search_notes_limit=5
     """
-    descending = sort.lower() != "asc"
+    descending = _resolve_descending(metric, sort)
     leaderboard = _build_leaderboard_response(
         metric, top, 5, None, False, descending=descending,
         max_open_ideas=max_open_ideas, max_progression=max_progression,
@@ -626,7 +635,10 @@ def get_digest_compat(
     include_details: bool = Query(default=False, description="Include per-problem metrics and settings"),
 ):
     """Deprecated alias for ``/leaderboard``. Use ``/leaderboard`` instead."""
-    return _build_leaderboard_response(metric, top, recent, tags, include_details)
+    return _build_leaderboard_response(
+        metric, top, recent, tags, include_details,
+        descending=_resolve_descending(metric, None),
+    )
 
 
 @router.get("/wait")
@@ -1118,7 +1130,8 @@ def get_chart_data():
     Example:
         GET /api/v1/chart-data
         -> {"experiments": [{"id": 4, "metrics": {"acc": 0.91}, "idea_description": "...", ...}],
-            "running": [{"id": 6, "metrics": {...}, "_running": true, "idea_description": "...", ...}]}
+            "running": [{"id": 6, "metrics": {...}, "_running": true, "idea_description": "...", ...}],
+            "metric_directions": {"score": "minimize"}}
     """
     all_exps = store.list_all_experiments()
     completed_exps = []
@@ -1170,4 +1183,10 @@ def get_chart_data():
                 base["metrics"] = _numeric_metrics(progress) if isinstance(progress, dict) else progress
                 base["_running"] = True
                 running_progress.append(base)
-    return {"experiments": completed_exps, "running": running_progress}
+    return {
+        "experiments": completed_exps,
+        "running": running_progress,
+        # Custom direction overrides so the dashboard's better/worse logic
+        # (step chart, colors, trends) matches /leaderboard.
+        "metric_directions": _read_metric_directions(),
+    }
