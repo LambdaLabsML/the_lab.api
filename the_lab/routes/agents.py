@@ -73,6 +73,7 @@ def _enrich(entry: dict) -> dict:
 class RegisterAgentRequest(BaseModel):
     role: str | None = None
     pid: int | None = None
+    resume_agent_id: str | None = None
 
 
 # Ceiling on simultaneously-registered agents (each holds a git worktree).
@@ -84,17 +85,18 @@ except ValueError:
 
 @router.post("/api/v1/agents/register")
 def register_agent(req: RegisterAgentRequest):
-    """Allocate a 5-char agent id, create a per-agent git worktree.
+    """Create a per-agent worktree, or reactivate a retained one.
 
-    Branches a new ``agent_init_<id>`` from the most recent active idea
-    branch (or main if none), and registers a worktree at
-    ``.the_lab/agents/<id>/``. Returns ``{agent_id, worktree, branch,
-    parent_branch, role}`` so the caller can ``cd`` into the worktree
-    and pass the id back via the ``X-Agent-Id`` header.
+    A new registration branches ``agent_init_<id>`` from the most recent
+    active idea branch (or main) and creates ``.the_lab/agents/<id>/``.
+    Supplying ``resume_agent_id`` reactivates that retained checkout instead.
+    Returns ``{agent_id, worktree, branch, parent_branch, role}`` so the caller
+    can ``cd`` into the worktree and pass the id via ``X-Agent-Id``.
 
-    The agent is expected to call ``DELETE /api/v1/agents/{id}`` on
-    exit. If it crashes, ``prune_dead_agents`` removes the entry on
-    the next API server restart (when a PID is recorded).
+    The agent is expected to call
+    ``DELETE /api/v1/agents/{id}?keep_worktree=true`` on exit. If it crashes,
+    ``prune_dead_agents`` retires the entry on the next API server restart
+    (when a PID is recorded). Both paths preserve the worktree for resume.
 
     When no other agents are currently registered (i.e. this is the first
     agent of a new session), all accumulated messages from previous sessions
@@ -109,7 +111,11 @@ def register_agent(req: RegisterAgentRequest):
         live = len(agents_mod.list_agents(REPO_DIR))
     except Exception:
         live = 0
-    if live >= MAX_REGISTERED_AGENTS:
+    already_live = bool(
+        req.resume_agent_id
+        and agents_mod.lookup_agent(REPO_DIR, req.resume_agent_id)
+    )
+    if live >= MAX_REGISTERED_AGENTS and not already_live:
         raise HTTPException(
             429,
             f"agent registration limit reached ({live}/{MAX_REGISTERED_AGENTS}). "
@@ -117,7 +123,19 @@ def register_agent(req: RegisterAgentRequest):
             "THE_LAB_MAX_AGENTS.",
         )
     try:
-        result = agents_mod.register_agent(REPO_DIR, store, role=req.role, pid=req.pid)
+        if req.resume_agent_id:
+            result = agents_mod.reactivate_agent(
+                REPO_DIR,
+                req.resume_agent_id,
+                role=req.role,
+                pid=req.pid,
+            )
+        else:
+            result = agents_mod.register_agent(
+                REPO_DIR, store, role=req.role, pid=req.pid,
+            )
+    except (KeyError, FileNotFoundError) as e:
+        raise HTTPException(404, str(e))
     except Exception as e:
         raise HTTPException(500, f"failed to register agent: {sanitize_error(e)}")
     try:
@@ -342,10 +360,23 @@ def get_agent(agent_id: str, request: Request):
 
 
 @router.delete("/api/v1/agents/{agent_id}")
-def unregister_agent(agent_id: str, request: Request, keep_branch: bool = True):
-    """Remove an agent's worktree (and optionally its branch)."""
+def unregister_agent(
+    agent_id: str,
+    request: Request,
+    keep_branch: bool = True,
+    keep_worktree: bool = True,
+):
+    """Retire an agent while preserving its worktree by default.
+
+    Operators can pass ``keep_worktree=false`` for deliberate cleanup.
+    """
     _require_own_agent(request, agent_id)
-    if not agents_mod.unregister_agent(REPO_DIR, agent_id, keep_branch=keep_branch):
+    if not agents_mod.unregister_agent(
+        REPO_DIR,
+        agent_id,
+        keep_branch=keep_branch,
+        keep_worktree=keep_worktree,
+    ):
         raise HTTPException(404, f"agent '{agent_id}' not registered")
     try:
         from .. import ws as ws_mod
@@ -356,7 +387,11 @@ def unregister_agent(agent_id: str, request: Request, keep_branch: bool = True):
         })
     except Exception:
         pass
-    return {"status": "unregistered", "agent_id": agent_id}
+    return {
+        "status": "unregistered",
+        "agent_id": agent_id,
+        "worktree_preserved": keep_worktree,
+    }
 
 
 @router.get("/api/v1/agents/{agent_id}/output")
