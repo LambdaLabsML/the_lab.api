@@ -7,9 +7,9 @@
 export interface IdeaNode {
   id: number;
   description: string;
-  status: string;          // 'active' | 'concluded' | 'abandoned' | 'suggested'
-  source?: string;         // 'agent' | 'human'
-  priority?: string;       // 'normal' | 'high'
+  status: string; // 'active' | 'concluded' | 'abandoned' | 'suggested'
+  source?: string; // 'agent' | 'human'
+  priority?: string; // 'normal' | 'high'
   branch: string;
   conclusion?: string;
   created_at: string;
@@ -51,8 +51,8 @@ export interface Experiment {
   seq?: number;
   label?: string;
   description: string;
-  status: string;          // 'running' | 'completed' | 'failed' | 'cancelled' | 'pending'
-  status_msg?: string | null;  // terminal-reason detail (timeout/cap_abandoned/sigterm/error/…)
+  status: string; // 'running' | 'completed' | 'failed' | 'cancelled' | 'pending'
+  status_msg?: string | null; // terminal-reason detail (timeout/cap_abandoned/sigterm/error/…)
   idea_status?: string;
   idea_description?: string;
   metrics?: Record<string, number>;
@@ -88,7 +88,7 @@ export interface ChartDataResponse {
 /** A note attached to an idea */
 export interface Note {
   text: string;
-  level?: string;          // e.g. 'observation', 'decision', 'result'
+  level?: string; // e.g. 'observation', 'decision', 'result'
   created_at?: string;
 }
 
@@ -216,8 +216,26 @@ export interface MessageEntry {
   /** "agent:<id>" | "role:<role>" | "all" */
   to: string;
   text: string;
+  /** Optional compact one-line summary supplied by the sender. */
+  tldr?: string;
   created_at: string;
   read_by: string[];
+  /** Root message id for a conversation. Absent on legacy/root messages. */
+  thread_id?: number | null;
+  /** Immediate parent message id when this is a reply. */
+  in_reply_to?: number | null;
+  references?: Array<
+    | { kind: "idea"; id: number }
+    | { kind: "experiment"; id: string }
+    | { kind: "resource"; path: string }
+  >;
+}
+
+export interface MessagePage {
+  messages: MessageEntry[];
+  total: number;
+  limit: number;
+  offset: number;
 }
 
 export interface AgentEntry {

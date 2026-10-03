@@ -648,7 +648,7 @@ def build_notifications(request) -> list[dict]:
             )
             for idx, m in enumerate(unread):
                 origin = m.get("from_role") or m.get("from_agent") or "system"
-                text = m.get("text") or ""
+                text = m.get("tldr") or m.get("text") or ""
                 truncated = len(text) > 60
                 snippet = text[:60].rstrip()
                 preview = (snippet + "…") if truncated else snippet

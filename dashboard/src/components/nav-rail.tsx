@@ -9,6 +9,7 @@ import type { ComponentChildren } from "preact";
 import { useState, useEffect } from "preact/hooks";
 import { serverDemoMode, sidebarWidth, sidebarCollapsed } from "../state/settings";
 import { wsCatchingUp, wsConnected, wsAuthFailed, wsLastMessageAt } from "../state/ws";
+import { messagesUnreadCount } from "../state/messages";
 import { Tooltip } from "./ui";
 
 function relAgo(ms: number | null): string {
@@ -55,6 +56,7 @@ export function NavRail({
   const wsState = wsAuthFailed.value ? "auth" : wsCatchingUp.value ? "busy" : wsConnected.value ? "on" : "off";
   const wsLabel = wsAuthFailed.value ? "auth failed" : wsCatchingUp.value ? "catching up…" : wsConnected.value ? "connected" : "reconnecting…";
   const lastStr = relAgo(wsLastMessageAt.value);
+  const unreadMessages = messagesUnreadCount.value;
 
   const item = (it: RailItem) => {
     const active = section === it.id && !settingsOpen;
@@ -64,11 +66,15 @@ export function NavRail({
         type="button"
         class={`nav-rail-btn${active ? " is-active" : ""}`}
         onClick={() => onSelect(it.id)}
-        title={it.label}
+        title={it.id === "messages" && unreadMessages ? `${it.label} — ${unreadMessages} unread` : it.label}
+        aria-label={it.id === "messages" && unreadMessages ? `${it.label}, ${unreadMessages} unread` : it.label}
         aria-current={active ? "page" : undefined}
       >
         <span class="nav-rail-icon" aria-hidden="true">{it.icon}</span>
         <span class="nav-rail-label">{it.label}</span>
+        {it.id === "messages" && unreadMessages > 0 && (
+          <span class="nav-rail-unread" aria-hidden="true">{unreadMessages > 99 ? "99+" : unreadMessages}</span>
+        )}
       </button>
     );
   };

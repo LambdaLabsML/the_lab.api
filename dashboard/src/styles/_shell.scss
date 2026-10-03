@@ -89,6 +89,20 @@
   font-size: 9px;       /* rail labels stay tiny regardless of the user's font scale */
   letter-spacing: 0.02em;
 }
+.nav-rail-unread {
+  position: absolute;
+  top: 4px;
+  right: 3px;
+  min-width: 12px;
+  padding: 1px 3px;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--bg);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.1;
+  text-align: center;
+}
 
 /* ── Secondary panel (level 2) ──────────────────────────────────────────── */
 .nav-secondary {

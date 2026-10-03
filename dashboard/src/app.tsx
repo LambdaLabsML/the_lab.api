@@ -73,6 +73,7 @@ import {
 import { startPolling, stopPolling } from "./state/polling";
 import { getQueue } from "./state/api";
 import { subscribeWsEvents, startWs, stopWs } from "./state/ws";
+import { startMessageNotifications } from "./state/messages";
 import {
   allExperiments,
   allIdeas,
@@ -892,11 +893,13 @@ export function App() {
     startPolling();
     startWs();
     startAgentActivity();
+    const stopMessageNotifications = startMessageNotifications();
     const dispose = effect(syncUrlFromSignals);
     return () => {
       window.removeEventListener("popstate", readFiltersFromUrl);
       stopPolling();
       stopWs();
+      stopMessageNotifications();
       dispose();
     };
   }, []);
@@ -1199,11 +1202,9 @@ export function App() {
         <div class="app-content">
           {navSection === "activity" && <ActivityPane />}
           {navSection === "messages" && (
-            <div class="app-scroll">
-              <main class="dashboard-page">
-                <MessagesView />
-              </main>
-            </div>
+            <main class="messages-page">
+              <MessagesView />
+            </main>
           )}
 
           {navSection === "review" && (

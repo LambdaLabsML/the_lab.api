@@ -1,373 +1,700 @@
-import { useEffect, useMemo, useRef, useState } from "preact/hooks";
-import { listAgents, listMessages } from "../state/api";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
+import {
+  getMessage,
+  getMessagePage,
+  listAgents,
+  listMessagesPage,
+  sendMessage,
+} from "../state/api";
 import { useLiveRefresh } from "../lib/hooks";
 import type { AgentEntry, MessageEntry } from "../lib/types";
 import { Badge, EmptyState, IconButton } from "../components/ui";
-import { agentColor } from "../lib/colors";
-import { messagesReadByMe } from "../state/settings";
+import { agentColor, agentInitials } from "../lib/colors";
+import { messagesReadByMe, serverDemoMode } from "../state/settings";
+import {
+  markMessagesReadByMe,
+  markThreadReadByMe,
+  registerDashboardUserMessage,
+} from "../state/messages";
 import { focusMessageId } from "../state/agent-activity";
-import { AgentPill } from "../components/agent-pill";
 import { RichText, stripRouting } from "../components/rich-text";
-
-/** Format a created_at ISO timestamp as "Xs ago" / "Xm ago" / "Xh ago" / "Xd ago". */
-function relativeTime(iso: string): string {
-  if (!iso) return "--";
-  const t = Date.parse(iso);
-  if (Number.isNaN(t)) return iso;
-  const sec = Math.max(0, Math.floor((Date.now() - t) / 1000));
-  if (sec < 60) return `${sec}s ago`;
-  const min = Math.floor(sec / 60);
-  if (min < 60) return `${min}m ago`;
-  const hr = Math.floor(min / 60);
-  if (hr < 48) return `${hr}h ago`;
-  const day = Math.floor(hr / 24);
-  return `${day}d ago`;
-}
+import { IdeaLink } from "../components/idea-link";
+import { ExpLink } from "../components/exp-link";
 
 type ReadFilter = "all" | "unread" | "read" | "agent-unread";
 type SortOrder = "newest" | "oldest";
+const threadKey = (m: MessageEntry) => m.thread_id ?? m.id;
+const timeOf = (m: MessageEntry) => Date.parse(m.created_at) || m.id;
+const recipientOf = (m: MessageEntry) =>
+  m.from_agent && m.from_agent !== "user"
+    ? `agent:${m.from_agent}`
+    : m.from_role && m.from_role !== "user"
+      ? `role:${m.from_role}`
+      : null;
 
-/** Mirror of the server's addressing rules (messages.is_for / unread_for):
- *  a message is in an agent's inbox if it's to them (id/role) or a broadcast
- *  from someone else — never their own messages. */
-function inboxOf(m: MessageEntry, agentId: string, role: string | undefined): boolean {
-  if (m.from_agent === agentId) return false;
-  if (m.to === "all") return true;
-  if (m.to === `agent:${agentId}`) return true;
-  if (role && m.to === `role:${role}`) return true;
-  return false;
+function relativeTime(iso: string) {
+  const s = Math.max(0, Math.floor((Date.now() - Date.parse(iso)) / 1000));
+  if (!Number.isFinite(s)) return iso || "--";
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 172800) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
+function inboxOf(m: MessageEntry, agent: string, role?: string) {
+  return (
+    m.from_agent !== agent &&
+    (m.to === "all" ||
+      m.to === `agent:${agent}` ||
+      (!!role && m.to === `role:${role}`))
+  );
 }
 
-function isLong(text: string): boolean {
-  return text.length > 360 || (text.match(/\n/g)?.length ?? 0) > 8;
+function Participant({ id }: { id: string }) {
+  const color = id === "everyone" ? "var(--text-faint)" : agentColor(id);
+  return (
+    <span class="thread-participant" style={{ "--participant-color": color } as Record<string, string>}>
+      <span class="thread-participant-avatar" aria-hidden="true">{agentInitials(id)}</span>
+      <span>{id}</span>
+    </span>
+  );
+}
+
+function MessageReferences({ message }: { message: MessageEntry }) {
+  if (!message.references?.length) return null;
+  return (
+    <div class="thread-message-references" aria-label="Attached references">
+      {message.references.map((ref, index) => {
+        if (ref.kind === "idea") return <IdeaLink key={`idea-${ref.id}-${index}`} id={ref.id} />;
+        if (ref.kind === "experiment") return <ExpLink key={`exp-${ref.id}-${index}`} label={ref.id} />;
+        const href = `/api/v1/files/${ref.path.split("/").map(encodeURIComponent).join("/")}`;
+        return <a key={`resource-${ref.path}-${index}`} href={href} target="_blank" rel="noopener noreferrer">↗ {ref.path}</a>;
+      })}
+    </div>
+  );
 }
 
 export function MessagesView() {
-  const [agents, setAgents] = useState<AgentEntry[]>([]);
-  const [messages, setMessages] = useState<MessageEntry[]>([]);
-  const [loaded, setLoaded] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  // Filter / sort controls
-  const [query, setQuery] = useState("");
-  const [agentFilter, setAgentFilter] = useState("");
-  const [readFilter, setReadFilter] = useState<ReadFilter>("all");
-  const [sort, setSort] = useState<SortOrder>("newest");
-  /** "" = me (the UI user); otherwise read-only perspective of that agent. */
-  const [viewAs, setViewAs] = useState("");
-  const [expanded, setExpanded] = useState<Set<number>>(new Set());
-
-  // Re-render every ~30s so "Xm ago" stays fresh
-  const [, setTick] = useState(0);
-  const cancelledRef = useRef(false);
-
-  // My personal read state — client-side, reactive (only used in "me" view).
+  const [agents, setAgents] = useState<AgentEntry[]>([]),
+    [messages, setMessages] = useState<MessageEntry[]>([]);
+  const [loaded, setLoaded] = useState(false),
+    [error, setError] = useState<string | null>(null);
+  const [messageTotal, setMessageTotal] = useState(0);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [pendingFocus, setPendingFocus] = useState<number | null>(null);
+  const [newThreadOpen, setNewThreadOpen] = useState(false);
+  const [query, setQuery] = useState(""),
+    [agentFilter, setAgentFilter] = useState(""),
+    [conversationScope, setConversationScope] = useState<"all" | "mine">("all"),
+    [readFilter, setReadFilter] = useState<ReadFilter>("all"),
+    [sort, setSort] = useState<SortOrder>("newest"),
+    [viewAs, setViewAs] = useState("");
+  const [selectedThread, setSelectedThread] = useState<number | null>(null),
+    [threadMessages, setThreadMessages] = useState<MessageEntry[]>([]),
+    [threadTotal, setThreadTotal] = useState(0),
+    [threadLoading, setThreadLoading] = useState(false),
+    [threadError, setThreadError] = useState<string | null>(null);
+  const [newTo, setNewTo] = useState("all"),
+    [newTldr, setNewTldr] = useState(""),
+    [newText, setNewText] = useState(""),
+    [replyTo, setReplyTo] = useState("all"),
+    [replyTldr, setReplyTldr] = useState(""),
+    [replyText, setReplyText] = useState(""),
+    [sending, setSending] = useState<"new" | "reply" | null>(null),
+    [sendError, setSendError] = useState<string | null>(null);
+  const cancelled = useRef(false),
+    requestNumber = useRef(0),
+    selectedThreadRef = useRef<number | null>(null),
+    viewAsRef = useRef(""),
+    replyTargetThreadRef = useRef<number | null>(null);
+  const sendingRef = useRef(false);
+  const replyDrafts = useRef(new Map<number, string>());
+  const replyTldrDrafts = useRef(new Map<number, string>());
+  const messageListRef = useRef<HTMLOListElement>(null);
+  const followNewestRef = useRef(true);
+  const scrollSnapshot = useRef<{ thread: number; first: number; last: number; height: number; top: number } | null>(null);
   const readMap = messagesReadByMe.value;
-  const isReadByMe = (id: number) => !!readMap[String(id)];
-  function setReadByMe(ids: number[], read: boolean) {
-    const next = { ...messagesReadByMe.value };
-    for (const id of ids) {
-      if (read) next[String(id)] = true;
-      else delete next[String(id)];
-    }
-    messagesReadByMe.value = next;
-  }
+  const demo = serverDemoMode.value;
+  const readByMe = (id: number) => !!readMap[String(id)];
+  const setReadByMe = (ids: number[], read: boolean) =>
+    markMessagesReadByMe(ids, read);
+  const roles = useMemo(
+    () => [...new Set(agents.map((a) => a.role).filter(Boolean))].sort(),
+    [agents],
+  );
+  const roleByAgent = useMemo(
+    () =>
+      Object.fromEntries(agents.map((a) => [a.agent_id, a.role || "default"])),
+    [agents],
+  );
+  const labelAgent = (id: string) =>
+    roleByAgent[id] ? `${id} · ${roleByAgent[id]}` : id;
+  const describeRecipient = (to: string) =>
+    to === "all"
+      ? "everyone"
+      : to.replace(/^agent:/, "").replace(/^role:/, "role:");
+  const inPerspective = !!viewAs;
+  selectedThreadRef.current = selectedThread;
+  viewAsRef.current = viewAs;
+  const relevant = (m: MessageEntry) =>
+    !inPerspective || inboxOf(m, viewAs, roleByAgent[viewAs]);
+  const isRead = (m: MessageEntry) =>
+    inPerspective
+      ? (m.read_by || []).includes(viewAs)
+      : m.from_agent === "user" ||
+        m.from_agent === "agent:user" ||
+        readByMe(m.id);
 
   async function refresh() {
     try {
-      const [agentList, msgs] = await Promise.all([
-        listAgents().catch(() => [] as AgentEntry[]),
-        listMessages(200).catch(() => [] as MessageEntry[]),
+      const [a, m] = await Promise.all([
+        listAgents().catch(() => []),
+        listMessagesPage(200),
       ]);
-      if (cancelledRef.current) return;
-      setAgents(agentList);
-      setMessages(msgs);
-      setError(null);
-      setLoaded(true);
-    } catch (err) {
-      if (cancelledRef.current) return;
-      setError(err instanceof Error ? err.message : String(err));
-      setLoaded(true);
+      if (!cancelled.current) {
+        setAgents(a);
+        setMessages((old) => [...new Map([...old, ...m.messages].map((item) => [item.id, item])).values()]);
+        setMessageTotal(m.total);
+        setError(null);
+        setLoaded(true);
+        const selected = selectedThreadRef.current;
+        if (selected != null) void loadThread(selected);
+      }
+    } catch (e) {
+      if (!cancelled.current) {
+        setError(e instanceof Error ? e.message : String(e));
+        setLoaded(true);
+      }
     }
   }
-
+  async function loadOlderConversations() {
+    if (loadingOlder) return;
+    setLoadingOlder(true);
+    try {
+      const page = await listMessagesPage(200, messages.length);
+      if (!cancelled.current) {
+        setMessages((old) => [...new Map([...old, ...page.messages].map((m) => [m.id, m])).values()]);
+        setMessageTotal(page.total);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally { setLoadingOlder(false); }
+  }
+  async function loadThread(id: number, offset = 0, append = false) {
+    const request = ++requestNumber.current;
+    setThreadLoading(true);
+    setThreadError(null);
+    try {
+      const page = await getMessagePage(id, 200, offset);
+      if (
+        !cancelled.current &&
+        request === requestNumber.current &&
+        selectedThreadRef.current === id
+      ) {
+        setThreadTotal(page.total);
+        setThreadMessages((old) =>
+          [
+            ...new Map(
+              [...old.filter((m) => threadKey(m) === id), ...page.messages].map((m) => [
+                m.id,
+                m,
+              ]),
+            ).values(),
+          ].sort((a, b) => timeOf(a) - timeOf(b)),
+        );
+        if (!viewAsRef.current) {
+          markMessagesReadByMe(page.messages.map((m) => m.id));
+          markThreadReadByMe(id);
+        }
+        if (!append && replyTargetThreadRef.current !== id) {
+          const latestOther = [...page.messages]
+            .sort((a, b) => timeOf(b) - timeOf(a))
+            .find(recipientOf);
+          setReplyTo(latestOther ? recipientOf(latestOther)! : page.messages[0]?.to || "all");
+          replyTargetThreadRef.current = id;
+        }
+      }
+    } catch (e) {
+      if (!cancelled.current && request === requestNumber.current && selectedThreadRef.current === id)
+        setThreadError(e instanceof Error ? e.message : String(e));
+    } finally {
+      if (!cancelled.current && request === requestNumber.current)
+        setThreadLoading(false);
+    }
+  }
   useLiveRefresh(["message_received", "agent_changed"], refresh, 30_000);
   useEffect(() => {
-    cancelledRef.current = false;
+    cancelled.current = false;
     refresh();
-    const tickT = window.setInterval(() => setTick((n) => n + 1), 30000);
     return () => {
-      cancelledRef.current = true;
-      window.      window.clearInterval(tickT);
+      cancelled.current = true;
     };
   }, []);
-
-  // Deep-link from the sidebar: expand + scroll to + flash the focused message.
-  const focusId = focusMessageId.value;
-  const [flashId, setFlashId] = useState<number | null>(null);
   useEffect(() => {
-    if (focusId == null || !loaded) return;
-    if (!messages.some((m) => m.id === focusId)) return;
-    focusMessageId.value = null;                       // consume
-    setExpanded((prev) => { const n = new Set(prev); n.add(focusId); return n; });
-    setFlashId(focusId);
-    requestAnimationFrame(() => {
-      document.getElementById(`msg-${focusId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
-    });
-    const t = window.setTimeout(() => setFlashId(null), 2500);
-    return () => window.clearTimeout(t);
-  }, [focusId, loaded, messages]);
-
-  const roleByAgent = useMemo(() => {
-    const map: Record<string, string> = {};
-    for (const a of agents) map[a.agent_id] = a.role || "default";
-    return map;
-  }, [agents]);
-
-  function labelAgent(id: string): string {
-    const role = roleByAgent[id];
-    return role ? `${id} · ${role}` : id;
-  }
-  function describeRecipient(to: string): string {
-    if (to === "all") return "everyone";
-    if (to.startsWith("agent:")) return labelAgent(to.slice(6));
-    if (to.startsWith("role:")) return `role:${to.slice(5)}`;
-    return to;
-  }
-
-  // Perspective: "me" uses local read state; an agent uses its server read_by.
-  const inPerspective = !!viewAs;
-  const viewRole = viewAs ? roleByAgent[viewAs] : undefined;
-  const readStateOf = (m: MessageEntry): boolean =>
-    inPerspective ? (m.read_by || []).includes(viewAs) : isReadByMe(m.id);
-  const relevant = (m: MessageEntry): boolean =>
-    inPerspective ? inboxOf(m, viewAs, viewRole) : true;
+    if (selectedThread != null) {
+      setReplyText(replyDrafts.current.get(selectedThread) || "");
+      setReplyTldr(replyTldrDrafts.current.get(selectedThread) || "");
+      replyTargetThreadRef.current = null;
+      setThreadMessages([]);
+      setThreadTotal(0);
+      loadThread(selectedThread);
+      if (!inPerspective) markThreadReadByMe(selectedThread);
+    } else setThreadMessages([]);
+  }, [selectedThread, inPerspective]);
 
   const displayed = useMemo(() => {
     const q = query.trim().toLowerCase();
-    let list = messages.filter(relevant);
-
-    if (agentFilter) {
-      list = list.filter(
-        (m) =>
-          m.from_agent === agentFilter ||
-          m.to === `agent:${agentFilter}` ||
-          (m.read_by || []).includes(agentFilter),
-      );
-    }
-    if (readFilter === "unread") list = list.filter((m) => !readStateOf(m));
-    else if (readFilter === "read") list = list.filter((m) => readStateOf(m));
-    else if (readFilter === "agent-unread") list = list.filter((m) => !(m.read_by || []).length);
-
-    if (q) {
-      list = list.filter((m) =>
-        `${m.from_agent || ""} ${m.from_role || ""} ${m.to} ${describeRecipient(m.to)} ${m.text} ${(m.read_by || []).join(" ")}`
+    return messages.filter(relevant).filter((m) => {
+      if (
+        agentFilter &&
+        m.from_agent !== agentFilter &&
+        m.to !== `agent:${agentFilter}` &&
+        !(m.read_by || []).includes(agentFilter)
+      )
+        return false;
+      if (readFilter === "unread" && isRead(m)) return false;
+      if (readFilter === "read" && !isRead(m)) return false;
+      if (readFilter === "agent-unread" && (m.read_by || []).length)
+        return false;
+      return (
+        !q ||
+        `${m.from_agent} ${m.from_role} ${m.to} ${describeRecipient(m.to)} ${m.tldr || ""} ${m.text} ${(m.references || []).map((ref) => "path" in ref ? ref.path : ref.id).join(" ")}`
           .toLowerCase()
-          .includes(q),
+          .includes(q)
       );
+    });
+  }, [messages, query, agentFilter, readFilter, viewAs, readMap, roleByAgent]);
+  const threads = useMemo(() => {
+    const groups = new Map<number, MessageEntry[]>();
+    displayed.forEach((m) =>
+      groups.set(threadKey(m), [...(groups.get(threadKey(m)) || []), m]),
+    );
+    return [...groups.entries()]
+      .map(([id, items]) => {
+        const latest = items.reduce((a, b) => (timeOf(a) > timeOf(b) ? a : b));
+        return {
+          id,
+          items,
+          latest,
+          unread: items.filter((m) => !isRead(m)).length,
+        };
+      })
+      .filter(
+        (thread) =>
+          conversationScope === "all" ||
+          thread.items.some(
+            (m) =>
+              m.from_agent === "user" ||
+              m.from_agent === "agent:user" ||
+              m.to === "user" ||
+              m.to === "agent:user",
+          ),
+      )
+      .sort((a, b) =>
+        sort === "newest"
+          ? timeOf(b.latest) - timeOf(a.latest)
+          : timeOf(a.latest) - timeOf(b.latest),
+      );
+  }, [displayed, sort, readMap, viewAs, conversationScope]);
+  const focusId = focusMessageId.value;
+  useLayoutEffect(() => {
+    const list = messageListRef.current;
+    if (!list || selectedThread == null || !threadMessages.length || threadKey(threadMessages[0]) !== selectedThread) return;
+    const first = threadMessages[0].id;
+    const last = threadMessages[threadMessages.length - 1].id;
+    const previous = scrollSnapshot.current;
+    const changedThread = previous?.thread !== selectedThread;
+    if (pendingFocus == null && focusId == null) {
+      if (!changedThread && previous.first !== first && previous.last === last) {
+        // Prepending history should keep the message being read in place.
+        list.scrollTop = previous.top + list.scrollHeight - previous.height;
+      } else if (changedThread || followNewestRef.current) {
+        list.scrollTop = list.scrollHeight;
+        followNewestRef.current = true;
+      }
+    } else {
+      // Explicit message links take precedence over following the newest reply.
+      followNewestRef.current = false;
     }
-    list = list.slice().sort((a, b) => {
-      const da = Date.parse(a.created_at) || a.id;
-      const db = Date.parse(b.created_at) || b.id;
-      return sort === "newest" ? db - da : da - db;
-    });
-    return list;
-  }, [messages, query, agentFilter, readFilter, sort, viewAs, readMap, roleByAgent]);
-
-  const relevantMsgs = messages.filter(relevant);
-  const unreadCount = relevantMsgs.filter((m) => !readStateOf(m)).length;
-  const listeningAgents = agents.filter((a) => a.listening);
-  const who = inPerspective ? viewAs : "you";
-  const countLabel = !loaded
-    ? "…"
-    : `${displayed.length} shown · ${unreadCount} unread by ${who}`;
-
-  function toggleExpand(id: number) {
-    setExpanded((prev) => {
-      const n = new Set(prev);
-      if (n.has(id)) n.delete(id);
-      else n.add(id);
-      return n;
-    });
+    scrollSnapshot.current = { thread: selectedThread, first, last, height: list.scrollHeight, top: list.scrollTop };
+  }, [selectedThread, threadMessages, pendingFocus, focusId]);
+  useEffect(() => {
+    if (focusId == null || !loaded) return;
+    const focus = (message: MessageEntry) => {
+      if (cancelled.current || focusMessageId.value !== focusId) return;
+      focusMessageId.value = null;
+      setConversationScope("all");
+      setNewThreadOpen(false);
+      setSelectedThread(threadKey(message));
+      setPendingFocus(message.id);
+    };
+    const found = messages.find((m) => m.id === focusId);
+    if (found) focus(found);
+    else
+      getMessage(focusId)
+        .then(focus)
+        .catch((e) => { if (!cancelled.current) setError(String(e)); });
+  }, [focusId, loaded, messages]);
+  useEffect(() => {
+    if (pendingFocus == null || threadLoading || threadError || !threadMessages.length || threadKey(threadMessages[0]) !== selectedThread) return;
+    const element = document.getElementById(`thread-message-${pendingFocus}`);
+    if (element) {
+      element.scrollIntoView({ behavior: "smooth", block: "center" });
+      setPendingFocus(null);
+    } else if (threadMessages.length < threadTotal && selectedThread != null) {
+      void loadThread(selectedThread, threadMessages.length, true);
+    }
+  }, [pendingFocus, threadMessages, threadLoading, threadTotal, threadError]);
+  async function submit(kind: "new" | "reply") {
+    const text = (kind === "new" ? newText : replyText).trim(),
+      to = kind === "new" ? newTo : replyTo,
+      tldr = (kind === "new" ? newTldr : replyTldr).trim() || undefined;
+    if (!text || sendingRef.current || demo || inPerspective) return;
+    if (kind === "reply" && (threadLoading || !threadMessages.length || threadKey(threadMessages[0]) !== selectedThread)) return;
+    sendingRef.current = true;
+    const sentThread = selectedThread;
+    setSending(kind);
+    setSendError(null);
+    try {
+      const parent =
+        kind === "reply"
+          ? threadMessages[threadMessages.length - 1]
+          : undefined;
+      const sent = await sendMessage(
+        to,
+        text,
+        parent ? { thread_id: selectedThread!, in_reply_to: parent.id, tldr } : { tldr },
+      );
+      registerDashboardUserMessage(sent);
+      if (kind === "new") {
+        setNewText("");
+        setNewTldr("");
+        setNewThreadOpen(false);
+        setSelectedThread(threadKey(sent));
+      } else {
+        if (sentThread != null) replyDrafts.current.delete(sentThread);
+        if (sentThread != null) replyTldrDrafts.current.delete(sentThread);
+        if (selectedThreadRef.current === sentThread) {
+          followNewestRef.current = true;
+          setReplyText("");
+          setReplyTldr("");
+          setThreadMessages((old) => [...old, sent]);
+        }
+      }
+      await refresh();
+    } catch (e) {
+      setSendError(e instanceof Error ? e.message : String(e));
+    } finally {
+      sendingRef.current = false;
+      setSending(null);
+    }
   }
+  const picker = (value: string, set: (v: string) => void, label: string) => (
+    <select
+      class="messages-select"
+      aria-label={label}
+      disabled={demo || inPerspective || !!sending}
+      value={value}
+      onChange={(e) => set((e.target as HTMLSelectElement).value)}
+    >
+      <option value="all">All agents</option>
+      {value !== "all" && !agents.some((a) => value === `agent:${a.agent_id}`) && !roles.some((r) => value === `role:${r}`) && <option value={value}>{value}</option>}
+      <optgroup label="Agents">
+        {agents.map((a) => (
+          <option key={a.agent_id} value={`agent:${a.agent_id}`}>
+            {labelAgent(a.agent_id)}
+          </option>
+        ))}
+      </optgroup>
+      {roles.length > 0 && (
+        <optgroup label="Roles">
+          {roles.map((r) => (
+            <option key={r} value={`role:${r}`}>
+              role:{r}
+            </option>
+          ))}
+        </optgroup>
+      )}
+    </select>
+  );
+  const selected = threads.find((t) => t.id === selectedThread);
 
   return (
-    <div id="messages-container">
-      <div class="pane-bar">
-        <h2 class="pane-bar-title">Messages</h2>
-        <span class="pane-bar-count">{countLabel}</span>
-        <div class="pane-bar-actions">
-          {!inPerspective && (
-            <IconButton
-              onClick={() => setReadByMe(displayed.map((m) => m.id), true)}
-              title="Mark all shown messages read (by you)"
-            >
-              ✓✓ Read all
-            </IconButton>
-          )}
-          <IconButton onClick={() => refresh()} title="Refresh">↺</IconButton>
-        </div>
-      </div>
-
-      {/* ── Sort + filter bar ── */}
-      <div class="messages-filterbar">
-        <input
-          class="messages-search"
-          type="search"
-          placeholder="Search from / to / text…"
-          value={query}
-          onInput={(e) => setQuery((e.target as HTMLInputElement).value)}
-        />
-        <label class="messages-viewas" title="See messages from another agent's perspective (read-only)">
-          <span>view as</span>
-          <select
-            class="messages-select"
-            value={viewAs}
-            onChange={(e) => setViewAs((e.target as HTMLSelectElement).value)}
-            style={viewAs ? { color: agentColor(viewAs), fontWeight: 600 } : undefined}
-          >
-            <option value="">you (the dashboard)</option>
-            {agents.map((a) => (
-              <option key={a.agent_id} value={a.agent_id}>{labelAgent(a.agent_id)}{a.listening ? " · live" : ""}</option>
-            ))}
-          </select>
-        </label>
-        <select
-          class="messages-select"
-          value={agentFilter}
-          title="Filter by agent (sender, recipient, or reader)"
-          onChange={(e) => setAgentFilter((e.target as HTMLSelectElement).value)}
-        >
-          <option value="">All agents</option>
-          {agents.map((a) => (
-            <option key={a.agent_id} value={a.agent_id}>{labelAgent(a.agent_id)}{a.listening ? " · live" : ""}</option>
-          ))}
-        </select>
-        <select
-          class="messages-select"
-          value={readFilter}
-          title="Filter by read state"
-          onChange={(e) => setReadFilter((e.target as HTMLSelectElement).value as ReadFilter)}
-        >
-          <option value="all">All</option>
-          <option value="unread">{inPerspective ? `Unseen by ${viewAs}` : "Unread by you"}</option>
-          <option value="read">{inPerspective ? `Seen by ${viewAs}` : "Read by you"}</option>
-          <option value="agent-unread">No agent has read</option>
-        </select>
-        <select
-          class="messages-select"
-          value={sort}
-          title="Sort order"
-          onChange={(e) => setSort((e.target as HTMLSelectElement).value as SortOrder)}
-        >
-          <option value="newest">Newest first</option>
-          <option value="oldest">Oldest first</option>
-        </select>
-      </div>
-
-      {listeningAgents.length > 0 && (
-        <div class="messages-listening">
-          <span class="messages-listening-label"><span class="messages-listening-dot" />listening now</span>
-          {listeningAgents.map((a) => (
+    <div id="messages-container" class={`message-threads${selectedThread != null || newThreadOpen ? " has-selection" : ""}`}>
+      <div class="thread-layout">
+        <div class="thread-sidebar">
+          <div class="thread-sidebar-toolbar">
+            <input
+              class="messages-search"
+              type="search"
+              aria-label="Search conversations"
+              placeholder="Search messages…"
+              value={query}
+              onInput={(e) => setQuery((e.target as HTMLInputElement).value)}
+            />
             <button
-              key={a.agent_id}
-              class="messages-listening-chip"
-              title={`Actively running the-lab messages — click to view ${a.agent_id}'s inbox`}
-              onClick={() => setViewAs(a.agent_id)}
+              class="ui-btn thread-new-button"
+              type="button"
+              disabled={demo || inPerspective}
+              onClick={() => {
+                setSendError(null);
+                setSelectedThread(null);
+                setNewThreadOpen(true);
+              }}
             >
-              {labelAgent(a.agent_id)}
+              + New
+            </button>
+            <IconButton onClick={refresh} title="Refresh">↺</IconButton>
+          </div>
+          <div class="thread-sidebar-subhead">
+            <span>{loaded ? `${threads.length} threads` : "Loading…"}</span>
+            <details class="thread-filters">
+              <summary>Filters</summary>
+              <div class="thread-filter-menu">
+                <label>
+                  <span>View as</span>
+                  <select class="messages-select" value={viewAs} onChange={(e) => setViewAs((e.target as HTMLSelectElement).value)}>
+                    <option value="">you (dashboard)</option>
+                    {agents.map((a) => <option key={a.agent_id} value={a.agent_id}>{labelAgent(a.agent_id)}</option>)}
+                  </select>
+                </label>
+                <label>
+                  <span>Participant</span>
+                  <select class="messages-select" value={agentFilter} onChange={(e) => setAgentFilter((e.target as HTMLSelectElement).value)}>
+                    <option value="">All agents</option>
+                    {agents.map((a) => <option key={a.agent_id} value={a.agent_id}>{labelAgent(a.agent_id)}</option>)}
+                  </select>
+                </label>
+                <select class="messages-select" aria-label="Conversation scope" value={conversationScope} onChange={(e) => setConversationScope((e.target as HTMLSelectElement).value as "all" | "mine")}>
+                  <option value="all">All threads</option>
+                  <option value="mine">My conversations</option>
+                </select>
+                <select class="messages-select" aria-label="Read status" value={readFilter} onChange={(e) => setReadFilter((e.target as HTMLSelectElement).value as ReadFilter)}>
+                  <option value="all">All messages</option>
+                  <option value="unread">Unread</option>
+                  <option value="read">Read</option>
+                  <option value="agent-unread">No agent has read</option>
+                </select>
+                <select class="messages-select" aria-label="Sort order" value={sort} onChange={(e) => setSort((e.target as HTMLSelectElement).value as SortOrder)}>
+                  <option value="newest">Latest activity</option>
+                  <option value="oldest">Oldest activity</option>
+                </select>
+              </div>
+            </details>
+          </div>
+          {inPerspective && <div class="messages-perspective-note">Viewing {labelAgent(viewAs)} read-only</div>}
+          {error && <div class="agents-error">{error}</div>}
+          <aside class="thread-list" aria-label="Message threads">
+          {threads.map((t) => (
+            <button
+              key={t.id}
+              class={`thread-list-row${selectedThread === t.id ? " is-selected" : ""}`}
+              onClick={() => {
+                setSendError(null);
+                setNewThreadOpen(false);
+                setSelectedThread(t.id);
+              }}
+            >
+              <span class="thread-list-line">
+                <Participant id={t.latest.from_agent ?? t.latest.from_role ?? "system"} />
+                <span class="thread-list-time">
+                  {relativeTime(t.latest.created_at)}
+                </span>
+              </span>
+              <span class="thread-list-preview">
+                {stripRouting(t.latest.tldr || t.latest.text)}
+              </span>
+              <span class="thread-list-meta">
+                <span>
+                  {t.items.length} msg{t.items.length === 1 ? "" : "s"}
+                </span>
+                {t.unread > 0 && <Badge tone="active">{t.unread} unread</Badge>}
+              </span>
             </button>
           ))}
+          {messages.length < messageTotal && <button class="thread-load-more" disabled={loadingOlder} onClick={loadOlderConversations}>{loadingOlder ? "Loading…" : "Load older conversations"}</button>}
+          {!threads.length && (
+            <EmptyState
+              icon="✉"
+              title="No threads"
+              body="Start a new conversation."
+            />
+          )}
+          </aside>
         </div>
-      )}
-
-      {inPerspective && (
-        <div class="messages-perspective-note">
-          Viewing <b style={{ color: agentColor(viewAs) }}>{labelAgent(viewAs)}</b>'s inbox — read-only;
-          nothing is marked read for them.
-        </div>
-      )}
-
-      {error && <div class="agents-error">{error}</div>}
-
-      <section class="agents-messages">
-        {displayed.length === 0 ? (
-          <EmptyState
-            icon="✉"
-            title={messages.length === 0 ? "No messages yet" : "No messages match"}
-            body={
-              messages.length === 0 ? (
-                <>
-                  Messages sent here arrive in agents' <code>_notifications</code> on their next API call.
-                  Use the ✉ button below or <code>POST /api/v1/messages</code>.
-                </>
-              ) : (
-                <>Adjust the search, filters, or perspective above to see more.</>
-              )
-            }
-          />
-        ) : (
-          <ol class="msg-list">
-            {displayed.map((m) => {
-              const read = readStateOf(m);
-              const readers = m.read_by || [];
-              const long = isLong(m.text);
-              const open = expanded.has(m.id);
-              const sColor = agentColor(m.from_agent);
-              const toId = m.to === "all" ? "all" : m.to.replace(/^agent:|^role:/, "");
-              return (
-                <li class={`msg${read ? " is-read" : " is-new"}${flashId === m.id ? " is-focus" : ""}`}
-                  key={m.id} id={`msg-${m.id}`}>
-                  <div class="msg-main">
-                    <div class="msg-head">
-                      <span class="msg-dot" style={{ background: sColor }} title={`agent ${m.from_agent ?? "system"}`} />
-                      {/* shared AgentPill language (see DESIGN.md) */}
-                      <AgentPill id={m.from_agent ?? m.from_role ?? "system"} />
-                      <span class="msg-arrow">→</span>
-                      <AgentPill id={toId} />
-                      <span class="msg-time" title={m.created_at}>{relativeTime(m.created_at)}</span>
-                      {inPerspective ? (
-                        <span
-                          class={`msg-readdot is-static${read ? " is-read" : ""}`}
-                          title={read ? `Seen by ${viewAs}` : `Not seen by ${viewAs}`}
-                        />
-                      ) : (
+        <section class="thread-detail">
+          {newThreadOpen ? (
+            <div class="thread-new-panel">
+              <div class="thread-detail-head">
+                <button class="thread-back" type="button" onClick={() => setNewThreadOpen(false)} aria-label="Back to conversations">←</button>
+                <span>New thread</span>
+              </div>
+              <form class="thread-new-form" onSubmit={(e) => { e.preventDefault(); submit("new"); }}>
+                <label><span>To</span>{picker(newTo, setNewTo, "New thread recipient")}</label>
+                <label><span>TL;DR <small>optional</small></span><input class="thread-compose-tldr" disabled={demo || inPerspective || !!sending} value={newTldr} maxLength={500} onInput={(e) => setNewTldr((e.target as HTMLInputElement).value)} placeholder="A short summary" /></label>
+                <label class="thread-new-message"><span>Message</span><textarea autoFocus rows={12} disabled={demo || inPerspective || !!sending} value={newText} onInput={(e) => setNewText((e.target as HTMLTextAreaElement).value)} placeholder={demo ? "Messaging is disabled in demo mode" : "Write to agents…"} /></label>
+                {sendError && <div class="agents-error">{sendError}</div>}
+                <div class="thread-new-actions">
+                  <button type="button" class="ui-btn" onClick={() => setNewThreadOpen(false)}>Cancel</button>
+                  <button class="ui-btn" disabled={demo || inPerspective || !newText.trim() || !!sending}>{sending === "new" ? "Sending…" : "Send message"}</button>
+                </div>
+              </form>
+            </div>
+          ) : selectedThread == null ? (
+            <EmptyState
+              icon="✉"
+              title="Select a thread"
+              body="Choose a conversation to read and reply."
+            />
+          ) : (
+            <>
+              <div class="thread-detail-head">
+                <button class="thread-back" type="button" onClick={() => setSelectedThread(null)} aria-label="Back to conversations">←</button>
+                <span>Thread #{selectedThread}</span>
+                {selected && (
+                  <span>{selected.items.length} recent messages</span>
+                )}
+                {!inPerspective && (
+                  <IconButton
+                    onClick={() =>
+                      setReadByMe(
+                        threadMessages.map((m) => m.id),
+                        true,
+                      )
+                    }
+                    title="Mark loaded messages read"
+                  >
+                    ✓ Read thread
+                  </IconButton>
+                )}
+              </div>
+              {threadError && <div class="agents-error">{threadError}</div>}
+              {sendError && <div class="agents-error">{sendError}</div>}
+              {threadTotal > threadMessages.length && (
+                <button
+                  class="thread-load-more"
+                  disabled={threadLoading}
+                  onClick={() =>
+                    loadThread(selectedThread, threadMessages.length, true)
+                  }
+                >
+                  {threadLoading
+                    ? "Loading…"
+                    : `Load ${Math.min(200, threadTotal - threadMessages.length)} older messages`}
+                </button>
+              )}
+              <ol
+                class="thread-message-list"
+                ref={messageListRef}
+                onScroll={() => {
+                  const list = messageListRef.current;
+                  if (!list) return;
+                  followNewestRef.current = list.scrollHeight - list.scrollTop - list.clientHeight < 48;
+                  if (scrollSnapshot.current) {
+                    scrollSnapshot.current.top = list.scrollTop;
+                    scrollSnapshot.current.height = list.scrollHeight;
+                  }
+                }}
+                onLoadCapture={() => {
+                  const list = messageListRef.current;
+                  if (list && followNewestRef.current) list.scrollTop = list.scrollHeight;
+                }}
+              >
+                {threadMessages.map((m) => (
+                  <li
+                    id={`thread-message-${m.id}`}
+                    key={m.id}
+                    class={`thread-message${isRead(m) ? " is-read" : " is-unread"}`}
+                  >
+                    <div class="thread-message-meta">
+                      <span
+                        class="msg-dot"
+                        style={{ background: agentColor(m.from_agent) }}
+                      />
+                      <Participant id={m.from_agent ?? m.from_role ?? "system"} />
+                      <span>→</span>
+                      <Participant id={describeRecipient(m.to)} />
+                      <time title={m.created_at}>
+                        {relativeTime(m.created_at)}
+                      </time>
+                      {!inPerspective && (
                         <button
-                          class={`msg-readdot${read ? " is-read" : ""}`}
-                          title={read ? "Read by you — click to mark unread" : "Unread by you — click to mark read"}
-                          onClick={() => setReadByMe([m.id], !read)}
+                          class={`msg-readdot${isRead(m) ? " is-read" : ""}`}
+                          onClick={() => setReadByMe([m.id], !isRead(m))}
+                          title="Toggle your local read state"
                         />
                       )}
                     </div>
-
-                    <div class={`msg-body${long && !open ? " is-clamped" : ""}`}>
-                      <RichText text={stripRouting(m.text)} />
-                    </div>
-                    {long && (
-                      <button class="msg-expand" onClick={() => toggleExpand(m.id)}>
-                        {open ? "Show less" : "Show more"}
-                      </button>
-                    )}
-
-                    <div class="msg-readers">
-                      {readers.length > 0 ? (
+                    <div class="thread-message-body">
+                      {m.tldr ? (
                         <>
-                          <span class="msg-readers-label">read by</span>
-                          {readers.map((rid) => (
-                            <span key={rid} title={`read by ${rid}`}><AgentPill id={rid} /></span>
-                          ))}
+                          <div class="thread-message-tldr"><RichText text={stripRouting(m.tldr)} /></div>
+                          <details class="thread-message-full">
+                            <summary>Full message</summary>
+                            <RichText text={stripRouting(m.text)} />
+                          </details>
                         </>
-                      ) : (
-                        <Badge tone="warn">no agent has read</Badge>
-                      )}
+                      ) : <RichText text={stripRouting(m.text)} />}
+                      <MessageReferences message={m} />
                     </div>
-                  </div>
-                </li>
-              );
-            })}
-          </ol>
-        )}
-      </section>
+                  </li>
+                ))}
+              </ol>
+              {threadLoading && !threadMessages.length && (
+                <div class="thread-loading">Loading thread…</div>
+              )}
+              <form
+                class="thread-compose thread-compose-reply"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  submit("reply");
+                }}
+              >
+                <span class="thread-compose-label">Reply</span>
+                {picker(replyTo, setReplyTo, "Reply recipient")}
+                <input
+                  class="thread-compose-tldr"
+                  disabled={demo || inPerspective || !!sending}
+                  value={replyTldr}
+                  maxLength={500}
+                  onInput={(e) => {
+                    const text = (e.target as HTMLInputElement).value;
+                    if (selectedThread != null) replyTldrDrafts.current.set(selectedThread, text);
+                    setReplyTldr(text);
+                  }}
+                  placeholder="TL;DR (optional)"
+                />
+                <textarea
+                  disabled={demo || inPerspective || !!sending}
+                  value={replyText}
+                  onInput={(e) => {
+                    const text = (e.target as HTMLTextAreaElement).value;
+                    if (selectedThread != null) replyDrafts.current.set(selectedThread, text);
+                    setReplyText(text);
+                  }}
+                  placeholder={
+                    demo
+                      ? "Messaging is disabled in demo mode"
+                      : "Reply in this thread…"
+                  }
+                />
+                <button
+                  class="ui-btn"
+                  disabled={
+                    demo ||
+                    inPerspective ||
+                    threadLoading ||
+                    !threadMessages.length ||
+                    !replyText.trim() ||
+                    !!sending
+                  }
+                >
+                  {sending === "reply" ? "Sending…" : "Reply"}
+                </button>
+              </form>
+            </>
+          )}
+        </section>
+      </div>
     </div>
   );
 }

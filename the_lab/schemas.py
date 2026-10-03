@@ -128,9 +128,11 @@ class UpdateTagsRequest(BaseModel):
 
 
 class MessageRequest(BaseModel):
-    # to: 'agent:<id>' | 'role:<role>' | 'all'
+    # to: 'agent:<id>' | 'role:<role>' | 'all' | 'user' (dashboard)
     to: str
     text: str
+    # Optional concise, one-line summary used for inbox and event previews.
+    tldr: str | None = None
     in_reply_to: int | None = None
     # A thread id names an existing root message; replies normally inherit it.
     thread_id: int | None = None

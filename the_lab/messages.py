@@ -36,6 +36,8 @@ from pathlib import Path
 
 
 _FILE_NAME = "messages.json"
+UI_USER = "user"
+TLDR_MAX_LENGTH = 500
 _lock = threading.Lock()
 
 # Global wake event — set whenever a message lands. /wait listeners
@@ -132,16 +134,21 @@ def _write(repo_dir: Path, data: dict) -> None:
 
 
 def _validate_to(to: str) -> None:
-    """Recipient must be ``agent:<id>``, ``role:<role>``, or ``all``."""
-    if to == "all":
+    """Recipient must be an agent, role, all agents, or the dashboard user."""
+    if to in ("all", UI_USER):
         return
     if to.startswith("agent:") and len(to) > len("agent:"):
         return
     if to.startswith("role:") and len(to) > len("role:"):
         return
     raise ValueError(
-        f"invalid recipient {to!r}; expected 'agent:<id>', 'role:<role>', or 'all'"
+        f"invalid recipient {to!r}; expected 'user', 'agent:<id>', 'role:<role>', or 'all'"
     )
+
+
+def _canonical_to(to: str) -> str:
+    """Keep the historical ``agent:user`` spelling equivalent to ``user``."""
+    return UI_USER if to == f"agent:{UI_USER}" else to
 
 
 def add_message(
@@ -151,15 +158,20 @@ def add_message(
     from_role: str | None,
     to: str,
     text: str,
+    tldr: str | None = None,
     in_reply_to: int | None = None,
     thread_id: int | None = None,
     references: list[dict] | None = None,
 ) -> dict:
     """Persist a new message and wake any /wait listeners."""
     _validate_to(to)
+    to = _canonical_to(to)
     text = (text or "").strip()
     if not text:
         raise ValueError("message text is empty")
+    tldr = (tldr or "").strip()
+    if len(tldr) > TLDR_MAX_LENGTH:
+        raise ValueError(f"message tldr must be at most {TLDR_MAX_LENGTH} characters")
     with _lock:
         data = _read(repo_dir)
         msg = {
@@ -173,6 +185,10 @@ def add_message(
             "delivered_by": [],
             "notified_by": [],
         }
+        # Do not add an empty key: existing clients and stored messages remain
+        # indistinguishable from messages that never supplied a summary.
+        if tldr:
+            msg["tldr"] = tldr
         if in_reply_to is not None:
             msg["in_reply_to"] = in_reply_to
         if thread_id is not None:
@@ -191,7 +207,7 @@ def add_message(
             "to": to,
             "from_agent": from_agent,
             "from_role": from_role,
-            "text": text[:80],
+            "text": (tldr or text)[:80],
         })
     except Exception:  # noqa: BLE001
         pass
@@ -232,6 +248,10 @@ def is_for(msg: dict, *, agent_id: str | None, role: str | None) -> bool:
     its own sender.
     """
     to = msg.get("to") or ""
+    # ``user`` is a reserved dashboard identity, not a registered agent.  The
+    # explicit agent:user spelling is retained as an input-compatible alias.
+    if to in (UI_USER, f"agent:{UI_USER}"):
+        return agent_id == UI_USER
     if to == "all":
         return not (agent_id and msg.get("from_agent") == agent_id)
     if agent_id and to == f"agent:{agent_id}":
