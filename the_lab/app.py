@@ -569,13 +569,16 @@ def build_notifications(request) -> list[dict]:
             desc = (idea.get("description") or "").split("\n")[0][:120]
             key = f"suggestion:{idea['id']}"
             all_keys.add(key)
-            keyed.append((key, {
+            item = {
                 "type": "suggestion",
                 "priority": p,
                 "message": f"Suggested idea #{idea['id']}: {desc}",
                 "action": f"POST /api/v1/ideas/{idea['id']}/adopt" if p == "high"
                           else f"POST /api/v1/ideas/{idea['id']}/abandon",
-            }))
+            }
+            if idea.get("thread_id") is not None:
+                item["discuss"] = f"GET /api/v1/threads/{idea['thread_id']}"
+            keyed.append((key, item))
     except Exception:
         pass
 

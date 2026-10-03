@@ -98,9 +98,10 @@ def register_agent(req: RegisterAgentRequest):
     ``prune_dead_agents`` retires the entry on the next API server restart
     (when a PID is recorded). Both paths preserve the worktree for resume.
 
-    When no other agents are currently registered (i.e. this is the first
-    agent of a new session), all accumulated messages from previous sessions
-    are cleared so the new agent starts with a clean inbox.
+    The response includes ``active_threads``: the most recently active open
+    threads the new agent can see (title, summary, last message preview), so
+    it can catch up on ongoing discussions and join them
+    (``POST /api/v1/threads/{id}/join``) instead of starting from a blank inbox.
     """
     # Cap concurrent registrations. Each one creates a git worktree and a
     # registry entry, and the route was completely unbounded — review made 1000
@@ -148,7 +149,10 @@ def register_agent(req: RegisterAgentRequest):
         })
     except Exception:
         pass
-    return result
+    # Registry entries are shared dicts: never attach response-only keys.
+    return {**result, **messages_mod.threads_digest(REPO_DIR, agent_id=result.get("agent_id"), role=result.get("role"))}
+
+
 
 
 @router.get("/api/v1/agents")

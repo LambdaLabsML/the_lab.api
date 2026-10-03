@@ -83,6 +83,15 @@ INCLUDE = {
     ("get",  "/api/v1/messages"):                  "list_messages",
     ("post", "/api/v1/messages/{msg_id}/read"):    "mark_message_read",
     ("post", "/api/v1/messages/read_all"):         "mark_all_messages_read",
+    ("get",  "/api/v1/messages/search"):           "search_messages",
+    # Threads: shared, titled conversations agents can find, read and join
+    ("get",  "/api/v1/threads"):                   "list_threads",
+    ("post", "/api/v1/threads"):                   "create_thread",
+    ("get",  "/api/v1/threads/{thread_id}"):       "get_thread",
+    ("post", "/api/v1/threads/{thread_id}/join"):  "join_thread",
+    ("post", "/api/v1/threads/{thread_id}/leave"): "leave_thread",
+    ("post", "/api/v1/threads/{thread_id}/members"): "add_thread_members",
+    ("patch", "/api/v1/threads/{thread_id}"):      "update_thread",
 }
 
 # ── OpenAPI parsing ───────────────────────────────────────────────────────────

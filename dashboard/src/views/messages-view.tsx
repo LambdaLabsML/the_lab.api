@@ -1,13 +1,16 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
 import {
+  createThread,
   getMessage,
   getMessagePage,
   listAgents,
   listMessagesPage,
+  listThreads,
   sendMessage,
+  updateThread,
 } from "../state/api";
 import { useLiveRefresh } from "../lib/hooks";
-import type { AgentEntry, MessageEntry } from "../lib/types";
+import type { AgentEntry, MessageEntry, ThreadMeta } from "../lib/types";
 import { Badge, EmptyState, IconButton } from "../components/ui";
 import { agentColor, agentInitials } from "../lib/colors";
 import { messagesReadByMe, serverDemoMode } from "../state/settings";
@@ -40,12 +43,20 @@ function relativeTime(iso: string) {
   if (s < 172800) return `${Math.floor(s / 3600)}h ago`;
   return `${Math.floor(s / 86400)}d ago`;
 }
-function inboxOf(m: MessageEntry, agent: string, role?: string) {
+function inboxOf(
+  m: MessageEntry,
+  agent: string,
+  role?: string,
+  participants?: Map<number, Set<string>>,
+) {
   return (
     m.from_agent !== agent &&
     (m.to === "all" ||
       m.to === `agent:${agent}` ||
-      (!!role && m.to === `role:${role}`))
+      (!!role && m.to === `role:${role}`) ||
+      // Thread posts reach members; posting in a thread is how agents
+      // usually join, so participants stand in for the member list.
+      (m.to.startsWith("thread:") && !!participants?.get(threadKey(m))?.has(agent)))
   );
 }
 
@@ -93,7 +104,9 @@ export function MessagesView() {
     [threadTotal, setThreadTotal] = useState(0),
     [threadLoading, setThreadLoading] = useState(false),
     [threadError, setThreadError] = useState<string | null>(null);
+  const [threadMeta, setThreadMeta] = useState<Map<number, ThreadMeta>>(new Map());
   const [newTo, setNewTo] = useState("all"),
+    [newTitle, setNewTitle] = useState(""),
     [newTldr, setNewTldr] = useState(""),
     [newText, setNewText] = useState(""),
     [replyTo, setReplyTo] = useState("all"),
@@ -131,12 +144,24 @@ export function MessagesView() {
   const describeRecipient = (to: string) =>
     to === "all"
       ? "everyone"
-      : to.replace(/^agent:/, "").replace(/^role:/, "role:");
+      : to.startsWith("thread:")
+        ? "thread members"
+        : to.replace(/^agent:/, "").replace(/^role:/, "role:");
   const inPerspective = !!viewAs;
   selectedThreadRef.current = selectedThread;
   viewAsRef.current = viewAs;
+  const participants = useMemo(() => {
+    const map = new Map<number, Set<string>>();
+    for (const m of messages) {
+      if (!m.from_agent) continue;
+      const k = threadKey(m);
+      if (!map.has(k)) map.set(k, new Set());
+      map.get(k)!.add(m.from_agent);
+    }
+    return map;
+  }, [messages]);
   const relevant = (m: MessageEntry) =>
-    !inPerspective || inboxOf(m, viewAs, roleByAgent[viewAs]);
+    !inPerspective || inboxOf(m, viewAs, roleByAgent[viewAs], participants);
   const isRead = (m: MessageEntry) =>
     inPerspective
       ? (m.read_by || []).includes(viewAs)
@@ -146,12 +171,14 @@ export function MessagesView() {
 
   async function refresh() {
     try {
-      const [a, m] = await Promise.all([
+      const [a, m, t] = await Promise.all([
         listAgents().catch(() => []),
         listMessagesPage(200),
+        listThreads({ status: "all", limit: 100 }).catch(() => null),
       ]);
       if (!cancelled.current) {
         setAgents(a);
+        if (t) setThreadMeta(new Map(t.threads.map((x) => [x.id, x])));
         setMessages((old) => [...new Map([...old, ...m.messages].map((item) => [item.id, item])).values()]);
         setMessageTotal(m.total);
         setError(null);
@@ -206,10 +233,16 @@ export function MessagesView() {
           markThreadReadByMe(id);
         }
         if (!append && replyTargetThreadRef.current !== id) {
-          const latestOther = [...page.messages]
-            .sort((a, b) => timeOf(b) - timeOf(a))
-            .find(recipientOf);
-          setReplyTo(latestOther ? recipientOf(latestOther)! : page.messages[0]?.to || "all");
+          const newestFirst = [...page.messages].sort((a, b) => timeOf(b) - timeOf(a));
+          // Follow the conversation's addressing: thread-addressed threads
+          // reply to their members; older ones to the last other speaker.
+          const threadAddressed = newestFirst.find((m) => m.to.startsWith("thread:"));
+          const latestOther = newestFirst.find(recipientOf);
+          setReplyTo(
+            threadAddressed
+              ? threadAddressed.to
+              : latestOther ? recipientOf(latestOther)! : page.messages[0]?.to || "all",
+          );
           replyTargetThreadRef.current = id;
         }
       }
@@ -221,7 +254,7 @@ export function MessagesView() {
         setThreadLoading(false);
     }
   }
-  useLiveRefresh(["message_received", "agent_changed"], refresh, 30_000);
+  useLiveRefresh(["message_received", "agent_changed", "thread_changed"], refresh, 30_000);
   useEffect(() => {
     cancelled.current = false;
     refresh();
@@ -281,6 +314,7 @@ export function MessagesView() {
       .filter(
         (thread) =>
           conversationScope === "all" ||
+          threadMeta.get(thread.id)?.created_by === "user" ||
           thread.items.some(
             (m) =>
               m.from_agent === "user" ||
@@ -294,7 +328,7 @@ export function MessagesView() {
           ? timeOf(b.latest) - timeOf(a.latest)
           : timeOf(a.latest) - timeOf(b.latest),
       );
-  }, [displayed, sort, readMap, viewAs, conversationScope]);
+  }, [displayed, sort, readMap, viewAs, conversationScope, threadMeta]);
   const focusId = focusMessageId.value;
   useLayoutEffect(() => {
     const list = messageListRef.current;
@@ -359,14 +393,30 @@ export function MessagesView() {
         kind === "reply"
           ? threadMessages[threadMessages.length - 1]
           : undefined;
-      const sent = await sendMessage(
-        to,
-        text,
-        parent ? { thread_id: selectedThread!, in_reply_to: parent.id, tldr } : { tldr },
-      );
+      const title = kind === "new" ? newTitle.trim() : "";
+      const sent = title
+        ? (await createThread({
+            title,
+            text,
+            tldr,
+            // "All agents" announces a public thread; otherwise the chosen
+            // agent / role members join it.
+            announce: to === "all",
+            members: to.startsWith("agent:")
+              ? [to.slice("agent:".length)]
+              : to.startsWith("role:")
+                ? agents.filter((a) => `role:${a.role}` === to).map((a) => a.agent_id)
+                : [],
+          })).message
+        : await sendMessage(
+            to,
+            text,
+            parent ? { thread_id: selectedThread!, in_reply_to: parent.id, tldr } : { tldr },
+          );
       registerDashboardUserMessage(sent);
       if (kind === "new") {
         setNewText("");
+        setNewTitle("");
         setNewTldr("");
         setNewThreadOpen(false);
         setSelectedThread(threadKey(sent));
@@ -388,7 +438,7 @@ export function MessagesView() {
       setSending(null);
     }
   }
-  const picker = (value: string, set: (v: string) => void, label: string) => (
+  const picker = (value: string, set: (v: string) => void, label: string, threadId?: number | null) => (
     <select
       class="messages-select"
       aria-label={label}
@@ -396,8 +446,9 @@ export function MessagesView() {
       value={value}
       onChange={(e) => set((e.target as HTMLSelectElement).value)}
     >
+      {threadId != null && <option value={`thread:${threadId}`}>Thread members</option>}
       <option value="all">All agents</option>
-      {value !== "all" && !agents.some((a) => value === `agent:${a.agent_id}`) && !roles.some((r) => value === `role:${r}`) && <option value={value}>{value}</option>}
+      {value !== "all" && value !== `thread:${threadId}` && !agents.some((a) => value === `agent:${a.agent_id}`) && !roles.some((r) => value === `role:${r}`) && <option value={value}>{value}</option>}
       <optgroup label="Agents">
         {agents.map((a) => (
           <option key={a.agent_id} value={`agent:${a.agent_id}`}>
@@ -500,6 +551,9 @@ export function MessagesView() {
                   {relativeTime(t.latest.created_at)}
                 </span>
               </span>
+              {threadMeta.get(t.id) && (
+                <span class="thread-list-title">{threadMeta.get(t.id)!.title}</span>
+              )}
               <span class="thread-list-preview">
                 {stripRouting(t.latest.tldr || t.latest.text)}
               </span>
@@ -507,6 +561,9 @@ export function MessagesView() {
                 <span>
                   {t.items.length} msg{t.items.length === 1 ? "" : "s"}
                 </span>
+                {threadMeta.get(t.id)?.kind === "suggestion" && <Badge tone="running">suggestion</Badge>}
+                {threadMeta.get(t.id)?.status === "closed" && <Badge>closed</Badge>}
+                {threadMeta.get(t.id)?.visibility === "private" && <Badge>private</Badge>}
                 {t.unread > 0 && <Badge tone="active">{t.unread} unread</Badge>}
               </span>
             </button>
@@ -530,6 +587,7 @@ export function MessagesView() {
               </div>
               <form class="thread-new-form" onSubmit={(e) => { e.preventDefault(); submit("new"); }}>
                 <label><span>To</span>{picker(newTo, setNewTo, "New thread recipient")}</label>
+                <label><span>Title <small>optional — makes it a shared thread agents can find and join</small></span><input class="thread-compose-tldr" disabled={demo || inPerspective || !!sending} value={newTitle} maxLength={200} onInput={(e) => setNewTitle((e.target as HTMLInputElement).value)} placeholder="What is this thread about?" /></label>
                 <label><span>TL;DR <small>optional</small></span><input class="thread-compose-tldr" disabled={demo || inPerspective || !!sending} value={newTldr} maxLength={500} onInput={(e) => setNewTldr((e.target as HTMLInputElement).value)} placeholder="A short summary" /></label>
                 <label class="thread-new-message"><span>Message</span><textarea autoFocus rows={12} disabled={demo || inPerspective || !!sending} value={newText} onInput={(e) => setNewText((e.target as HTMLTextAreaElement).value)} placeholder={demo ? "Messaging is disabled in demo mode" : "Write to agents…"} /></label>
                 {sendError && <div class="agents-error">{sendError}</div>}
@@ -549,9 +607,32 @@ export function MessagesView() {
             <>
               <div class="thread-detail-head">
                 <button class="thread-back" type="button" onClick={() => setSelectedThread(null)} aria-label="Back to conversations">←</button>
-                <span>Thread #{selectedThread}</span>
+                <span class="thread-detail-title">
+                  {threadMeta.get(selectedThread)?.title ?? `Thread #${selectedThread}`}
+                </span>
                 {selected && (
                   <span>{selected.items.length} recent messages</span>
+                )}
+                {threadMeta.get(selectedThread) && (
+                  <span>{threadMeta.get(selectedThread)!.member_count} members</span>
+                )}
+                {threadMeta.get(selectedThread) && !inPerspective && !demo && (
+                  <IconButton
+                    onClick={async () => {
+                      const meta = threadMeta.get(selectedThread)!;
+                      try {
+                        await updateThread(selectedThread, {
+                          status: meta.status === "closed" ? "open" : "closed",
+                        });
+                        await refresh();
+                      } catch (e) {
+                        setSendError(e instanceof Error ? e.message : String(e));
+                      }
+                    }}
+                    title={threadMeta.get(selectedThread)!.status === "closed" ? "Reopen this thread" : "Close this thread (posts a closing message)"}
+                  >
+                    {threadMeta.get(selectedThread)!.status === "closed" ? "Reopen" : "Close"}
+                  </IconButton>
                 )}
                 {!inPerspective && (
                   <IconButton
@@ -567,6 +648,12 @@ export function MessagesView() {
                   </IconButton>
                 )}
               </div>
+              {(threadMeta.get(selectedThread)?.summary || threadMeta.get(selectedThread)?.conclusion) && (
+                <div class="thread-summary">
+                  {threadMeta.get(selectedThread)!.summary && <p><strong>Summary</strong> {threadMeta.get(selectedThread)!.summary}</p>}
+                  {threadMeta.get(selectedThread)!.conclusion && <p><strong>Conclusion</strong> {threadMeta.get(selectedThread)!.conclusion}</p>}
+                </div>
+              )}
               {threadError && <div class="agents-error">{threadError}</div>}
               {sendError && <div class="agents-error">{sendError}</div>}
               {threadTotal > threadMessages.length && (
@@ -650,7 +737,7 @@ export function MessagesView() {
                 }}
               >
                 <span class="thread-compose-label">Reply</span>
-                {picker(replyTo, setReplyTo, "Reply recipient")}
+                {picker(replyTo, setReplyTo, "Reply recipient", selectedThread)}
                 <input
                   class="thread-compose-tldr"
                   disabled={demo || inPerspective || !!sending}

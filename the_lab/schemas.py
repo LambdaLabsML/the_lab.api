@@ -128,8 +128,10 @@ class UpdateTagsRequest(BaseModel):
 
 
 class MessageRequest(BaseModel):
-    # to: 'agent:<id>' | 'role:<role>' | 'all' | 'user' (dashboard)
-    to: str
+    # to: 'agent:<id>' | 'role:<role>' | 'all' | 'user' (dashboard) |
+    # 'thread' / 'thread:<id>' (the thread's members). May be omitted when
+    # thread_id or in_reply_to is given: the message then goes to the thread.
+    to: str | None = None
     text: str
     # Optional concise, one-line summary used for inbox and event previews.
     tldr: str | None = None
@@ -137,6 +139,31 @@ class MessageRequest(BaseModel):
     # A thread id names an existing root message; replies normally inherit it.
     thread_id: int | None = None
     references: list[dict] = []
+
+
+class ThreadCreateRequest(BaseModel):
+    title: str
+    text: str
+    tldr: str | None = None
+    # public: every agent can read and join; private: members only.
+    visibility: str = "public"
+    # Agent ids to add as members (they receive thread messages).
+    members: list[str] = []
+    # Send the opening message to "all" so every agent is notified once.
+    announce: bool = False
+    references: list[dict] = []
+
+
+class ThreadUpdateRequest(BaseModel):
+    title: str | None = None
+    summary: str | None = None
+    status: str | None = None        # open | closed
+    conclusion: str | None = None
+    visibility: str | None = None    # public | private
+
+
+class ThreadMembersRequest(BaseModel):
+    agent_ids: list[str]
 
 
 class RequeueRequest(BaseModel):

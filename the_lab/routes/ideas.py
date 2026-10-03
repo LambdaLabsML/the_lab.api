@@ -337,14 +337,85 @@ def search_ideas(
     return project_fields(results, fields)
 
 
+# --- Suggestions travel as messages -------------------------------------------
+# A suggested idea opens a public "suggestion" thread announced to all agents,
+# so it arrives in inboxes like any message and can be discussed in place.
+# Adopting or abandoning the idea posts the outcome there and closes it.
+
+def _caller_identity(request: Request) -> tuple[str, str]:
+    from .. import agents as agents_mod
+    from .. import messages as messages_mod
+    agent_id = getattr(request.state, "agent_id", None)
+    if not agent_id:
+        return messages_mod.UI_USER, messages_mod.UI_USER
+    entry = agents_mod.lookup_agent(REPO_DIR, agent_id) or {}
+    return agent_id, entry.get("role") or "default"
+
+
+def _open_suggestion_thread(idea: dict, request: Request) -> int | None:
+    """Announce a suggested idea as a public suggestion thread. Best-effort:
+    messaging trouble never fails the suggestion itself."""
+    from .. import messages as messages_mod
+    sender, role = _caller_identity(request)
+    desc = (idea.get("description") or "").strip()
+    first = desc.splitlines()[0] if desc else f"idea {idea['id']}"
+    head = first if len(first) <= 180 else first[:179].rstrip() + "…"
+    lines = [desc, ""]
+    if idea.get("priority") == "high":
+        lines.append("Priority: HIGH")
+    for r in idea.get("resources") or []:
+        lines.append(f"Resource: {r.get('label') or r.get('url')} — {r.get('url')}")
+    lines += [
+        "",
+        f"Suggested idea {idea['id']}. Adopt it: POST /api/v1/ideas/{idea['id']}/adopt — "
+        f"or abandon with a reason: POST /api/v1/ideas/{idea['id']}/abandon. "
+        "Questions or objections: reply in this thread.",
+    ]
+    try:
+        meta, _root = messages_mod.create_thread(
+            REPO_DIR, from_agent=sender, from_role=role, title=f"Suggestion: {head}",
+            text="\n".join(lines).strip(), tldr=f"Suggested idea {idea['id']}: {head}"[:500],
+            visibility="public", announce=True, kind="suggestion", idea_id=idea["id"],
+            references=[{"kind": "idea", "id": idea["id"]}],
+        )
+    except Exception:  # noqa: BLE001
+        return None
+    store.update_idea(idea["id"], thread_id=meta["id"])
+    return meta["id"]
+
+
+def _resolve_suggestion_thread(idea_id: int, request: Request, conclusion: str) -> None:
+    """Post the outcome to the idea's suggestion thread and close it."""
+    from .. import messages as messages_mod
+    idea = store.get_idea(idea_id) or {}
+    tid = idea.get("thread_id")
+    if tid is None:
+        meta = messages_mod.find_thread_for_idea(REPO_DIR, idea_id)
+        tid = meta and meta["id"]
+    if tid is None:
+        return
+    sender, role = _caller_identity(request)
+    try:
+        messages_mod.update_thread(
+            REPO_DIR, tid, requester=sender, requester_role=role, operator=True,
+            status="closed", conclusion=conclusion,
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
 @router.post("/ideas/suggest", status_code=201)
-def suggest_idea(req: SuggestIdeaRequest):
+def suggest_idea(req: SuggestIdeaRequest, request: Request):
     """Submit an idea suggestion from a human for the agent to consider.
 
     Creates an idea in ``suggested`` status with ``source=human``. The idea
     does not get a git branch until the agent adopts it. Use ``priority`` to
     flag urgent suggestions as ``high``, and attach ``resources`` (URL + label
     pairs) to provide context such as papers, datasets, or related issues.
+
+    The suggestion is also delivered as a message: a public ``suggestion``
+    thread (``thread_id`` on the idea) announced to all agents, where they can
+    discuss it. Adopting or abandoning the idea closes that thread.
 
     Example:
         POST /api/v1/ideas/suggest {"description": "Try cosine annealing schedule",
@@ -366,7 +437,8 @@ def suggest_idea(req: SuggestIdeaRequest):
         resources=resources,
     )
     store.save_idea(idea)
-    return idea
+    _open_suggestion_thread(idea, request)
+    return store.get_idea(idea["id"]) or idea
 
 
 def _has_output_md(script_relpath: str | None) -> bool:
@@ -693,7 +765,7 @@ def conclude_idea(idea_id: int, req: ConcludeRequest):
 
 
 @router.post("/ideas/{idea_id}/abandon")
-def abandon_idea(idea_id: int, req: AbandonRequest):
+def abandon_idea(idea_id: int, req: AbandonRequest, request: Request):
     """Abandon an idea that is no longer worth pursuing.
 
     Transitions the idea's status to ``abandoned`` and records the reason.
@@ -711,6 +783,8 @@ def abandon_idea(idea_id: int, req: AbandonRequest):
     if idea["status"] not in ("active", "suggested"):
         raise HTTPException(400, f"idea is {idea['status']}, cannot abandon")
     store.update_idea(idea_id, status="abandoned", conclusion=req.reason)
+    if idea["status"] == "suggested":
+        _resolve_suggestion_thread(idea_id, request, f"Abandoned: {req.reason}")
     return {
         "id": idea_id,
         "status": "abandoned",
@@ -886,6 +960,12 @@ def adopt_idea(idea_id: int, request: Request, req: AdoptRequest | None = None):
         store.update_idea(idea_id, status="active", branch=branch_name)
         if req and req.agent_note:
             store.add_note(idea_id, req.agent_note, level="observation")
+        adopter, _ = _caller_identity(request)
+        _resolve_suggestion_thread(
+            idea_id, request,
+            f"Adopted by {adopter} as idea {idea_id} (branch {branch_name})."
+            + (f" {req.agent_note}" if req and req.agent_note else ""),
+        )
 
         # Move the agent's worktree onto the idea branch. Idempotent — if
         # they're already on it, checkout_idea returns "already_on_branch".

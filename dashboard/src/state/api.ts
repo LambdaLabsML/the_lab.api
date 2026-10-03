@@ -21,6 +21,8 @@ import type {
   ResourceUpsertBody,
   SandboxState,
   SuggestIdeaRequest,
+  ThreadMeta,
+  ThreadPage,
 } from "../lib/types";
 
 // ---------------------------------------------------------------------------
@@ -357,6 +359,47 @@ export async function sendMessage(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ to, text, ...options }),
+  });
+}
+
+/** GET /api/v1/threads — thread metadata (titles, status, kind) for the
+ *  operator view; ``status=all`` includes closed threads. */
+export async function listThreads(
+  params: { status?: "open" | "closed" | "all"; q?: string; limit?: number } = {},
+): Promise<ThreadPage> {
+  const qs = new URLSearchParams({
+    status: params.status ?? "all",
+    limit: String(params.limit ?? 100),
+  });
+  if (params.q) qs.set("q", params.q);
+  return fetchJson<ThreadPage>(`/api/v1/threads?${qs}`);
+}
+
+/** POST /api/v1/threads — start a titled thread with an opening message. */
+export async function createThread(body: {
+  title: string;
+  text: string;
+  tldr?: string;
+  members?: string[];
+  announce?: boolean;
+  visibility?: "public" | "private";
+}): Promise<{ thread: ThreadMeta; message: MessageEntry }> {
+  return fetchJson("/api/v1/threads", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+/** PATCH /api/v1/threads/:id — title, summary, status (open|closed), conclusion. */
+export async function updateThread(
+  id: number,
+  patch: Partial<Pick<ThreadMeta, "title" | "summary" | "status" | "conclusion" | "visibility">>,
+): Promise<ThreadMeta> {
+  return fetchJson(`/api/v1/threads/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
   });
 }
 

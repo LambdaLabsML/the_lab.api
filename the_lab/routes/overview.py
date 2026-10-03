@@ -843,6 +843,7 @@ def get_backlog(request: Request):
 
 @router.get("/orient")
 def orient(
+    request: Request,
     tags: str | None = Query(default=None, description="Comma-separated tags to filter best score and active ideas (running experiments always shown)"),
 ):
     """Get a compact orientation summary with recommended next action.
@@ -1034,6 +1035,15 @@ def orient(
     if len(tag_counts) >= 2:
         sample_tag = sorted(tag_counts.keys())[0]
         resp["filter_hint"] = f"Filter by approach: add ?tags={sample_tag} to /orient or /leaderboard/search"
+
+    # Ongoing discussions the caller can see, so agents join existing threads
+    # rather than re-broadcasting the same topic.
+    agent_id = getattr(request.state, "agent_id", None)
+    if agent_id:
+        from .. import agents as agents_mod
+        from .. import messages as messages_mod
+        role = (agents_mod.lookup_agent(REPO_DIR, agent_id) or {}).get("role")
+        resp.update(messages_mod.threads_digest(REPO_DIR, agent_id=agent_id, role=role, limit=3))
 
     return resp
 
