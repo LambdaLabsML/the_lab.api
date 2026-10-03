@@ -215,6 +215,36 @@ def set_metric_directions(directions: dict):
     return directions
 
 
+# --- Reload from disk ---
+
+@router.post("/api/v1/reload")
+def reload_from_disk():
+    """Rescan ``.the_lab/experiments`` and replace the server's in-memory state.
+
+    The server loads ideas, notes and experiments once at startup; use this
+    after editing or adding files on disk to pick them up without a restart.
+    Queued/running experiments whose files vanished are kept (reported in
+    ``kept_active_missing_on_disk``) so live jobs aren't orphaned. Writes block
+    while the scan runs. 422 if any file fails to parse (state unchanged).
+    For a single experiment prefer ``POST /experiments/{ref}/reload``.
+
+    Example:
+        POST /api/v1/reload
+        -> {"ideas": 41, "experiments": 212, "added": ["41.1"], "removed": [],
+            "kept_active_missing_on_disk": []}
+    """
+    try:
+        result = store.reload_all()
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    try:
+        from .. import ws as ws_mod
+        ws_mod.broadcaster.broadcast_soon({"type": "lab_reloaded", **{k: result[k] for k in ("ideas", "experiments")}})
+    except Exception:
+        pass
+    return result
+
+
 # --- Sandbox ---
 
 @router.get("/api/v1/sandbox")

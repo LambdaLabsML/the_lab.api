@@ -161,16 +161,43 @@ class Store:
         artifacts_dir.mkdir(parents=True, exist_ok=True)
 
     def _load_all(self):
-        """Scan filesystem once on startup to populate all caches.
+        """Scan filesystem once on startup to populate all caches."""
+        ideas, notes, experiments, exp_by_idea, max_idea = self._scan()
+        self._ideas, self._notes = ideas, notes
+        self._experiments, self._exp_by_idea = experiments, exp_by_idea
+        self._next_idea_id = max_idea + 1
+
+    @staticmethod
+    def _load_experiment_file(path: Path, idea_id: int, seq: int, subfolder: bool) -> dict:
+        """Read one experiment JSON and stamp the identity fields derived from
+        its location (the path, not the file's contents, is authoritative)."""
+        data = _read_json(path)
+        if not isinstance(data, dict):
+            raise ValueError(f"{path}: expected a JSON object, got {type(data).__name__}")
+        exp = _enrich_experiment(data)
+        label = f"{idea_id}.{seq}"
+        exp["id"] = label
+        exp["seq"] = seq
+        exp["label"] = label
+        exp["idea_id"] = idea_id
+        exp["script"] = Store._exp_script_rel(idea_id, seq, subfolder=subfolder)
+        return exp
+
+    def _scan(self) -> tuple[dict, dict, dict, dict, int]:
+        """Read every idea, note list and experiment from disk into fresh dicts.
 
         Experiments are identified by label "{idea_id}.{file_stem}".
         Old projects use global IDs as file stems (e.g. 671.json),
         new projects use per-idea seq (e.g. 1.json). Both work —
         the file stem IS the seq number in the label.
         """
-        if not self.lab_dir.exists():
-            return
+        ideas: dict[int, dict] = {}
+        notes: dict[int, list[dict]] = {}
+        experiments: dict[str, dict] = {}
+        exp_by_idea: dict[int, set[str]] = {}
         max_idea = 0
+        if not self.lab_dir.exists():
+            return ideas, notes, experiments, exp_by_idea, max_idea
         for d in self.lab_dir.iterdir():
             if not d.is_dir():
                 continue
@@ -183,12 +210,12 @@ class Store:
             # Load idea
             idea_path = d / "idea.json"
             if idea_path.exists():
-                self._ideas[idea_id] = json.loads(idea_path.read_text())
+                ideas[idea_id] = json.loads(idea_path.read_text())
 
             # Load notes
             notes_path = d / "notes.json"
             if notes_path.exists():
-                self._notes[idea_id] = json.loads(notes_path.read_text())
+                notes[idea_id] = json.loads(notes_path.read_text())
 
             # Load experiments — supports both old flat layout and new subfolder layout
             exp_labels: set[str] = set()
@@ -197,34 +224,81 @@ class Store:
                 if sub.is_dir() and sub.name.isdigit():
                     exp_json = sub / "experiment.json"
                     if exp_json.exists():
-                        seq = int(sub.name)
-                        label = f"{idea_id}.{seq}"
-                        exp = _enrich_experiment(json.loads(exp_json.read_text()))
-                        exp["id"] = label
-                        exp["seq"] = seq
-                        exp["label"] = label
-                        exp["idea_id"] = idea_id
-                        exp["script"] = f".the_lab/experiments/{idea_id}/{seq}/script.sh"
-                        self._experiments[label] = exp
-                        exp_labels.add(label)
+                        exp = self._load_experiment_file(exp_json, idea_id, int(sub.name), subfolder=True)
+                        experiments[exp["label"]] = exp
+                        exp_labels.add(exp["label"])
             # Old layout: {seq}.json (flat files in idea dir)
             for f in d.glob("*.json"):
                 if f.stem.isdigit():
-                    seq = int(f.stem)
-                    label = f"{idea_id}.{seq}"
+                    label = f"{idea_id}.{int(f.stem)}"
                     if label in exp_labels:
                         continue  # already loaded from subfolder
-                    exp = _enrich_experiment(json.loads(f.read_text()))
-                    exp["id"] = label
-                    exp["seq"] = seq
-                    exp["label"] = label
-                    exp["idea_id"] = idea_id
-                    exp["script"] = f".the_lab/experiments/{idea_id}/{seq}.sh"
-                    self._experiments[label] = exp
+                    exp = self._load_experiment_file(f, idea_id, int(f.stem), subfolder=False)
+                    experiments[label] = exp
                     exp_labels.add(label)
-            self._exp_by_idea[idea_id] = exp_labels
+            exp_by_idea[idea_id] = exp_labels
+        return ideas, notes, experiments, exp_by_idea, max_idea
 
-        self._next_idea_id = max_idea + 1
+    # --- Reload (pick up files edited on disk while the server runs) ---
+
+    def reload_experiment(self, exp_ref) -> dict:
+        """Re-read one experiment's JSON from disk, replacing the cached record.
+
+        Raises KeyError when the label is malformed or no file exists, and
+        ValueError when the file is not a valid experiment object — the cache
+        is left untouched in both cases.
+        """
+        label = str(exp_ref)
+        try:
+            idea_id, seq = (int(x) for x in label.split("."))
+        except ValueError:
+            raise KeyError(label) from None
+        with self._lock:
+            path = self._exp_json_path(idea_id, seq)
+            if not path.exists():
+                raise KeyError(label)
+            try:
+                exp = self._load_experiment_file(path, idea_id, seq, subfolder=path.name == "experiment.json")
+            except json.JSONDecodeError as e:
+                raise ValueError(f"{path}: invalid JSON: {e}") from e
+            self._experiments[label] = exp
+            self._exp_by_idea.setdefault(idea_id, set()).add(label)
+            self._version += 1
+        return exp
+
+    def reload_all(self) -> dict:
+        """Rescan everything from disk and swap the caches in atomically.
+
+        Queued/running experiments whose files are missing on disk are kept in
+        memory so the runner isn't pulled out from under a live job. Idea ids
+        never move backwards (a missing idea dir can't cause id reuse).
+        Raises ValueError (caches untouched) if any file fails to parse. The
+        scan runs under the store lock so no concurrent write can land between
+        the scan and the swap (writes block for the scan's duration).
+        """
+        with self._lock:
+            try:
+                ideas, notes, experiments, exp_by_idea, max_idea = self._scan()
+            except json.JSONDecodeError as e:
+                raise ValueError(f"invalid JSON during rescan: {e}") from e
+            kept = []
+            for label, exp in self._experiments.items():
+                if label not in experiments and exp.get("status") in ("queued", "running"):
+                    experiments[label] = exp
+                    exp_by_idea.setdefault(exp["idea_id"], set()).add(label)
+                    kept.append(label)
+            before = set(self._experiments)
+            self._ideas, self._notes = ideas, notes
+            self._experiments, self._exp_by_idea = experiments, exp_by_idea
+            self._next_idea_id = max(self._next_idea_id, max_idea + 1)
+            self._version += 1
+        return {
+            "ideas": len(ideas),
+            "experiments": len(experiments),
+            "added": sorted(set(experiments) - before),
+            "removed": sorted(before - set(experiments)),
+            "kept_active_missing_on_disk": sorted(kept),
+        }
 
     def _idea_dir(self, idea_id: int) -> Path:
         return self.lab_dir / str(idea_id)

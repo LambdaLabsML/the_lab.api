@@ -110,7 +110,8 @@ function applyEvent(event: WsEvent): void {
     case "experiment_queued":
     case "experiment_started":
     case "experiment_finished":
-    case "experiment_cancelled": {
+    case "experiment_cancelled":
+    case "experiment_reloaded": {
       const row = event.experiment as Partial<Experiment> | undefined;
       if (!row || !patchExperiment(row)) refreshChartData();
       // Lifecycle changes flip computed graph flags (has_running/last_finish)
@@ -139,6 +140,12 @@ function applyEvent(event: WsEvent): void {
     }
     case "note_added":
       refreshGraphData();
+      break;
+    case "lab_reloaded":
+      // Whole store re-read from disk: resnapshot everything.
+      refreshChartData();
+      refreshGraphData();
+      refreshBacklogData();
       break;
     // queue_changed / message_received / agent_changed: consumed by the
     // views that own that data via subscribeWsEvents (queue view, messages
