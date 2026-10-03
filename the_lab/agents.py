@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import socket
 import threading
 import time
 from datetime import datetime, timezone
@@ -181,8 +182,13 @@ def register_agent(
     store,
     role: str | None = None,
     pid: int | None = None,
+    host: str | None = None,
 ) -> dict:
-    """Allocate an id, create the agent's worktree, return registry entry."""
+    """Allocate an id, create the agent's worktree, return registry entry.
+
+    ``host`` is the machine the agent process (``pid``) runs on; stale-agent
+    pruning only trusts PID checks made on that same machine.
+    """
     repo_dir = Path(repo_dir).resolve()
     registry = _read_registry(repo_dir)
     agent_id = _generate_agent_id(set(registry.keys()))
@@ -198,6 +204,25 @@ def register_agent(
         ["worktree", "add", str(worktree), agent_branch],
         cwd=repo_dir,
     )
+    _prepare_worktree(worktree, agent_id)
+
+    entry = {
+        "agent_id": agent_id,
+        "role": role or "default",
+        "branch": agent_branch,
+        "parent_branch": parent_branch,
+        "worktree": str(worktree),
+        "pid": pid,
+        "host": host,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    registry[agent_id] = entry
+    _write_registry(repo_dir, registry)
+    return entry
+
+
+def _prepare_worktree(worktree: Path, agent_id: str) -> None:
+    """Agent scaffolding inside a (new or recreated) worktree."""
 
     # Symlinks — let the agent's tooling find configs without absolute paths.
     _ensure_symlink(worktree / ".claude", Path("../../../.claude"))
@@ -220,19 +245,6 @@ def register_agent(
     # worktree's own git exclude file, and drop it from the index if tracked.
     _make_worktree_local_untracked(worktree)
 
-    entry = {
-        "agent_id": agent_id,
-        "role": role or "default",
-        "branch": agent_branch,
-        "parent_branch": parent_branch,
-        "worktree": str(worktree),
-        "pid": pid,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-    registry[agent_id] = entry
-    _write_registry(repo_dir, registry)
-    return entry
-
 
 def lookup_agent(repo_dir: Path, agent_id: str) -> dict | None:
     return _read_registry(Path(repo_dir).resolve()).get(agent_id)
@@ -248,8 +260,16 @@ def reactivate_agent(
     *,
     role: str | None = None,
     pid: int | None = None,
+    host: str | None = None,
 ) -> dict:
-    """Move a retained past-agent worktree back into the live registry."""
+    """Bring an agent back under its own id: live entry or retained history.
+
+    A resumed agent always keeps its id. If its worktree was cleaned up, it is
+    recreated at the same path (on the agent's branch when that still
+    exists), so session transcripts keyed by that path keep resolving.
+    The returned entry carries ``previous_pid`` / ``previous_host`` when the
+    agent was still registered as live (the caller may be a second process).
+    """
     repo_dir = Path(repo_dir).resolve()
     registry = _read_registry(repo_dir)
     entry = registry.get(agent_id)
@@ -263,17 +283,43 @@ def reactivate_agent(
         entry = dict(entry)
         entry.pop("completed_at", None)
 
-    worktree = Path(entry.get("worktree", ""))
-    if not worktree.is_dir():
-        raise FileNotFoundError(f"retained worktree for agent '{agent_id}' is missing")
+    previous = registry.get(agent_id)
+    entry = dict(entry)
+    worktree = Path(entry.get("worktree") or (_agents_dir(repo_dir) / agent_id))
+    recreated = not worktree.is_dir()
+    if recreated:
+        _recreate_worktree(repo_dir, worktree, entry, agent_id)
+        entry["worktree"] = str(worktree)
 
     entry["pid"] = pid
+    entry["host"] = host
     if role:
         entry["role"] = role
     entry["resumed_at"] = datetime.now(timezone.utc).isoformat()
     registry[agent_id] = entry
     _write_registry(repo_dir, registry)
-    return entry
+    out = dict(entry)
+    if recreated:
+        out["worktree_recreated"] = True
+    if previous is not None:
+        out["previous_pid"] = previous.get("pid")
+        out["previous_host"] = previous.get("host")
+    return out
+
+
+def _recreate_worktree(repo_dir: Path, worktree: Path, entry: dict, agent_id: str) -> None:
+    """Re-add a cleaned-up agent worktree at its original path."""
+    git_ops._run(["worktree", "prune"], cwd=repo_dir, check=False)
+    branch = entry.get("branch") or f"agent_init_{agent_id}"
+    if not git_ops.branch_exists(branch, cwd=repo_dir):
+        base = entry.get("parent_branch")
+        if not base or not git_ops.branch_exists(base, cwd=repo_dir):
+            base = git_ops.get_default_branch(cwd=repo_dir)
+        git_ops.create_branch_from(branch, base, cwd=repo_dir)
+        entry["branch"] = branch
+    worktree.parent.mkdir(parents=True, exist_ok=True)
+    git_ops._run(["worktree", "add", str(worktree), branch], cwd=repo_dir)
+    _prepare_worktree(worktree, agent_id)
 
 
 # ── "Actively listening" tracking ───────────────────────────────────────────
@@ -509,10 +555,15 @@ def prune_dead_agents(repo_dir: Path) -> list[str]:
     repo_dir = Path(repo_dir).resolve()
     registry = _read_registry(repo_dir)
     removed: list[str] = []
+    here = socket.gethostname()
     for agent_id, entry in list(registry.items()):
         pid = entry.get("pid")
         if pid is None:
             continue  # PID unknown — leave it alone
+        if entry.get("host") != here:
+            # The server often runs on another machine than its agents (e.g.
+            # a Slurm node); a PID check here says nothing about them.
+            continue
         if _pid_alive(int(pid)):
             continue
         record_completed_agent(repo_dir, entry)

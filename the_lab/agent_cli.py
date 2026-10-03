@@ -3,7 +3,9 @@
 import argparse
 import os
 import shutil
+import socket
 import sys
+import time
 from pathlib import Path
 
 from .sandbox import build_sandbox_command, load_sandbox_config, sandbox_capabilities
@@ -498,6 +500,42 @@ def _resume_command(row: dict) -> str:
     return f"the-lab-agent --agent claude loop --resume {session_id}"
 
 
+def _lab_of_cwd(cwd: str | None) -> Path | None:
+    """The lab repository an agent worktree path belongs to."""
+    if not cwd:
+        return None
+    marker = _AGENT_WT_RE.search(cwd)
+    return Path(cwd[: marker.start()]) if marker else None
+
+
+def _lab_root(path: "Path | None") -> "Path | None":
+    """The lab a path belongs to: its repo root, or for an agent worktree the
+    lab that owns it."""
+    if path is None:
+        return None
+    return _lab_of_cwd(str(path)) or path
+
+
+def _resolve_resume_session(agent: str, session_id: str) -> dict | None:
+    """Locate a resumable session and summarise it (agent id, latest cwd).
+
+    Claude transcripts live under ~/.claude/projects/<encoded cwd>/; Codex
+    rollouts under CODEX_HOME. Returns the listing row plus ``path`` (the
+    transcript file), or None when no such session exists.
+    """
+    if agent == "codex":
+        root = _codex_session_root()
+        found = next(iter(root.glob(f"**/*{session_id}.jsonl")), None) if root.is_dir() else None
+        row = _read_codex_listing_session(found) if found else None
+    else:
+        found = next(iter(_SESSION_ROOT.glob(f"*/{session_id}.jsonl")), None) if _SESSION_ROOT.is_dir() else None
+        row = _read_session(found) if found else None
+    if row is None:
+        return None
+    row["path"] = found
+    return row
+
+
 def _fmt_age(epoch: float) -> str:
     import time
     if not epoch:
@@ -532,7 +570,13 @@ def cmd_list_sessions(argv: list[str]) -> None:
                         help="Only show one agent CLI (default: all)")
     parser.add_argument("--json", action="store_true", dest="as_json",
                         help="Emit raw JSON instead of a table")
+    parser.add_argument("--all-labs", action="store_true",
+                        help="Include sessions of other labs (default inside a lab: only this one; "
+                             "a session resumes only from its own lab)")
     args = parser.parse_args(argv)
+    here = _lab_root(_find_repo_root(Path.cwd()))
+    if here is not None and not (here / ".the_lab").is_dir():
+        here = None  # not inside a lab: nothing to scope to
 
     codex_root = _codex_session_root()
     if not _SESSION_ROOT.exists() and not codex_root.exists():
@@ -553,6 +597,11 @@ def cmd_list_sessions(argv: list[str]) -> None:
             and not r.get("is_subagent", False)
             and (r["provider"] == "codex" or r["turns"] or r["output_tokens"])
         ]
+    for r in rows:
+        lab = _lab_of_cwd(r.get("cwd"))
+        r["lab"] = str(lab) if lab else None
+    if here and not args.all_labs:
+        rows = [r for r in rows if not r["lab"] or Path(r["lab"]).resolve() == here.resolve()]
     rows.sort(key=lambda r: r["modified"], reverse=True)
     shown, total = rows[: args.limit], len(rows)
     for row in shown:
@@ -577,6 +626,8 @@ def cmd_list_sessions(argv: list[str]) -> None:
         wt = "" if r["worktree_exists"] else _dim(" (worktree gone)")
         print(f"  {(r['agent_id'] or '-'):8} {r['provider']:7} "
               f"{_fmt_age(r['modified']):14}  {r['session_id']}{wt}")
+        if args.all_labs and r.get("lab") and (not here or Path(r["lab"]).resolve() != here.resolve()):
+            print(f"    {_dim('lab:   ')} {r['lab']}")
         print(f"    {_dim('resume:')} {r['resume_command']}")
     if total > len(shown):
         print(f"\n  {_dim(f'... {total - len(shown)} more (use --limit)')}")
@@ -960,9 +1011,11 @@ def main():
                 f"{_lab_user}:{_lab_pw}".encode()
             ).decode()
 
-        # If --resume <session_id> is given, find the agent whose worktree
-        # owns that session and reuse it instead of creating a fresh one.
-        # This keeps the same branch and working state as the original run.
+        # If --resume <session_id> is given, bring back the agent that owns
+        # that session under the SAME id (its worktree is recreated by the
+        # server if it was cleaned up). Any failure here is fatal and
+        # explained: silently registering a fresh agent would start a brand-new
+        # conversation under a new id, which is never what --resume means.
         _resume_id: str | None = codex_resume_id
         if not _resume_id:
             for _i, _a in enumerate(extra_agent_args or []):
@@ -970,109 +1023,113 @@ def main():
                     _resume_id = extra_agent_args[_i + 1]
                     break
 
+        def _resume_fail(msg: str) -> None:
+            _tty = sys.stderr.isatty()
+            print(f"\n{chr(27) + '[31m' if _tty else ''}Cannot resume: {msg}"
+                  f"{chr(27) + '[0m' if _tty else ''}\n", file=sys.stderr)
+            sys.exit(1)
+
         _resumed_from_old = False
+        _projects_root = _SESSION_ROOT
         _stale_proj: "Path | None" = None
         _stale_agent_id: "str | None" = None
         if _resume_id:
-            _projects_root = Path.home() / ".claude" / "projects"
-            # Claude stores transcripts in a cwd-encoded project directory;
-            # Codex stores global rollouts and records the real cwd in its
-            # initial session_meta payload.
-            _session_proj: Path | None = None
-            _resume_cwd: Path | None = None
-            if args.agent == "codex":
-                _meta = _read_codex_session_meta(_resume_id)
-                if _meta:
-                    _resume_cwd = Path(_meta["cwd"]).resolve()
-            elif _projects_root.exists():
-                for _proj in _projects_root.iterdir():
-                    if (_proj / f"{_resume_id}.jsonl").exists():
-                        _session_proj = _proj
-                        break
-            if _session_proj or _resume_cwd:
-                # Match project dir name back to an agent worktree via the API.
-                # Check both live and past agents; worktree may no longer exist
-                # (agent was unregistered) so we skip the exists() guard here.
+            _session = _resolve_resume_session(args.agent, _resume_id)
+            if _session is None:
+                _resume_fail(
+                    f"no {args.agent} session '{_resume_id}' found. "
+                    "`the-lab-agent list` shows resumable sessions."
+                )
+            _owner = _session.get("agent_id")
+            _owner_lab = _lab_of_cwd(_session.get("cwd"))
+            # The lab this launch talks to (repo_root is only set when sandboxed).
+            _this_lab = _lab_root(
+                Path(args.repo).resolve() if args.repo else _find_repo_root(Path.cwd())
+            )
+            if not _owner or _owner_lab is None:
+                # Not started in an agent worktree: adopt it into a new agent.
+                print(f"  session {_resume_id[:8]}… was not started by a lab agent"
+                      " — registering a new agent for it", file=sys.stderr)
+                _stale_proj = _session["path"].parent if args.agent == "claude" else None
+            elif _this_lab and _owner_lab.resolve() != _this_lab.resolve():
+                _resume_fail(
+                    f"session {_resume_id[:8]}… belongs to agent {_owner} of the lab at "
+                    f"{_owner_lab}, not {_this_lab}. Run the resume from that lab."
+                )
+            else:
+                # Refuse to run two processes on one agent: same worktree,
+                # same transcript.
                 try:
-                    for _endpoint in (
-                        f"{api_base_for_register}/agents",
-                        f"{api_base_for_register}/agents/past",
-                    ):
-                        _req = _urlreq.Request(_endpoint, headers=_reg_headers)
-                        with _urlreq.urlopen(_req, timeout=10, context=_api_ssl_ctx) as _r:
-                            _entries = _json.loads(_r.read().decode())
-                        for _entry in _entries:
-                            _wt = _entry.get("worktree", "")
-                            if not _wt:
-                                continue
-                            _wt_path = Path(_wt).resolve()
-                            if args.agent == "codex":
-                                if _wt_path != _resume_cwd:
-                                    continue
-                            elif _re.sub(r"[^a-zA-Z0-9]", "-", str(_wt_path)) != _session_proj.name:
-                                continue
-                            if _wt_path.exists():
-                                # Worktree still exists — reactivate its agent
-                                # record, then reuse the checkout directly.
-                                _reactivate_payload = _json.dumps({
-                                    "role": args.role,
-                                    "pid": os.getpid(),
-                                    "resume_agent_id": _entry["agent_id"],
-                                }).encode()
-                                _reactivate_req = _urlreq.Request(
-                                    f"{api_base_for_register}/agents/register",
-                                    data=_reactivate_payload,
-                                    method="POST",
-                                    headers=_reg_headers,
-                                )
-                                with _urlreq.urlopen(
-                                    _reactivate_req,
-                                    timeout=10,
-                                    context=_api_ssl_ctx,
-                                ) as _reactivate_resp:
-                                    _reactivated = _json.loads(
-                                        _reactivate_resp.read().decode()
-                                    )
-                                agent_id = _reactivated["agent_id"]
-                                agent_worktree = Path(
-                                    _reactivated["worktree"]
-                                ).resolve()
-                                env["THE_LAB_AGENT_ID"] = agent_id
-                                env["THE_LAB_AGENT_WORKTREE"] = str(agent_worktree)
-                                _resumed_from_old = True
-                                print(
-                                    f"Agent: resuming id={agent_id} on retained worktree",
-                                    file=sys.stderr,
-                                )
-                            else:
-                                # Worktree gone — register fresh. Claude's
-                                # cwd-keyed store needs its JSONL moved; Codex
-                                # rollouts remain in CODEX_HOME and resume by id.
-                                _stale_proj = _session_proj
-                                _stale_agent_id = _entry["agent_id"]
-                                if args.agent == "codex":
-                                    print(
-                                        f"  Codex session {_resume_id[:8]}… found (worktree was cleaned up)"
-                                        f" — will resume it in a fresh worktree",
-                                        file=sys.stderr,
-                                    )
-                                else:
-                                    print(
-                                        f"  session {_resume_id[:8]}… found (worktree was cleaned up)"
-                                        f" — will move to fresh worktree",
-                                        file=sys.stderr,
-                                    )
-                            break
-                        if _resumed_from_old:
-                            break
+                    _req = _urlreq.Request(f"{api_base_for_register}/agents", headers=_reg_headers)
+                    with _urlreq.urlopen(_req, timeout=30, context=_api_ssl_ctx) as _r:
+                        _live = {e.get("agent_id"): e for e in _json.loads(_r.read().decode())}
                 except Exception:
-                    pass  # fall through to normal registration
+                    _live = {}
+                _cur = _live.get(_owner) or {}
+                if (_cur.get("pid") and _cur.get("host") == socket.gethostname()
+                        and _cur["pid"] != os.getpid()):
+                    try:
+                        os.kill(int(_cur["pid"]), 0)
+                        _resume_fail(
+                            f"agent {_owner} is still running here (pid {_cur['pid']}). "
+                            "Stop it first, then resume."
+                        )
+                    except ProcessLookupError:
+                        pass
+                    except PermissionError:
+                        _resume_fail(f"agent {_owner} is still running (pid {_cur['pid']}).")
+                _payload = _json.dumps({
+                    "role": args.role,
+                    "pid": os.getpid(),
+                    "host": socket.gethostname(),
+                    "resume_agent_id": _owner,
+                }).encode()
+                _reactivated = None
+                for _attempt in range(3):
+                    try:
+                        _req = _urlreq.Request(
+                            f"{api_base_for_register}/agents/register",
+                            data=_payload, method="POST", headers=_reg_headers,
+                        )
+                        # Generous timeout: a just-restarted server can be busy,
+                        # and giving up here used to mean a new agent id.
+                        with _urlreq.urlopen(_req, timeout=60, context=_api_ssl_ctx) as _resp:
+                            _reactivated = _json.loads(_resp.read().decode())
+                        break
+                    except _urlerr.HTTPError as _e:
+                        _detail = _e.read().decode(errors="replace")[:300]
+                        _resume_fail(f"the lab refused to resume agent {_owner} "
+                                     f"(HTTP {_e.code}): {_detail}")
+                    except Exception as _e:  # network trouble: retry, then explain
+                        if _attempt == 2:
+                            _resume_fail(f"could not reach the lab to resume agent {_owner}: {_e}")
+                        time.sleep(2 * (_attempt + 1))
+                agent_id = _reactivated["agent_id"]
+                agent_worktree = Path(_reactivated["worktree"]).resolve()
+                env["THE_LAB_AGENT_ID"] = agent_id
+                env["THE_LAB_AGENT_WORKTREE"] = str(agent_worktree)
+                _resumed_from_old = True
+                print(f"Agent: resuming id={agent_id} in {agent_worktree}"
+                      + (" (worktree recreated)" if _reactivated.get("worktree_recreated") else ""),
+                      file=sys.stderr)
+                # Claude finds a transcript only under the project directory of
+                # its cwd; move it there if it lives elsewhere.
+                if args.agent == "claude":
+                    _src = _session["path"]
+                    _dst_dir = _projects_root / _re.sub(r"[^a-zA-Z0-9]", "-", str(agent_worktree))
+                    _dst = _dst_dir / _src.name
+                    if _src.resolve() != _dst.resolve() and not _dst.exists():
+                        import shutil as _shutil
+                        _dst_dir.mkdir(parents=True, exist_ok=True)
+                        _shutil.move(str(_src), _dst)
+                        print("  session transcript moved next to the worktree", file=sys.stderr)
 
         if not _resumed_from_old:
             try:
                 payload = _json.dumps({
                     "role": args.role,
                     "pid": os.getpid(),
+                    "host": socket.gethostname(),
                 }).encode()
                 req_obj = _urlreq.Request(
                     f"{api_base_for_register}/agents/register",
@@ -1145,6 +1202,7 @@ def main():
                             payload2 = _json.dumps({
                                 "role": args.role,
                                 "pid": os.getpid(),
+                                "host": socket.gethostname(),
                             }).encode()
                             req_obj2 = _urlreq.Request(
                                 f"{api_base_for_register}/agents/register",
