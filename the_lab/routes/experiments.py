@@ -1560,6 +1560,43 @@ async def pull_experiment_results(exp_ref: str):
     return {"ok": ok, "label": label}
 
 
+@router.post("/experiments/{exp_ref}/reload")
+async def reload_experiment(exp_ref: str):
+    """Re-read one experiment's JSON file from disk into the server.
+
+    The server serves experiments from memory (loaded at startup), so a hand
+    edit to ``.the_lab/experiments/<idea>/<seq>/experiment.json`` is invisible
+    until reloaded — and would be overwritten by the next write to that
+    experiment. Call this after editing the file. Also picks up an experiment
+    file that was added on disk (pass its ``idea.seq`` label).
+
+    Returns the reloaded record. 404 if no file exists; 422 if the file isn't
+    a valid experiment object (the in-memory record is left unchanged).
+
+    Example:
+        POST /api/v1/experiments/12.3/reload
+    """
+    known = store.resolve_experiment(exp_ref)
+    label = known["label"] if known else str(exp_ref).strip()
+    async with runner.label_lock(label):
+        try:
+            exp = store.reload_experiment(label)
+        except KeyError:
+            raise HTTPException(404, f"no experiment file on disk for '{exp_ref}' (expected a label like '12.3')")
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+    try:
+        from .. import ws as ws_mod
+        ws_mod.broadcaster.broadcast_soon({
+            "type": "experiment_reloaded",
+            "label": label,
+            "idea_id": exp.get("idea_id"),
+        })
+    except Exception:
+        pass
+    return exp
+
+
 # --- Timeseries ---
 
 @router.get("/experiments/{exp_ref}/timeseries")

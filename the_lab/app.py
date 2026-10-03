@@ -317,21 +317,34 @@ _ADMIN_ONLY_ROUTES: dict[str, set[str]] = {
     "/api/v1/task":                  {"PUT"},
     "/api/v1/config/metric-directions": {"*"},
     "/api/v1/chat":                  {"*"},               # spends the operator's Anthropic key
+    # Reload promotes on-disk JSON to server truth — an experiment that can
+    # write its own experiment.json must not be able to publish it.
+    "/api/v1/reload":                {"*"},
+    "/api/v1/experiments/{}/reload": {"*"},
 }
 
 
 def _admin_route_key(path: str) -> str:
     """Collapse a concrete path to its _ADMIN_ONLY_ROUTES key.
 
-    Only the final path segment is templated, which is enough for the
-    single-parameter routes in the table (``/prompts/<role>``,
-    ``/resources/<name>``) without pulling in the router's own matcher.
+    Tries the exact path, then the final segment templated (``/prompts/<role>``,
+    ``/resources/<name>``), then the second-to-last (``/experiments/<ref>/reload``)
+    — enough for the single-parameter routes in the table without pulling in
+    the router's own matcher.
     """
     p = "/" + path.strip("/")
     if p in _ADMIN_ONLY_ROUTES:
         return p
-    head, _, _tail = p.rpartition("/")
-    return f"{head}/{{}}" if head else p
+    head, _, tail = p.rpartition("/")
+    last = f"{head}/{{}}" if head else p
+    if last in _ADMIN_ONLY_ROUTES:
+        return last
+    head2, _, _mid = head.rpartition("/")
+    if head2:
+        mid = f"{head2}/{{}}/{tail}"
+        if mid in _ADMIN_ONLY_ROUTES:
+            return mid
+    return last
 
 
 def _is_admin_only(method: str, path: str) -> bool:

@@ -296,7 +296,7 @@ def idea_payload(idea: dict | None) -> dict | None:
 
 _EXP_EVENT_TYPES = frozenset({
     "experiment_queued", "experiment_started",
-    "experiment_finished", "experiment_cancelled",
+    "experiment_finished", "experiment_cancelled", "experiment_reloaded",
 })
 
 
