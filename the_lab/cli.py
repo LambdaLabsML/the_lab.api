@@ -1628,6 +1628,12 @@ def main():
                              ".the_lab/ — safe for showing a lab DB to an audience.")
     parser.add_argument("--https", action="store_true", help="Enable HTTPS with a self-signed certificate")
     parser.add_argument(
+        "--serve-git",
+        action="store_true",
+        help="Expose this repository for authenticated, read-only clone/fetch "
+             "at /git/repository.git (requires THE_LAB_USER and THE_LAB_PASSWORD).",
+    )
+    parser.add_argument(
         "--http-redirect-port",
         type=int,
         default=None,
@@ -1701,6 +1707,21 @@ def main():
         print(f"[auth] HTTP Basic Auth enabled (user: {_auth_user})", file=sys.stderr)
     else:
         print("[auth] No authentication — set THE_LAB_USER + THE_LAB_PASSWORD to enable", file=sys.stderr)
+
+    if args.serve_git and not _auth_on:
+        print(
+            "[git] refusing to serve the repository without THE_LAB_USER and "
+            "THE_LAB_PASSWORD",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    if args.serve_git:
+        os.environ["THE_LAB_SERVE_GIT"] = "1"
+        print(
+            f"[git] authenticated read-only clone/fetch enabled at "
+            f"{scheme}://{args.host}:{args.port}/git/repository.git",
+            file=sys.stderr,
+        )
 
     # Fail closed: never expose an unauthenticated server beyond loopback unless
     # the operator says so in as many words. Refusing to start is deliberately
