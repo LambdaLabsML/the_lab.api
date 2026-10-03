@@ -6,7 +6,7 @@ You have access to a local experiment management API. Use it to structure your w
 
 ### Important habits
 
-- **Before concluding an idea, check whether your metric actually improved.** Use `leaderboard_search(metric="...", sort="desc")` or `GET /leaderboard/search?metric=...&sort=desc`. If your idea isn't at the top, say so in the conclusion.
+- **Before concluding an idea, check whether your metric actually improved.** Use `leaderboard_search(metric="...")` or `GET /leaderboard/search?metric=...` (ranking follows the metric's configured direction). If your idea isn't at the top, say so in the conclusion.
 - **Do not delegate API work to sub-agents.** Call the MCP tools or curl yourself. Sub-agents don't receive these instructions.
 
 ### Core concepts
@@ -61,8 +61,8 @@ Tags categorize experiments by approach. Messy or duplicate tags hurt analysis �
 - **Filter by tag** → pass `tags=...` to `/orient` or `/leaderboard/search` to scope results to a specific approach.
 
 Metrics have direction — know which way is better:
-- `score` → **higher is better** (default sort is descending, so `/leaderboard/search?metric=score` already does the right thing)
-- `convergence_gap` → **lower is better** — use `sort=asc`: `/leaderboard/search?metric=convergence_gap&sort=asc`
+- Without `sort`, the leaderboard ranks by the metric's configured direction (`GET /config/metric-directions`), falling back to a name heuristic (`loss`, `error`, `latency`, … → lower is better; everything else → higher is better). The response's `direction` field says which way it ranked.
+- Pass `sort=asc` / `sort=desc` to force an order, e.g. `convergence_gap` is lower-is-better but not matched by the heuristic: `/leaderboard/search?metric=convergence_gap&sort=asc`
 
 When documenting findings, always note what each tag represents (e.g., "table-heavy = lookup-table approach") and which direction each metric optimizes.
 

@@ -104,8 +104,20 @@ const _LOWER_IS_BETTER_PATTERNS = [
   "fid", "distance", "penalty", "ttft", "_ms",
 ];
 
-/** Infer whether lower values are better for a given metric name. */
+// Custom overrides from .the_lab/metric_directions.json, delivered with
+// /chart-data. Set before allExperiments is updated so memoized consumers
+// recompute with the right direction.
+let _directionOverrides: Record<string, string> = {};
+
+export function setMetricDirectionOverrides(overrides: Record<string, string> | undefined): void {
+  _directionOverrides = overrides ?? {};
+}
+
+/** Whether lower values are better: custom override first, then name heuristic. */
 export function isLowerBetter(metricKey: string): boolean {
+  const override = _directionOverrides[metricKey];
+  if (override === "minimize") return true;
+  if (override === "maximize") return false;
   const k = metricKey.toLowerCase();
   return _LOWER_IS_BETTER_PATTERNS.some((p) => k.includes(p));
 }

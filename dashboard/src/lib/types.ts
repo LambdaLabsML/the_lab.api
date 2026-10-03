@@ -83,6 +83,8 @@ export interface ExperimentMeta extends Record<string, unknown> {
 export interface ChartDataResponse {
   experiments: Experiment[];
   running: Experiment[];
+  /** Custom metric → "minimize" | "maximize" overrides. */
+  metric_directions?: Record<string, string>;
 }
 
 /** A note attached to an idea */
