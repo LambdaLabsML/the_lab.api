@@ -915,14 +915,15 @@ async def startup():
     if _DEMO:
         logger.info("DEMO MODE: read-only — mutations blocked, scheduler off, no disk writes")
         return  # no agent pruning either — it rewrites the registry
-    # Reap agent worktrees whose registered PID is gone (a CLI wrapper that
-    # crashed before unregistering). Safe to skip on errors.
+    # Retire live agent entries whose registered PID is gone (a CLI wrapper
+    # that crashed before unregistering). Their worktrees remain available for
+    # resume. Safe to skip on errors.
     try:
         from . import agents as _agents_mod
         removed = _agents_mod.prune_dead_agents(REPO_DIR)
         if removed:
             logger.info(
-                "Pruned %d stale agent worktree(s): %s",
+                "Retired %d stale agent(s), preserving worktrees: %s",
                 len(removed), ", ".join(removed),
             )
     except Exception as e:  # pragma: no cover

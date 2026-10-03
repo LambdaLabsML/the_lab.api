@@ -206,7 +206,7 @@ def _codex_mcp_config_overrides(mcp_config: str) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# list subcommand — resumable Claude Code sessions
+# list subcommand — resumable Claude Code and Codex sessions
 # ---------------------------------------------------------------------------
 
 # Claude Code writes one JSONL per session under a per-cwd project directory,
@@ -222,6 +222,18 @@ _SESSION_ROOT = Path.home() / ".claude" / "projects"
 
 # Agent worktrees live at <repo>/.the_lab/agents/<agent_id>.
 _AGENT_WT_RE = __import__("re").compile(r"[/\\]\.the_lab[/\\]agents[/\\]([^/\\]+)")
+
+
+def _agent_id_from_cwd(cwd: str | None) -> str | None:
+    if not cwd:
+        return None
+    match = _AGENT_WT_RE.search(cwd)
+    return match.group(1) if match else None
+
+
+def _codex_session_root(codex_home: Path | None = None) -> Path:
+    home = codex_home or Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
+    return home / "sessions"
 
 
 def _extract_codex_resume_request(args, extra_agent_args: list[str]) -> tuple[str | None, list[str]]:
@@ -277,8 +289,7 @@ def _read_codex_session_meta(session_id: str, codex_home: Path | None = None) ->
     """
     import json
 
-    home = codex_home or Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
-    sessions = home / "sessions"
+    sessions = _codex_session_root(codex_home)
     if not sessions.is_dir():
         return None
     # Codex rollout names end in the UUID, but use a suffix glob so timestamp
@@ -306,6 +317,7 @@ def _read_session(jsonl: Path) -> dict:
     import re as _re
 
     info = {
+        "provider": "claude",
         "session_id": jsonl.stem,
         "project_dir": jsonl.parent.name,
         "cwd": None,          # most recent cwd — where the session lives now
@@ -375,6 +387,117 @@ def _read_session(jsonl: Path) -> dict:
     return info
 
 
+def _find_recent_agent_cwd(value) -> str | None:
+    """Return the newest lab-agent cwd found while walking a JSON value."""
+    if isinstance(value, dict):
+        cwd = value.get("cwd")
+        if isinstance(cwd, str) and _agent_id_from_cwd(cwd):
+            return cwd.removeprefix("file://")
+        for child in reversed(list(value.values())):
+            found = _find_recent_agent_cwd(child)
+            if found:
+                return found
+    elif isinstance(value, list):
+        for child in reversed(value):
+            found = _find_recent_agent_cwd(child)
+            if found:
+                return found
+    return None
+
+
+def _read_codex_listing_session(jsonl: Path, tail_bytes: int = 2 * 1024 * 1024) -> dict:
+    """Read enough of a Codex rollout to list it without scanning huge files.
+
+    Session metadata is the first line.  The most recently used agent worktree
+    is recovered from a bounded tail scan, which also handles resumed sessions
+    whose original ``session_meta.cwd`` names an older agent.
+    """
+    import json as _json
+    import re as _re
+
+    info = {
+        "provider": "codex",
+        "session_id": jsonl.stem,
+        "project_dir": str(jsonl.parent),
+        "cwd": None,
+        "started_in": None,
+        "resumes": 0,
+        "agent_id": None,
+        "started_at": None,
+        "last_at": None,
+        "turns": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "size_bytes": 0,
+        "modified": 0.0,
+        "is_subagent": False,
+    }
+    try:
+        stat = jsonl.stat()
+        info["size_bytes"], info["modified"] = stat.st_size, stat.st_mtime
+        with jsonl.open("rb") as handle:
+            first = handle.readline(1_048_576)
+    except OSError:
+        return info
+
+    try:
+        entry = _json.loads(first)
+        payload = entry.get("payload") if isinstance(entry, dict) else None
+        if entry.get("type") == "session_meta" and isinstance(payload, dict):
+            info["session_id"] = payload.get("id", payload.get("session_id")) or info["session_id"]
+            original_cwd = payload.get("cwd")
+            if isinstance(original_cwd, str):
+                info["started_in"] = original_cwd.removeprefix("file://")
+                info["cwd"] = info["started_in"]
+            info["started_at"] = entry.get("timestamp")
+            info["is_subagent"] = isinstance(payload.get("source"), dict)
+    except (ValueError, AttributeError):
+        pass
+
+    # Only lab-agent sessions need their resumed cwd resolved.  Reading an
+    # exact byte window avoids ``readline`` accidentally consuming a single
+    # enormous JSONL record from a multi-gigabyte rollout.
+    if _agent_id_from_cwd(info["cwd"]):
+        try:
+            with jsonl.open("rb") as handle:
+                offset = max(0, info["size_bytes"] - tail_bytes)
+                handle.seek(offset)
+                raw = handle.read(tail_bytes)
+            if offset:
+                raw = raw.partition(b"\n")[2]
+            tail = raw.decode("utf-8", errors="replace")
+        except OSError:
+            tail = ""
+        for line in reversed(tail.splitlines()):
+            try:
+                entry = _json.loads(line)
+            except ValueError:
+                continue
+            if not info["last_at"] and isinstance(entry, dict) and entry.get("timestamp"):
+                info["last_at"] = entry["timestamp"]
+            recent_cwd = _find_recent_agent_cwd(entry)
+            if recent_cwd:
+                info["cwd"] = recent_cwd
+                break
+
+    info["agent_id"] = _agent_id_from_cwd(info["cwd"])
+    if not info["agent_id"]:
+        # Rollout names end in a UUID even when session metadata is damaged.
+        match = _re.search(r"([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$", jsonl.stem, _re.I)
+        if match:
+            info["session_id"] = match.group(1)
+    info["worktree_exists"] = bool(info["cwd"]) and Path(info["cwd"]).exists()
+    return info
+
+
+def _resume_command(row: dict) -> str:
+    import shlex
+    session_id = shlex.quote(str(row["session_id"]))
+    if row.get("provider") == "codex":
+        return f"the-lab-agent --agent codex resume {session_id}"
+    return f"the-lab-agent --agent claude loop --resume {session_id}"
+
+
 def _fmt_age(epoch: float) -> str:
     import time
     if not epoch:
@@ -395,58 +518,69 @@ def _fmt_tokens(n: int) -> str:
 
 
 def cmd_list_sessions(argv: list[str]) -> None:
-    """List Claude Code sessions that ``--resume`` can pick up."""
+    """List recent Claude Code and Codex sessions that can be resumed."""
     import json as _json
 
     parser = argparse.ArgumentParser(
         prog="the-lab-agent list",
-        description="List resumable agent sessions (Claude Code JSONL transcripts).",
-        epilog="Resume one with:  the-lab-agent loop --resume <session-id>   "
-               "(the launcher reuses that session's worktree and branch).",
+        description="List recently used lab agents and their resumable sessions.",
     )
     parser.add_argument("--all", action="store_true",
                         help="Include sessions outside lab agent worktrees, and empty ones")
     parser.add_argument("--limit", type=int, default=20, help="Max rows (default 20)")
+    parser.add_argument("--provider", choices=("all", "claude", "codex"), default="all",
+                        help="Only show one agent CLI (default: all)")
     parser.add_argument("--json", action="store_true", dest="as_json",
                         help="Emit raw JSON instead of a table")
     args = parser.parse_args(argv)
 
-    if not _SESSION_ROOT.exists():
-        print(f"No Claude Code sessions found ({_SESSION_ROOT} does not exist).", file=sys.stderr)
+    codex_root = _codex_session_root()
+    if not _SESSION_ROOT.exists() and not codex_root.exists():
+        print("No Claude Code or Codex session directories found.", file=sys.stderr)
         sys.exit(1)
 
-    rows = [_read_session(p) for p in _SESSION_ROOT.glob("*/*.jsonl")]
+    rows = []
+    if args.provider in ("all", "claude") and _SESSION_ROOT.exists():
+        rows.extend(_read_session(p) for p in _SESSION_ROOT.glob("*/*.jsonl"))
+    if args.provider in ("all", "codex") and codex_root.exists():
+        rows.extend(_read_codex_listing_session(p) for p in codex_root.glob("**/*.jsonl"))
     if not args.all:
         # Default view is what --resume is actually for: lab agent sessions that
         # got far enough to have content.
-        rows = [r for r in rows if r["agent_id"] and (r["turns"] or r["output_tokens"])]
+        rows = [
+            r for r in rows
+            if r["agent_id"]
+            and not r.get("is_subagent", False)
+            and (r["provider"] == "codex" or r["turns"] or r["output_tokens"])
+        ]
     rows.sort(key=lambda r: r["modified"], reverse=True)
     shown, total = rows[: args.limit], len(rows)
+    for row in shown:
+        row["resume_command"] = _resume_command(row)
 
     if args.as_json:
         print(_json.dumps({"sessions": shown, "total": total,
-                           "session_root": str(_SESSION_ROOT)}, indent=2))
+                           "session_roots": {
+                               "claude": str(_SESSION_ROOT),
+                               "codex": str(codex_root),
+                           }}, indent=2))
         return
 
     if not shown:
-        print(f"No resumable sessions found under {_SESSION_ROOT}")
+        print("No resumable lab-agent sessions found.")
         print("  (use --all to include non-agent and empty sessions)")
         return
 
-    print(f"\n{_bold('Resumable sessions')}  {_dim(str(_SESSION_ROOT))}\n")
-    print(f"  {'SESSION':38} {'AGENT':8} {'LAST ACTIVITY':14} {'TURNS':>6} {'TOKENS':>8}  PROJECT")
+    print(f"\n{_bold('Recent resumable agents')}\n")
+    print(f"  {'AGENT':8} {'CLI':7} {'LAST ACTIVITY':14}  RESUME ID")
     for r in shown:
         wt = "" if r["worktree_exists"] else _dim(" (worktree gone)")
-        proj = r["cwd"] or r["project_dir"]
-        if len(proj) > 46:
-            proj = "…" + proj[-45:]
-        print(f"  {r['session_id']:38} {(r['agent_id'] or '-'):8} "
-              f"{_fmt_age(r['modified']):14} {r['turns']:>6} "
-              f"{_fmt_tokens(r['input_tokens'] + r['output_tokens']):>8}  {proj}{wt}")
+        print(f"  {(r['agent_id'] or '-'):8} {r['provider']:7} "
+              f"{_fmt_age(r['modified']):14}  {r['session_id']}{wt}")
+        print(f"    {_dim('resume:')} {r['resume_command']}")
     if total > len(shown):
         print(f"\n  {_dim(f'... {total - len(shown)} more (use --limit)')}")
-    print(f"\n  {_dim('Resume:')} the-lab-agent loop --resume {shown[0]['session_id']}")
-    print(f"  {_dim('A cleaned-up worktree is fine — the launcher recreates one from the session.')}\n")
+    print(f"\n  {_dim('Worktrees are retained on exit so these sessions resume in place.')}\n")
 
 def main():
     # Subcommands are handled before argparse: the positional 'command'
@@ -542,7 +676,7 @@ def main():
         action="store_true",
         help="Run in the main repo instead of registering a per-agent git "
              "worktree (legacy behaviour). Default is isolated mode: a fresh "
-             "worktree is created and removed automatically around the run.",
+             "worktree is created and retained for later resume.",
     )
     parser.add_argument(
         "--resume",
@@ -878,14 +1012,36 @@ def main():
                             elif _re.sub(r"[^a-zA-Z0-9]", "-", str(_wt_path)) != _session_proj.name:
                                 continue
                             if _wt_path.exists():
-                                # Worktree still exists — reuse it directly
-                                agent_id = _entry["agent_id"]
-                                agent_worktree = _wt_path
+                                # Worktree still exists — reactivate its agent
+                                # record, then reuse the checkout directly.
+                                _reactivate_payload = _json.dumps({
+                                    "role": args.role,
+                                    "pid": os.getpid(),
+                                    "resume_agent_id": _entry["agent_id"],
+                                }).encode()
+                                _reactivate_req = _urlreq.Request(
+                                    f"{api_base_for_register}/agents/register",
+                                    data=_reactivate_payload,
+                                    method="POST",
+                                    headers=_reg_headers,
+                                )
+                                with _urlreq.urlopen(
+                                    _reactivate_req,
+                                    timeout=10,
+                                    context=_api_ssl_ctx,
+                                ) as _reactivate_resp:
+                                    _reactivated = _json.loads(
+                                        _reactivate_resp.read().decode()
+                                    )
+                                agent_id = _reactivated["agent_id"]
+                                agent_worktree = Path(
+                                    _reactivated["worktree"]
+                                ).resolve()
                                 env["THE_LAB_AGENT_ID"] = agent_id
                                 env["THE_LAB_AGENT_WORKTREE"] = str(agent_worktree)
                                 _resumed_from_old = True
                                 print(
-                                    f"Agent: resuming id={agent_id} on existing worktree",
+                                    f"Agent: resuming id={agent_id} on retained worktree",
                                     file=sys.stderr,
                                 )
                             else:
@@ -1077,8 +1233,9 @@ def main():
     # whatever cwd we were launched from.
     run_cwd = str(agent_worktree) if agent_worktree else None
 
-    # In isolated mode we need to outlive the agent process so we can
-    # unregister + clean up the worktree. Use Popen + signal forwarding
+    # In isolated mode we need to outlive the agent process so we can retire
+    # its live registry entry while retaining the worktree for resume. Use
+    # Popen + signal forwarding
     # instead of execvpe.
     if agent_id:
         import signal as _signal
@@ -1455,7 +1612,7 @@ def main():
                     ).decode()
                 _resp = _urlreq.urlopen(
                     _urlreq.Request(
-                        f"{api_base}/agents/{agent_id}",
+                        f"{api_base}/agents/{agent_id}?keep_worktree=true",
                         method="DELETE", headers=_del_headers,
                     ),
                     timeout=10,

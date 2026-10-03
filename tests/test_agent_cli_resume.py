@@ -1,7 +1,10 @@
 """Codex-specific resume parsing and rollout lookup coverage."""
 
 import argparse
+import contextlib
+import io
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,7 +16,9 @@ from unittest.mock import patch
 from the_lab.agent_cli import (
     _build_launch_command,
     _extract_codex_resume_request,
+    _read_codex_listing_session,
     _read_codex_session_meta,
+    _resume_command,
 )
 
 
@@ -114,6 +119,83 @@ class CodexResumeTests(unittest.TestCase):
             with patch.dict("os.environ", {"CODEX_HOME": tmp}, clear=False):
                 meta = _read_codex_session_meta(SESSION_ID)
         self.assertEqual(meta["cwd"], "/old/worktree")
+
+    def test_codex_listing_uses_latest_resumed_agent_and_command(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            rollout = Path(tmp) / f"rollout-{SESSION_ID}.jsonl"
+            rollout.write_text("\n".join([
+                json.dumps({
+                    "timestamp": "2026-09-20T10:00:00Z",
+                    "type": "session_meta",
+                    "payload": {
+                        "id": SESSION_ID,
+                        "cwd": "/repo/.the_lab/agents/old01",
+                        "source": "cli",
+                    },
+                }),
+                json.dumps({
+                    "timestamp": "2026-09-24T10:00:00Z",
+                    "type": "event_msg",
+                    "payload": {"environment_context": {
+                        "cwd": "file:///repo/.the_lab/agents/new02",
+                    }},
+                }),
+            ]) + "\n")
+
+            row = _read_codex_listing_session(rollout)
+
+        self.assertEqual(row["agent_id"], "new02")
+        self.assertEqual(row["cwd"], "/repo/.the_lab/agents/new02")
+        self.assertEqual(row["provider"], "codex")
+        self.assertEqual(
+            _resume_command(row),
+            f"the-lab-agent --agent codex resume {SESSION_ID}",
+        )
+
+    def test_list_combines_providers_newest_first_and_hides_codex_subagents(self):
+        claude_id = "11111111-1111-1111-1111-111111111111"
+        codex_id = "22222222-2222-2222-2222-222222222222"
+        subagent_id = "33333333-3333-3333-3333-333333333333"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            claude_root = root / "claude"
+            project = claude_root / "project"
+            project.mkdir(parents=True)
+            claude = project / f"{claude_id}.jsonl"
+            claude.write_text(json.dumps({
+                "type": "user", "timestamp": "2026-09-23T10:00:00Z",
+                "cwd": "/repo/.the_lab/agents/cla01", "message": {},
+            }) + "\n")
+
+            codex_root = root / "codex"
+            codex_root.mkdir()
+            codex = codex_root / f"rollout-{codex_id}.jsonl"
+            codex.write_text(json.dumps({
+                "type": "session_meta", "timestamp": "2026-09-24T10:00:00Z",
+                "payload": {"id": codex_id, "cwd": "/repo/.the_lab/agents/cod01", "source": "cli"},
+            }) + "\n")
+            subagent = codex_root / f"rollout-{subagent_id}.jsonl"
+            subagent.write_text(json.dumps({
+                "type": "session_meta", "timestamp": "2026-09-24T11:00:00Z",
+                "payload": {"id": subagent_id, "cwd": "/repo/.the_lab/agents/cod01", "source": {"subagent": {}}},
+            }) + "\n")
+            os.utime(claude, (1_000, 1_000))
+            os.utime(codex, (2_000, 2_000))
+            os.utime(subagent, (3_000, 3_000))
+
+            stdout = io.StringIO()
+            with patch.object(agent_cli, "_SESSION_ROOT", claude_root), patch.object(
+                agent_cli, "_codex_session_root", return_value=codex_root,
+            ), contextlib.redirect_stdout(stdout):
+                agent_cli.cmd_list_sessions(["--json"])
+
+        result = json.loads(stdout.getvalue())
+        self.assertEqual(
+            [(row["provider"], row["agent_id"], row["session_id"]) for row in result["sessions"]],
+            [("codex", "cod01", codex_id), ("claude", "cla01", claude_id)],
+        )
+        self.assertIn("--agent codex resume", result["sessions"][0]["resume_command"])
+        self.assertIn("--agent claude loop --resume", result["sessions"][1]["resume_command"])
 
 
 if __name__ == "__main__":

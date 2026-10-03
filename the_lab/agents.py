@@ -242,6 +242,40 @@ def list_agents(repo_dir: Path) -> list[dict]:
     return list(_read_registry(Path(repo_dir).resolve()).values())
 
 
+def reactivate_agent(
+    repo_dir: Path,
+    agent_id: str,
+    *,
+    role: str | None = None,
+    pid: int | None = None,
+) -> dict:
+    """Move a retained past-agent worktree back into the live registry."""
+    repo_dir = Path(repo_dir).resolve()
+    registry = _read_registry(repo_dir)
+    entry = registry.get(agent_id)
+    if entry is None:
+        entry = next(
+            (item for item in _load_history(repo_dir) if item.get("agent_id") == agent_id),
+            None,
+        )
+        if entry is None:
+            raise KeyError(f"unknown past agent '{agent_id}'")
+        entry = dict(entry)
+        entry.pop("completed_at", None)
+
+    worktree = Path(entry.get("worktree", ""))
+    if not worktree.is_dir():
+        raise FileNotFoundError(f"retained worktree for agent '{agent_id}' is missing")
+
+    entry["pid"] = pid
+    if role:
+        entry["role"] = role
+    entry["resumed_at"] = datetime.now(timezone.utc).isoformat()
+    registry[agent_id] = entry
+    _write_registry(repo_dir, registry)
+    return entry
+
+
 # ── "Actively listening" tracking ───────────────────────────────────────────
 # Recorded in a separate file from the registry so the high-frequency poll
 # writes never race with register/unregister.
@@ -416,24 +450,37 @@ def _archive_agent_data(repo_dir: Path, agent_id: str, entry: dict) -> None:
         pass  # archiving is best-effort; never block cleanup
 
 
-def unregister_agent(repo_dir: Path, agent_id: str, *, keep_branch: bool = True) -> bool:
+def unregister_agent(
+    repo_dir: Path,
+    agent_id: str,
+    *,
+    keep_branch: bool = True,
+    keep_worktree: bool = False,
+) -> bool:
+    """Retire an agent, optionally retaining its checkout for later resume.
+
+    ``keep_worktree`` is used by the agent launcher on normal exit. Explicit
+    operator deletion keeps the historical behaviour (remove the checkout)
+    unless the caller asks to preserve it.
+    """
     repo_dir = Path(repo_dir).resolve()
     registry = _read_registry(repo_dir)
     entry = registry.pop(agent_id, None)
     if entry is None:
         return False
     record_completed_agent(repo_dir, entry)
-    # Preserve durable data (Claude history + worktree lab stats) BEFORE the
-    # worktree checkout is deleted, otherwise it's orphaned/lost. See feedback.
-    _archive_agent_data(repo_dir, agent_id, entry)
-    worktree = Path(entry["worktree"])
-    git_ops.remove_worktree(worktree, cwd=repo_dir)
-    git_ops.prune_worktrees(cwd=repo_dir)
-    if not keep_branch:
-        try:
-            git_ops._run(["branch", "-D", entry["branch"]], cwd=repo_dir, check=False)
-        except Exception:
-            pass
+    if not keep_worktree:
+        # Preserve durable data (Claude history + worktree lab stats) BEFORE
+        # the checkout is deleted, otherwise it is orphaned/lost.
+        _archive_agent_data(repo_dir, agent_id, entry)
+        worktree = Path(entry["worktree"])
+        git_ops.remove_worktree(worktree, cwd=repo_dir)
+        git_ops.prune_worktrees(cwd=repo_dir)
+        if not keep_branch:
+            try:
+                git_ops._run(["branch", "-D", entry["branch"]], cwd=repo_dir, check=False)
+            except Exception:
+                pass
     _write_registry(repo_dir, registry)
     return True
 
@@ -452,7 +499,13 @@ def _pid_alive(pid: int) -> bool:
 
 
 def prune_dead_agents(repo_dir: Path) -> list[str]:
-    """Remove registry entries whose PIDs are gone. Returns ids removed."""
+    """Retire registry entries whose PIDs are gone, preserving worktrees.
+
+    A dead wrapper process must not destroy resumable working state. The
+    checkout remains registered with git and the completed-agent history keeps
+    its path, while the live registry entry is removed so it does not consume
+    an active-agent slot.
+    """
     repo_dir = Path(repo_dir).resolve()
     registry = _read_registry(repo_dir)
     removed: list[str] = []
@@ -462,14 +515,10 @@ def prune_dead_agents(repo_dir: Path) -> list[str]:
             continue  # PID unknown — leave it alone
         if _pid_alive(int(pid)):
             continue
-        try:
-            git_ops.remove_worktree(Path(entry["worktree"]), cwd=repo_dir)
-        except Exception:
-            pass
+        record_completed_agent(repo_dir, entry)
         registry.pop(agent_id, None)
         removed.append(agent_id)
     if removed:
-        git_ops.prune_worktrees(cwd=repo_dir)
         _write_registry(repo_dir, registry)
     return removed
 

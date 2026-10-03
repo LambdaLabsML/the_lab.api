@@ -84,8 +84,13 @@ the-lab . --perf                # write .the_lab/api_perf.csv
 the-lab-agent --role instructor # use .the_lab/PROMPT.instructor.md
 the-lab-agent --sandbox on      # enable network + file sandbox
 the-lab-agent --agent codex     # Codex instead of Claude
+the-lab-agent list              # recent agent IDs, resume IDs, and commands
 the-lab-agent --agent codex resume <session-id>  # continue a saved Codex conversation
 ```
+
+`the-lab-agent list` combines Claude and Codex sessions in newest-first order.
+Use `--provider claude|codex`, `--limit N`, or `--json` to narrow or script the
+output. Internal Codex subagent threads are hidden unless `--all` is supplied.
 
 Codex resume keeps its rollout in `$CODEX_HOME/sessions` (normally
 `~/.codex/sessions`). The launcher reuses the session's registered worktree
