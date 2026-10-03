@@ -13,11 +13,12 @@ import {
   clipOutliers,
   ideaMean,
   chartPointSize,
+  chartTimeCurve,
   colorblindMode,
 } from "../../state/settings";
 import { collectChartKeys } from "../../lib/chart-data";
 import { isLowerBetter } from "../../lib/colors";
-import { fmtMetricName } from "../../lib/format";
+import { fmtMetricName, fmtScoreShort, scoreFormatter } from "../../lib/format";
 import { MiniMetricsChart } from "./mini-metrics-chart";
 import { Toggle, IconButton } from "../ui";
 
@@ -39,6 +40,7 @@ export function MetricsChart({ instanceId, initialMetric, hideClone }: { instanc
   const clip = clipOutliers.value;
   const mean = ideaMean.value;
   const pointSize = chartPointSize.value;
+  const timeCurve = chartTimeCurve.value;
   const _cb = colorblindMode.value; // subscribe — colors recompute on change
 
   // Idea-status filters (abandoned/concluded). The "running" toggle is
@@ -129,18 +131,36 @@ export function MetricsChart({ instanceId, initialMetric, hideClone }: { instanc
         </Toggle>
         {/* Point-size control — drives chartPointSize (persisted). Scales the mini dot radii. */}
         <span class="chart-ptsize" title="Dot size">
-          {(["s", "m", "l"] as const).map((sz) => (
+          {(["s", "m", "l", "x"] as const).map((sz) => (
             <button
               key={sz}
               type="button"
               class={`chart-ptsize-btn${pointSize === sz ? " is-active" : ""}`}
               onClick={() => { chartPointSize.value = sz; }}
-              title={`Dot size: ${sz === "s" ? "small" : sz === "m" ? "medium" : "large"}`}
+              title={sz === "x"
+                ? "No dots: x axis is real time, squeezed to fit the panel"
+                : `Dot size: ${sz === "s" ? "small" : sz === "m" ? "medium" : "large"}`}
             >
               {sz}
             </button>
           ))}
         </span>
+        {/* Time-mode curve — only meaningful (and only shown) in "x" mode. */}
+        {pointSize === "x" && (
+          <span class="chart-ptsize" title="Time-mode curve">
+            {(["best", "avg"] as const).map((c) => (
+              <button
+                key={c}
+                type="button"
+                class={`chart-ptsize-btn${timeCurve === c ? " is-active" : ""}`}
+                onClick={() => { chartTimeCurve.value = c; }}
+                title={c === "best" ? "Best-so-far over time" : "Moving average — window auto-sized from result count and noise"}
+              >
+                {c}
+              </button>
+            ))}
+          </span>
+        )}
         {/* Clone is hidden in the single-chart review (hideClone); kept in the workbench */}
         {!hideClone && (
           <IconButton onClick={() => { if (cloneChartPanel) cloneChartPanel("metrics", metric); }} title="Clone this chart as a new tab">
@@ -168,10 +188,10 @@ export function MetricsChart({ instanceId, initialMetric, hideClone }: { instanc
             )}
             <span style={{ color: "var(--text-faint)" }}> · </span>
             <span style={{ color: "var(--border-soft)", fontWeight: 600 }}>·</span>
-            {" "}median {Math.abs(median) >= 1 ? median.toFixed(1) : median.toFixed(2)}
+            {" "}median {scoreFormatter([median, peak])(median)}
             <span style={{ color: "var(--text-faint)" }}> · </span>
             <span style={{ color: "var(--purple)", fontWeight: 600 }}>·</span>
-            {" "}best {Math.abs(peak) >= 100 ? peak.toFixed(0) : Math.abs(peak) >= 1 ? peak.toFixed(2) : peak.toFixed(3)}
+            {" "}best {scoreFormatter([median, peak])(peak)}
             {impOnly && allExperiments.value.some(e => e._running) && (
               <>
                 <span style={{ color: "var(--text-faint)" }}> · </span>
@@ -201,7 +221,7 @@ export function MetricsChart({ instanceId, initialMetric, hideClone }: { instanc
                     const lower = isLowerBetter(k);
                     const vals = experiments.filter(e => !e._running && typeof e.metrics?.[k] === "number").map(e => e.metrics![k] as number);
                     const best = vals.length > 0 ? (lower ? Math.min(...vals) : Math.max(...vals)) : null;
-                    const fmt = best === null ? "--" : Math.abs(best) >= 100 ? best.toFixed(0) : Math.abs(best) >= 1 ? best.toFixed(2) : best.toFixed(3);
+                    const fmt = best === null ? "--" : fmtScoreShort(best);
                     return (
                       <div key={k}
                         class="chart-metric-card"
@@ -239,6 +259,7 @@ export function MetricsChart({ instanceId, initialMetric, hideClone }: { instanc
             logScale={logScale}
             clip={clip}
             pointSize={pointSize}
+            timeCurve={timeCurve}
           />
         </div>
       </div>

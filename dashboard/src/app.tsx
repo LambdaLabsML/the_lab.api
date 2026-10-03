@@ -92,7 +92,7 @@ import {
 import { initTouchMoveMenu } from "./lib/touch-move-menu";
 import { getStatusColor, isLowerBetter } from "./lib/colors";
 import { navigateToIdea } from "./lib/navigate";
-import { fmtMetricName, fmtScoreShort } from "./lib/format";
+import { fmtMetricName, fmtScoreShort, scoreFormatter } from "./lib/format";
 import { collectChartKeys } from "./lib/chart-data";
 
 // ---------------------------------------------------------------------------
@@ -1402,9 +1402,7 @@ function IdeaMiniLeaderboard({ experiments, ideas, metric, lower, maxRows = 5 }:
 
   if (ranked.length === 0) return null;
 
-  function fmtV(v: number) {
-    return Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(2) : v.toFixed(3);
-  }
+  const fmtV = scoreFormatter(ranked.map((r) => r.best));
 
   // Tiny sparkline for an idea's score history
   function IdeaSparkline({ vals, lower: lo }: { vals: number[]; lower: boolean }) {
@@ -1473,7 +1471,7 @@ function IdeaMiniLeaderboard({ experiments, ideas, metric, lower, maxRows = 5 }:
             : rawDesc2.slice(0, 40) || `idea #${r.ideaId}`;
           const history = ideaHistory[r.ideaId] ?? [];
           const gap = i > 0 && ranked[0].best !== r.best
-            ? (lower ? `+${(r.best - ranked[0].best).toFixed(2)}` : `−${(ranked[0].best - r.best).toFixed(2)}`)
+            ? (lower ? `+${fmtScoreShort(r.best - ranked[0].best)}` : `−${fmtScoreShort(ranked[0].best - r.best)}`)
             : null;
           return (
             <Tooltip
@@ -1848,7 +1846,7 @@ function BestSparkline({ experiments, metric, lower }: {
   const px = (i: number) => 2 + (i / (recent.length - 1)) * (W - 4);
   const py = (v: number) => H - 3 - ((v - lo) / range) * (H - 6);
   const d = recent.map((v, i) => `${i === 0 ? "M" : "L"}${px(i).toFixed(1)},${py(v).toFixed(1)}`).join(" ");
-  const fmtv = (v: number) => Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(2) : v.toFixed(3);
+  const fmtv = fmtScoreShort;
   const startBest = recent[0], endBest = recent[recent.length - 1];
   const gain = startBest !== 0 ? Math.abs((endBest - startBest) / startBest) * 100 : null;
   return (
@@ -1892,9 +1890,7 @@ function ScoreDistBar({ experiments, metric, lower }: {
   for (const v of values) counts[Math.min(Math.floor((v - lo) / size), BUCKETS - 1)]++;
   const maxC = Math.max(...counts);
 
-  function fmtN(v: number) {
-    return Math.abs(v) >= 10 ? v.toFixed(0) : v.toFixed(1);
-  }
+  const fmtN = scoreFormatter([lo, hi]);
 
   // median bucket (for the hover card)
   let cum = 0; const half = values.length / 2; let medBucket = 0;
@@ -1926,7 +1922,7 @@ function ScoreDistBar({ experiments, metric, lower }: {
             return (
               <span key={i} class={`score-dist-tick${c > 0 ? "" : " is-empty"}`}
                 style={{ height: `${h}px` }}
-                title={`${c} exp @ ${(lo + i * size).toFixed(1)}–${(lo + (i+1) * size).toFixed(1)}`}
+                title={`${c} exp @ ${fmtN(lo + i * size)}–${fmtN(lo + (i+1) * size)}`}
               />
             );
           })}
@@ -1973,9 +1969,7 @@ function MilestonesTable({ experiments, metric, lower, ideas, maxRows = 6 }: {
   }
   if (rows.length === 0) return null;
 
-  function fmtV(v: number) {
-    return Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(2) : v.toFixed(3);
-  }
+  const fmtV = scoreFormatter(rows.map((r) => r.val));
   function whenAgo(iso: string | null | undefined): string {
     if (!iso) return "—";
     const sec = Math.max(0, Math.floor((Date.now() - Date.parse(iso)) / 1000));
@@ -2538,7 +2532,7 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
           <span class="review-kpi-row">
             <span class="ui-stat-value ui-stat-value--best">
               {bestVal != null && typeof bestVal === "number"
-                ? bestVal.toFixed(bestVal >= 100 ? 0 : bestVal >= 1 ? 2 : 3)
+                ? fmtScoreShort(bestVal)
                 : "—"}
             </span>
             <BestSparkline experiments={done} metric={metric} lower={lower} />
@@ -2677,7 +2671,7 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
                   const vals = recent30.map(e => e.metrics![metric] as number);
                   const maxV = Math.max(...vals, 0.001);
                   const lastV = vals[vals.length - 1];
-                  const fmtv = (v: number) => Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(2) : v.toFixed(3);
+                  const fmtv = scoreFormatter([lastV, maxV]);
                   const W = 150, H = 26;
                   return (
                     <div class="review-mini">
@@ -2710,7 +2704,7 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
                               );
                             })}
                           </svg>
-                          <span class="review-mini-ymax">{maxV >= 100 ? maxV.toFixed(0) : maxV.toFixed(1)}</span>
+                          <span class="review-mini-ymax">{fmtScoreShort(maxV)}</span>
                         </div>
                       </Tooltip>
                       <div class="review-mini-cap">
@@ -2903,7 +2897,7 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
             </div>
             <span class="review-permanent-sub">
               {selected
-                ? <>idea #{selected}{selectedIdeaBest != null && <> · <b style={{ color: "var(--purple)" }}>best {selectedIdeaBest.toFixed(3)}</b></>}</>
+                ? <>idea #{selected}{selectedIdeaBest != null && <> · <b style={{ color: "var(--purple)" }}>best {fmtScoreShort(selectedIdeaBest)}</b></>}</>
                 : <span style={{ fontStyle: "italic" }}>click any idea above to explore</span>}
             </span>
           </div>

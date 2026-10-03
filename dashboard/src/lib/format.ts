@@ -47,10 +47,58 @@ export function ideaTitle(s: string): string {
   return m ? m[0].trim() : s;
 }
 
-/** Short score for dense tables/rows: 123 · 1.23 · 0.123 (the Overview
- *  experiment tables' format — reuse this everywhere a score is inlined). */
+/** Scientific notation without the "+" in positive exponents: 2.50e7, 3.83e-4. */
+function toSci(v: number, digits: number): string {
+  return v.toExponential(digits).replace("e+", "e");
+}
+
+/** Short score for dense tables/rows: 123 · 1.23 · 0.123 · 3.83e-4 (the
+ *  Overview experiment tables' format — reuse this everywhere a score is
+ *  inlined). Tiny (< 1e-2) and huge (≥ 1e6) values go scientific. */
 export function fmtScoreShort(v: number): string {
-  return Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(2) : v.toFixed(3);
+  if (!Number.isFinite(v)) return String(v);
+  if (v === 0) return "0";
+  const a = Math.abs(v);
+  if (a < 1e-2 || a >= 1e6) return toSci(v, 2);
+  return a >= 100 ? v.toFixed(0) : a >= 1 ? v.toFixed(2) : v.toFixed(3);
+}
+
+/** Whether a set of values shown together reads better in scientific notation. */
+export function prefersSci(values: number[]): boolean {
+  let minAbs = Infinity, maxAbs = 0;
+  for (const v of values) {
+    const a = Math.abs(v);
+    if (!Number.isFinite(a) || a === 0) continue;
+    if (a < minAbs) minAbs = a;
+    if (a > maxAbs) maxAbs = a;
+  }
+  if (maxAbs === 0) return false;
+  return maxAbs < 1e-2 || maxAbs >= 1e6 || (minAbs < 1e-2 && maxAbs / minAbs >= 1e3);
+}
+
+/**
+ * Formatter for a set of values shown together (axis ticks, a best/median
+ * pair). Picks ONE notation for the whole set: scientific when the values are
+ * tiny (< 1e-2), huge (≥ 1e6), or span ≥ 3 decades down into the small range
+ * (typical for a log axis); fixed otherwise. Precision grows until values that
+ * differ no longer render identically; exact powers of ten (log-axis decades)
+ * drop the mantissa decimals: 1e-5, 1e-3, 1e-1.
+ */
+export function scoreFormatter(values: number[]): (v: number) => string {
+  const vals = values.filter((v) => Number.isFinite(v));
+  const mags = vals.map(Math.abs).filter((a) => a > 0);
+  if (mags.length === 0) return fmtScoreShort;
+  const maxAbs = Math.max(...mags);
+  const sci = prefersSci(vals);
+
+  const make = (p: number) => (v: number) =>
+    !Number.isFinite(v) ? String(v) : v === 0 ? "0" : sci ? toSci(v, p) : v.toFixed(p);
+  const distinct = new Set(vals).size;
+  let p = sci ? 1 : maxAbs >= 100 ? 0 : maxAbs >= 1 ? 2 : 3;
+  const maxP = sci ? 4 : 6;
+  while (p < maxP && new Set(vals.map(make(p))).size < distinct) p++;
+  if (sci && vals.every((v) => Number(make(0)(v)) === Number(make(p)(v)))) p = 0;
+  return make(p);
 }
 
 /**

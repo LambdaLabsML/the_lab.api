@@ -3,7 +3,7 @@ import { selectedIdea, selectedMetric, detailTimeline, detailSortNewest, colorTh
 import { scrollToExperiment, runningProgress, allExperiments } from "../state/signals";
 import { getIdea, getExperimentProgress, getExperimentLog, getExperimentScript, getExperimentOutput, getIdeaDiff } from "../state/api";
 import { subscribeWsEvents } from "../state/ws";
-import { formatTime, badgeHtml, escapeHtml } from "../lib/format";
+import { formatTime, badgeHtml, escapeHtml, fmtScoreShort } from "../lib/format";
 import { Lightbox } from "./lightbox";
 import { JsonView } from "./json-view";
 import { Eyebrow, Stat, Badge, Toggle, EmptyState, type BadgeTone } from "./ui";
@@ -802,7 +802,7 @@ export function DetailPanel({ embedded = false }: { embedded?: boolean } = {}) {
                     if (best === null || (lower ? v < best : v > best)) best = v;
                   }
                   if (best === null) return null;
-                  const fmtBest = Math.abs(best) >= 100 ? best.toFixed(0) : Math.abs(best) >= 1 ? best.toFixed(2) : best.toFixed(3);
+                  const fmtBest = fmtScoreShort(best);
                   return (
                     <div class="meta-best">
                       <Stat
@@ -1754,10 +1754,7 @@ function ExperimentItem({
         {/* Primary metric value — most important number at a glance; reads like a <Stat>. */}
         {metricKey && exp.metrics && typeof exp.metrics[metricKey] === "number" && !exp._running && (
           <span class="exp-metric-badge" title={`${metricKey} = ${exp.metrics[metricKey]}`}>
-            {(exp.metrics[metricKey] as number).toFixed(
-              Math.abs(exp.metrics[metricKey] as number) >= 100 ? 0 :
-              Math.abs(exp.metrics[metricKey] as number) >= 1 ? 2 : 3
-            )}
+            {fmtScoreShort(exp.metrics[metricKey] as number)}
           </span>
         )}
         <span dangerouslySetInnerHTML={{ __html: badgeHtml(exp.status, progress?.pct_complete ?? progress?.pct) }} />

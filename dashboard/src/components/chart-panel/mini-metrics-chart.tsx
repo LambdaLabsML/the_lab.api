@@ -24,6 +24,12 @@
  *
  * Point size: dot radii are multiplied by a factor driven by chartPointSize
  * (s | m | l → 0.75 | 1 | 1.4).
+ *
+ * Time mode (chartPointSize "x"): no dots. X is wall-clock time (finished_at,
+ * else started_at/created_at), squeezed to the panel width so the whole
+ * history is visible without scrolling. Only one curve is drawn (raw or
+ * idea-mean), with time ticks on the x axis: the best-so-far step line, or
+ * (timeCurve "avg") a trailing moving average, window from pickAvgWindow.
  */
 
 import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
@@ -31,7 +37,7 @@ import { buildChartData } from "../../lib/chart-data";
 import { isLowerBetter } from "../../lib/colors";
 import { useEntityNav } from "../../lib/hooks";
 import { highlightedIdea } from "../../state/signals";
-import { fmtMetricName } from "../../lib/format";
+import { fmtMetricName, scoreFormatter } from "../../lib/format";
 import { experimentTipContent } from "../ui";
 import type { Experiment, IdeaNode, SubwayLayout } from "../../lib/types";
 
@@ -41,9 +47,75 @@ const TIP_MARGIN = 8; // min gap from viewport edge (matches shared Tooltip)
 const TIP_GAP = 8;    // gap between dot and card
 
 /** Dot-radius multiplier per chartPointSize step. */
-const PT_SIZE_SCALE: Record<"s" | "m" | "l", number> = { s: 0.75, m: 1, l: 1.4 };
+const PT_SIZE_SCALE: Record<"s" | "m" | "l" | "x", number> = { s: 0.75, m: 1, l: 1.4, x: 1 };
+
+/**
+ * Moving-average window for time mode, sized from the data: the k whose
+ * trailing mean best predicts the NEXT result (lowest mean absolute one-step
+ * error). Noisy, flat series pick a wide window; trending series a narrow one.
+ * k ∈ [3, min(256, n/2)] (at least half the results remain as targets);
+ * absolute error so one failed run doesn't dominate. The error curve is treated
+ * as unimodal in k and bisected on its slope: O(n·log kMax) via prefix sums.
+ */
+export function pickAvgWindow(vals: number[]): number {
+  const n = vals.length;
+  const kMax = Math.min(256, Math.floor(n / 2));
+  if (kMax <= 3) return Math.max(1, Math.min(3, n));
+  const prefix = [0];
+  for (const v of vals) prefix.push(prefix[prefix.length - 1] + v);
+  // Score every k on the same targets (i ≥ kMax) so errors are comparable.
+  const memo = new Map<number, number>();
+  const err = (k: number): number => {
+    let e = memo.get(k);
+    if (e === undefined) {
+      e = 0;
+      for (let i = kMax; i < n; i++) e += Math.abs(vals[i] - (prefix[i] - prefix[i - k]) / k);
+      memo.set(k, e);
+    }
+    return e;
+  };
+  // Bisect for the first k where the error stops decreasing.
+  let lo = 3, hi = kMax;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (err(mid) <= err(mid + 1)) hi = mid; else lo = mid + 1;
+  }
+  return lo;
+}
+
+const MIN = 60_000, HOUR = 60 * MIN, DAY = 24 * HOUR;
+const TIME_STEPS = [
+  MIN, 5 * MIN, 15 * MIN, 30 * MIN, HOUR, 3 * HOUR, 6 * HOUR, 12 * HOUR,
+  DAY, 2 * DAY, 7 * DAY, 14 * DAY, 30 * DAY, 90 * DAY, 365 * DAY,
+];
 
 // ── helpers ──────────────────────────────────────────────────────────────────
+
+/** Experiment timestamp (ms) for time mode. */
+function expTime(e: Experiment | undefined): number {
+  if (!e) return NaN;
+  const iso = e.finished_at || e.started_at || e.created_at;
+  return iso ? Date.parse(iso) : NaN;
+}
+
+/** Evenly spaced, locally aligned time ticks: at most `maxTicks` over [t0, t1]. */
+function timeTicks(t0: number, t1: number, maxTicks: number): { t: number; label: string }[] {
+  const span = Math.max(t1 - t0, 1);
+  const step = TIME_STEPS.find((s) => span / s <= maxTicks) ?? TIME_STEPS[TIME_STEPS.length - 1];
+  // Align to local midnight/hour boundaries, not UTC.
+  const tz = -new Date(t0).getTimezoneOffset() * MIN;
+  const out: { t: number; label: string }[] = [];
+  let prevDay = "";
+  for (let t = Math.ceil((t0 + tz) / step) * step - tz; t <= t1; t += step) {
+    const d = new Date(t);
+    const day = d.toLocaleDateString([], { month: "short", day: "numeric" });
+    const hm = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+    const label = step >= DAY || hm === "00:00" ? day : day !== prevDay ? `${day} ${hm}` : hm;
+    out.push({ t, label });
+    prevDay = day;
+  }
+  return out;
+}
 
 /** Upward-pointing triangle path centred on (cx, cy) with half-size r. */
 function trianglePath(cx: number, cy: number, r: number): string {
@@ -52,13 +124,6 @@ function trianglePath(cx: number, cy: number, r: number): string {
   const x1 = cx - r, y1 = cy + h * 0.4; // bottom-left
   const x2 = cx + r, y2 = cy + h * 0.4; // bottom-right
   return `M${x0.toFixed(1)},${y0.toFixed(1)} L${x1.toFixed(1)},${y1.toFixed(1)} L${x2.toFixed(1)},${y2.toFixed(1)} Z`;
-}
-
-function fmtVal(v: number): string {
-  if (Math.abs(v) >= 1000) return v.toFixed(0);
-  if (Math.abs(v) >= 10)   return v.toFixed(1);
-  if (Math.abs(v) >= 1)    return v.toFixed(2);
-  return v.toFixed(3);
 }
 
 // ── single dot (its own component so it can use the nav hook) ──────────────────
@@ -168,7 +233,7 @@ function MiniTooltip({ anchor, children }: { anchor: DOMRect; children: any }) {
 export function MiniMetricsChart({
   metric, experiments, ideas, layout, hiddenStatuses, hideRunning,
   impOnly, colorMode, tags, tagMode, reversed, mean, logScale = false, clip = false,
-  pointSize = "m",
+  pointSize = "m", timeCurve = "best",
 }: {
   metric: string;
   experiments: Experiment[];
@@ -184,7 +249,9 @@ export function MiniMetricsChart({
   mean: boolean;
   logScale?: boolean;
   clip?: boolean;
-  pointSize?: "s" | "m" | "l";
+  pointSize?: "s" | "m" | "l" | "x";
+  /** Time mode only: best-so-far step line, or trailing moving average. */
+  timeCurve?: "best" | "avg";
 }) {
   // hovered dot index + its screen rect (for the HTML overlay tooltip)
   const [hovered, setHovered] = useState<{ idx: number; rect: DOMRect } | null>(null);
@@ -229,6 +296,7 @@ export function MiniMetricsChart({
 
   const lower = isLowerBetter(metric);
   const sizeScale = PT_SIZE_SCALE[pointSize] ?? 1;
+  const timeMode = pointSize === "x";
 
   // ── Milestone (record) detection over the FULL ordered list ──────────────────
   // `chartData` is already in display order (buildChartData reverses when
@@ -265,7 +333,7 @@ export function MiniMetricsChart({
   // most recent record (the current dry streak) as normal dots. Works in both
   // time directions because the dry-streak test is chronological.
   let keepIdx: number[];
-  if (impOnly) {
+  if (impOnly && !timeMode) {
     keepIdx = [];
     for (let d = 0; d < fullN; d++) {
       const c = reversed ? fullN - 1 - d : d;
@@ -285,21 +353,46 @@ export function MiniMetricsChart({
   keepIdx.forEach((srcD, dstI) => { if (fullMilestones.has(srcD)) milestones.add(dstI); });
   const n = values.length;
 
-  // 1:1 pixel coordinate space — viewBox matches measured size, no scaling.
-  const containerW = size.w;
-  const H = Math.max(120, size.h);
-  const minSvgW = PAD.l + n * MIN_PX_PER_POINT + PAD.r;
-  const svgW = Math.max(containerW, minSvgW);
-  const needsScroll = svgW > containerW + 0.5;
-  const plotW = svgW - PAD.l - PAD.r;
-  const plotH = H - PAD.t - PAD.b;
-  const rightEdge = svgW - PAD.r;
-  const baselineY = H - PAD.b;
+  // Time mode: chronological (t, y) points of ONE curve — best-so-far, or the
+  // trailing moving average — and the y range fits that curve rather than
+  // every value. Works on raw experiments and idea means alike (a mean point
+  // sits at its idea's latest finish). Running experiments carry partial
+  // progress, so they never enter the curve; they only extend the axis to "now".
+  const avgMode = timeMode && timeCurve === "avg";
+  const timed: { t: number; y: number }[] = [];
+  let avgWindow = 0;
+  const isRunning = (i: number) => !!(expData?.[i] as { _running?: boolean } | undefined)?._running;
+  const anyRunning = timeMode && values.some((_, i) => isRunning(i));
+  if (timeMode) {
+    const pts = values
+      .map((v, i) => ({ t: isRunning(i) ? NaN : expTime(expData?.[i] as Experiment | undefined), v }))
+      .filter((p) => isFinite(p.t) && isFinite(p.v))
+      .sort((a, b) => a.t - b.t);
+    if (avgMode) avgWindow = pickAvgWindow(pts.map((p) => p.v));
+    let windowSum = 0;
+    pts.forEach((p, k) => {
+      if (avgMode) {
+        windowSum += p.v;
+        if (k >= avgWindow) windowSum -= pts[k - avgWindow].v;
+        timed.push({ t: p.t, y: windowSum / Math.min(k + 1, avgWindow) });
+      } else {
+        const prev = timed.length ? timed[timed.length - 1].y : null;
+        timed.push({ t: p.t, y: prev === null || (lower ? p.v < prev : p.v > prev) ? p.v : prev });
+      }
+    });
+    if (timed.length === 0) {
+      return (
+        <div ref={wrapRef} style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <span style={{ color: "var(--text-faint)", fontSize: "var(--text-sm)" }}>no timestamps for {metric}</span>
+        </div>
+      );
+    }
+  }
 
   // ── Y range ──────────────────────────────────────────────────────────────────
   // Optionally clip outliers (IQR fence) and/or use a log scale, mirroring the
   // toolbar toggles. Log scale only applies when all finite values are positive.
-  const finite = values.filter(isFinite);
+  const finite = timeMode ? timed.map((p) => p.y) : values.filter(isFinite);
   let dataMin = Math.min(...finite);
   let dataMax = Math.max(...finite);
   if (clip && finite.length >= 4) {
@@ -323,21 +416,68 @@ export function MiniMetricsChart({
   const yMax = tMax + tPad;
   const clampV = (v: number) => Math.min(dataMax, Math.max(dataMin, v));
 
-  const toX = (i: number) => PAD.l + (n <= 1 ? plotW / 2 : (i / (n - 1)) * plotW);
-  const toY = (v: number) => PAD.t + (1 - (tform(clampV(v)) - yMin) / (yMax - yMin)) * plotH;
-
-  // Stepped best-score path
-  const stepPoints = values.map((_, i) => [toX(i), toY(runningBest[i])] as const);
-  let stepPath = `M${stepPoints[0][0].toFixed(1)},${stepPoints[0][1].toFixed(1)}`;
-  for (let i = 1; i < stepPoints.length; i++) {
-    stepPath += ` H${stepPoints[i][0].toFixed(1)} V${stepPoints[i][1].toFixed(1)}`;
-  }
-  stepPath += ` H${rightEdge.toFixed(1)}`;
-
   const nTicks = 4;
   const tickStep = (yMax - yMin) / (nTicks - 1);
   const yTicks = Array.from({ length: nTicks }, (_, i) => yMin + i * tickStep);
-  const bestVal = lower ? Math.min(...finite) : Math.max(...finite);
+  // Bottom-right readout: the best value, or the latest moving average.
+  const bestVal = avgMode ? timed[timed.length - 1].y : lower ? Math.min(...finite) : Math.max(...finite);
+  // One notation for the axis + best label, chosen from what is on screen.
+  const yTickVals = yTicks.map((ty) => (useLog ? Math.pow(10, ty) : ty));
+  const fmtVal = scoreFormatter([...yTickVals, bestVal]);
+  const yTickLabels = yTickVals.map(fmtVal);
+
+  // 1:1 pixel coordinate space — viewBox matches measured size, no scaling.
+  // Left pad grows to fit the widest tick label (e.g. "-3.84e-4").
+  const padL = Math.max(PAD.l, Math.ceil(Math.max(...yTickLabels.map((l) => l.length)) * font.xs * 0.62) + 8);
+  const containerW = size.w;
+  const H = Math.max(120, size.h);
+  // Time mode never scrolls: the full time range is squeezed into the panel.
+  const minSvgW = timeMode ? 0 : padL + n * MIN_PX_PER_POINT + PAD.r;
+  const svgW = Math.max(containerW, minSvgW);
+  const needsScroll = svgW > containerW + 0.5;
+  const padB = timeMode ? PAD.b + font.xs + 6 : PAD.b; // extra row for time ticks
+  const plotW = svgW - padL - PAD.r;
+  const plotH = H - PAD.t - padB;
+  const rightEdge = svgW - PAD.r;
+  const baselineY = H - padB;
+
+  const toX = (i: number) => padL + (n <= 1 ? plotW / 2 : (i / (n - 1)) * plotW);
+  const toY = (v: number) => PAD.t + (1 - (tform(clampV(v)) - yMin) / (yMax - yMin)) * plotH;
+
+  const t0 = timed.length ? timed[0].t : 0;
+  const t1 = timed.length ? Math.max(timed[timed.length - 1].t, anyRunning ? Date.now() : -Infinity) : 1;
+  const toXT = (t: number) => {
+    const f = t1 > t0 ? (t - t0) / (t1 - t0) : 0.5;
+    return reversed ? rightEdge - f * plotW : padL + f * plotW;
+  };
+
+  // Stepped best-score path: (x, running best) pairs, drawn as H/V segments.
+  let stepPoints: (readonly [number, number])[];
+  if (timeMode) {
+    stepPoints = timed.map((p) => [toXT(p.t), toY(p.y)] as const);
+  } else {
+    stepPoints = values.map((_, i) => [toX(i), toY(runningBest[i])] as const);
+  }
+  const stepStartX = stepPoints.length ? stepPoints[0][0] : padL;
+  const stepEndX = timeMode ? (reversed ? padL : rightEdge) : rightEdge;
+  let stepPath = stepPoints.length ? `M${stepPoints[0][0].toFixed(1)},${stepPoints[0][1].toFixed(1)}` : "";
+  for (let i = 1; i < stepPoints.length; i++) {
+    stepPath += avgMode
+      ? ` L${stepPoints[i][0].toFixed(1)},${stepPoints[i][1].toFixed(1)}`  // average: straight segments
+      : ` H${stepPoints[i][0].toFixed(1)} V${stepPoints[i][1].toFixed(1)}`;
+  }
+  if (stepPath) stepPath += ` H${stepEndX.toFixed(1)}`;
+
+  // Time-axis ticks, spaced so labels don't collide (~90px each).
+  const xTicks = timeMode && timed.length
+    ? timeTicks(t0, t1, Math.max(2, Math.floor(plotW / 90)))
+        .map((tk) => ({ ...tk, x: toXT(tk.t) }))
+        .filter((tk) => {
+          const half = (tk.label.length * font.xs * 0.62) / 2;
+          return tk.x - half >= 0 && tk.x + half <= svgW;
+        })
+    : [];
+
 
   return (
     <div
@@ -353,31 +493,39 @@ export function MiniMetricsChart({
       >
         {/* Y grid + labels */}
         {yTicks.map((ty, i) => {
-          const v = useLog ? Math.pow(10, ty) : ty;
           const gy = PAD.t + (1 - (ty - yMin) / (yMax - yMin)) * plotH;
           return (
             <g key={i}>
-              <line x1={PAD.l} x2={rightEdge} y1={gy} y2={gy}
+              <line x1={padL} x2={rightEdge} y1={gy} y2={gy}
                 stroke="var(--border-soft)" stroke-width="1" />
-              <text x={PAD.l - 5} y={gy + font.xs * 0.34}
+              <text x={padL - 5} y={gy + font.xs * 0.34}
                 fill="var(--text-faint)" font-size={font.xs} text-anchor="end"
-                font-family="var(--font-mono)">{fmtVal(v)}</text>
+                font-family="var(--font-mono)">{yTickLabels[i]}</text>
             </g>
           );
         })}
 
         {/* X baseline */}
-        <line x1={PAD.l} x2={rightEdge} y1={baselineY} y2={baselineY} stroke="var(--border)" />
+        <line x1={padL} x2={rightEdge} y1={baselineY} y2={baselineY} stroke="var(--border)" />
+
+        {/* Time ticks (time mode) */}
+        {xTicks.map((tk) => (
+          <g key={tk.t}>
+            <line x1={tk.x} x2={tk.x} y1={baselineY} y2={baselineY + 3} stroke="var(--border)" />
+            <text x={tk.x} y={baselineY + 4 + font.xs} text-anchor="middle"
+              fill="var(--text-faint)" font-size={font.xs} font-family="var(--font-mono)">{tk.label}</text>
+          </g>
+        ))}
 
         {/* Best-line flat tint + stroke (no gradient) */}
-        <path d={`${stepPath} V${baselineY} H${PAD.l} Z`}
-          fill="var(--purple)" fill-opacity={impOnly ? 0.07 : 0.05} />
-        <path d={stepPath} fill="none" stroke="var(--purple)"
-          stroke-width={impOnly ? 1.8 : 1.4}
-          stroke-linejoin="round" stroke-linecap="round" />
+        {stepPath && <path d={`${stepPath} V${baselineY} H${stepStartX.toFixed(1)} Z`}
+          fill="var(--purple)" fill-opacity={impOnly ? 0.07 : 0.05} />}
+        {stepPath && <path d={stepPath} fill="none" stroke="var(--purple)"
+          stroke-width={impOnly || timeMode ? 1.8 : 1.4}
+          stroke-linejoin="round" stroke-linecap="round" />}
 
-        {/* Dots */}
-        {values.map((v, i) => {
+        {/* Dots (none in time mode) */}
+        {!timeMode && values.map((v, i) => {
           const e = expData?.[i] as (Experiment & { _running?: boolean }) | undefined;
           const isMs = milestones.has(i);
           // milestone caption: "idea/exp · excerpt…" (purple, clickable)
@@ -403,15 +551,17 @@ export function MiniMetricsChart({
 
         {/* Bottom labels */}
         <g font-family="var(--font-mono)" font-size={font.xs}>
-          <text x={PAD.l} y={H - 5} fill="var(--text-faint)">experiments left → right</text>
+          <text x={padL} y={H - 5} fill="var(--text-faint)">
+            {timeMode ? (reversed ? "← time" : "time →") : "experiments left → right"}
+          </text>
           <text x={rightEdge} y={H - 5} text-anchor="end" fill="var(--purple)">
-            current best {fmtVal(bestVal)}
+            {avgMode ? `avg of last ${avgWindow}` : "current best"} {fmtVal(bestVal)}
           </text>
         </g>
       </svg>
 
       {/* Shared HTML hover card — visually identical to timeline/table tooltips */}
-      {hovered !== null && (() => {
+      {hovered !== null && !timeMode && (() => {
         const i = hovered.idx;
         if (i >= n) return null;
         const exp = expData?.[i];

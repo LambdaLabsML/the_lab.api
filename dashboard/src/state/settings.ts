@@ -164,8 +164,11 @@ export const showBestLine = useSetting("showBestLine", true);
 /** Minified chart: tiny dots, no axis labels — global overview mode. */
 export const chartMinified = useSetting("chartMinified", false);
 
-/** Chart point/dot size: s | m | l. */
-export const chartPointSize = useSetting<"s" | "m" | "l">("chartPointSize", "m");
+/** Chart point/dot size: s | m | l, or x = no dots, time-scaled x axis fit to width. */
+export const chartPointSize = useSetting<"s" | "m" | "l" | "x">("chartPointSize", "m");
+
+/** Time mode (chartPointSize "x") curve: best-so-far step line, or moving average. */
+export const chartTimeCurve = useSetting<"best" | "avg">("chartTimeCurve", "best");
 
 /** Review metrics-graph height in px (user-adjustable via chevron steppers). */
 export const reviewChartHeight = useSetting("reviewChartHeight", 360);
