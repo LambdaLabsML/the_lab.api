@@ -12,6 +12,7 @@ import type {
   IdeaDetail,
   Experiment,
   MessageEntry,
+  MessagePage,
   ProgressResponse,
   OpenAPISpec,
   PromptMeta,
@@ -119,10 +120,19 @@ export async function getExperimentLog(
 
 /** GET /api/v1/agents/costs — per-agent cost/token records (completed = one
  *  record at completion ts; live = a readings time-series). */
-export async function getAgentCosts(): Promise<Record<string, {
-  cost?: number; inTok?: number; outTok?: number; ts?: string; live?: boolean;
-  readings?: { ts: string; cost: number; inTok: number; outTok: number }[];
-}>> {
+export async function getAgentCosts(): Promise<
+  Record<
+    string,
+    {
+      cost?: number;
+      inTok?: number;
+      outTok?: number;
+      ts?: string;
+      live?: boolean;
+      readings?: { ts: string; cost: number; inTok: number; outTok: number }[];
+    }
+  >
+> {
   return fetchJson("/api/v1/agents/costs");
 }
 
@@ -130,7 +140,13 @@ export async function getAgentCosts(): Promise<Record<string, {
 export async function getIdeaDiff(
   ideaId: number,
   base?: string,
-): Promise<{ stat: string; diff: string; base: string; branch: string; merge_base: string }> {
+): Promise<{
+  stat: string;
+  diff: string;
+  base: string;
+  branch: string;
+  merge_base: string;
+}> {
   const qs = base ? `?base=${encodeURIComponent(base)}` : "";
   return fetchJson(`/api/v1/ideas/${ideaId}/diff${qs}`);
 }
@@ -146,9 +162,11 @@ export async function getExperimentScript(
 export async function getExperimentOutput(
   expRef: string | number,
 ): Promise<{ output: string; base_path: string; format?: "md" | "html" }> {
-  return fetchJson<{ output: string; base_path: string; format?: "md" | "html" }>(
-    `/api/v1/experiments/${expRef}/output`,
-  );
+  return fetchJson<{
+    output: string;
+    base_path: string;
+    format?: "md" | "html";
+  }>(`/api/v1/experiments/${expRef}/output`);
 }
 
 /** GET /api/v1/experiments/:expRef/progress */
@@ -194,12 +212,24 @@ export interface ApiStatsResponse {
   patterns: { sequence: string; count: number }[];
   // calls = measured (successful MCP) responses; all_calls = total traffic incl.
   // curl + dashboard polling, absent on servers predating the split.
-  response_sizes: { endpoint: string; calls: number; all_calls?: number; total_kb: number; avg_kb: number; max_kb: number }[];
+  response_sizes: {
+    endpoint: string;
+    calls: number;
+    all_calls?: number;
+    total_kb: number;
+    avg_kb: number;
+    max_kb: number;
+  }[];
 }
 
 /** GET /api/v1/stats */
-export async function getApiStats(patternLength = 2, sinceHours?: number | null): Promise<ApiStatsResponse> {
-  return fetchJson<ApiStatsResponse>(`/api/v1/stats?pattern_length=${patternLength}${sinceHours ? `&since_hours=${sinceHours}` : ""}`);
+export async function getApiStats(
+  patternLength = 2,
+  sinceHours?: number | null,
+): Promise<ApiStatsResponse> {
+  return fetchJson<ApiStatsResponse>(
+    `/api/v1/stats?pattern_length=${patternLength}${sinceHours ? `&since_hours=${sinceHours}` : ""}`,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -237,12 +267,19 @@ export async function listPrompts(): Promise<PromptMeta[]> {
 }
 
 /** GET /api/v1/prompts/:role */
-export async function getPrompt(role: string): Promise<{ role: string; content: string }> {
-  return fetchJson<{ role: string; content: string }>(`/api/v1/prompts/${encodeURIComponent(role)}`);
+export async function getPrompt(
+  role: string,
+): Promise<{ role: string; content: string }> {
+  return fetchJson<{ role: string; content: string }>(
+    `/api/v1/prompts/${encodeURIComponent(role)}`,
+  );
 }
 
 /** PUT /api/v1/prompts/:role */
-export async function putPrompt(role: string, content: string): Promise<PromptMeta> {
+export async function putPrompt(
+  role: string,
+  content: string,
+): Promise<PromptMeta> {
   return fetchJson<PromptMeta>(`/api/v1/prompts/${encodeURIComponent(role)}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
@@ -251,10 +288,15 @@ export async function putPrompt(role: string, content: string): Promise<PromptMe
 }
 
 /** DELETE /api/v1/prompts/:role */
-export async function deletePromptRole(role: string): Promise<{ status: string; role: string }> {
-  return fetchJson<{ status: string; role: string }>(`/api/v1/prompts/${encodeURIComponent(role)}`, {
-    method: "DELETE",
-  });
+export async function deletePromptRole(
+  role: string,
+): Promise<{ status: string; role: string }> {
+  return fetchJson<{ status: string; role: string }>(
+    `/api/v1/prompts/${encodeURIComponent(role)}`,
+    {
+      method: "DELETE",
+    },
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -267,17 +309,54 @@ export async function listAgents(): Promise<AgentEntry[]> {
 }
 
 /** GET /api/v1/messages */
-export async function listMessages(limit: number = 100): Promise<MessageEntry[]> {
-  const res = await fetchJson<{ messages: MessageEntry[] }>(`/api/v1/messages?limit=${limit}`);
+export async function listMessages(
+  limit: number = 100,
+): Promise<MessageEntry[]> {
+  const res = await fetchJson<MessagePage>(`/api/v1/messages?limit=${limit}`);
   return res.messages ?? [];
 }
 
+/** GET /api/v1/messages — pageable recent log (operator/dashboard identity). */
+export async function listMessagesPage(
+  limit: number = 200,
+  offset: number = 0,
+): Promise<MessagePage> {
+  const params = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset),
+  });
+  return fetchJson<MessagePage>(`/api/v1/messages?${params}`);
+}
+
+/** GET /api/v1/messages — one pageable conversation, newest first. */
+export async function getMessagePage(
+  threadId: number,
+  limit: number = 200,
+  offset: number = 0,
+): Promise<MessagePage> {
+  const params = new URLSearchParams({
+    thread_id: String(threadId),
+    limit: String(limit),
+    offset: String(offset),
+  });
+  return fetchJson<MessagePage>(`/api/v1/messages?${params}`);
+}
+
+/** Resolve a deep-linked message outside the dashboard's recent-message page. */
+export async function getMessage(id: number): Promise<MessageEntry> {
+  return fetchJson<MessageEntry>(`/api/v1/messages/${id}`);
+}
+
 /** POST /api/v1/messages — send a message to agents */
-export async function sendMessage(to: string, text: string): Promise<MessageEntry> {
+export async function sendMessage(
+  to: string,
+  text: string,
+  options: Pick<MessageEntry, "thread_id" | "in_reply_to" | "tldr"> = {},
+): Promise<MessageEntry> {
   return fetchJson<MessageEntry>("/api/v1/messages", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ to, text }),
+    body: JSON.stringify({ to, text, ...options }),
   });
 }
 
@@ -303,8 +382,13 @@ export async function getQueue(): Promise<QueueSnapshot> {
 }
 
 /** GET /api/v1/queue/config */
-export async function getQueueConfig(): Promise<{ paused: boolean; dispatch_interval_s: number }> {
-  return fetchJson<{ paused: boolean; dispatch_interval_s: number }>("/api/v1/queue/config");
+export async function getQueueConfig(): Promise<{
+  paused: boolean;
+  dispatch_interval_s: number;
+}> {
+  return fetchJson<{ paused: boolean; dispatch_interval_s: number }>(
+    "/api/v1/queue/config",
+  );
 }
 
 /** PUT /api/v1/queue/config */
@@ -312,25 +396,40 @@ export async function setQueueConfig(req: {
   paused?: boolean;
   dispatch_interval_s?: number;
 }): Promise<{ paused: boolean; dispatch_interval_s: number }> {
-  return fetchJson<{ paused: boolean; dispatch_interval_s: number }>("/api/v1/queue/config", {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(req),
-  });
+  return fetchJson<{ paused: boolean; dispatch_interval_s: number }>(
+    "/api/v1/queue/config",
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(req),
+    },
+  );
 }
 
 /** POST /api/v1/queue/pause */
-export async function pauseQueue(): Promise<{ paused: boolean; dispatch_interval_s: number }> {
-  return fetchJson<{ paused: boolean; dispatch_interval_s: number }>("/api/v1/queue/pause", {
-    method: "POST",
-  });
+export async function pauseQueue(): Promise<{
+  paused: boolean;
+  dispatch_interval_s: number;
+}> {
+  return fetchJson<{ paused: boolean; dispatch_interval_s: number }>(
+    "/api/v1/queue/pause",
+    {
+      method: "POST",
+    },
+  );
 }
 
 /** POST /api/v1/queue/resume */
-export async function resumeQueue(): Promise<{ paused: boolean; dispatch_interval_s: number }> {
-  return fetchJson<{ paused: boolean; dispatch_interval_s: number }>("/api/v1/queue/resume", {
-    method: "POST",
-  });
+export async function resumeQueue(): Promise<{
+  paused: boolean;
+  dispatch_interval_s: number;
+}> {
+  return fetchJson<{ paused: boolean; dispatch_interval_s: number }>(
+    "/api/v1/queue/resume",
+    {
+      method: "POST",
+    },
+  );
 }
 
 /** GET /api/v1/resources */
@@ -340,7 +439,9 @@ export async function listResources(): Promise<ResourceState[]> {
 
 /** GET /api/v1/resources/:name */
 export async function getResource(name: string): Promise<ResourceState> {
-  return fetchJson<ResourceState>(`/api/v1/resources/${encodeURIComponent(name)}`);
+  return fetchJson<ResourceState>(
+    `/api/v1/resources/${encodeURIComponent(name)}`,
+  );
 }
 
 /** PUT /api/v1/resources/:name */
@@ -348,15 +449,20 @@ export async function upsertResource(
   name: string,
   body: ResourceUpsertBody,
 ): Promise<ResourceState> {
-  return fetchJson<ResourceState>(`/api/v1/resources/${encodeURIComponent(name)}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  return fetchJson<ResourceState>(
+    `/api/v1/resources/${encodeURIComponent(name)}`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  );
 }
 
 /** DELETE /api/v1/resources/:name */
-export async function deleteResource(name: string): Promise<{ status: string; name: string }> {
+export async function deleteResource(
+  name: string,
+): Promise<{ status: string; name: string }> {
   return fetchJson<{ status: string; name: string }>(
     `/api/v1/resources/${encodeURIComponent(name)}`,
     { method: "DELETE" },
@@ -433,7 +539,9 @@ export async function streamChat(
         if (evt.type === "text") onText(evt.text);
         else if (evt.type === "done") onDone();
         else if (evt.type === "error") onError(evt.error);
-      } catch { /* skip malformed lines */ }
+      } catch {
+        /* skip malformed lines */
+      }
     }
   }
   onDone();

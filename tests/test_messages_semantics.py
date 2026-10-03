@@ -53,6 +53,14 @@ class MessageStateTests(unittest.TestCase):
         self.assertEqual(messages.get_message(self.repo, one["id"])["read_by"], ["a"])
         self.assertEqual(messages.get_message(self.repo, two["id"])["read_by"], [])
 
+    def test_message_event_preview_prefers_tldr(self):
+        with patch("the_lab.ws.broadcaster.broadcast_soon") as broadcast:
+            messages.add_message(
+                self.repo, from_agent="b", from_role=None, to="agent:a",
+                text="The detailed message body", tldr="Summary",
+            )
+        self.assertEqual(broadcast.call_args.args[0]["text"], "Summary")
+
 
 class MessageRouteTests(unittest.TestCase):
     def setUp(self):
@@ -61,7 +69,7 @@ class MessageRouteTests(unittest.TestCase):
         @app.middleware("http")
         async def identity(request: Request, call_next):
             request.state.agent_id = request.headers.get("X-Agent-Id")
-            request.state.auth_tier = "experiment"
+            request.state.auth_tier = request.headers.get("X-Test-Auth-Tier", "experiment")
             return await call_next(request)
         app.include_router(routes.router); self.client = TestClient(app)
         lookup = lambda _repo, aid: {"agent_id": aid, "role": "worker"}
@@ -95,6 +103,119 @@ class MessageRouteTests(unittest.TestCase):
         self.assertEqual(messages.get_message(self.repo, two["id"])["read_by"], [])
         self.assertEqual(self.client.post("/api/v1/messages/read_all", headers=self.h()).status_code, 200)
         self.assertEqual(messages.get_message(self.repo, two["id"])["read_by"], ["a"])
+
+    def test_tldr_is_trimmed_stored_and_returned(self):
+        r = self.client.post("/api/v1/messages", headers=self.h(), json={
+            "to": "agent:b", "text": "A detailed status update", "tldr": "  Status: ready  ",
+        })
+        self.assertEqual(r.status_code, 201)
+        self.assertEqual(r.json()["tldr"], "Status: ready")
+        saved = messages.get_message(self.repo, r.json()["id"])
+        self.assertEqual(saved["tldr"], "Status: ready")
+        listed = self.client.get("/api/v1/messages", headers={
+            "X-Test-Auth-Tier": "admin",
+        }).json()["messages"]
+        self.assertEqual(listed[0]["tldr"], "Status: ready")
+
+    def test_tldr_absent_or_blank_is_omitted(self):
+        absent = self.client.post("/api/v1/messages", headers=self.h(), json={
+            "to": "agent:b", "text": "No summary",
+        })
+        blank = self.client.post("/api/v1/messages", headers=self.h(), json={
+            "to": "agent:b", "text": "Blank summary", "tldr": " \n\t ",
+        })
+        self.assertEqual(absent.status_code, 201)
+        self.assertEqual(blank.status_code, 201)
+        self.assertNotIn("tldr", absent.json())
+        self.assertNotIn("tldr", blank.json())
+        self.assertNotIn("tldr", messages.get_message(self.repo, blank.json()["id"]))
+
+    def test_tldr_too_long_is_a_clear_bad_request(self):
+        r = self.client.post("/api/v1/messages", headers=self.h(), json={
+            "to": "agent:b", "text": "Update", "tldr": "x" * 501,
+        })
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("at most 500 characters", r.json()["detail"])
+
+    def test_anonymous_admin_dashboard_is_stamped_as_reserved_user(self):
+        r = self.client.post("/api/v1/messages", headers={
+            "X-The-Lab-Source": "dashboard", "X-Test-Auth-Tier": "admin",
+        }, json={"to": "agent:a", "text": "from the UI"})
+        self.assertEqual(r.status_code, 201)
+        self.assertEqual((r.json()["from_agent"], r.json()["from_role"]), ("user", "user"))
+
+        # Ordinary anonymous API calls remain unidentified.
+        r = self.client.post("/api/v1/messages", headers={"X-Test-Auth-Tier": "admin"},
+                             json={"to": "agent:a", "text": "plain API"})
+        self.assertEqual((r.json()["from_agent"], r.json()["from_role"]), (None, None))
+
+    def test_dashboard_header_requires_admin_and_never_overrides_an_agent(self):
+        spoof = self.client.post("/api/v1/messages", headers={
+            "X-The-Lab-Source": "dashboard", "X-Test-Auth-Tier": "experiment",
+        }, json={"to": "agent:a", "text": "spoof"})
+        self.assertEqual(spoof.status_code, 201)
+        self.assertIsNone(spoof.json()["from_agent"])
+
+        agent = self.client.post("/api/v1/messages", headers={
+            "X-Agent-Id": "a", "X-The-Lab-Source": "dashboard", "X-Test-Auth-Tier": "admin",
+        }, json={"to": "agent:b", "text": "agent"})
+        self.assertEqual(agent.status_code, 201)
+        self.assertEqual(agent.json()["from_agent"], "a")
+
+        hidden = messages.add_message(self.repo, from_agent="b", from_role=None,
+                                      to="agent:b", text="private")
+        denied = self.client.post("/api/v1/messages", headers={
+            "X-The-Lab-Source": "dashboard", "X-Test-Auth-Tier": "experiment",
+        }, json={"to": "agent:a", "text": "spoof reply", "in_reply_to": hidden["id"]})
+        self.assertEqual(denied.status_code, 400)
+
+        intervention = self.client.post("/api/v1/messages", headers={
+            "X-The-Lab-Source": "dashboard", "X-Test-Auth-Tier": "admin",
+        }, json={"to": "agent:b", "text": "operator intervention", "in_reply_to": hidden["id"]})
+        self.assertEqual(intervention.status_code, 201)
+        self.assertEqual(intervention.json()["from_agent"], "user")
+        self.assertEqual(intervention.json()["thread_id"], hidden["id"])
+
+    def test_user_recipient_is_persistent_reserved_and_not_an_agent_inbox(self):
+        r = self.client.post("/api/v1/messages", headers=self.h(),
+                             json={"to": "user", "text": "reply"})
+        self.assertEqual(r.status_code, 201)
+        self.assertEqual(r.json()["to"], "user")
+        self.assertEqual(r.json()["recipients"], [])
+        self.assertFalse(messages.is_for(r.json(), agent_id="b", role="worker"))
+        self.assertEqual(messages.unread_for(self.repo, agent_id="b", role="worker"), [])
+        alias = messages.add_message(self.repo, from_agent="a", from_role=None,
+                                     to="agent:user", text="alias")
+        self.assertEqual(alias["to"], "user")
+
+    def test_agent_thread_with_user_is_scoped_and_identified_admin_cannot_bypass(self):
+        root = messages.add_message(self.repo, from_agent="user", from_role="user",
+                                    to="agent:a", text="question")
+        reply = self.client.post("/api/v1/messages", headers=self.h(), json={
+            "to": "user", "text": "answer", "in_reply_to": root["id"],
+        })
+        self.assertEqual(reply.status_code, 201)
+        self.assertEqual(reply.json()["thread_id"], root["id"])
+        visible = self.client.get(f"/api/v1/messages?thread_id={root['id']}", headers=self.h())
+        self.assertEqual({m["id"] for m in visible.json()["messages"]}, {root["id"], reply.json()["id"]})
+
+        hidden = messages.add_message(self.repo, from_agent="user", from_role="user",
+                                      to="agent:b", text="other")
+        r = self.client.post("/api/v1/messages", headers={
+            "X-Agent-Id": "a", "X-Test-Auth-Tier": "admin",
+        }, json={"to": "user", "text": "snoop", "in_reply_to": hidden["id"]})
+        self.assertEqual(r.status_code, 400)
+
+    def test_deep_link_message_visibility_matches_operator_and_agent_scope(self):
+        visible = messages.add_message(self.repo, from_agent="b", from_role=None,
+                                       to="agent:a", text="visible")
+        hidden = messages.add_message(self.repo, from_agent="b", from_role=None,
+                                      to="agent:b", text="hidden")
+        self.assertEqual(self.client.get(f"/api/v1/messages/{visible['id']}", headers=self.h()).status_code, 200)
+        self.assertEqual(self.client.get(f"/api/v1/messages/{hidden['id']}", headers=self.h()).status_code, 403)
+        self.assertEqual(self.client.get(f"/api/v1/messages/{hidden['id']}", headers={
+            "X-The-Lab-Source": "dashboard", "X-Test-Auth-Tier": "admin",
+        }).status_code, 200)
 
 
 if __name__ == "__main__": unittest.main()

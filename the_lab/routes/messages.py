@@ -31,9 +31,23 @@ def _resolve_sender(request: Request) -> tuple[str | None, str | None]:
     return agent_id, entry.get("role")
 
 
+def _is_dashboard_user_sender(request: Request, agent_id: str | None) -> bool:
+    """Whether this anonymous, authenticated dashboard request is the UI user.
+
+    The source header is only a presentation hint in general, so it is paired
+    with the auth tier here.  In particular an experiment bearer token cannot
+    impersonate the dashboard user merely by supplying the header.
+    """
+    return bool(
+        agent_id is None
+        and getattr(request.state, "auth_tier", "admin") == "admin"
+        and request.headers.get("x-the-lab-source") == "dashboard"
+    )
+
+
 @router.post("/api/v1/messages", status_code=201)
 def send_message(req: MessageRequest, request: Request):
-    """Send a message to another agent, a role, or all agents.
+    """Send a message to an agent, a role, all agents, or the dashboard user.
 
     The sender's ``X-Agent-Id`` (and role, looked up from the registry) is
     stamped onto the message automatically. The body's ``to`` field accepts:
@@ -51,13 +65,21 @@ def send_message(req: MessageRequest, request: Request):
                                 "text": "please run a 2x cache_size variant"}
     """
     from_agent, from_role = _resolve_sender(request)
+    if _is_dashboard_user_sender(request, from_agent):
+        from_agent = from_role = messages_mod.UI_USER
     try:
         parent = None
         if req.in_reply_to is not None:
             parent = messages_mod.get_message(REPO_DIR, req.in_reply_to)
             if not parent:
                 raise ValueError(f"parent message {req.in_reply_to} not found")
-            if not _is_operator(request) and not messages_mod.can_see(parent, agent_id=from_agent, role=from_role):
+            # An identified admin is still an agent for message visibility.
+            # The anonymous dashboard/operator may intervene in any thread it
+            # can display, while its newly-created message remains stamped as
+            # the reserved ``user`` identity.
+            if not _is_operator(request) and not messages_mod.can_see(
+                parent, agent_id=from_agent, role=from_role,
+            ):
                 raise ValueError("you cannot reply to a message you cannot see")
         thread_id = req.thread_id
         if parent:
@@ -69,7 +91,9 @@ def send_message(req: MessageRequest, request: Request):
             root = messages_mod.get_message(REPO_DIR, thread_id)
             if not root:
                 raise ValueError(f"thread {thread_id} not found")
-            if not _is_operator(request) and not messages_mod.can_see(root, agent_id=from_agent, role=from_role):
+            if not _is_operator(request) and not messages_mod.can_see(
+                root, agent_id=from_agent, role=from_role,
+            ):
                 raise ValueError("you cannot post to a thread you cannot see")
         references = _validate_references(req.references)
         msg = messages_mod.add_message(
@@ -78,6 +102,7 @@ def send_message(req: MessageRequest, request: Request):
             from_role=from_role,
             to=req.to,
             text=req.text,
+            tldr=req.tldr,
             in_reply_to=req.in_reply_to,
             thread_id=thread_id,
             references=references,
@@ -127,6 +152,9 @@ def _validate_references(references: list[dict]) -> list[dict]:
 
 
 def _recipient_listening(to: str) -> list[dict]:
+    if to in (messages_mod.UI_USER, f"agent:{messages_mod.UI_USER}"):
+        # The UI user is browser-local; it is never an agent listener.
+        return []
     listeners = agents_mod.read_listening(REPO_DIR)
     recipients = []
     for entry in agents_mod.list_agents(REPO_DIR):
@@ -143,7 +171,10 @@ def _is_operator(request: Request) -> bool:
     entirely. An experiment bearer token is tier "experiment" and does not
     qualify, so a single experiment cannot dump the whole message log.
     """
-    return getattr(request.state, "auth_tier", "admin") == "admin"
+    return (
+        not getattr(request.state, "agent_id", None)
+        and getattr(request.state, "auth_tier", "admin") == "admin"
+    )
 
 
 @router.get("/api/v1/messages")
@@ -244,6 +275,20 @@ def list_messages(
             messages_mod.mark_delivered_many(REPO_DIR, ids, agent_id)
 
     return {"messages": page, "total": total, "limit": limit, "offset": offset}
+
+
+@router.get("/api/v1/messages/{msg_id}")
+def get_message(msg_id: int, request: Request):
+    """Fetch one message for a dashboard deep link without changing state."""
+    msg = messages_mod.get_message(REPO_DIR, msg_id)
+    if msg is None:
+        raise HTTPException(404, f"message {msg_id} not found")
+    agent_id, role = _resolve_sender(request)
+    if not _is_operator(request) and not messages_mod.can_see(
+        msg, agent_id=agent_id, role=role,
+    ):
+        raise HTTPException(403, "you cannot see this message")
+    return msg
 
 
 @router.post("/api/v1/messages/{msg_id}/read")
