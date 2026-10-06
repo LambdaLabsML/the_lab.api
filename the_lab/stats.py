@@ -6,6 +6,7 @@ of length 2–5). Stored in `.the_lab/api_stats.json` and flushed periodically.
 from __future__ import annotations
 
 import json
+import os
 import re
 import threading
 import time
@@ -46,6 +47,11 @@ def normalize_path(path: str) -> str:
 
 
 MAX_HISTORY = 200  # recent calls to keep in memory
+
+try:
+    _FLUSH_INTERVAL_S = float(os.environ.get("THE_LAB_STATS_FLUSH_INTERVAL", "300") or 300)
+except ValueError:
+    _FLUSH_INTERVAL_S = 300.0
 
 
 class ApiStats:
@@ -152,7 +158,9 @@ class ApiStats:
             data["hourly"] = {k: dict(v) for k, v in self._hourly.items()}
             data["resp_hourly"] = {k: dict(v) for k, v in self._resp_hourly.items()}
             self._dirty = False
-        jsonio.write_json(self._path, data, sort_keys=True)
+        # Compact: indent forces the pure-Python encoder (~90 ms for the 8 MB
+        # file vs ~35 ms), and this runs every flush interval.
+        jsonio.write_json(self._path, data, sort_keys=True, indent=None)
 
     def record(self, method: str, path: str, client_ip: str = "",
                query: str = "", body_preview: str = "", status_code: int = 0,
@@ -193,10 +201,11 @@ class ApiStats:
                 pattern = " → ".join(ngram)
                 self._patterns[n][pattern] += 1
             self._dirty = True
-        # Periodic flush (every 30s) — on a background thread so the request
-        # path (and, via the stats middleware, the event loop) never waits on
-        # the api_stats.json NFS write.
-        if time.monotonic() - self._last_flush > 30:
+        # Periodic flush — on a background thread so the request path (and,
+        # via the stats middleware, the event loop) never waits on the
+        # api_stats.json NFS write. The whole file (MBs of n-gram counters) is
+        # rewritten each time, so keep the interval long; shutdown flushes too.
+        if time.monotonic() - self._last_flush > _FLUSH_INTERVAL_S:
             self._last_flush = time.monotonic()
             threading.Thread(target=self._flush_quiet, daemon=True,
                              name="api-stats-flush").start()

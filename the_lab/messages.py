@@ -45,7 +45,9 @@ experiment-finished queue without per-recipient subscription bookkeeping.
 from __future__ import annotations
 
 import asyncio
+import atexit
 import json
+import os
 import threading
 
 from . import jsonio
@@ -153,11 +155,69 @@ def _prune(data: dict) -> dict:
     return data
 
 
+# Write-behind persistence. Every delivery/notification/read marker used to
+# re-serialize the whole store (indent=2 → CPython's pure-Python encoder, ~75 ms
+# for a 7.6 MB file) and rewrite it on NFS while holding _lock — and the /wait
+# long-poll takes _lock on the event loop. Memory is authoritative, so writes
+# are now coalesced: _write() marks the store dirty and a single timer flushes
+# it at most once per _WRITE_DELAY seconds, serialized compactly (C encoder).
+# A crash loses at most _WRITE_DELAY seconds of marker/message state.
+# THE_LAB_MESSAGES_WRITE_DELAY=0 restores synchronous write-through.
+try:
+    _WRITE_DELAY = float(os.environ.get("THE_LAB_MESSAGES_WRITE_DELAY", "1.0") or 0)
+except ValueError:
+    _WRITE_DELAY = 1.0
+_dirty_gen = 0          # bumped by every _write (under _lock)
+_flushed_gen = 0        # last generation that reached disk (under _flush_io_lock)
+_flush_timer: threading.Timer | None = None
+_flush_io_lock = threading.Lock()
+
+
+def _snapshot_locked() -> tuple[Path, str, int] | None:
+    """Serialize the live store. Call while holding _lock."""
+    if _cache is None or _cache_path is None:
+        return None
+    text = json.dumps(_prune(_cache), separators=(",", ":")) + "\n"
+    return _cache_path, text, _dirty_gen
+
+
+def _persist(snapshot: tuple[Path, str, int] | None) -> None:
+    global _flushed_gen
+    if snapshot is None:
+        return
+    path, text, gen = snapshot
+    with _flush_io_lock:
+        if gen <= _flushed_gen:
+            return  # a newer snapshot already reached disk
+        jsonio.write_text_atomic(path, text)
+        _flushed_gen = gen
+
+
+def flush() -> None:
+    """Write pending message state to disk now (timer, shutdown, tests)."""
+    global _flush_timer
+    with _lock:
+        _flush_timer = None
+        snap = _snapshot_locked() if _dirty_gen != _flushed_gen else None
+    _persist(snap)
+
+
+atexit.register(flush)
+
+
 def _write(repo_dir: Path, data: dict) -> None:
-    """Persist and adopt *data* as the cache. Call while holding _lock."""
-    global _cache, _cache_path
+    """Adopt *data* as the cache and schedule persistence. Call while holding _lock."""
+    global _cache, _cache_path, _dirty_gen, _flush_timer
     _cache, _cache_path = data, _path(repo_dir)
-    jsonio.write_json(_cache_path, _prune(data))
+    _dirty_gen += 1
+    if _WRITE_DELAY <= 0:
+        _persist(_snapshot_locked())
+        return
+    if _flush_timer is None:
+        _flush_timer = threading.Timer(_WRITE_DELAY, flush)
+        _flush_timer.daemon = True
+        _flush_timer.name = "messages-flush"
+        _flush_timer.start()
 
 
 def _validate_to(to: str) -> None:

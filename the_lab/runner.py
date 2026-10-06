@@ -33,6 +33,11 @@ from . import token_registry
 
 logger = logging.getLogger(__name__)
 
+try:
+    _LIVE_PULL_EVERY = max(1, int(os.environ.get("THE_LAB_SLURM_LIVE_PULL_EVERY", "1") or 1))
+except ValueError:
+    _LIVE_PULL_EVERY = 1
+
 
 def _metrics_from_result(result: dict) -> tuple[dict, dict]:
     """Return final metrics/meta, preferring ARC scorecard score when present."""
@@ -1357,9 +1362,11 @@ class ExperimentRunner:
                     ws_mod.broadcaster.broadcast_soon({"type": "experiment_updated", "label": label,
                         "experiment_id": exp_id, "idea_id": current.get("idea_id"), "status": "running",
                         "slurm_state": state, "slurm_restart_count": meta.get("slurm_restart_count", 0)})
-                # Pull live logs every 30s so the dashboard shows progress
+                # Pull live logs every N polls (default every 30s poll) so the
+                # dashboard shows progress. THE_LAB_SLURM_LIVE_PULL_EVERY=4
+                # pulls every ~2 min — each pull scans the whole job dir.
                 _live_pull_counter += 1
-                if _live_pull_counter % 1 == 0:
+                if _live_pull_counter % _LIVE_PULL_EVERY == 0:
                     try:
                         pulled_generation = await self._pull_slurm_owned(
                             exp_id, label, executor, local_exp_dir, job_id, generation)
@@ -1373,14 +1380,19 @@ class ExperimentRunner:
                         async with self.label_lock(label):
                             if not self._slurm_owner(self._store.get_experiment(exp_id), job_id, generation):
                                 continue
-                            if _log_path.exists():
-                                try:
-                                    _lines = (await self._read_text_off_loop(_log_path)).splitlines()
-                                    _snap = _parse_log_progress(_lines)
-                                    if _snap and self._slurm_owner(self._store.get_experiment(exp_id), job_id, generation):
-                                        jsonio.write_json(_prog_path, _snap, indent=0)
-                                except Exception:
-                                    pass
+                            try:
+                                # No NFS stat/read/write on the event loop, and
+                                # the regex scan of a multi-MB log (~50 ms per
+                                # job per poll) stays off-loop too.
+                                _snap = await asyncio.get_running_loop().run_in_executor(
+                                    None, lambda: _parse_log_progress(
+                                        _log_path.read_text(errors="replace").splitlines())
+                                    if _log_path.exists() else None)
+                                if _snap and self._slurm_owner(self._store.get_experiment(exp_id), job_id, generation):
+                                    await asyncio.get_running_loop().run_in_executor(
+                                        None, lambda: jsonio.write_json(_prog_path, _snap, indent=None))
+                            except Exception:
+                                pass
                         ws_mod.broadcaster.broadcast_soon({
                             "type": "experiment_log_updated",
                             "label": label,
@@ -1981,14 +1993,13 @@ class ExperimentRunner:
                 # Role-only callers can't claim (no id for read_by); the /wait
                 # route only sets agent_role when agent_id resolved, so in
                 # practice this is always the claiming path.
-                unread = (
-                    messages_mod.claim_unread_for(
-                        repo_dir, agent_id=agent_id, role=agent_role, limit=20,
-                    )
-                    if agent_id
-                    else messages_mod.unread_for(
-                        repo_dir, agent_id=agent_id, role=agent_role, limit=20,
-                    )
+                # Off-loop: both take messages._lock (a threading.Lock held
+                # across store serialization) and a claim may persist — never
+                # block the event loop on either. Every /wait parked on the
+                # global wake event re-runs this on each new message.
+                unread = await asyncio.to_thread(
+                    messages_mod.claim_unread_for if agent_id else messages_mod.unread_for,
+                    repo_dir, agent_id=agent_id, role=agent_role, limit=20,
                 )
                 if unread:
                     running = self._store.list_experiments_by_status("running")
