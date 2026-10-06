@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, useState } from "preact/hooks";
+import { useEffect, useRef, useCallback, useMemo, useState } from "preact/hooks";
 import { effect, signal } from "@preact/signals";
 import { render } from "preact";
 
@@ -47,7 +47,7 @@ import { QueueView } from "./views/queue-view";
 import { TablePanel } from "./components/table-panel";
 import { DetailPanel } from "./components/detail-panel";
 import { MetricsChart } from "./components/chart-panel/metrics-chart";
-import { ScatterChart } from "./components/chart-panel/scatter-chart";
+import { LazyScatterChart as ScatterChart } from "./components/chart-panel/lazy-scatter";
 import { FilterBar } from "./components/filter-bar";
 import { SearchFilter, type FilterItem } from "./components/search-filter/search-filter";
 import { Eyebrow, Stat, Stepper, Tooltip, experimentTipContent, ideaTipContent } from "./components/ui";
@@ -2276,7 +2276,7 @@ function ReviewSearchFilter({ experiments, ideas }: {
 // the single review chart's metric. Lives in the top row, left of the search.
 function ReviewMetricSelect({ experiments }: { experiments: import("./lib/types").Experiment[] }) {
   const metric = selectedMetric.value;
-  const grouped = collectChartKeys(experiments);
+  const grouped = useMemo(() => collectChartKeys(experiments), [experiments]);
   const allKeys = [...grouped.metrics, ...grouped.nested, ...grouped.timing, ...grouped.meta];
   if (allKeys.length === 0) {
     return <span class="review-metric-select-input is-empty">no metrics yet</span>;
@@ -2334,9 +2334,14 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
       })
       .catch(() => { /* keep last known */ });
     load();
-    const un = subscribeWsEvents((ev) => { if (ev.type === "queue_changed") load(); });
-    const t = window.setInterval(load, 60000);
-    return () => { dead = true; un(); window.clearInterval(t); };
+    // Debounced: queue_changed arrives in bursts (dispatch ticks) — one fetch per burst.
+    let deb: number | null = null;
+    const un = subscribeWsEvents((ev) => {
+      if (ev.type !== "queue_changed" || deb !== null) return;
+      deb = window.setTimeout(() => { deb = null; load(); }, 1000);
+    });
+    const t = window.setInterval(() => { if (!document.hidden) load(); }, 60000);
+    return () => { dead = true; un(); window.clearInterval(t); if (deb !== null) window.clearTimeout(deb); };
   }, []);
 
   const data = backlogData.value;
@@ -2993,7 +2998,11 @@ function ReviewDisclosure({
         )}
       </summary>
       <div class="review-disclosure-body" style={panelHeight != null ? { height: `${panelHeight}px` } : undefined}>
-        {children}
+        {/* Mount the body only while open. A closed <details> still runs its
+            children's renders/effects: on the landing page that was the full
+            2k-row experiments table, the 900-node subway map and a Chart.js
+            scatter, all re-rendering on every poll/progress event/hover. */}
+        {(reviewOpenSections.value[id] ?? autoOpen ?? false) ? children : null}
       </div>
     </details>
   );

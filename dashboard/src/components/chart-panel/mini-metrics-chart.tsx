@@ -32,7 +32,8 @@
  * (timeCurve "avg") a trailing moving average, window from pickAvgWindow.
  */
 
-import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
+import { colorTheme, colorblindMode } from "../../state/settings";
 import { buildChartData } from "../../lib/chart-data";
 import { isLowerBetter } from "../../lib/colors";
 import { useEntityNav } from "../../lib/hooks";
@@ -279,10 +280,17 @@ export function MiniMetricsChart({
   // Build the FULL run (impOnly handled below by our own step-collapse rule, so
   // buildChartData is always called with improvementsOnly=false). This keeps
   // milestone detection consistent and lets us show post-record experiments.
-  const chartData = metric ? buildChartData(
+  // Memoized: the parent re-renders on unrelated changes (hover, cost/progress
+  // ticks, size); hiddenStatuses is a fresh Set each render, so key on its
+  // contents. Theme/colorblind feed resolved CSS colours, so key on them too.
+  const hsKey = [...hiddenStatuses].sort().join(",");
+  const themeKey = `${colorTheme.value}|${colorblindMode.value}`;
+  const chartData = useMemo(() => metric ? buildChartData(
     metric, experiments, tags, tagMode, /* improvementsOnly */ false, colorMode,
     ideas, layout, reversed, hiddenStatuses, mean, hideRunning,
-  ) : null;
+  ) : null,
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  [metric, experiments, tags, tagMode, colorMode, ideas, layout, reversed, hsKey, mean, hideRunning, themeKey]);
 
   if (!chartData || chartData.values.length === 0) {
     return (

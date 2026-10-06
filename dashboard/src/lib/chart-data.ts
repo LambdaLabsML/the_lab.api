@@ -332,7 +332,10 @@ export function buildChartData(
       const statusBase = ({'concluded': '#58a6ff', 'abandoned': '#f85149', 'active': '#d29922'} as Record<string, string>)[exp.idea_status || 'active'] || base;
       return meanMilestones.has(exp.idea_id) ? '#e078f0' : statusBase;
     }
-    const c = resolveColor(_colorForExp(exp, metricKey, colorMode, currentLayout, allIdeas, metricFiltered));
+    // _colorForExp returns null in 'idea' mode (palette fallback below);
+    // resolveColor(null) used to throw and blank the chart.
+    const raw = _colorForExp(exp, metricKey, colorMode, currentLayout, allIdeas, metricFiltered);
+    const c = raw ? resolveColor(raw) : null;
     return c || ideaColorMap[exp.idea_id] || '#8b949e';
   }
 

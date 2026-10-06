@@ -88,17 +88,43 @@ interface WsEvent {
 }
 
 type WsSubscriber = (event: WsEvent) => void;
-const _subscribers = new Set<WsSubscriber>();
+/** subscriber -> wants stale REPLAY events too (see STALE_EVENT_MS). */
+const _subscribers = new Map<WsSubscriber, boolean>();
 
-/** Subscribe to every raw stream event. Returns an unsubscribe fn. */
-export function subscribeWsEvents(fn: WsSubscriber): () => void {
-  _subscribers.add(fn);
+/** Subscribe to raw stream events. Returns an unsubscribe fn.
+ *
+ *  By default only LIVE events are delivered: a fresh page load replays the
+ *  whole event journal (tens of thousands of frames on a big lab), and
+ *  subscribers that refetch on an event (queue_changed -> GET /queue,
+ *  agent_changed -> GET /agents, message_received -> GET /messages, ...)
+ *  would otherwise fire one request per replayed event. Pass
+ *  `{ replay: true }` only for consumers that rebuild history from the
+ *  stream itself (the activity feed). */
+export function subscribeWsEvents(
+  fn: WsSubscriber,
+  opts?: { replay?: boolean },
+): () => void {
+  _subscribers.set(fn, !!opts?.replay);
   return () => { _subscribers.delete(fn); };
 }
 
 // ---------------------------------------------------------------------------
 // Event → state reducers
 // ---------------------------------------------------------------------------
+
+/** Trailing debounce for the coarse refetches events trigger. The pollers'
+ *  in-flight guard only merges CONCURRENT calls, so a burst of N lifecycle
+ *  events used to cost up to N sequential 1.1 MB /graph downloads (and N
+ *  /backlog calls, which take ~20 s server-side on a big lab). */
+function debounced(fn: () => unknown, ms: number): () => void {
+  let t: ReturnType<typeof setTimeout> | null = null;
+  return () => {
+    if (t !== null) return;
+    t = setTimeout(() => { t = null; void fn(); }, ms);
+  };
+}
+const graphSoon = debounced(refreshGraphData, 1_500);
+const backlogSoon = debounced(refreshBacklogData, 5_000);
 
 /**
  * Apply one event to the data signals. Prefers patching with the entity
@@ -116,13 +142,13 @@ function applyEvent(event: WsEvent): void {
       if (!row || !patchExperiment(row)) refreshChartData();
       // Lifecycle changes flip computed graph flags (has_running/last_finish)
       // that the payload can't carry — the graph fetch is the cheap one.
-      if (event.type !== "experiment_queued") refreshGraphData();
+      if (event.type !== "experiment_queued") graphSoon();
       break;
     }
     case "experiment_deleted": {
       const key = (event.label as string) ?? String(event.experiment_id ?? "");
       if (key) removeExperiment(key);
-      refreshGraphData();
+      graphSoon();
       break;
     }
     case "experiment_progress_updated": {
@@ -134,13 +160,13 @@ function applyEvent(event: WsEvent): void {
     }
     case "idea_changed": {
       const idea = event.idea as (Partial<IdeaNode> & { id: number }) | undefined;
-      if (!idea || !patchIdea(idea)) refreshGraphData();
-      refreshBacklogData();
+      if (!idea || !patchIdea(idea)) graphSoon();
+      backlogSoon();
       break;
     }
-    case "note_added":
-      refreshGraphData();
-      break;
+    // note_added: /graph nodes carry no note-derived field, so the old
+    // refreshGraphData() here re-downloaded 1.1 MB for nothing. Views that
+    // show notes (detail panel) subscribe to note_added themselves.
     case "lab_reloaded":
       // Whole store re-read from disk: resnapshot everything.
       refreshChartData();
@@ -181,7 +207,11 @@ function noteStaleReplay(): void {
   staleBurstTimer = setTimeout(() => {
     staleBurstTimer = null;
     wsCatchingUp.value = false;
-    catchUp();
+    // Skip the resnapshot when one already started after the newest replayed
+    // event (fresh load / reconnect: onopen's catchUp covers it). Saves a
+    // second 4.8 MB /chart-data + 1.1 MB /graph fetch on every page load.
+    if (newestStaleTsMs > lastCatchUpAt) catchUp();
+    newestStaleTsMs = 0;
   }, 500);
 }
 
@@ -191,20 +221,32 @@ function handleRawEvent(event: WsEvent): void {
     lastSeq = event.seq;
   }
   const tsMs = typeof event.ts === "number" ? event.ts * 1000 : null;
-  if (tsMs !== null && Date.now() - tsMs > STALE_EVENT_MS) {
+  const stale = tsMs !== null && Date.now() - tsMs > STALE_EVENT_MS;
+  if (stale) {
+    if (tsMs! > newestStaleTsMs) newestStaleTsMs = tsMs!;
     noteStaleReplay();
   } else {
     applyEvent(event);
   }
-  // Fan out the raw event to activity subscribers (never let one throw break
-  // the stream or the other subscribers).
-  for (const sub of _subscribers) {
+  // Fan out the raw event to subscribers (never let one throw break the
+  // stream or the other subscribers). Stale replay only reaches opt-ins.
+  for (const [sub, wantsReplay] of _subscribers) {
+    if (stale && !wantsReplay) continue;
     try { sub(event); } catch { /* ignore subscriber error */ }
   }
 }
 
+/** Newest server ts (ms) among stale events of the current replay burst, and
+ *  when the last full resnapshot was STARTED (client clock). A burst whose
+ *  events all predate the last snapshot needs no second resnapshot — the
+ *  common case: onopen already called catchUp() and every replayed event is
+ *  >STALE_EVENT_MS old by definition. */
+let newestStaleTsMs = 0;
+let lastCatchUpAt = 0;
+
 function catchUp(): void {
   // Fill any gap accumulated while the stream was down.
+  lastCatchUpAt = Date.now();
   refreshChartData();
   refreshGraphData();
   refreshBacklogData();

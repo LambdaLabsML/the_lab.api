@@ -1092,8 +1092,13 @@ async def ws_endpoint(websocket: WebSocket, since: int = 0, token: str = ""):
     q = _ws_mod.broadcaster.subscribe()
     try:
         cursor = since
-        replay = await _asyncio.to_thread(
-            _ws_mod.broadcaster.replay_with_journal, since)
+        # since=0 is a FRESH client (a new dashboard tab), not one catching up
+        # after a gap: give it the in-memory ring only. Reading the whole
+        # journal sent every new tab ~42k events / 7.5 MB that it then parsed
+        # and mostly discarded (and fanned out into hundreds of refetches).
+        # The /events API keeps journal history for explicit after_seq=0.
+        replay = (_ws_mod.broadcaster.replay_since(0) if since <= 0 else
+                  await _asyncio.to_thread(_ws_mod.broadcaster.replay_with_journal, since))
         for event in replay:
             if event.get("seq", 0) > cursor:
                 await websocket.send_json(event)

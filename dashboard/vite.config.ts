@@ -20,5 +20,14 @@ export default defineConfig({
   build: {
     outDir: "../the_lab/static",
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        // Stable vendor chunk: app deploys (several a day) no longer
+        // invalidate the browser's copy of preact/signals/dockview.
+        manualChunks: {
+          vendor: ["preact", "preact/hooks", "@preact/signals", "dockview-core"],
+        },
+      },
+    },
   },
 });
