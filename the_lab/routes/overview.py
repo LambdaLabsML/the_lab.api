@@ -1,9 +1,11 @@
 """Overview endpoints: leaderboard, digest, wait, backlog, orient, graph, chart-data."""
 from __future__ import annotations
 
+import hashlib
 import json
+import secrets
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 
 from ..cache import cached_response
 from ..deps import (
@@ -14,6 +16,7 @@ from ..deps import (
     _read_metric_directions,
     _idea_context,
     _agents_on_idea,
+    _agents_by_branch,
     _branch_diff_summary,
     _description_short,
     _read_task,
@@ -798,6 +801,9 @@ def get_backlog(request: Request):
     caller_agent_id = getattr(request.state, "agent_id", None)
     current = get_current_branch(cwd=REPO_DIR)
     ideas = store.list_ideas(status="active")
+    # Agent -> branch map built ONCE (one HEAD read per agent); the per-idea
+    # lookup below is then a dict hit instead of agents × git forks.
+    claims_by_branch = _agents_by_branch(exclude_agent_id=caller_agent_id)
     result = []
     total_running = 0
     total_pending = 0
@@ -818,7 +824,7 @@ def get_backlog(request: Request):
             "completed_experiments": completed,
             "failed_experiments": failed,
         }
-        claimed = _agents_on_idea(idea["id"], exclude_agent_id=caller_agent_id)
+        claimed = _agents_on_idea(idea["id"], by_branch=claims_by_branch)
         if claimed:
             entry["claimed_by"] = claimed
         result.append(entry)
@@ -1122,8 +1128,60 @@ def _read_progress_cached(path) -> dict | None:
     return parsed
 
 
+_ETAG_PROCESS_NONCE = secrets.token_hex(6)
+
+
+def _chart_data_etag() -> str:
+    """Cheap fingerprint of everything /chart-data renders.
+
+    store.version covers ideas/experiments (same contract as cached_response);
+    running experiments' progress files and metric_directions.json change
+    outside the store, so their mtimes are folded in. A handful of stat()s
+    instead of rebuilding + serializing + gzipping ~5 MB.
+    """
+    # store.version restarts at 0 with the process: the per-process nonce keeps
+    # a browser's pre-restart ETag from matching a different post-restart state.
+    parts = [_ETAG_PROCESS_NONCE, str(store.version)]
+    for exp in store.list_experiments_by_status("running"):
+        try:
+            m = (REPO_DIR / exp["script"].replace(".sh", ".progress")).stat().st_mtime_ns
+        except (OSError, KeyError):
+            m = 0
+        parts.append(f"{exp.get('label')}:{m}")
+    try:
+        parts.append(str((REPO_DIR / ".the_lab" / "metric_directions.json").stat().st_mtime_ns))
+    except OSError:
+        parts.append("-")
+    return 'W/"' + hashlib.blake2b("|".join(parts).encode(), digest_size=12).hexdigest() + '"'
+
+
+_chart_data_last: tuple[str, dict] | None = None
+
+
 @router.get("/chart-data")
-def get_chart_data():
+def get_chart_data(request: Request, response: Response):
+    """Dashboard chart data, with conditional-GET support.
+
+    Responses carry a weak ``ETag``; a request whose ``If-None-Match``
+    matches gets ``304 Not Modified`` with no body (the browser HTTP cache
+    does this transparently for ``fetch()``). See ``_build_chart_data``.
+    """
+    global _chart_data_last
+    etag = _chart_data_etag()
+    inm = request.headers.get("if-none-match")
+    if inm and etag in {t.strip() for t in inm.split(",")}:
+        return Response(status_code=304, headers={"ETag": etag, "Cache-Control": "no-cache"})
+    response.headers["ETag"] = etag
+    response.headers["Cache-Control"] = "no-cache"
+    last = _chart_data_last
+    if last is not None and last[0] == etag:
+        return last[1]
+    data = _build_chart_data()
+    _chart_data_last = (etag, data)
+    return data
+
+
+def _build_chart_data():
     """Get all data for the dashboard metrics chart in one request.
 
     .. note::

@@ -39,6 +39,41 @@ def get_current_branch(cwd: str | Path | None = None) -> str:
     return get_default_branch(cwd=cwd)
 
 
+_HEAD_REF_PREFIX = "ref: refs/heads/"
+
+
+def read_head_branch(worktree: str | Path) -> str | None:
+    """Branch checked out in *worktree*, read straight from its HEAD file.
+
+    Same answer as ``get_current_branch`` for the common cases (a normal
+    checkout or a linked worktree whose ``.git`` is a ``gitdir:`` pointer) but
+    without forking ``git`` — a subprocess costs ~5 ms on NFS, which adds up
+    fast when called per idea × per agent. Returns None when HEAD is detached
+    or the layout is unexpected; callers that need git's exact fallback
+    behaviour should keep using ``get_current_branch``.
+    """
+    try:
+        wt = Path(worktree)
+        dot_git = wt / ".git"
+        if dot_git.is_file():
+            text = dot_git.read_text().strip()
+            if not text.startswith("gitdir:"):
+                return None
+            gitdir = Path(text[len("gitdir:"):].strip())
+            if not gitdir.is_absolute():
+                gitdir = (wt / gitdir).resolve()
+        elif dot_git.is_dir():
+            gitdir = dot_git
+        else:
+            return None
+        head = (gitdir / "HEAD").read_text().strip()
+    except OSError:
+        return None
+    if head.startswith(_HEAD_REF_PREFIX):
+        return head[len(_HEAD_REF_PREFIX):]
+    return None
+
+
 def get_head_commit(cwd: str | Path | None = None) -> str:
     """Get the short hash of HEAD, or empty string for empty repos."""
     result = _run(["rev-parse", "--short", "HEAD"], cwd=cwd, check=False)

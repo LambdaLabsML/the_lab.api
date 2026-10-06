@@ -243,8 +243,17 @@ def get_agent_costs():
     to_compute: list[dict] = []
     for a in live_agents:
         to_compute.append({**a, "_live": True})
+    seen_past: set[str] = set()
     for a in past_agents:
         aid = a["agent_id"]
+        # A resumed agent keeps its id, so history can hold many entries for
+        # an id that is ALSO live right now (8x for r1rtv on arc3). Those must
+        # not be "finalised": each one re-parsed the live agent's whole JSONL
+        # dir and overwrote its live readings with a flat record, so every
+        # other call cost ~9 full parses and the time series kept resetting.
+        if aid in live_ids or aid in seen_past:
+            continue
+        seen_past.add(aid)
         existing = cache.get(aid, {})
         # Re-compute if: never cached, or was previously live (now finalise it)
         if not existing or existing.get("live"):
@@ -490,6 +499,90 @@ def _find_agent_project_dir(worktree: str) -> Path | None:
     return None
 
 
+# Claude Sonnet 4.x pricing per 1 M tokens (approximate)
+_PRICE = {
+    "input":            3.00 / 1_000_000,
+    "output":          15.00 / 1_000_000,
+    "cache_read":       0.30 / 1_000_000,
+    "cache_creation":   3.75 / 1_000_000,
+}
+
+# Incremental per-file parse state for Claude Code session JSONL files.
+# Session files are append-only and a live agent's file reaches 100+ MB, so
+# re-reading and json-parsing every line on each /agents/costs poll cost
+# seconds. Keyed by path; the value is the running totals up to ``offset``
+# (bytes, always at a line boundary). A file that shrank or was replaced
+# (inode change) is re-parsed from scratch; a grown file parses only its tail.
+_session_parse_cache: dict[str, dict] = {}
+_session_parse_lock = threading.Lock()
+
+
+def _parse_session_file(jsonl: Path, st: os.stat_result) -> dict:
+    key = str(jsonl)
+    with _session_parse_lock:
+        prev = _session_parse_cache.get(key)
+    if prev is None or st.st_ino != prev["ino"] or st.st_size < prev["offset"]:
+        state = {"ino": st.st_ino, "offset": 0, "in": 0, "out": 0,
+                 "cache_read": 0, "cache_create": 0, "msgs": 0, "started_at": None,
+                 "seen": set()}
+    elif st.st_size == prev["offset"]:
+        return prev
+    else:
+        # copy-on-write: concurrent readers keep a stable view
+        state = {**prev, "seen": set(prev["seen"])}
+    with open(jsonl, "rb") as fh:
+        fh.seek(state["offset"])
+        chunk = fh.read(st.st_size - state["offset"])
+    # Only consume complete lines; a partially-written last line is picked up
+    # on a later call once its newline lands.
+    cut = chunk.rfind(b"\n")
+    if cut < 0:
+        return state
+    chunk = chunk[:cut + 1]
+    state["offset"] += len(chunk)
+    for raw in chunk.split(b"\n"):
+        if not raw.strip():
+            continue
+        try:
+            entry = json.loads(raw)
+        except ValueError:  # JSONDecodeError / UnicodeDecodeError
+            continue
+        if not isinstance(entry, dict):
+            continue
+        # Timestamp — use the first one we see
+        ts = entry.get("timestamp") or entry.get("created_at")
+        if ts and not state["started_at"]:
+            state["started_at"] = ts
+        # Usage lives inside entry["message"]["usage"] for assistant turns
+        msg = entry.get("message")
+        usage = (
+            (msg.get("usage") if isinstance(msg, dict) else None)
+            or entry.get("usage")
+            or {}
+        )
+        # Claude Code writes one line per content block of an assistant
+        # message, each repeating the same message id and usage: count each
+        # message's usage once (summing per line over-counted ~2x).
+        mid = msg.get("id") if isinstance(msg, dict) else None
+        if mid:
+            if mid in state["seen"]:
+                usage = {}
+            else:
+                state["seen"].add(mid)
+        try:
+            state["in"] += usage.get("input_tokens", 0) or 0
+            state["out"] += usage.get("output_tokens", 0) or 0
+            state["cache_read"] += usage.get("cache_read_input_tokens", 0) or 0
+            state["cache_create"] += usage.get("cache_creation_input_tokens", 0) or 0
+        except (AttributeError, TypeError):
+            pass
+        if entry.get("type") in ("user", "assistant"):
+            state["msgs"] += 1
+    with _session_parse_lock:
+        _session_parse_cache[key] = state
+    return state
+
+
 def _parse_jsonl_dir(project_dir: Path, since: float | None = None) -> dict:
     """Parse all JSONL session files inside ONE Claude project directory.
 
@@ -502,61 +595,32 @@ def _parse_jsonl_dir(project_dir: Path, since: float | None = None) -> dict:
     ``since`` — optional Unix timestamp; JSONL files modified before this
     time are skipped.  Used when multiple agents share the same project dir
     (repo-root fallback) to filter to only the current agent's sessions.
+
+    Parsing is incremental per file (see ``_parse_session_file``): repeated
+    calls only read the bytes appended since the previous call.
     """
     sessions = []
+    PRICE = _PRICE
 
-    # Claude Sonnet 4.x pricing per 1 M tokens (approximate)
-    PRICE = {
-        "input":            3.00 / 1_000_000,
-        "output":          15.00 / 1_000_000,
-        "cache_read":       0.30 / 1_000_000,
-        "cache_creation":   3.75 / 1_000_000,
-    }
-
-    for jsonl in sorted(
-        project_dir.glob("*.jsonl"),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    ):
-        # Skip files that predate this agent's registration (repo-root fallback)
-        if since is not None and jsonl.stat().st_mtime < since:
-            continue
-
-        in_tok = out_tok = cache_read = cache_create = 0
-        started_at = None
-        msg_count = 0
-
+    files = []
+    for jsonl in project_dir.glob("*.jsonl"):
         try:
-            for line in jsonl.read_text(errors="replace").splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    entry = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
+            files.append((jsonl, jsonl.stat()))
+        except OSError:
+            continue
+    files.sort(key=lambda f: f[1].st_mtime, reverse=True)
 
-                # Timestamp — use the first one we see
-                ts = entry.get("timestamp") or entry.get("created_at")
-                if ts and not started_at:
-                    started_at = ts
-
-                # Usage lives inside entry["message"]["usage"] for assistant turns
-                msg = entry.get("message")
-                usage = (
-                    (msg.get("usage") if isinstance(msg, dict) else None)
-                    or entry.get("usage")
-                    or {}
-                )
-                in_tok      += usage.get("input_tokens", 0)
-                out_tok     += usage.get("output_tokens", 0)
-                cache_read  += usage.get("cache_read_input_tokens", 0)
-                cache_create+= usage.get("cache_creation_input_tokens", 0)
-
-                if entry.get("type") in ("user", "assistant"):
-                    msg_count += 1
+    for jsonl, st in files:
+        # Skip files that predate this agent's registration (repo-root fallback)
+        if since is not None and st.st_mtime < since:
+            continue
+        try:
+            state = _parse_session_file(jsonl, st)
         except Exception:
             continue
+        in_tok, out_tok = state["in"], state["out"]
+        cache_read, cache_create = state["cache_read"], state["cache_create"]
+        started_at, msg_count = state["started_at"], state["msgs"]
 
         if not (in_tok or out_tok):
             continue  # empty / unstarted session

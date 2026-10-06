@@ -244,29 +244,52 @@ def _idea_context(idea_id: int) -> dict:
     }
 
 
-def _agents_on_idea(idea_id: int, exclude_agent_id: str | None = None) -> list[dict]:
-    """Return live agents whose worktree is checked out on idea/<idea_id>.
+def _agents_by_branch(exclude_agent_id: str | None = None) -> dict[str, list[dict]]:
+    """Map branch name -> live agents whose worktree has it checked out.
 
-    Excludes *exclude_agent_id* (typically the requesting agent) so an agent
-    doesn't see itself as a competitor on its own idea.  Returns slim dicts:
-    [{agent_id, role}].
+    One HEAD read per registered agent (no git subprocess). Callers that need
+    claims for many ideas (``/backlog``) should build this once per request
+    instead of calling ``_agents_on_idea`` per idea — the old per-idea loop
+    forked ``git`` ideas × agents times (3.8k forks, ~20 s on the arc3 lab).
+    Excludes *exclude_agent_id* (typically the requesting agent).
     """
     from . import agents as _agents_mod
-    from .git_ops import get_current_branch
-    branch = f"idea/{idea_id}"
-    result = []
+    from .git_ops import get_current_branch, read_head_branch
+    out: dict[str, list[dict]] = {}
     for entry in _agents_mod.list_agents(REPO_DIR):
         aid = entry.get("agent_id")
         if exclude_agent_id and aid == exclude_agent_id:
             continue
         worktree = entry.get("worktree")
-        try:
-            cb = get_current_branch(cwd=worktree) if worktree else None
-        except Exception:
-            cb = None
-        if cb == branch:
-            result.append({"agent_id": aid, "role": entry.get("role")})
-    return result
+        if not worktree:
+            continue
+        cb = read_head_branch(worktree)
+        if cb is None:
+            # Unusual layout / detached HEAD: defer to git's own answer.
+            try:
+                cb = get_current_branch(cwd=worktree)
+            except Exception:
+                cb = None
+        if cb:
+            out.setdefault(cb, []).append({"agent_id": aid, "role": entry.get("role")})
+    return out
+
+
+def _agents_on_idea(
+    idea_id: int,
+    exclude_agent_id: str | None = None,
+    by_branch: dict[str, list[dict]] | None = None,
+) -> list[dict]:
+    """Return live agents whose worktree is checked out on idea/<idea_id>.
+
+    Excludes *exclude_agent_id* (typically the requesting agent) so an agent
+    doesn't see itself as a competitor on its own idea.  Returns slim dicts:
+    [{agent_id, role}]. Pass a precomputed ``by_branch`` (from
+    ``_agents_by_branch``) when looking up many ideas in one request.
+    """
+    if by_branch is None:
+        by_branch = _agents_by_branch(exclude_agent_id)
+    return list(by_branch.get(f"idea/{idea_id}", ()))
 
 
 def _branch_diff_summary(idea_id: int) -> dict | None:
