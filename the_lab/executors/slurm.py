@@ -43,6 +43,14 @@ executor_config keys
 from __future__ import annotations
 
 import json
+import hashlib
+import inspect
+import time
+import uuid
+import sys
+from contextlib import contextmanager
+from contextvars import ContextVar
+from functools import wraps
 import logging
 import os
 import re
@@ -53,6 +61,26 @@ import tempfile
 from pathlib import Path
 
 logger = logging.getLogger("the-lab.slurm")
+
+
+class UncertainCommandCompletion(RuntimeError):
+    """The caller cannot prove that a child/remote writer has stopped."""
+
+
+_HELD_LIFECYCLES = ContextVar("slurm_git_lifecycles", default=frozenset())
+
+
+def _serialized_git_lifecycle(fn):
+    @wraps(fn)
+    def wrapped(self, *args, **kwargs):
+        bound = inspect.signature(fn).bind(self, *args, **kwargs).arguments
+        if fn.__name__ == 'submit' and not all(bound.get(k) for k in ('local_repo_dir', 'git_branch', 'git_commit')):
+            return fn(self, *args, **kwargs)
+        if fn.__name__ == 'cleanup_remote' and not bound.get('abs_bare_path'):
+            return fn(self, *args, **kwargs)
+        with self._git_lifecycle():
+            return fn(self, *args, **kwargs)
+    return wrapped
 
 
 class SlurmExecutor:
@@ -98,6 +126,59 @@ class SlurmExecutor:
         # Path to the bare git repo on the slurm machine.
         self.git_repo_path = config.get("git_repo_path", "~/.thelab/repo.git")
 
+    @contextmanager
+    def _git_lifecycle(self):
+        """Cross-host NFS-safe ownership lock; never steal a stale lock.
+
+        Covers creation, staging, submission and removal in every cooperating
+        executor instance. Atomic mkdir, rather than a process-local mutex or
+        host-local flock, is required by shared multi-node Git storage.
+        A crashed owner requires explicit operator investigation/recovery.
+        """
+        bare = self._resolve_git_repo_path()
+        bare = self._ssh_plain(f"readlink -m -- {shlex.quote(bare)}").stdout.strip()
+        if not bare.startswith('/'):
+            raise RuntimeError("cannot canonicalize shared bare repository")
+        key = (self.ssh_host, bare)
+        held = _HELD_LIFECYCLES.get()
+        if key in held:
+            yield
+            return
+        lock = bare + '.the-lab-lifecycle-lock'
+        token = uuid.uuid4().hex
+        self._ssh_plain(f"mkdir -p -- {shlex.quote(str(Path(bare).parent))}")
+        deadline = time.monotonic() + 120
+        while True:
+            result = self._ssh_plain(f"mkdir -- {shlex.quote(lock)}", check=False)
+            if result.returncode == 0:
+                break
+            if time.monotonic() >= deadline:
+                raise RuntimeError("shared Git lifecycle lock unavailable; no automatic stale-lock removal")
+            time.sleep(0.2)
+        # Failure to write ownership leaves the directory held for investigation.
+        self._ssh_plain(f"printf '%s\\n' {shlex.quote(token)} > {shlex.quote(lock + '/owner')}")
+        context_token = _HELD_LIFECYCLES.set(held | {key})
+        try:
+            yield
+        finally:
+            _HELD_LIFECYCLES.reset(context_token)
+            primary = sys.exc_info()[1]
+            if isinstance(primary, (UncertainCommandCompletion, subprocess.TimeoutExpired,
+                                    KeyboardInterrupt, SystemExit)):
+                # A killed shell/SSH client need not kill its descendants.
+                # Preserve ownership until an operator proves quiescence.
+                logger.error("Git lifecycle completion uncertain; ownership lock retained")
+            else:
+                try:
+                    self._ssh_plain(
+                        f"test \"$(cat {shlex.quote(lock + '/owner')})\" = {shlex.quote(token)} && "
+                        f"rm -- {shlex.quote(lock + '/owner')} && rmdir -- {shlex.quote(lock)}")
+                except Exception:
+                    if primary is None:
+                        raise
+                    logger.exception("Git lifecycle lock release failed; preserving original operation error")
+
+
     # ------------------------------------------------------------------
     # SSH / SCP helpers
     # ------------------------------------------------------------------
@@ -116,6 +197,8 @@ class SlurmExecutor:
             capture_output=True, text=True,
             timeout=timeout,
         )
+        if result.returncode < 0 or (not self._is_local and result.returncode == 255):
+            raise UncertainCommandCompletion("shell signal/SSH disconnect: child completion unknown")
         if check and result.returncode != 0:
             raise RuntimeError(
                 f"SSH command failed (rc={result.returncode}): {cmd!r}\n"
@@ -128,12 +211,12 @@ class SlurmExecutor:
         """Run cmd via SSH without the SLURM_CONF prefix (for git commands).
 
         Uses a timeout to prevent hanging indefinitely on git lock contention.
-        The remote process is killed if the local timeout fires.
+        Timeout kills the immediate client, not necessarily its descendants.
+        Unknown completion retains any owned lifecycle lock.
         """
         try:
             argv = (["bash", "-lc", cmd] if self._is_local else ["ssh",
-                 # Kill remote process when the connection dies (prevents orphaned
-                 # git processes that leave index.lock files on the remote).
+                 # Detect lost transport; this does not prove descendants died.
                  "-o", "ServerAliveInterval=10",
                  "-o", "ServerAliveCountMax=3",
                  self.ssh_host, cmd])
@@ -143,15 +226,10 @@ class SlurmExecutor:
                 timeout=timeout,
             )
         except subprocess.TimeoutExpired as e:
-            if check:
-                raise RuntimeError(
-                    f"SSH command timed out after {timeout}s: {cmd!r}"
-                ) from e
-            # Return a fake failure result on timeout
-            return subprocess.CompletedProcess(
-                args=[], returncode=1,
-                stdout="", stderr=f"timeout after {timeout}s",
-            )
+            raise UncertainCommandCompletion(
+                "shell/SSH timeout: descendant completion unknown; check=False cannot waive it") from e
+        if result.returncode < 0 or (not self._is_local and result.returncode == 255):
+            raise UncertainCommandCompletion("shell signal/SSH disconnect: child completion unknown")
         if check and result.returncode != 0:
             raise RuntimeError(
                 f"SSH command failed (rc={result.returncode}): {cmd!r}\n"
@@ -206,34 +284,33 @@ class SlurmExecutor:
     # Git helpers
     # ------------------------------------------------------------------
 
+    @_serialized_git_lifecycle
     def ensure_bare_repo(self) -> str:
         """Ensure a bare git repo exists on the remote. Returns absolute path.
 
         Also caches the result as ``_resolved_bare_path`` so cleanup_remote
         can pass it without needing to SSH again.
 
-        Sets ``receive.denyCurrentBranch = ignore`` unconditionally — this is
-        a no-op on proper bare repos (which have no checked-out branch) and a
-        safety net when the remote is a non-bare repo with a branch checked out.
+        Refuses an existing non-bare repository instead of changing its
+        checkout/configuration. Caller holds the shared lifecycle lock.
         """
         abs_path = self._resolve_git_repo_path()
         q_path = shlex.quote(abs_path)
         self._ssh_plain(
-            f"git init --bare {q_path} -q 2>/dev/null || true && "
-            f"git -C {q_path} config receive.denyCurrentBranch ignore"
-        )
+            f"if [ ! -e {q_path} ]; then git init --bare {q_path} -q; fi; "
+            f"test \"$(git -C {q_path} rev-parse --is-bare-repository)\" = true")
         self._resolved_bare_path: str = abs_path  # type: ignore[attr-defined]
         return abs_path
 
+    @_serialized_git_lifecycle
     def push_branch(self, local_repo_dir: Path, branch: str) -> None:
         """Push *branch* from the local repo to the remote repo via SSH.
 
         Uses an SSH URL so no extra git remote needs to be configured.
         The push is force-pushed because ideas are re-committed frequently.
 
-        If the push fails because the branch is currently checked out on the
-        remote (non-bare repo), switch the remote off that branch first
-        (checkout main, or detach HEAD) so the push can proceed cleanly.
+        A non-bare destination is rejected by ensure_bare_repo. No fallback
+        checkout of another repository is permitted.
         """
         abs_bare = self._resolve_git_repo_path()
         remote_url = abs_bare if self._is_local else f"ssh://{self.ssh_host}{abs_bare}"
@@ -247,101 +324,53 @@ class SlurmExecutor:
             )
 
         result = _do_push()
-        if result.returncode != 0 and "branch is currently checked out" in result.stderr:
-            # Remote is a non-bare repo with this branch checked out.
-            # Force-checkout a different ref so the push is accepted, then retry.
-            # --force is required in case there are uncommitted changes on the remote.
-            self._ssh_plain(
-                f"git -C {abs_bare} checkout --force main -q 2>/dev/null || "
-                f"git -C {abs_bare} checkout --force --detach HEAD -q 2>/dev/null || true"
-            )
-            result = _do_push()
         if result.returncode != 0:
-            raise RuntimeError(
-                f"git push to slurm failed for branch {branch!r}:\n"
-                f"{result.stderr.strip()}"
-            )
+            # A failed local push cannot prove that the remote receive process
+            # has stopped. Preserve the lifecycle lock conservatively.
+            raise UncertainCommandCompletion("git push failed; remote writer completion unproved")
 
+    @_serialized_git_lifecycle
     def create_worktree(self, abs_bare_path: str, worktree_path: str,
                         commit_sha: str) -> None:
-        """Create an isolated worktree at *worktree_path* for *commit_sha*.
+        """Create a new pinned registration without pruning or replacing others."""
+        if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", commit_sha):
+            raise RuntimeError("full expected commit required")
+        qbare, qwt = shlex.quote(abs_bare_path), shlex.quote(worktree_path)
+        # Existing targets may still belong to a live/requeued allocation. Never
+        # remove/reuse them automatically, even if HEAD happens to match.
+        self._ssh_plain(f"test ! -e {qwt} && test ! -L {qwt}")
+        self._ssh_plain(
+            f"git -C {qbare} worktree add --detach --lock "
+            f"--reason 'the-lab allocation; remove only after reciprocal attestation' "
+            f"{qwt} {shlex.quote(commit_sha)}")
 
-        Prunes stale worktree registrations first so retries after a failed
-        job don't hit 'already exists' errors.
-        """
-        # Clear any stale index.lock files left by interrupted git commands
-        # before running any git worktree operations (locks cause hangs).
-        try:
-            self._ssh_plain(
-                f"find {abs_bare_path}/worktrees -name 'index.lock' "
-                f"-delete 2>/dev/null || true"
-            )
-        except Exception:
-            pass
-        # Unlock the worktree if it was locked by a previous interrupted add.
-        try:
-            self._ssh_plain(
-                f"git -C {abs_bare_path} worktree unlock {worktree_path} "
-                f"2>/dev/null || true"
-            )
-        except Exception:
-            pass
-        # Prune stale worktree registrations, then force-remove any live
-        # worktree at the same path (happens when a rerun uses the same label).
-        try:
-            self._ssh_plain(
-                f"git -C {abs_bare_path} worktree prune 2>/dev/null || true"
-            )
-        except Exception:
-            pass
-        try:
-            self._ssh_plain(
-                f"git -C {abs_bare_path} worktree remove --force {worktree_path} "
-                f"2>/dev/null || true"
-            )
-        except Exception:
-            pass
-        # Also remove the directory if it still exists (defensive)
-        try:
-            self._ssh_plain(f"rm -rf {worktree_path} 2>/dev/null || true")
-        except Exception:
-            pass
-        result = self._ssh_plain(
-            f"git -C {abs_bare_path} worktree add --detach -q "
-            f"{worktree_path} {commit_sha}",
-            check=False,
-        )
-        if result.returncode != 0:
-            # Worktree may still exist at the right commit (partial retry).
-            # Check with rev-parse HEAD inside the worktree.
-            check = self._ssh_plain(
-                f"git -C {worktree_path} rev-parse HEAD 2>/dev/null "
-                f"| grep -q {commit_sha}",
-                check=False,
-            )
-            if check.returncode != 0:
-                raise RuntimeError(
-                    f"git worktree add failed (rc={result.returncode}): "
-                    f"{result.stderr.strip()}"
-                )
-            # Worktree exists and is at the correct commit — reuse it.
-
+    @_serialized_git_lifecycle
     def remove_worktree(self, abs_bare_path: str, worktree_path: str) -> None:
-        """Remove the worktree from git's tracking. Best-effort."""
-        try:
-            self._ssh_plain(
-                f"git -C {abs_bare_path} worktree remove --force {worktree_path} 2>/dev/null || true"
-            )
-        except Exception as e:
-            logger.warning("worktree remove failed: %s", e)
+        """Remove only an attested reciprocal checkout; preserve all failures."""
+        root = str(Path(worktree_path).parent)
+        helper = root + '/worktree_attestation.py'
+        # This receipt is launcher-owned, outside the solver tree.
+        script = (
+            "import json,sys; d=json.load(open(sys.argv[1])); "
+            "assert d['qualified'] is True; print(d['expected_commit'])")
+        expected = self._ssh_plain(
+            f"python3 -c {shlex.quote(script)} {shlex.quote(root + '/source-attestation-submit.json')}"
+        ).stdout.strip()
+        if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", expected):
+            raise RuntimeError("missing cleanup source identity")
+        self._attest_remote(abs_bare_path, worktree_path, expected,
+                            root + '/source-attestation-cleanup-' + uuid.uuid4().hex + '.json')
+        self._ssh_plain(f"git -C {shlex.quote(abs_bare_path)} worktree unlock {shlex.quote(worktree_path)}")
+        self._ssh_plain(f"git -C {shlex.quote(abs_bare_path)} worktree remove --force {shlex.quote(worktree_path)}")
 
-    # ------------------------------------------------------------------
-    # Wrapper script builder
-    # ------------------------------------------------------------------
-
-    # ------------------------------------------------------------------
-    # Narrow runtime staging (gitignored but required by experiment scripts)
-    # ------------------------------------------------------------------
+    def _attest_remote(self, bare: str, worktree: str, expected: str, receipt: str) -> None:
+        helper = str(Path(worktree).parent / 'worktree_attestation.py')
+        source = Path(__file__).with_name('worktree_attestation.py')
+        expected_helper = hashlib.sha256(source.read_bytes()).hexdigest()
+        self._ssh_plain(
+            f"echo {shlex.quote(expected_helper + '  ' + helper)} | sha256sum -c - >/dev/null && "
+            f"python3 {shlex.quote(helper)} {shlex.quote(bare)} {shlex.quote(worktree)} "
+            f"{shlex.quote(expected)} {shlex.quote(receipt)}")
 
     @staticmethod
     def _script_runtime_requirements(script_path: Path) -> tuple[bool, bool]:
@@ -411,7 +440,8 @@ class SlurmExecutor:
                        worktree_dir: str, unit_kind: str = "gpu",
                        env_vars: dict | None = None,
                        requires_preamble: bool = False,
-                       requires_experiment_json: bool = False) -> str:
+                       requires_experiment_json: bool = False,
+                       source_guard: str = "") -> str:
         gpu_line     = f"#SBATCH --gres=gpu:{self.gpus}" if unit_kind == "gpu" else ""
         mem_line     = f"#SBATCH --mem={self.mem}"        if self.mem        else ""
         time_line    = f"#SBATCH --time={self.time_limit}" if self.time_limit else ""
@@ -525,6 +555,21 @@ fi
 fi
 ''' if requires_experiment_json else ""
 
+        source_recheck = f"""if ! (
+{source_guard.replace('prestartup', 'preexec')}
+); then
+    # Runtime setup may already own children; fail closed and reap them.
+    if [ -n "${{_WATCHER_PID:-}}" ]; then
+        kill "$_WATCHER_PID" 2>/dev/null || true
+        wait "$_WATCHER_PID" 2>/dev/null || true
+    fi
+    if declare -F _cleanup_model >/dev/null 2>&1; then
+        _cleanup_model || true
+    fi
+    exit 125
+fi
+""" if source_guard else ""
+
         return f"""#!/bin/bash
 #SBATCH --partition={self.partition}
 #SBATCH --job-name=thelab-{label}
@@ -583,6 +628,7 @@ if ! cd "{worktree_dir}"; then
 fi
 {preamble_preflight}
 {snapshot_preflight}
+{source_guard}
 
 {venv_setup}
 {model_setup}
@@ -614,6 +660,8 @@ _push_progress() {{
 _push_progress &
 _WATCHER_PID=$!
 
+# Recheck after runtime setup; per-phase receipts preserve both observations.
+{source_recheck}
 # Run the experiment script from the already-validated worktree.
 bash "{remote_job_dir}/script.sh" &
 _SCRIPT_PID=$!
@@ -674,6 +722,7 @@ exit $_EXIT
     # Public API
     # ------------------------------------------------------------------
 
+    @_serialized_git_lifecycle
     def submit(
         self,
         label: str,
@@ -701,8 +750,8 @@ exit $_EXIT
         remote_job_dir = f"{resolved_base}/{label}"
         worktree_dir   = f"{remote_job_dir}/worktree"
 
-        # 1. Create remote job directory
-        self._ssh_plain(f"mkdir -p {remote_job_dir}")
+        # Never overwrite an existing allocation's metadata or failure receipts.
+        self._ssh_plain(f"mkdir -p -- {shlex.quote(resolved_base)} && mkdir -- {shlex.quote(remote_job_dir)}")
 
         # The preamble reads this job-root file before model startup.  Lab
         # dispatches must pass an explicit frozen record; the fallback exists
@@ -715,12 +764,18 @@ exit $_EXIT
                 raise RuntimeError("experiment snapshot is required for Slurm submission") from exc
         if not isinstance(experiment_record, dict):
             raise RuntimeError("experiment snapshot must be a JSON object")
+        if git_commit:
+            metadata = experiment_record.get('meta') or {}
+            for key in ('git_commit', 'EXPECTED_COMMIT'):
+                if metadata.get(key) not in (None, git_commit):
+                    raise RuntimeError(f"{key} conflicts with checkout commit")
         self._stage_experiment_snapshot(remote_job_dir, experiment_record)
 
         # 2. Git: push branch and create per-job worktree
         use_worktree = bool(local_repo_dir and git_branch and git_commit)
         abs_bare_path = None
         requires_preamble = False
+        source_guard = ""
         if use_worktree:
             abs_bare_path = self.ensure_bare_repo()
             self.push_branch(local_repo_dir, git_branch)           # type: ignore[arg-type]
@@ -739,6 +794,19 @@ exit $_EXIT
             requires_preamble = self._stage_runtime_assets(
                 Path(local_repo_dir), worktree_dir, local_script_path
             )
+            helper_source = Path(__file__).with_name('worktree_attestation.py')
+            helper_path = remote_job_dir + '/worktree_attestation.py'
+            self._scp_to_remote(helper_source, helper_path)
+            self._attest_remote(abs_bare_path, worktree_dir, git_commit,
+                                remote_job_dir + '/source-attestation-submit.json')
+            helper_sha = hashlib.sha256(helper_source.read_bytes()).hexdigest()
+            # The allocation's generation supplies a distinct receipt name on
+            # native requeue. Failure stops before model/venv/preamble startup.
+            source_guard = (
+                f"echo {shlex.quote(helper_sha + '  ' + helper_path)} | sha256sum -c - >/dev/null || exit 125\n"
+                f"python3 {shlex.quote(helper_path)} {shlex.quote(abs_bare_path)} "
+                f"{shlex.quote(worktree_dir)} {shlex.quote(git_commit)} "
+                f"{shlex.quote(remote_job_dir)}/source-attestation-prestartup-${{SLURM_RESTART_COUNT:-0}}.json || exit 125")
             # Also copy script to job dir root for the wrapper to reference
             self._scp_to_remote(local_script_path, f"{remote_job_dir}/script.sh")
         else:
@@ -761,7 +829,7 @@ exit $_EXIT
         wrapper_content = self._build_wrapper(
             label, remote_job_dir, worktree_dir, unit_kind=unit_kind,
             env_vars=merged_env, requires_preamble=requires_preamble,
-            requires_experiment_json=True,
+            requires_experiment_json=True, source_guard=source_guard,
         )
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".sh", prefix="thelab_wrapper_", delete=False,
@@ -932,15 +1000,12 @@ exit $_EXIT
                     shutil.copytree(item, target, symlinks=True)
             return before
 
+    @_serialized_git_lifecycle
     def cleanup_remote(self, label: str,
                        abs_bare_path: str | None = None) -> None:
-        """Remove worktree tracking entry and job directory. Best-effort."""
-        if abs_bare_path:
-            self.remove_worktree(
-                abs_bare_path,
-                f"{self._resolve_remote_base()}/{label}/worktree",
-            )
-        try:
-            self._ssh_plain(f"rm -rf {self._resolve_remote_base()}/{label}")
-        except Exception as e:
-            logger.warning("cleanup_remote %s failed: %s", label, e)
+        """Remove an attested checkout/venv; retain job and failure receipts."""
+        if not abs_bare_path:
+            logger.warning("cleanup %s preserved: no shared-repository identity", label)
+            return
+        self.remove_worktree(abs_bare_path, f"{self._resolve_remote_base()}/{label}/worktree")
+        self._ssh_plain(f"rm -rf -- {shlex.quote(self._resolve_remote_base() + '/' + label + '/venv')}")
