@@ -97,6 +97,10 @@ class SlurmExecutor:
 
         self.ssh_host    = ssh_host
         self._is_local    = ssh_host == "local"
+        # Job dirs readable by this server as plain paths (same host, or an
+        # explicitly shared filesystem): results are linked, never copied.
+        _shared = config.get("shared_fs")
+        self.shares_filesystem = bool(self._is_local if _shared is None else _shared)
         self.instance_id = instance_id or ""
         self.partition   = config.get("partition",  "lowprio")
         self.account     = config.get("account")
@@ -926,13 +930,64 @@ exit $_EXIT
         value = result.stdout.strip()
         return int(value) if result.returncode == 0 and value.isdigit() else None
 
+    # Never linked into the experiment dir: the per-job checkout/venv, and the
+    # lab-owned frozen inputs (same set pull_results protects/excludes).
+    _LINK_SKIP = frozenset({"worktree", "venv", "experiment.json", "script.sh"})
+
+    def _job_dir_path(self, label: str) -> Path:
+        return Path(os.path.expanduser(self._rsync_base)) / label
+
+    def link_results(self, label: str, local_exp_dir: str | Path) -> int | None:
+        """Shared-filesystem replacement for :meth:`pull_results`.
+
+        When the job dir is readable here, copying it is pure overhead (on the
+        arc3 lab: ~11 GB / 180k files rewritten every 30 s across 16 jobs).
+        Instead each top-level job entry is exposed in the experiment dir as a
+        symlink to the job dir; new entries are linked as they appear, so a
+        poll costs one directory listing. Earlier pulled copies of the same
+        names are replaced by links once. Readers see the live files; after a
+        native requeue the wrapper archives/truncates the current-attempt
+        files in place, so the links keep pointing at the current attempt.
+        Returns the job's generation marker like ``pull_results``.
+        """
+        destination = Path(local_exp_dir)
+        destination.mkdir(parents=True, exist_ok=True)
+        job_dir = self._job_dir_path(label)
+        if not job_dir.is_dir():
+            raise RuntimeError(f"job dir for {label} not found at {job_dir}")
+        for entry in os.scandir(job_dir):
+            name = entry.name
+            if name in self._LINK_SKIP:
+                continue
+            want = str(job_dir / name)
+            target = destination / name
+            if target.is_symlink():
+                if os.readlink(target) == want:
+                    continue
+            elif target.is_dir():
+                shutil.rmtree(target)  # stale pulled copy of a job dir entry
+            fd, temporary_name = tempfile.mkstemp(prefix=f".{name}.", suffix=".link", dir=destination)
+            os.close(fd)
+            os.unlink(temporary_name)
+            os.symlink(want, temporary_name)
+            os.replace(temporary_name, target)
+        marker = job_dir / ".the_lab_generation"
+        try:
+            text = marker.read_text().strip()
+        except OSError:
+            return None
+        return int(text) if text.isdigit() else None
+
     def pull_results(self, label: str, local_exp_dir: str | Path) -> int | None:
         """Publish one verified generation of job-root results.
 
         A native requeue can replace files while rsync runs.  Pull into a
         sibling staging directory, verify the generation before/after, then
         publish files.  Lifecycle-owned source files are never touched.
+        On a shared filesystem nothing is copied: see :meth:`link_results`.
         """
+        if self.shares_filesystem:
+            return self.link_results(label, local_exp_dir)
         destination = Path(local_exp_dir)
         destination.mkdir(parents=True, exist_ok=True)
         source = (f"{self._rsync_base}/{label}/" if self._is_local

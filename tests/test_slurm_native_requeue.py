@@ -19,7 +19,7 @@ from the_lab.deps import _wrap_script
 
 class NativeRequeueWrapperTests(unittest.TestCase):
     def _executor(self):
-        return SlurmExecutor("local", {"partition": "lowprio", "remote_base": "/tmp/jobs"})
+        return SlurmExecutor("local", {"partition": "lowprio", "shared_fs": False, "remote_base": "/tmp/jobs"})
 
     def test_detail_meta_exposes_job_id_but_not_run_token(self):
         visible = _visible_meta({"meta": {
@@ -222,7 +222,7 @@ class NativeRequeueWrapperTests(unittest.TestCase):
             # The wrapper blocks in readiness polling after this launcher starts.
             (root / "model_server.sh").write_text("#!/bin/bash\nsleep 1000 &\nwait\n")
             (root / "model_server.sh").chmod(0o755)
-            executor = SlurmExecutor("local", {"partition": "lowprio", "remote_base": "/tmp/jobs",
+            executor = SlurmExecutor("local", {"partition": "lowprio", "shared_fs": False, "remote_base": "/tmp/jobs",
                 "model_server": {"kind": "qwen38_flash_sglang", "api_key_file": str(key), "model_inference_root": str(root), "readiness_timeout_s": 999}})
             wrapper = executor._build_wrapper("7.1", str(root), str(worktree))
             path = root / "wrapper.sh"
@@ -247,7 +247,7 @@ class NativeRequeueWrapperTests(unittest.TestCase):
             (local / "script.heartbeats").write_text("stale beats")
             (local / "model.ready.json.smoke.json").write_text("stale readiness")
             (local / "experiment.json").write_text("keep")
-            executor = SlurmExecutor("local", {"partition": "lowprio", "remote_base": str(base)})
+            executor = SlurmExecutor("local", {"partition": "lowprio", "shared_fs": False, "remote_base": str(base)})
             self.assertEqual(executor.pull_results("7.1", local), 1)
             self.assertEqual((local / "script.log").read_text(), "new log")
             self.assertFalse((local / "script.output.md").exists())
@@ -263,7 +263,7 @@ class NativeRequeueWrapperTests(unittest.TestCase):
             managed_directory = local / "script.output.md"
             managed_directory.mkdir()
             (managed_directory / "keep").write_text("x")
-            executor = SlurmExecutor("local", {"partition": "lowprio", "remote_base": str(base)})
+            executor = SlurmExecutor("local", {"partition": "lowprio", "shared_fs": False, "remote_base": str(base)})
             executor.pull_results("7.1", local)
             self.assertTrue((managed_directory / "keep").exists())
 
@@ -274,7 +274,7 @@ class NativeRequeueWrapperTests(unittest.TestCase):
             (job / ".the_lab_generation").write_text("0\n")
             (job / "script.log").write_text("new")
             (local / "script.log").write_text("old")
-            executor = SlurmExecutor("local", {"partition": "lowprio", "remote_base": str(base)})
+            executor = SlurmExecutor("local", {"partition": "lowprio", "shared_fs": False, "remote_base": str(base)})
             with patch.object(executor, "restart_count", side_effect=[0, 1]):
                 with self.assertRaisesRegex(RuntimeError, "generation changed"):
                     executor.pull_results("7.1", local)
@@ -287,7 +287,7 @@ class NativeRequeueWrapperTests(unittest.TestCase):
             (job / ".the_lab_generation").write_text("1\n")
             (job / "script.log").write_text("new")
             (local / "script.log").write_text("old")
-            executor = SlurmExecutor("local", {"partition": "lowprio", "remote_base": str(base)})
+            executor = SlurmExecutor("local", {"partition": "lowprio", "shared_fs": False, "remote_base": str(base)})
             with patch.object(executor, "restart_count", side_effect=[None, None]):
                 with self.assertRaisesRegex(RuntimeError, "generation changed"):
                     executor.pull_results("7.1", local)
