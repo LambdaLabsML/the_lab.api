@@ -44,8 +44,9 @@ class IncrementalCostParseTests(unittest.TestCase):
         self.file = Path(self.tmp.name) / "s.jsonl"
         agent_routes._session_parse_cache.clear()
 
-    def line(self, mid, out, typ="assistant"):
-        return json.dumps({"type": typ, "timestamp": "t", "message": {"id": mid, "usage": {"output_tokens": out}}}) + "\n"
+    def line(self, mid, out, typ="assistant", model="claude-opus-5-5"):
+        return json.dumps({"type": typ, "timestamp": "t", "message": {
+            "id": mid, "model": model, "usage": {"output_tokens": out}}}) + "\n"
 
     def parse(self):
         return agent_routes._parse_session_file(self.file, self.file.stat())
@@ -59,6 +60,12 @@ class IncrementalCostParseTests(unittest.TestCase):
         state = self.parse()
         self.assertEqual(state["out"], 15)
         self.assertEqual(state["offset"], self.file.stat().st_size)
+
+    def test_cost_uses_each_messages_model_price(self):
+        # 1M output tokens: Opus 5.5 $20 + Fable 5.1 $50; duplicate block not billed.
+        self.file.write_text(self.line("m1", 1_000_000) + self.line("m1", 1_000_000)
+                             + self.line("m2", 1_000_000, model="claude-fable-5-1"))
+        self.assertAlmostEqual(self.parse()["cost"], 70.0)
 
     def test_partial_last_line_waits_for_newline(self):
         full = self.line("m1", 10)
@@ -89,6 +96,14 @@ class ChartDataConditionalGetTests(unittest.TestCase):
         overview._chart_data_last = None
         app = FastAPI(); app.include_router(overview.router)
         self.client = TestClient(app)
+
+    def test_backlog_fields_projection(self):
+        with patch.object(overview, "get_current_branch", return_value="main"), \
+                patch("the_lab.agents.list_agents", return_value=[]):
+            full = self.client.get("/api/v1/backlog").json()
+            slim = self.client.get("/api/v1/backlog?fields=current_branch,active_count").json()
+        self.assertEqual(full["active_count"], len(full["active_ideas"]))
+        self.assertEqual(slim, {"current_branch": "main", "active_count": full["active_count"]})
 
     def test_unchanged_data_returns_304_and_changes_invalidate(self):
         first = self.client.get("/api/v1/chart-data")

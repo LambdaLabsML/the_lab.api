@@ -789,7 +789,15 @@ async def wait_for_experiment(
 
 
 @router.get("/backlog")
-def get_backlog(request: Request):
+def get_backlog(
+    request: Request,
+    fields: str | None = Query(
+        default=None,
+        description="Comma-separated top-level field projection, e.g. "
+                    "'current_branch,total_pending,total_running,active_count' — "
+                    "skips the per-idea list (~800 KB on a large lab).",
+    ),
+):
     """Get an overview of active work and the suggestion backlog.
 
     Returns the current git branch, all active ideas with per-idea experiment
@@ -843,6 +851,7 @@ def get_backlog(request: Request):
     resp: dict = {
         "current_branch": current,
         "active_ideas": result,
+        "active_count": len(result),
         "suggested_ideas": suggested_items,
         "total_running": total_running,
         "total_pending": total_pending,
@@ -850,7 +859,7 @@ def get_backlog(request: Request):
     task = _read_task()
     if task:
         resp["current_task"] = task
-    return resp
+    return project_fields(resp, fields)
 
 
 @router.get("/orient")
