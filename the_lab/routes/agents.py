@@ -499,13 +499,42 @@ def _find_agent_project_dir(worktree: str) -> Path | None:
     return None
 
 
-# Claude Sonnet 4.x pricing per 1 M tokens (approximate)
-_PRICE = {
-    "input":            3.00 / 1_000_000,
-    "output":          15.00 / 1_000_000,
-    "cache_read":       0.30 / 1_000_000,
-    "cache_creation":   3.75 / 1_000_000,
+# USD per 1M tokens: (input, output, cache_read). Cache writes (5-minute TTL)
+# bill at 1.25x input. Each assistant message is priced by the model recorded
+# in it; unknown models fall back to Opus-tier rates.
+_MODEL_PRICES = {
+    "claude-fable-5-1": (10.00, 50.00, 0.25),
+    "claude-fable-5":   (10.00, 50.00, 1.00),
+    "claude-opus-5-5":  (4.00, 20.00, 0.20),
+    "claude-opus-5":    (5.00, 25.00, 0.50),
+    "claude-opus-4-8":  (5.00, 25.00, 0.50),
+    "claude-opus-4-7":  (5.00, 25.00, 0.50),
+    "claude-opus-4-6":  (5.00, 25.00, 0.50),
+    "claude-sonnet-5":  (2.00, 10.00, 0.20),
+    "claude-sonnet-4-6": (3.00, 15.00, 0.30),
+    "claude-haiku-4-5": (1.00, 5.00, 0.10),
 }
+_DEFAULT_PRICE = _MODEL_PRICES["claude-opus-5"]
+
+
+def _price_of(model: str | None) -> tuple[float, float, float]:
+    if not model:
+        return _DEFAULT_PRICE
+    for prefix, price in _MODEL_PRICES.items():
+        # Exact id, or a dated snapshot of it ("claude-haiku-4-5-2025...").
+        if model == prefix or model.startswith(prefix + "-2"):
+            return price
+    return _DEFAULT_PRICE
+
+
+def _usage_cost(usage: dict, model: str | None) -> float:
+    inp, out, cread = _price_of(model)
+    return (
+        (usage.get("input_tokens", 0) or 0) * inp
+        + (usage.get("output_tokens", 0) or 0) * out
+        + (usage.get("cache_read_input_tokens", 0) or 0) * cread
+        + (usage.get("cache_creation_input_tokens", 0) or 0) * inp * 1.25
+    ) / 1_000_000
 
 # Incremental per-file parse state for Claude Code session JSONL files.
 # Session files are append-only and a live agent's file reaches 100+ MB, so
@@ -524,7 +553,7 @@ def _parse_session_file(jsonl: Path, st: os.stat_result) -> dict:
     if prev is None or st.st_ino != prev["ino"] or st.st_size < prev["offset"]:
         state = {"ino": st.st_ino, "offset": 0, "in": 0, "out": 0,
                  "cache_read": 0, "cache_create": 0, "msgs": 0, "started_at": None,
-                 "seen": set()}
+                 "cost": 0.0, "seen": set()}
     elif st.st_size == prev["offset"]:
         return prev
     else:
@@ -570,6 +599,8 @@ def _parse_session_file(jsonl: Path, st: os.stat_result) -> dict:
             else:
                 state["seen"].add(mid)
         try:
+            if usage:
+                state["cost"] += _usage_cost(usage, msg.get("model") if isinstance(msg, dict) else None)
             state["in"] += usage.get("input_tokens", 0) or 0
             state["out"] += usage.get("output_tokens", 0) or 0
             state["cache_read"] += usage.get("cache_read_input_tokens", 0) or 0
@@ -600,7 +631,6 @@ def _parse_jsonl_dir(project_dir: Path, since: float | None = None) -> dict:
     calls only read the bytes appended since the previous call.
     """
     sessions = []
-    PRICE = _PRICE
 
     files = []
     for jsonl in project_dir.glob("*.jsonl"):
@@ -625,12 +655,7 @@ def _parse_jsonl_dir(project_dir: Path, since: float | None = None) -> dict:
         if not (in_tok or out_tok):
             continue  # empty / unstarted session
 
-        cost = (
-            in_tok       * PRICE["input"]
-            + out_tok    * PRICE["output"]
-            + cache_read * PRICE["cache_read"]
-            + cache_create * PRICE["cache_creation"]
-        )
+        cost = state["cost"]
         sessions.append({
             "session_id":          jsonl.stem,
             "started_at":          started_at,

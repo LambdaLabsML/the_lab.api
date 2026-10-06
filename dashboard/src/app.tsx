@@ -2353,7 +2353,7 @@ function ReviewDashboard({ onOpenWorkbench }: { onOpenWorkbench: () => void }) {
   const ideaListForCount = Object.values(ideas);
   const activeIdeas = ideaListForCount.length > 0
     ? ideaListForCount.filter(i => i.status !== "concluded" && i.status !== "abandoned").length
-    : (data?.active_ideas.length ?? 0);
+    : (data?.active_count ?? data?.active_ideas?.length ?? 0);
   const done = experiments.filter((e) => !e._running && e.status !== "running");
   const finished = done.length;
   const running = experiments.filter((e) => e._running || e.status === "running").length;

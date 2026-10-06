@@ -45,7 +45,11 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
 
 /** GET /api/v1/backlog */
 export async function getBacklog(): Promise<BacklogResponse> {
-  return fetchJson<BacklogResponse>("/api/v1/backlog");
+  // Only the summary fields the dashboard shows; the full per-idea list is
+  // ~800 KB on a large lab and was re-downloaded on every poll.
+  return fetchJson<BacklogResponse>(
+    "/api/v1/backlog?fields=current_branch,total_pending,total_running,active_count",
+  );
 }
 
 /** GET /api/v1/graph */

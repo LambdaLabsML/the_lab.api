@@ -38,7 +38,9 @@ export interface GraphResponse {
 
 /** Response from GET /api/v1/backlog */
 export interface BacklogResponse {
-  active_ideas: unknown[];
+  /** Omitted when requested with a ``fields`` projection; use active_count. */
+  active_ideas?: unknown[];
+  active_count?: number;
   total_running: number;
   total_pending: number;
   current_branch: string;
