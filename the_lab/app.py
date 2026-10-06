@@ -909,7 +909,9 @@ app.add_middleware(
 
 # GZip goes outermost (added last) so it compresses the already-assembled
 # response after CORS and auth headers have been injected.
-app.add_middleware(GZipMiddleware, minimum_size=1000)
+# compresslevel=6 (zlib's default) instead of Starlette's 9: on the ~5 MB
+# /chart-data body level 9 costs ~1.5x the CPU of level 6 for ~2% fewer bytes.
+app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=6)
 
 
 # --- Lifecycle ---
