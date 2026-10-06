@@ -47,6 +47,9 @@ with TemporaryDirectory() as tmp:
         # An event emitted during historical replay must reach the same socket.
         from the_lab.ws import Broadcaster
         events = Broadcaster()
+        # since=0 (a fresh client) is served from the in-memory ring with no
+        # I/O; the race below only exists on the journal path (since>0).
+        events.broadcast({'type': 'probe', 'value': 'seen-earlier'})
         events.broadcast({'type': 'probe', 'value': 'before'})
         replay = events.replay_with_journal
         def during_replay(since):
@@ -55,7 +58,7 @@ with TemporaryDirectory() as tmp:
             return snapshot
         with patch.object(server._ws_mod, 'broadcaster', events), patch.object(
                 events, 'replay_with_journal', side_effect=during_replay):
-            with client.websocket_connect('/api/v1/ws?since=0') as ws:
+            with client.websocket_connect('/api/v1/ws?since=1') as ws:
                 assert ws.receive_json()['value'] == 'before'
                 assert ws.receive_json()['value'] == 'during'
 '''

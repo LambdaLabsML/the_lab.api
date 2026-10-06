@@ -265,7 +265,13 @@ class SafeJSONResponse(HTMLResponse):
     media_type = "application/json"
 
     def render(self, content) -> bytes:
-        return _json.dumps(_sanitize_floats(content)).encode("utf-8")
+        # Fast path: nearly every body is NaN-free, so skip the full
+        # pure-Python copy (_sanitize_floats, ~35 ms per 5 MB on the event
+        # loop) unless the strict C encoder actually hits a NaN/Infinity.
+        try:
+            return _json.dumps(content, allow_nan=False).encode("utf-8")
+        except ValueError:
+            return _json.dumps(_sanitize_floats(content)).encode("utf-8")
 
 
 app = FastAPI(title="The Lab", version="0.1.0", default_response_class=SafeJSONResponse)
@@ -413,6 +419,27 @@ async def basic_auth(request: Request, call_next):
     )
 
 
+# resolve_agent runs on the event loop for every request carrying X-Agent-Id;
+# an NFS stat there stalls the whole server whenever NFS is slow (e.g. during
+# bulk Slurm result pulls). Positive results are cached briefly — worktrees
+# are long-lived, and a vanished one is still caught by git-touching routes.
+_WT_EXISTS_TTL_S = 30.0
+_wt_exists_cache: dict[str, float] = {}
+
+
+def _worktree_exists_cached(wt: Path) -> bool:
+    key = str(wt)
+    now = _time_mod.monotonic()
+    seen = _wt_exists_cache.get(key)
+    if seen is not None and now - seen < _WT_EXISTS_TTL_S:
+        return True
+    if wt.exists():
+        _wt_exists_cache[key] = now
+        return True
+    _wt_exists_cache.pop(key, None)
+    return False
+
+
 @app.middleware("http")
 async def resolve_agent(request, call_next):
     """Read X-Agent-Id, look up the agent's worktree, stash on request.state.
@@ -431,7 +458,7 @@ async def resolve_agent(request, call_next):
         if entry:
             from pathlib import Path as _P
             wt = _P(entry["worktree"])
-            if wt.exists():
+            if _worktree_exists_cached(wt):
                 request.state.agent_cwd = wt
             else:
                 request.state.agent_unknown = True

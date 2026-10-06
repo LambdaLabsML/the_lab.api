@@ -6,6 +6,7 @@ import json
 import secrets
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
+from starlette.concurrency import run_in_threadpool
 
 from ..cache import cached_response
 from ..deps import (
@@ -705,13 +706,15 @@ async def wait_for_experiment(
         agent_id=_agent_id,
         agent_role=_agent_role,
     )
-    result["current_branch"] = get_current_branch(cwd=REPO_DIR)
+    # This handler is async: git subprocesses (and NFS writes) here would run
+    # on the event loop and stall every other request, so push them off-loop.
+    result["current_branch"] = await run_in_threadpool(get_current_branch, cwd=REPO_DIR)
     exp = result.get("experiment")
     if exp:
         result.update(_idea_context(exp.get("idea_id")))
         # Concise branch diff: which files changed and +/- line counts only.
         # Full patch available via GET /ideas/{id}/diff if needed.
-        diff_summary = _branch_diff_summary(exp.get("idea_id"))
+        diff_summary = await run_in_threadpool(_branch_diff_summary, exp.get("idea_id"))
         if diff_summary:
             result["branch_diff"] = diff_summary
         exp_label = exp.get("label", str(exp["id"]))
@@ -769,16 +772,19 @@ async def wait_for_experiment(
                 note_text += f"score={current_score}"
             else:
                 note_text += "completed (no score metric)"
-            store.add_note(idea_id_val, note_text, level="observation")
+            await run_in_threadpool(store.add_note, idea_id_val, note_text, level="observation")
             # Second note: comparison analysis
             if current_score is not None and best_score is not None:
                 if current_score > best_score:
                     comparison = f"Experiment {exp_label} achieved NEW BEST score (+{current_score - best_score:.4f} over previous best {best_score})"
                 else:
                     comparison = f"Experiment {exp_label} scored {current_score} vs best {best_score} (delta={current_score - best_score:.4f}) — consider a different approach"
-                store.add_note(idea_id_val, comparison, level="observation")
+                await run_in_threadpool(store.add_note, idea_id_val, comparison, level="observation")
             elif exp.get("status") == "failed":
-                store.add_note(idea_id_val, f"Experiment {exp_label} needs debugging — check logs with GET /experiments/log", level="debug")
+                await run_in_threadpool(
+                    store.add_note, idea_id_val,
+                    f"Experiment {exp_label} needs debugging — check logs with GET /experiments/log",
+                    level="debug")
     return result
 
 
