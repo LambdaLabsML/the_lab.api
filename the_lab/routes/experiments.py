@@ -13,7 +13,7 @@ import mimetypes
 import math
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 from .. import jsonio
 from ..deps import (
@@ -813,12 +813,31 @@ def compare_curves(
 
 # --- Static file serving for output.md image references ---
 
-@router.get("/files/{file_path:path}", include_in_schema=False)
-def serve_repo_file(file_path: str):
+def _not_modified(request: Request, etag: str) -> bool:
+    """True when the request's If-None-Match already names *etag*."""
+    inm = request.headers.get("if-none-match")
+    if not inm:
+        return False
+    if inm.strip() == "*":
+        return True
+    # Weak comparison (RFC 9110 §13.1.2): W/ prefixes don't matter here.
+    tags = {t.strip().removeprefix("W/") for t in inm.split(",")}
+    return etag.removeprefix("W/") in tags
+
+
+@router.api_route("/files/{file_path:path}", methods=["GET", "HEAD"], include_in_schema=False)
+def serve_repo_file(file_path: str, request: Request):
     """Serve a file from the repository root directory.
 
-    Used by the dashboard to load images embedded in output.md files.
-    Path traversal outside the repo root is rejected with 403.
+    Used by the dashboard to load images embedded in output.md files, and by
+    HTML outputs (the session viewer) to load their data files. Path
+    traversal outside the repo root is rejected with 403.
+
+    Caching: ``no-cache`` + ETag, so clients always revalidate (agents append
+    to these files while a run is live) but an unchanged file costs a 304
+    instead of the full body — a finished run's 10–95 MB chat_history.json
+    is otherwise re-sent on every open. HEAD is allowed so viewers can poll
+    Content-Length for appended bytes without downloading the body.
     """
     # Validate the requested spelling before resolving symlinks.  This keeps
     # the public URL namespace repository-relative even for the narrowly
@@ -856,7 +875,20 @@ def serve_repo_file(file_path: str):
         return FileResponse(str(full_path), media_type="image/png",
                             headers={"X-Content-Type-Options": "nosniff"})
     content_type, _ = mimetypes.guess_type(str(full_path))
-    return FileResponse(str(full_path), media_type=content_type or "application/octet-stream")
+    resp = FileResponse(
+        str(full_path),
+        media_type=content_type or "application/octet-stream",
+        stat_result=os.stat(full_path),
+        headers={"Cache-Control": "no-cache"},
+    )
+    etag = resp.headers.get("etag", "")
+    if etag and _not_modified(request, etag):
+        return Response(status_code=304, headers={
+            "etag": etag,
+            "last-modified": resp.headers.get("last-modified", ""),
+            "cache-control": "no-cache",
+        })
+    return resp
 
 
 # --- Parameterized experiment routes (MUST come after literal paths) ---
@@ -1327,7 +1359,7 @@ def _resolve_output_path(script_relpath: str | None):
 
 
 @router.get("/experiments/{exp_ref}/output")
-def get_experiment_output(exp_ref: str):
+def get_experiment_output(exp_ref: str, request: Request):
     """Read the experiment's output file (HTML preferred, else markdown).
 
     Returns the file content plus ``base_path`` (directory of the file
@@ -1347,12 +1379,22 @@ def get_experiment_output(exp_ref: str):
     if output_path is None:
         raise HTTPException(404, "output file not found")
     base_path = str(output_path.parent.relative_to(REPO_DIR))
-    # Disable browser HTTP caching — agents append to output files after the
-    # experiment completes (e.g. summary/post-mortem), so a stale cached
-    # response would hide updates from the dashboard.
+    # Always revalidate — agents append to output files after the experiment
+    # completes (e.g. summary/post-mortem), so a stale cached response would
+    # hide updates — but let an unchanged file revalidate to a 304 instead of
+    # re-reading (NFS) and re-sending it. Every experiment's output.html is
+    # typically a symlink to the same 3.8 MB session-viewer bundle, which the
+    # old no-store forced the browser to download (and JSON-escape) per open
+    # and per 15 s poll of a running experiment. The tag covers the resolved
+    # target's stat, so a rebuilt viewer or an appended output.md changes it.
+    st = output_path.stat()
+    etag = 'W/"%x-%x-%x-%s"' % (st.st_ino, st.st_size, st.st_mtime_ns, fmt)
+    headers = {"Cache-Control": "no-cache", "ETag": etag}
+    if _not_modified(request, etag):
+        return Response(status_code=304, headers=headers)
     return JSONResponse(
         {"output": output_path.read_text(), "base_path": base_path, "format": fmt},
-        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+        headers=headers,
     )
 
 
