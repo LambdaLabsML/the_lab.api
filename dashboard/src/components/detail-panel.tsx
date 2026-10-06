@@ -393,6 +393,16 @@ export function DetailPanel({ embedded = false }: { embedded?: boolean } = {}) {
   const displayedContent = _outputLinkedTop ? _outputLinkedTop.content : outputContent;
   const displayedBasePath = _outputLinkedTop ? _outputLinkedTop.basePath : outputBasePath;
   const displayedFormat: "md" | "html" = _outputLinkedTop ? _outputLinkedTop.format : outputFormat;
+  // Render markdown once per content change, not on every DetailPanel
+  // render: the panel re-renders on the idea/progress polls, WS pushes and
+  // follow-toggle scrolls, and each re-render used to re-run the whole
+  // regex pipeline over the document (~70 ms/MB, far more on long lines).
+  const displayedMdHtml = useMemo(
+    () => (displayedContent !== null && displayedFormat === "md"
+      ? renderMarkdown(displayedContent, displayedBasePath)
+      : ""),
+    [displayedContent, displayedBasePath, displayedFormat],
+  );
 
   // Track which inline scripts we've already executed in this context so
   // poll refreshes don't re-run them and stack intervals/listeners.
@@ -1063,9 +1073,7 @@ export function DetailPanel({ embedded = false }: { embedded?: boolean } = {}) {
                 <div
                   class="md-output"
                   dangerouslySetInnerHTML={{
-                    __html: displayedFormat === "html"
-                      ? displayedContent
-                      : renderMarkdown(displayedContent, displayedBasePath),
+                    __html: displayedFormat === "html" ? displayedContent : displayedMdHtml,
                   }}
                 />
               )
@@ -1348,7 +1356,12 @@ function inlineMd(raw: string, basePath = ""): string {
 
   // Extract whitelisted inline HTML tags so they survive the escape step.
   // Non-whitelisted / malformed matches fall through and get escaped normally.
-  s = s.replace(/<\/?[a-zA-Z][a-zA-Z0-9]*(?:\s[^>]*?)?\s*\/?>/g, (match) => {
+  // The attribute run excludes "<" so a scan that finds no ">" stops at the
+  // next tag start instead of the end of the line. The old
+  // `(?:\s[^>]*?)?\s*\/?>` rescanned to end-of-line from every "<x" and
+  // backtracked over whitespace runs: a 60k-char log line full of `a<b`
+  // took ~0.8 s, "<a" + 32k spaces ~2 s.
+  s = s.replace(/<\/?[a-zA-Z][a-zA-Z0-9]*(?:\s[^<>]*)?\/?>/g, (match) => {
     const nameMatch = match.match(/^<\/?([a-zA-Z][a-zA-Z0-9]*)/);
     if (!nameMatch || !INLINE_HTML_TAGS.has(nameMatch[1].toLowerCase())) return match;
     const clean = sanitizeInlineHtmlTag(match);

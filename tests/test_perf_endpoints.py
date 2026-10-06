@@ -102,5 +102,33 @@ class ChartDataConditionalGetTests(unittest.TestCase):
         self.assertEqual(changed.json()["experiments"][0]["metrics"]["score"], 2.0)
 
 
+
+class FileRevalidationTests(unittest.TestCase):
+    def setUp(self):
+        from the_lab.routes import experiments
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.repo = Path(self.tmp.name).resolve()
+        (self.repo / "data").mkdir()
+        self.file = self.repo / "data" / "history.json"
+        self.file.write_text('{"a": 1}')
+        for p in (patch.object(experiments, "REPO_DIR", self.repo), patch("the_lab.deps.REPO_DIR", self.repo)):
+            p.start(); self.addCleanup(p.stop)
+        app = FastAPI(); app.include_router(experiments.router)
+        self.client = TestClient(app)
+
+    def test_etag_304_head_and_change(self):
+        first = self.client.get("/api/v1/files/data/history.json")
+        self.assertEqual(first.status_code, 200, first.text)
+        etag = first.headers["etag"]
+        self.assertEqual(first.headers["cache-control"], "no-cache")
+        same = self.client.get("/api/v1/files/data/history.json", headers={"If-None-Match": etag})
+        self.assertEqual((same.status_code, same.content), (304, b""))
+        head = self.client.head("/api/v1/files/data/history.json")
+        self.assertEqual((head.status_code, head.headers["content-length"]), (200, "8"))
+        self.file.write_text('{"a": 1, "b": 2}')
+        changed = self.client.get("/api/v1/files/data/history.json", headers={"If-None-Match": etag})
+        self.assertEqual(changed.status_code, 200)
+
+
 if __name__ == "__main__":
     unittest.main()

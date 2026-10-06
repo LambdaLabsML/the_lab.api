@@ -788,11 +788,28 @@ async def inject_notifications(request, call_next):
     if "application/json" not in content_type:
         _emit_call()
         return response
+    is_mcp_req = request.headers.get("x-mcp-proxy") == "true"
+    # Never buffer a body we already know we won't touch. /files/ serves raw
+    # repo files (a *.json there is data, e.g. a 95 MB chat_history.json the
+    # output viewer loads) and anything with a declared length over the
+    # injection cap is passed through below anyway — buffering it first
+    # held the whole file in memory and stalled the first byte until the
+    # last chunk was read. Stream it instead; the declared length still
+    # feeds the Stats size table.
+    try:
+        declared_len = int(response.headers.get("content-length", ""))
+    except ValueError:
+        declared_len = None
+    if path.startswith("/api/v1/files/") or (
+            declared_len is not None and declared_len > _NOTIF_INJECT_MAX_BYTES):
+        _emit_call(resp_bytes=declared_len)
+        if is_mcp_req and declared_len is not None and response.status_code < 400:
+            api_stats.record_response_size(request.method, path, declared_len)
+        return response
     body_parts = []
     async for chunk in response.body_iterator:
         body_parts.append(chunk if isinstance(chunk, bytes) else chunk.encode())
     body = b"".join(body_parts)
-    is_mcp_req = request.headers.get("x-mcp-proxy") == "true"
 
     def _track_size(final_body: bytes) -> None:
         if is_mcp_req and response.status_code < 400:
@@ -909,9 +926,11 @@ app.add_middleware(
 
 # GZip goes outermost (added last) so it compresses the already-assembled
 # response after CORS and auth headers have been injected.
-# compresslevel=6 (zlib's default) instead of Starlette's 9: on the ~5 MB
-# /chart-data body level 9 costs ~1.5x the CPU of level 6 for ~2% fewer bytes.
-app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=6)
+# compresslevel=4 instead of Starlette's default 9: level 9 costs ~6x the CPU
+# for ~7% smaller bodies, which dominates time-to-first-byte on multi-MB
+# payloads (a 95 MB chat_history.json for the output viewer took 8.6 s at
+# level 9 vs ~1 s uncompressed; /chart-data ~2x faster to compress).
+app.add_middleware(GZipMiddleware, minimum_size=1000, compresslevel=4)
 
 
 # --- Lifecycle ---
