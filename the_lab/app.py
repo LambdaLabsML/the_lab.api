@@ -992,11 +992,34 @@ async def startup():
             )
     except Exception as e:  # pragma: no cover
         logger.warning("agent prune failed at startup: %s", e)
+    # Slurm result pulls stage into .thelab-pull-* dirs beside the experiment
+    # dir; a restart mid-pull orphans them (100+ dirs, up to ~350 MB each on
+    # the arc3 lab). No pull can be running yet, so all of them are garbage.
+    # Removed on a background thread: rmtree on NFS can take a while.
+    threading.Thread(target=_remove_orphan_pull_staging, daemon=True,
+                     name="pull-staging-cleanup").start()
+
+
+def _remove_orphan_pull_staging() -> None:
+    import shutil
+    root = REPO_DIR / ".the_lab" / "experiments"
+    removed = 0
+    try:
+        for staging in root.glob("*/.thelab-pull-*"):
+            if staging.is_dir() and not staging.is_symlink():
+                shutil.rmtree(staging, ignore_errors=True)
+                removed += 1
+    except OSError as e:  # pragma: no cover
+        logger.warning("pull staging cleanup failed: %s", e)
+    if removed:
+        logger.info("Removed %d orphaned Slurm pull staging dir(s)", removed)
 
 
 @app.on_event("shutdown")
 async def shutdown():
     api_stats.flush()
+    from . import messages as _messages_mod
+    _messages_mod.flush()  # write-behind: persist pending message state
 
 
 # --- Static files ---

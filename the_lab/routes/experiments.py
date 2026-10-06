@@ -813,6 +813,51 @@ def compare_curves(
 
 # --- Static file serving for output.md image references ---
 
+# Top-level job-dir entries that are never exposed (per-job checkout and venv,
+# the frozen experiment payload, the wrapper script) — mirrors the set the
+# Slurm executor never links into an experiment dir.
+_JOB_DIR_PRIVATE = frozenset({"worktree", "venv", "experiment.json", "script.sh"})
+
+
+def _shared_job_roots() -> list[Path]:
+    """Job-dir roots of Slurm resources whose results are linked (not copied)
+    into experiment dirs: ``<remote_base>/<instance_id>`` on a shared FS."""
+    try:
+        from .. import queue as queue_mod
+        resources, _ = queue_mod.load_config(REPO_DIR)
+    except Exception:
+        return []
+    roots = []
+    for res in resources:
+        cfg = res.executor_config or {}
+        if res.kind != "slurm":
+            continue
+        shared = cfg.get("shared_fs")
+        if not (cfg.get("ssh_host") == "local" if shared is None else shared):
+            continue
+        base = str(cfg.get("remote_base") or "$HOME/.thelab/jobs").replace("$HOME", "~")
+        root = Path(os.path.expanduser(base))
+        if store.instance_id:
+            root = root / store.instance_id
+        try:
+            roots.append(root.resolve())
+        except OSError:
+            continue
+    return roots
+
+
+def _in_shared_job_dir(full_path: Path) -> bool:
+    """True for a file inside a linked job dir (but not its private entries)."""
+    for root in _shared_job_roots():
+        try:
+            rel = full_path.relative_to(root)
+        except ValueError:
+            continue
+        # <label>/<entry>/...: the entry must be a published (linkable) one.
+        return len(rel.parts) >= 2 and rel.parts[1] not in _JOB_DIR_PRIVATE
+    return False
+
+
 def _not_modified(request: Request, etag: str) -> bool:
     """True when the request's If-None-Match already names *etag*."""
     inm = request.headers.get("if-none-match")
@@ -826,7 +871,7 @@ def _not_modified(request: Request, etag: str) -> bool:
 
 
 @router.api_route("/files/{file_path:path}", methods=["GET", "HEAD"], include_in_schema=False)
-def serve_repo_file(file_path: str, request: Request):
+def serve_repo_file(file_path: str, request: Request = None):
     """Serve a file from the repository root directory.
 
     Used by the dashboard to load images embedded in output.md files, and by
@@ -852,6 +897,9 @@ def serve_repo_file(file_path: str, request: Request):
     repo_root = REPO_DIR.resolve()
     in_repo = full_path == repo_root or repo_root in full_path.parents
     external_image = False
+    if not in_repo and _in_shared_job_dir(full_path):
+        # Experiment results linked from a Slurm job dir on a shared FS.
+        in_repo = True
     if not in_repo:
         # Opt in explicitly: experiments may refer to content-addressed images
         # stored on a shared NFS database, but no arbitrary external file is
@@ -882,7 +930,7 @@ def serve_repo_file(file_path: str, request: Request):
         headers={"Cache-Control": "no-cache"},
     )
     etag = resp.headers.get("etag", "")
-    if etag and _not_modified(request, etag):
+    if etag and request is not None and _not_modified(request, etag):
         return Response(status_code=304, headers={
             "etag": etag,
             "last-modified": resp.headers.get("last-modified", ""),
