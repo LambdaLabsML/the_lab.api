@@ -148,12 +148,22 @@ function pollChartData(): Promise<void> {
       resetGlobalBestBeforeCache();
       allExperiments.value = merged;
 
-      // Fetch progress for running experiments
-      const runningLabels = running.map((e) => e.label || String(e.id)).filter(Boolean);
-      if (runningLabels.length > 0) {
-        const progress: Record<string, number> = {};
+      // Progress pct for running experiments. /chart-data already embeds the
+      // flattened progress body in each running row's metrics (pct_complete
+      // included), so only rows WITHOUT it need a per-experiment request —
+      // previously every chart poll fired one GET /progress per running exp.
+      const progress: Record<string, number> = {};
+      const missing: string[] = [];
+      for (const e of running) {
+        const label = e.label || String(e.id);
+        const m = e.metrics as Record<string, unknown> | undefined;
+        const pct = m?.["pct_complete"] ?? m?.["pct"];
+        if (typeof pct === "number") progress[label] = pct;
+        else if (label) missing.push(label);
+      }
+      if (missing.length > 0) {
         await Promise.all(
-          runningLabels.map(async (label) => {
+          missing.map(async (label) => {
             try {
               const resp = await getExperimentProgress(label);
               const pct = resp.progress?.pct_complete ?? resp.progress?.pct;
@@ -161,10 +171,8 @@ function pollChartData(): Promise<void> {
             } catch { /* ignore */ }
           }),
         );
-        runningProgress.value = progress;
-      } else {
-        runningProgress.value = {};
       }
+      runningProgress.value = progress;
     } catch {
       // Network error — keep stale data.
     } finally {
@@ -246,6 +254,21 @@ function pollLog(): Promise<void> {
     }
   })();
   return logInflight;
+}
+
+// The log (ideas list + notes, ~2 MB on a 900-idea lab) is only rendered by
+// LogView, so it is polled only while at least one LogView is mounted.
+let logViewers = 0;
+
+function pollLogIfViewed(): Promise<void> {
+  return logViewers > 0 ? pollLog() : Promise.resolve();
+}
+
+/** Call from a LogView mount effect; returns the release fn for unmount. */
+export function retainLogPolling(): () => void {
+  logViewers++;
+  if (logViewers === 1) void pollLog();
+  return () => { logViewers = Math.max(0, logViewers - 1); };
 }
 
 // ---------------------------------------------------------------------------
@@ -467,7 +490,7 @@ export function startPolling(): void {
   pollBacklog();
   pollGraph();
   const chartPromise = pollChartData();
-  chartPromise.then(() => pollLog());
+  chartPromise.then(() => pollLogIfViewed());
   pollAgentCosts();
 
   const pollers: Poller[] = [
@@ -476,7 +499,7 @@ export function startPolling(): void {
     { fn: pollChartData,  fastMs: 30_000, slowMs: 120_000 },
     // Log polling reuses the experiments already in `allExperiments`, so it
     // only needs to re-fetch the ideas list.
-    { fn: pollLog,        fastMs: 15_000, slowMs: 60_000 },
+    { fn: pollLogIfViewed,       fastMs: 15_000, slowMs: 60_000 },
     // Agent costs are SAMPLED by the GET itself server-side — no push
     // events exist, so this one keeps its cadence in both modes.
     { fn: pollAgentCosts, fastMs: 60_000, slowMs: 60_000 },
@@ -507,7 +530,7 @@ function onVisibility(): void {
     // Tab is back — reconcile everything now rather than waiting a round.
     pollBacklog();
     pollGraph();
-    pollChartData().then(() => pollLog());
+    pollChartData().then(() => pollLogIfViewed());
     pollAgentCosts();
   }
 }

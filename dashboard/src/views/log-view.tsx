@@ -1,4 +1,5 @@
-import { useState } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
+import { retainLogPolling } from "../state/polling";
 import { logEntries } from "../state/signals";
 import { selectedIdea } from "../state/settings";
 import { formatTime } from "../lib/format";
@@ -15,6 +16,7 @@ const FILTERS = [
 ];
 
 export function LogView() {
+  useEffect(() => retainLogPolling(), []);
   const entries = logEntries.value;
   const [active, setActive] = useState<Record<string, boolean>>(() => {
     const m: Record<string, boolean> = {};

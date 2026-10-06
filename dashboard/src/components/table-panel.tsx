@@ -1,4 +1,5 @@
-import { useMemo, useState } from "preact/hooks";
+import { useMemo, useRef, useState } from "preact/hooks";
+import { useSignalEffect } from "@preact/signals";
 import { allExperiments, allIdeas, currentLayout, highlightedIdea, runningProgress } from "../state/signals";
 import {
   selectedMetric, colorMode, activeTagFilters, tagFilterMode,
@@ -73,7 +74,6 @@ export function TablePanel() {
   const mode = colorMode.value;
   const tags = activeTagFilters.value;
   const tagMode = tagFilterMode.value;
-  const highlighted = highlightedIdea.value;
   const impOnly = improvementsOnly.value;
   const mean = ideaMean.value;
 
@@ -236,6 +236,33 @@ export function TablePanel() {
     return out;
   }, [sorted, visibleMetrics]);
 
+  // Range of the selected metric over the visible rows — hoisted out of the
+  // per-row cell render, which used to rebuild this array for EVERY row
+  // (O(n²): ~0.7 s per render at 2k experiments).
+  const selRange = useMemo(() => {
+    if (!metric) return null;
+    let mn = Infinity, mx = -Infinity, n = 0;
+    for (const e of sorted) {
+      const v = resolveNumericValue(e, metric);
+      if (v === undefined) continue;
+      n++;
+      if (v < mn) mn = v;
+      if (v > mx) mx = v;
+    }
+    return n > 1 ? { mn, mx, lower: isLowerBetter(metric) } : null;
+  }, [sorted, metric]);
+
+  // Row highlight is applied imperatively so hovering an idea anywhere on the
+  // page doesn't re-render (and re-diff) every row of this table.
+  const tbodyRef = useRef<HTMLTableSectionElement>(null);
+  useSignalEffect(() => {
+    const id = highlightedIdea.value;
+    const tb = tbodyRef.current;
+    if (!tb) return;
+    tb.querySelectorAll("tr.is-highlighted").forEach((r) => r.classList.remove("is-highlighted"));
+    if (id != null) tb.querySelectorAll(`tr[data-idea="${id}"]`).forEach((r) => r.classList.add("is-highlighted"));
+  });
+
   // Toggle sort on column header click
   function handleSort(key: string) {
     if (sortKey === key) {
@@ -372,13 +399,12 @@ export function TablePanel() {
               )}
             </tr>
           </thead>
-          <tbody>
+          <tbody ref={tbodyRef}>
             {sorted.map((exp) => {
-              const isHighlighted = highlighted === exp.idea_id;
               return (
                 <tr
                   key={exp.id}
-                  class={isHighlighted ? "is-highlighted" : undefined}
+                  data-idea={exp.idea_id}
                   onMouseEnter={() => { highlightedIdea.value = exp.idea_id; }}
                   onMouseLeave={() => { if (highlightedIdea.value === exp.idea_id) highlightedIdea.value = null; }}
                   onClick={() => navigateToIdea(exp.idea_id, exp.label)}
@@ -417,10 +443,8 @@ export function TablePanel() {
                     // Color-code selected metric column by value quality
                     let valColor: string | undefined;
                     if (isSelected && v !== undefined) {
-                      const lower = isLowerBetter(mk);
-                      const allVals = sorted.filter(e => resolveNumericValue(e, mk) !== undefined).map(e => resolveNumericValue(e, mk) as number);
-                      if (allVals.length > 1) {
-                        const mn = Math.min(...allVals), mx = Math.max(...allVals);
+                      if (selRange) {
+                        const { mn, mx, lower } = selRange;
                         const range = mx - mn;
                         if (range > 0) {
                           const frac = lower ? 1 - (v - mn) / range : (v - mn) / range;

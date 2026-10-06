@@ -411,7 +411,21 @@ function pushEvent(e: ActivityEvent): void {
   rebuildAgentStates(feed);
 }
 
-async function pollAgents(): Promise<void> {
+let _agentsInflight: Promise<void> | null = null;
+let _agentsAgain = false;
+
+/** Coalesced: concurrent callers share one request, and calls that arrive
+ *  while it is in flight collapse into ONE trailing refetch. */
+function pollAgents(): Promise<void> {
+  if (_agentsInflight) { _agentsAgain = true; return _agentsInflight; }
+  _agentsInflight = _pollAgentsOnce().finally(() => {
+    _agentsInflight = null;
+    if (_agentsAgain) { _agentsAgain = false; void pollAgents(); }
+  });
+  return _agentsInflight;
+}
+
+async function _pollAgentsOnce(): Promise<void> {
   try {
     const agents = await listAgents();
     const meta: Record<string, AgentEntry> = {};
@@ -468,7 +482,9 @@ export function startAgentActivity(): void {
     // Roster changes push now (P2.1): refetch the enriched roster right away
     // instead of waiting for the reconcile tick.
     if (type === "agent_changed") {
-      pollAgents();
+      // Replayed history (page load) must not refetch once per old event —
+      // the initial pollAgents() below already has the current roster.
+      if (Date.now() - evTime(ev) < 90_000) pollAgents();
       return;
     }
 
@@ -478,9 +494,9 @@ export function startAgentActivity(): void {
     // without adding feed noise.
     if (TOUCH_TYPES.has(type)) {
       const idea = agentForIdea(ev.idea_id);
-      if (idea) { touch(idea, evTime(ev)); rebuildAgentStates(activityFeed.value); }
+      if (idea) { touch(idea, evTime(ev)); scheduleAgentStatesRebuild(); }
     }
-  });
+  }, { replay: true });   // rebuilds the feed from history
   pollAgents();
   // Reconcile tick: refreshes the roster AND lets the time-based `active`
   // window expire for agents that went quiet. agent_changed events cover
