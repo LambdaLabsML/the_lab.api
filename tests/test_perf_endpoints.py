@@ -131,6 +131,14 @@ class FileRevalidationTests(unittest.TestCase):
         app = FastAPI(); app.include_router(experiments.router)
         self.client = TestClient(app)
 
+    def test_content_addressed_images_are_immutable(self):
+        img_dir = self.repo / "data" / "images"; img_dir.mkdir()
+        (img_dir / "001c107bcc55ba4d.png").write_bytes(b"png")
+        (img_dir / "frame.png").write_bytes(b"png")
+        self.assertEqual(self.client.get("/api/v1/files/data/images/001c107bcc55ba4d.png").headers["cache-control"],
+                         "public, max-age=31536000, immutable")
+        self.assertEqual(self.client.get("/api/v1/files/data/images/frame.png").headers["cache-control"], "no-cache")
+
     def test_etag_304_head_and_change(self):
         first = self.client.get("/api/v1/files/data/history.json")
         self.assertEqual(first.status_code, 200, first.text)
