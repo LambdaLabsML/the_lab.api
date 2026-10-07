@@ -165,9 +165,18 @@ export const showBestLine = useSetting("showBestLine", true);
 export const chartMinified = useSetting("chartMinified", false);
 
 /** Chart point/dot size: s | m | l, or x = no dots, time-scaled x axis fit to width. */
-export const chartPointSize = useSetting<"s" | "m" | "l" | "x">("chartPointSize", "m");
+export const chartPointSize = useSetting<"s" | "m" | "l" | "none" | "x">("chartPointSize", "m");
 
-/** Time mode (chartPointSize "x") curve: best-so-far step line, or moving average. */
+/** Metrics chart x axis: real time (fit to the panel) instead of experiment order. */
+export const chartTimeAxis = useSetting<boolean>("chartTimeAxis", false);
+
+// "x" used to mean "time axis, no dots" in one setting; it is now two settings.
+if (chartPointSize.value === "x") {
+  chartPointSize.value = "none";
+  chartTimeAxis.value = true;
+}
+
+/** Time-axis curve: best-so-far step line, or moving average. */
 export const chartTimeCurve = useSetting<"best" | "avg">("chartTimeCurve", "best");
 
 /** Review metrics-graph height in px (user-adjustable via chevron steppers). */

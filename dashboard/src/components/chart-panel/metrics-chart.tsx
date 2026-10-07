@@ -13,6 +13,7 @@ import {
   clipOutliers,
   ideaMean,
   chartPointSize,
+  chartTimeAxis,
   chartTimeCurve,
   colorblindMode,
 } from "../../state/settings";
@@ -39,7 +40,8 @@ export function MetricsChart({ instanceId, initialMetric, hideClone }: { instanc
   const reversed = reverseTime.value;
   const clip = clipOutliers.value;
   const mean = ideaMean.value;
-  const pointSize = chartPointSize.value;
+  const pointSize = chartPointSize.value === "x" ? "none" : chartPointSize.value;
+  const timeAxis = chartTimeAxis.value;
   const timeCurve = chartTimeCurve.value;
   const _cb = colorblindMode.value; // subscribe — colors recompute on change
 
@@ -129,24 +131,40 @@ export function MetricsChart({ instanceId, initialMetric, hideClone }: { instanc
         <Toggle active={logScale} onClick={() => { setLogScale(!logScale); }} title="Logarithmic Y axis">
           Log Y
         </Toggle>
-        {/* Point-size control — drives chartPointSize (persisted). Scales the mini dot radii. */}
+        {/* Dot size (click the active size again for no dots) and, independently,
+            the time axis: x + a size = dots over time with the curve; x alone =
+            the curve only. All persisted. */}
         <span class="chart-ptsize" title="Dot size">
-          {(["s", "m", "l", "x"] as const).map((sz) => (
+          {(["s", "m", "l"] as const).map((sz) => (
             <button
               key={sz}
               type="button"
               class={`chart-ptsize-btn${pointSize === sz ? " is-active" : ""}`}
-              onClick={() => { chartPointSize.value = sz; }}
-              title={sz === "x"
-                ? "No dots: x axis is real time, squeezed to fit the panel"
-                : `Dot size: ${sz === "s" ? "small" : sz === "m" ? "medium" : "large"}`}
+              onClick={() => {
+                // Without dots the time axis is the only thing left to show.
+                chartPointSize.value = pointSize === sz && timeAxis ? "none" : sz;
+              }}
+              title={`Dot size: ${sz === "s" ? "small" : sz === "m" ? "medium" : "large"}`
+                + (timeAxis ? " (click again to hide dots)" : "")}
             >
               {sz}
             </button>
           ))}
+          <button
+            type="button"
+            class={`chart-ptsize-btn${timeAxis ? " is-active" : ""}`}
+            onClick={() => {
+              chartTimeAxis.value = !timeAxis;
+              // Leaving the time axis needs dots again.
+              if (timeAxis && pointSize === "none") chartPointSize.value = "m";
+            }}
+            title={timeAxis ? "x axis: real time (click for experiment order)" : "x axis: experiment order (click for real time, fit to the panel)"}
+          >
+            x
+          </button>
         </span>
-        {/* Time-mode curve — only meaningful (and only shown) in "x" mode. */}
-        {pointSize === "x" && (
+        {/* Time-axis curve — only meaningful (and only shown) with the time axis. */}
+        {timeAxis && (
           <span class="chart-ptsize" title="Time-mode curve">
             {(["best", "avg"] as const).map((c) => (
               <button
@@ -259,6 +277,7 @@ export function MetricsChart({ instanceId, initialMetric, hideClone }: { instanc
             logScale={logScale}
             clip={clip}
             pointSize={pointSize}
+            timeAxis={timeAxis}
             timeCurve={timeCurve}
           />
         </div>

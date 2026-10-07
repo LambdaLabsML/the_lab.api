@@ -48,7 +48,7 @@ const TIP_MARGIN = 8; // min gap from viewport edge (matches shared Tooltip)
 const TIP_GAP = 8;    // gap between dot and card
 
 /** Dot-radius multiplier per chartPointSize step. */
-const PT_SIZE_SCALE: Record<"s" | "m" | "l" | "x", number> = { s: 0.75, m: 1, l: 1.4, x: 1 };
+const PT_SIZE_SCALE: Record<"s" | "m" | "l" | "none", number> = { s: 0.75, m: 1, l: 1.4, none: 1 };
 
 /**
  * Moving-average window for time mode, sized from the data: the k whose
@@ -234,7 +234,7 @@ function MiniTooltip({ anchor, children }: { anchor: DOMRect; children: any }) {
 export function MiniMetricsChart({
   metric, experiments, ideas, layout, hiddenStatuses, hideRunning,
   impOnly, colorMode, tags, tagMode, reversed, mean, logScale = false, clip = false,
-  pointSize = "m", timeCurve = "best",
+  pointSize = "m", timeAxis = false, timeCurve = "best",
 }: {
   metric: string;
   experiments: Experiment[];
@@ -250,12 +250,17 @@ export function MiniMetricsChart({
   mean: boolean;
   logScale?: boolean;
   clip?: boolean;
-  pointSize?: "s" | "m" | "l" | "x";
+  /** Dot size; "none" draws only the curve. */
+  pointSize?: "s" | "m" | "l" | "none";
+  /** x axis is wall-clock time (fit to the panel) instead of experiment order. */
+  timeAxis?: boolean;
   /** Time mode only: best-so-far step line, or trailing moving average. */
   timeCurve?: "best" | "avg";
 }) {
   // hovered dot index + its screen rect (for the HTML overlay tooltip)
   const [hovered, setHovered] = useState<{ idx: number; rect: DOMRect } | null>(null);
+  // Time mode: the curve point under the mouse (index into ``timed``) + where.
+  const [curveHover, setCurveHover] = useState<{ k: number; x: number; clientX: number; clientY: number } | null>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ w: 560, h: 180 });
   // font sizes read from the --text-* tokens so the chart honours font-size setting
@@ -304,7 +309,8 @@ export function MiniMetricsChart({
 
   const lower = isLowerBetter(metric);
   const sizeScale = PT_SIZE_SCALE[pointSize] ?? 1;
-  const timeMode = pointSize === "x";
+  const timeMode = !!timeAxis;
+  const showDots = pointSize !== "none" || !timeMode;
 
   // ── Milestone (record) detection over the FULL ordered list ──────────────────
   // `chartData` is already in display order (buildChartData reverses when
@@ -341,7 +347,8 @@ export function MiniMetricsChart({
   // most recent record (the current dry streak) as normal dots. Works in both
   // time directions because the dry-streak test is chronological.
   let keepIdx: number[];
-  if (impOnly && !timeMode) {
+  // Records-only collapses the DOTS; a curve-only time plot has none to collapse.
+  if (impOnly && showDots) {
     keepIdx = [];
     for (let d = 0; d < fullN; d++) {
       const c = reversed ? fullN - 1 - d : d;
@@ -366,26 +373,30 @@ export function MiniMetricsChart({
   // every value. Works on raw experiments and idea means alike (a mean point
   // sits at its idea's latest finish). Running experiments carry partial
   // progress, so they never enter the curve; they only extend the axis to "now".
+  // The curve always uses the FULL run (records-only only thins the dots).
+  // ``exp`` on a best point is the experiment that set that best.
   const avgMode = timeMode && timeCurve === "avg";
-  const timed: { t: number; y: number }[] = [];
+  const timed: { t: number; y: number; exp?: Experiment }[] = [];
   let avgWindow = 0;
-  const isRunning = (i: number) => !!(expData?.[i] as { _running?: boolean } | undefined)?._running;
-  const anyRunning = timeMode && values.some((_, i) => isRunning(i));
+  const fullExp = chartData.expData as (Experiment & { _running?: boolean })[];
+  const anyRunning = timeMode && fullExp.some((e) => !!e?._running);
   if (timeMode) {
-    const pts = values
-      .map((v, i) => ({ t: isRunning(i) ? NaN : expTime(expData?.[i] as Experiment | undefined), v }))
-      .filter((p) => isFinite(p.t) && isFinite(p.v))
-      .sort((a, b) => a.t - b.t);
+    type Pt = { t: number; v: number; exp: Experiment };
+    const pts: Pt[] = (fullValues as number[])
+      .map((v: number, d: number): Pt => ({ t: fullExp[d]?._running ? NaN : expTime(fullExp[d]), v, exp: fullExp[d] }))
+      .filter((p: Pt) => isFinite(p.t) && isFinite(p.v))
+      .sort((a: Pt, b: Pt) => a.t - b.t);
     if (avgMode) avgWindow = pickAvgWindow(pts.map((p) => p.v));
     let windowSum = 0;
     pts.forEach((p, k) => {
       if (avgMode) {
         windowSum += p.v;
         if (k >= avgWindow) windowSum -= pts[k - avgWindow].v;
-        timed.push({ t: p.t, y: windowSum / Math.min(k + 1, avgWindow) });
+        timed.push({ t: p.t, y: windowSum / Math.min(k + 1, avgWindow), exp: p.exp });
       } else {
-        const prev = timed.length ? timed[timed.length - 1].y : null;
-        timed.push({ t: p.t, y: prev === null || (lower ? p.v < prev : p.v > prev) ? p.v : prev });
+        const prev = timed.length ? timed[timed.length - 1] : null;
+        const better = prev === null || (lower ? p.v < prev.y : p.v > prev.y);
+        timed.push({ t: p.t, y: better ? p.v : prev!.y, exp: better ? p.exp : prev!.exp });
       }
     });
     if (timed.length === 0) {
@@ -399,12 +410,21 @@ export function MiniMetricsChart({
 
   // ── Y range ──────────────────────────────────────────────────────────────────
   // Optionally clip outliers (IQR fence) and/or use a log scale, mirroring the
-  // toolbar toggles. Log scale only applies when all finite values are positive.
-  const finite = timeMode ? timed.map((p) => p.y) : values.filter(isFinite);
-  let dataMin = Math.min(...finite);
-  let dataMax = Math.max(...finite);
-  if (clip && finite.length >= 4) {
-    const sorted = [...finite].sort((a, b) => a - b);
+  // toolbar toggles. With dots, the range covers every value; a curve-only time
+  // plot fits the curve. Log scale ranges over the POSITIVE values and draws
+  // values <= 0 at the floor (it used to switch itself off whenever a single
+  // value was <= 0, e.g. any failed run scoring 0).
+  const finite = !timeMode ? values.filter(isFinite)
+    : showDots ? [...values.filter(isFinite), ...timed.map((p) => p.y)]
+    : timed.map((p) => p.y);
+  const positives = finite.filter((v) => v > 0);
+  const useLog = logScale && positives.length > 0;
+  const rangeVals = useLog ? positives : finite;
+  const atFloor = useLog ? finite.length - positives.length : 0;
+  let dataMin = Math.min(...rangeVals);
+  let dataMax = Math.max(...rangeVals);
+  if (clip && rangeVals.length >= 4) {
+    const sorted = [...rangeVals].sort((a, b) => a - b);
     const q1 = sorted[Math.floor(sorted.length * 0.25)];
     const q3 = sorted[Math.floor(sorted.length * 0.75)];
     const iqr = q3 - q1;
@@ -415,7 +435,6 @@ export function MiniMetricsChart({
       dataMax = Math.min(dataMax, hi);
     }
   }
-  const useLog = logScale && finite.every((v) => v > 0);
   const tform = useLog ? Math.log10 : (x: number) => x;
   const tMin = tform(dataMin);
   const tMax = tform(dataMax);
@@ -428,7 +447,9 @@ export function MiniMetricsChart({
   const tickStep = (yMax - yMin) / (nTicks - 1);
   const yTicks = Array.from({ length: nTicks }, (_, i) => yMin + i * tickStep);
   // Bottom-right readout: the best value, or the latest moving average.
-  const bestVal = avgMode ? timed[timed.length - 1].y : lower ? Math.min(...finite) : Math.max(...finite);
+  const bestVal = timeMode && timed.length
+    ? timed[timed.length - 1].y
+    : (lower ? Math.min(...finite) : Math.max(...finite));
   // One notation for the axis + best label, chosen from what is on screen.
   const yTickVals = yTicks.map((ty) => (useLog ? Math.pow(10, ty) : ty));
   const fmtVal = scoreFormatter([...yTickVals, bestVal]);
@@ -457,6 +478,28 @@ export function MiniMetricsChart({
   const toXT = (t: number) => {
     const f = t1 > t0 ? (t - t0) / (t1 - t0) : 0.5;
     return reversed ? rightEdge - f * plotW : padL + f * plotW;
+  };
+  // Dot x: experiment order, or (time axis) its finish time; running ones at now.
+  const dotX = (i: number): number => {
+    if (!timeMode) return toX(i);
+    const e = expData?.[i] as (Experiment & { _running?: boolean }) | undefined;
+    const t = e?._running ? Math.min(Date.now(), t1) : expTime(e);
+    return isFinite(t) ? toXT(Math.max(t0, Math.min(t1, t))) : NaN;
+  };
+
+  // Hover on the time curve: the step value in effect at the mouse's time.
+  const onCurveMove = (ev: MouseEvent) => {
+    if (!timeMode || !timed.length) return;
+    const svg = ev.currentTarget as SVGSVGElement;
+    const r = svg.getBoundingClientRect();
+    const x = ((ev.clientX - r.left) / r.width) * svgW;
+    if (x < padL || x > rightEdge) { setCurveHover(null); return; }
+    const f = (x - padL) / plotW;
+    const t = t0 + (reversed ? 1 - f : f) * (t1 - t0);
+    let k = -1;
+    for (let j = 0; j < timed.length && timed[j].t <= t; j++) k = j;
+    if (k < 0) { setCurveHover(null); return; }
+    setCurveHover({ k, x, clientX: ev.clientX, clientY: ev.clientY });
   };
 
   // Stepped best-score path: (x, running best) pairs, drawn as H/V segments.
@@ -493,6 +536,8 @@ export function MiniMetricsChart({
       style={{ width: "100%", height: "100%", overflowX: needsScroll ? "auto" : "hidden", overflowY: "hidden" }}
     >
       <svg
+        onMouseMove={timeMode ? onCurveMove : undefined}
+        onMouseLeave={timeMode ? () => setCurveHover(null) : undefined}
         width={needsScroll ? svgW : "100%"}
         height={H}
         viewBox={`0 0 ${svgW} ${H}`}
@@ -532,8 +577,20 @@ export function MiniMetricsChart({
           stroke-width={impOnly || timeMode ? 1.8 : 1.4}
           stroke-linejoin="round" stroke-linecap="round" />}
 
-        {/* Dots (none in time mode) */}
-        {!timeMode && values.map((v, i) => {
+        {/* Hover guide on the time curve */}
+        {curveHover && timed[curveHover.k] && hovered === null && (
+          <g pointer-events="none">
+            <line x1={curveHover.x} x2={curveHover.x} y1={PAD.t} y2={baselineY}
+              stroke="var(--text-faint)" stroke-dasharray="2 3" stroke-width="1" />
+            <circle cx={curveHover.x} cy={toY(timed[curveHover.k].y)} r={3.2}
+              fill="var(--purple)" stroke="var(--bg)" stroke-width="1" />
+          </g>
+        )}
+
+        {/* Dots (time axis: at their finish time; hidden when size is "none") */}
+        {showDots && values.map((v, i) => {
+          const x = dotX(i);
+          if (!isFinite(x)) return null;
           const e = expData?.[i] as (Experiment & { _running?: boolean }) | undefined;
           const isMs = milestones.has(i);
           // milestone caption: "idea/exp · excerpt…" (purple, clickable)
@@ -544,7 +601,7 @@ export function MiniMetricsChart({
             <MiniDot
               key={i}
               exp={e}
-              x={toX(i)} y={toY(v)} baselineY={baselineY}
+              x={x} y={toY(v)} baselineY={baselineY}
               color={pointColors[i] ?? "var(--text-muted)"}
               isMilestone={isMs}
               fontXs={font.xs}
@@ -561,6 +618,7 @@ export function MiniMetricsChart({
         <g font-family="var(--font-mono)" font-size={font.xs}>
           <text x={padL} y={H - 5} fill="var(--text-faint)">
             {timeMode ? (reversed ? "← time" : "time →") : "experiments left → right"}
+            {atFloor > 0 ? ` · ${atFloor} value${atFloor === 1 ? "" : "s"} ≤ 0 at floor` : ""}
           </text>
           <text x={rightEdge} y={H - 5} text-anchor="end" fill="var(--purple)">
             {avgMode ? `avg of last ${avgWindow}` : "current best"} {fmtVal(bestVal)}
@@ -569,7 +627,31 @@ export function MiniMetricsChart({
       </svg>
 
       {/* Shared HTML hover card — visually identical to timeline/table tooltips */}
-      {hovered !== null && !timeMode && (() => {
+      {curveHover && timed[curveHover.k] && hovered === null && (() => {
+        const pt = timed[curveHover.k];
+        const exp = pt.exp;
+        const when = new Date(pt.t).toLocaleString([], {
+          month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
+        const rect = new DOMRect(curveHover.clientX, curveHover.clientY, 0, 0);
+        return (
+          <MiniTooltip anchor={rect}>
+            <span class="ui-tip-head"><span class="ui-tip-mark">{when}</span></span>
+            <span class="ui-tip-metric">
+              <span class="ui-tip-metric-label">
+                {avgMode ? `${metric ? fmtMetricName(metric) : "value"} · avg of last ${avgWindow}` : `best ${metric ? fmtMetricName(metric) : "value"}`}
+              </span>
+              <span class="ui-tip-metric-value is-record">{fmtVal(pt.y)}</span>
+            </span>
+            {exp && (
+              <span class="ui-tip-idea">
+                <span class="ui-tip-idea-id">{avgMode ? "latest" : "set by"} exp/{exp.label ?? exp.id} · idea #{exp.idea_id}</span>
+              </span>
+            )}
+          </MiniTooltip>
+        );
+      })()}
+
+      {hovered !== null && (() => {
         const i = hovered.idx;
         if (i >= n) return null;
         const exp = expData?.[i];
