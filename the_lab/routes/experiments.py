@@ -858,6 +858,17 @@ def _in_shared_job_dir(full_path: Path) -> bool:
     return False
 
 
+# Content-addressed frame images (``.../images/<hex digest>.png``): the name
+# changes whenever the bytes do, so browsers may cache them forever instead
+# of revalidating each one (a viewer playing a run requests hundreds).
+_CONTENT_ADDRESSED_IMAGE = re.compile(r"[0-9a-f]{16,64}\.(?:png|jpe?g|webp|gif)")
+_IMMUTABLE = "public, max-age=31536000, immutable"
+
+
+def _is_content_addressed_image(path: Path) -> bool:
+    return path.parent.name == "images" and bool(_CONTENT_ADDRESSED_IMAGE.fullmatch(path.name))
+
+
 def _not_modified(request: Request, etag: str) -> bool:
     """True when the request's If-None-Match already names *etag*."""
     inm = request.headers.get("if-none-match")
@@ -921,13 +932,15 @@ def serve_repo_file(file_path: str, request: Request = None):
         raise HTTPException(404, "file not found")
     if external_image:
         return FileResponse(str(full_path), media_type="image/png",
-                            headers={"X-Content-Type-Options": "nosniff"})
+                            headers={"X-Content-Type-Options": "nosniff",
+                                     "Cache-Control": _IMMUTABLE})
     content_type, _ = mimetypes.guess_type(str(full_path))
+    immutable = _is_content_addressed_image(full_path)
     resp = FileResponse(
         str(full_path),
         media_type=content_type or "application/octet-stream",
         stat_result=os.stat(full_path),
-        headers={"Cache-Control": "no-cache"},
+        headers={"Cache-Control": _IMMUTABLE if immutable else "no-cache"},
     )
     etag = resp.headers.get("etag", "")
     if etag and request is not None and _not_modified(request, etag):
