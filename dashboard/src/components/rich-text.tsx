@@ -108,10 +108,10 @@ function entityNodes(text: string, key: { value: number }): ComponentChildren[] 
       node = <ExpLink key={`rt-${key.value++}`} label={value} />;
     } else if (/^\d+$/.test(value)) {
       const id = Number(value);
-      // Ideas win; other numbers in the message id range may be bare message
-      // refs ("→ David 5843:", "(5843/5847)"): hover to check, click to open.
-      node = ideas[id] ? <IdeaLink key={`rt-${key.value++}`} id={id} />
-        : id >= 100 && id <= newestMsg ? <MsgRef key={`rt-${key.value++}`} id={id} bare><span class="rt-num">{value}</span></MsgRef>
+      // Ideas are written #N or idea/N, so a bare number is never an idea. In
+      // the message id range it may be a bare message ref ("→ David 5843:",
+      // "(5843/5847)"): hover to check, click to open.
+      node = id >= 100 && id <= newestMsg ? <MsgRef key={`rt-${key.value++}`} id={id} bare><span class="rt-num">{value}</span></MsgRef>
         : <span key={`rt-${key.value++}`} class="rt-num">{value}</span>;
     } else if (/^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$/.test(value) || /^(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,12}$/i.test(value)) {
       node = <code key={`rt-${key.value++}`} class="rt-env">{value}</code>;

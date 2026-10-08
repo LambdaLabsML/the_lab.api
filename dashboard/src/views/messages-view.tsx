@@ -388,6 +388,11 @@ export function MessagesView() {
     const element = document.getElementById(`thread-message-${pendingFocus}`);
     if (element) {
       element.scrollIntoView({ behavior: "smooth", block: "center" });
+      // Flash it so the eye finds it after the scroll (restart if repeated).
+      element.classList.remove("is-flash");
+      void element.offsetWidth;
+      element.classList.add("is-flash");
+      window.setTimeout(() => element.classList.remove("is-flash"), 2200);
       setPendingFocus(null);
     } else if (threadMessages.length < threadTotal && selectedThread != null) {
       void loadThread(selectedThread, threadMessages.length, true);
