@@ -108,6 +108,8 @@ export const detailSortNewest = useSetting("detailSortNewest", true);
 
 /** Active colour theme name. Applied as data-theme on <html>. */
 export const colorTheme = useSetting<string>("colorTheme", "default");
+/** Contrast on top of the theme: -2 (soft) … 0 (as designed) … +2 (high). */
+export const uiContrast = useSetting<number>("uiContrast", 0);
 
 // ---------------------------------------------------------------------------
 // Server-provided defaults from GET /api/v1/config

@@ -1,6 +1,7 @@
 import { render } from "preact";
 import { App } from "./app";
-import { colorTheme, fontFamily, fontSize, colorblindMode, uiTexture } from "./state/settings";
+import { colorTheme, fontFamily, fontSize, colorblindMode, uiTexture, uiContrast } from "./state/settings";
+import { applyContrast } from "./lib/contrast";
 import { effect } from "@preact/signals";
 import { ALL_PAIRINGS, DEFAULT_PAIRING } from "./lib/fonts";
 import "dockview-core/dist/styles/dockview.css";
@@ -35,6 +36,8 @@ import "./styles/search-filter.scss";
 // Apply theme / font-family / font-size on every change
 effect(() => {
   document.documentElement.setAttribute("data-theme", colorTheme.value);
+  // Contrast re-derives from the theme's own colours, so it follows theme changes.
+  applyContrast(uiContrast.value);
 });
 effect(() => {
   const id = fontFamily.value;

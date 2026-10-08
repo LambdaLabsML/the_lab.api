@@ -143,6 +143,34 @@
 
 /* ── Size — xs … xxl segmented row ─────────────────────────────────────── */
 
+/* Connected segmented buttons (contrast). */
+.settings-seg {
+  display: inline-flex;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  align-self: flex-start;
+}
+.settings-seg-btn {
+  appearance: none;
+  min-width: 30px;
+  padding: 3px 8px;
+  background: transparent;
+  border: none;
+  box-shadow: inset 1px 0 var(--border-soft);
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.2;
+  cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast);
+  &:first-child { box-shadow: none; }
+  &:hover { color: var(--text); background: var(--bg-hi); }
+  &.is-active {
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+  }
+}
 .settings-size-row {
   display: flex;
   gap: 4px;
