@@ -103,6 +103,33 @@ export function showMessagePreview(ev: ActivityEvent, anchorEl?: Element | null)
   }
 }
 
+/** Show the preview for a message referenced by id (e.g. "msg 5510" in a
+ *  message text); fetches it. Unknown ids say so instead of showing a card. */
+export function showMessagePreviewById(id: number, anchorEl?: Element | null): void {
+  setAnchor(anchorEl);
+  const cached = _fullMsgCache[id];
+  messagePreview.value = cached
+    ? { id, from: cached.from, to: cached.to, body: cached.text, ts: cached.ts, full: true }
+    : { id, from: null, to: "…", body: "", ts: 0, full: false };
+  if (cached) return;
+  import("./api").then(({ getMessage }) => getMessage(id)).then((m) => {
+    const hit = _fullMsgCache[id] = {
+      from: m.from_agent ?? m.from_role ?? null,
+      to: m.to === "all" ? "all" : m.to.replace(/^agent:|^role:/, ""),
+      text: m.text,
+      ts: Date.parse(m.created_at) || 0,
+    };
+    // Only update if this message is still the one being hovered.
+    if (messagePreview.value?.id === id) {
+      messagePreview.value = { id, from: hit.from, to: hit.to, body: hit.text, ts: hit.ts, full: true };
+    }
+  }).catch(() => {
+    if (messagePreview.value?.id === id) {
+      messagePreview.value = { id, from: null, to: "—", body: `No message #${id} (or not visible).`, ts: 0, full: true };
+    }
+  });
+}
+
 export function hideMessagePreview(): void {
   messagePreview.value = null;
   previewAnchor.value = null;

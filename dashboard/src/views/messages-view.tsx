@@ -759,6 +759,14 @@ export function MessagesView() {
                       <time title={m.created_at}>
                         {relativeTime(m.created_at)}
                       </time>
+                      <button
+                        type="button"
+                        class="thread-message-id"
+                        title={`Message id ${m.id} — click to copy`}
+                        onClick={() => { void navigator.clipboard?.writeText(String(m.id)).catch(() => {}); }}
+                      >
+                        #{m.id}
+                      </button>
                       {!inPerspective && (
                         <button
                           class={`msg-readdot${isRead(m) ? " is-read" : ""}`}

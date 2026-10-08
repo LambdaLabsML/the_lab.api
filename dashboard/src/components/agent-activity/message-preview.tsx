@@ -141,6 +141,7 @@ export function MessagePreviewOverlay() {
         {p.from && <AgentPill id={p.from} />}
         <span class="msg-arrow">→</span>
         <AgentPill id={p.to} />
+        {p.id != null && <span class="msg-preview-id">#{p.id}</span>}
         <span class="msg-time">{clock(p.ts)}</span>
       </div>
       <div class="msg-body msg-preview-body">{p.body ? <RichText text={stripRouting(p.body)} /> : "…"}</div>
