@@ -31,7 +31,8 @@
  * The purple line (timeCurve) is the best-so-far step line, or "avg": a
  * trailing moving average (window from pickAvgWindow) — in every view.
  *
- * Log Y ranges over the positive values; values <= 0 are drawn at the floor.
+ * Log Y ranges over the positive values; values <= 0 are excluded (× marks on
+ * the x axis, skipped by the purple line).
  */
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
@@ -136,11 +137,14 @@ function trianglePath(cx: number, cy: number, r: number): string {
 
 function MiniDot({
   exp, x, y, baselineY, color, isMilestone, fontXs, note, sizeScale, onHoverChange,
+  excluded = false,
 }: {
   exp: (Experiment & { _running?: boolean }) | undefined;
   x: number; y: number; baselineY: number;
   color: string; isMilestone: boolean; fontXs: number; note?: string;
   sizeScale: number;
+  /** Not on the scale (log Y and value <= 0): a small × on the x axis. */
+  excluded?: boolean;
   onHoverChange: (hovered: boolean, rect: DOMRect | null) => void;
 }) {
   const groupRef = useRef<SVGGElement>(null);
@@ -170,11 +174,17 @@ function MiniDot({
       onMouseLeave={() => { onHoverChange(false, null); if (exp) nav.bind.onMouseLeave(); }}
       onClick={exp ? (nav.bind.onClick as any) : undefined}
     >
+      {excluded ? (
+        <path d={`M${x - 2.5},${baselineY - 6.5} l5,5 m0,-5 l-5,5`}
+          stroke={isMilestone ? "var(--yellow)" : "var(--text-faint)"} stroke-width="1.1"
+          stroke-linecap="round" opacity={faded ? 0.2 : 0.8} />
+      ) : (
       <line x1={x} x2={x} y1={y} y2={baselineY}
         stroke={isMilestone ? "var(--yellow)" : "var(--border)"}
         stroke-width="1" stroke-dasharray="2 3"
         opacity={faded ? 0.1 : isMilestone ? 0.5 : 0.3} />
-      {isRunning ? (
+      )}
+      {excluded ? null : isRunning ? (
         <path d={trianglePath(x, y, r)} fill="transparent" stroke={dotColor}
           stroke-width={Math.max(strokeW, 1.3)} opacity={faded ? 0.2 : 1} />
       ) : (
@@ -182,11 +192,11 @@ function MiniDot({
           stroke={strokeColor} stroke-width={strokeW} opacity={faded ? 0.2 : 1} />
       )}
       {/* Milestone caption — purple + clickable (sits inside this clickable <g>) */}
-      {isMilestone && !faded && note && (
+      {isMilestone && !faded && note && !excluded && (
         <text x={x + 5} y={y - 5} fill="var(--purple)" font-size={fontXs}
           font-family="var(--font-mono)" opacity="0.95" style="cursor:pointer;">{note}</text>
       )}
-      <circle cx={x} cy={y} r="9" fill="transparent" />
+      <circle cx={x} cy={excluded ? baselineY - 4 : y} r="9" fill="transparent" />
     </g>
   );
 }
@@ -437,9 +447,10 @@ export function MiniMetricsChart({
   // ── Y range ──────────────────────────────────────────────────────────────────
   // Optionally clip outliers (IQR fence) and/or use a log scale, mirroring the
   // toolbar toggles. With dots, the range covers every value; a curve-only time
-  // plot fits the curve. Log scale ranges over the POSITIVE values and draws
-  // values <= 0 at the floor (it used to switch itself off whenever a single
-  // value was <= 0, e.g. any failed run scoring 0).
+  // plot fits the curve. Log scale ranges over the POSITIVE values; values <= 0
+  // are excluded: × marks on the x axis, and the purple line skips them (it
+  // used to switch itself off whenever a single value was <= 0, e.g. any
+  // failed run scoring 0).
   const finite = !timeMode ? values.filter(isFinite)
     : showDots ? [...values.filter(isFinite), ...timed.map((p) => p.y)]
     : timed.map((p) => p.y);
@@ -528,18 +539,21 @@ export function MiniMetricsChart({
     const t = t0 + (reversed ? 1 - f : f) * (t1 - t0);
     let k = -1;
     for (let j = 0; j < timed.length && timed[j].t <= t; j++) k = j;
-    if (k < 0) { setCurveHover(null); return; }
+    // Before the first point, or (log Y) where the value is off the scale.
+    if (k < 0 || (useLog && timed[k].y <= 0)) { setCurveHover(null); return; }
     setCurveHover({ k, x, clientX: ev.clientX, clientY: ev.clientY });
   };
 
   // Stepped best-score path: (x, running best) pairs, drawn as H/V segments.
   let stepPoints: (readonly [number, number])[];
+  // Log Y: values <= 0 are off the scale, so the line skips them (it starts at
+  // the first positive best / average instead of being pinned to the floor).
+  const onScale = (v: number) => isFinite(v) && (!useLog || v > 0);
   if (timeMode) {
-    stepPoints = timed.map((p) => [toXT(p.t), toY(p.y)] as const);
+    stepPoints = timed.filter((p) => onScale(p.y)).map((p) => [toXT(p.t), toY(p.y)] as const);
   } else {
     const line = avgMode ? runningAvg : runningBest;
-    stepPoints = values.map((_, i) => [toX(i), toY(line[i])] as const)
-      .filter(([, y]) => isFinite(y));
+    stepPoints = values.flatMap((_, i) => onScale(line[i]) ? [[toX(i), toY(line[i])] as const] : []);
   }
   const stepStartX = stepPoints.length ? stepPoints[0][0] : padL;
   const stepEndX = timeMode ? (reversed ? padL : rightEdge) : rightEdge;
@@ -634,6 +648,7 @@ export function MiniMetricsChart({
               key={i}
               exp={e}
               x={x} y={toY(v)} baselineY={baselineY}
+              excluded={useLog && v <= 0}
               color={pointColors[i] ?? "var(--text-muted)"}
               isMilestone={isMs}
               fontXs={font.xs}
@@ -650,7 +665,7 @@ export function MiniMetricsChart({
         <g font-family="var(--font-mono)" font-size={font.xs}>
           <text x={padL} y={H - 5} fill="var(--text-faint)">
             {timeMode ? (reversed ? "← time" : "time →") : "experiments left → right"}
-            {atFloor > 0 ? ` · ${atFloor} value${atFloor === 1 ? "" : "s"} ≤ 0 at floor` : ""}
+            {atFloor > 0 ? ` · ${atFloor} value${atFloor === 1 ? "" : "s"} ≤ 0 off the log scale (×)` : ""}
           </text>
           <text x={rightEdge} y={H - 5} text-anchor="end" fill="var(--purple)">
             {avgMode ? `avg of last ${shownWindow}` : "current best"} {fmtVal(bestVal)}
