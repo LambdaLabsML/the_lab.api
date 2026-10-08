@@ -14,6 +14,7 @@ import {
   ideaMean,
   chartView,
   chartTimeCurve,
+  chartXAxis,
   colorblindMode,
 } from "../../state/settings";
 import { collectChartKeys } from "../../lib/chart-data";
@@ -41,6 +42,7 @@ export function MetricsChart({ instanceId, initialMetric, hideClone }: { instanc
   const mean = ideaMean.value;
   const view = chartView.value;
   const timeCurve = chartTimeCurve.value;
+  const xAxis = chartXAxis.value;
   const _cb = colorblindMode.value; // subscribe — colors recompute on change
 
   // Idea-status filters (abandoned/concluded). The "running" toggle is
@@ -129,8 +131,27 @@ export function MetricsChart({ instanceId, initialMetric, hideClone }: { instanc
         <Toggle active={logScale} onClick={() => { setLogScale(!logScale); }} title="Logarithmic Y axis">
           Log Y
         </Toggle>
-        {/* View (persisted): x = purple line only, time axis, full width;
-            s / m / l = dots in experiment order, tight to roomy. */}
+        {/* X axis (persisted). */}
+        <span class="chart-ptsize" title="X axis">
+          {(["experiments", "ideas", "time", "compute"] as const).map((a) => (
+            <button
+              key={a}
+              type="button"
+              class={`chart-ptsize-btn${xAxis === a ? " is-active" : ""}`}
+              onClick={() => { chartXAxis.value = a; }}
+              title={{
+                experiments: "X axis: experiments in order",
+                ideas: "X axis: experiments grouped by idea (ideas in order of their first experiment)",
+                time: "X axis: finish time",
+                compute: "X axis: cumulative experiment runtime (hours) — score against compute spent",
+              }[a]}
+            >
+              {{ experiments: "exp", ideas: "idea", time: "time", compute: "hours" }[a]}
+            </button>
+          ))}
+        </span>
+        {/* View (persisted): x = purple line only, full width;
+            s / m / l = dots, tight to roomy. */}
         <span class="chart-ptsize" title="Chart view">
           {(["x", "s", "m", "l"] as const).map((v) => (
             <button
@@ -139,7 +160,7 @@ export function MetricsChart({ instanceId, initialMetric, hideClone }: { instanc
               class={`chart-ptsize-btn${view === v ? " is-active" : ""}`}
               onClick={() => { chartView.value = v; }}
               title={{
-                x: "Purple line only, on a time axis, fit to the full width",
+                x: "Purple line only, fit to the full width",
                 s: "Tiniest dots, densest packing, with the purple line",
                 m: "Very small, tightly packed dots with the purple line",
                 l: "Roomy: larger dots, wide spacing",
@@ -262,6 +283,7 @@ export function MetricsChart({ instanceId, initialMetric, hideClone }: { instanc
             clip={clip}
             pointSize={view}
             timeCurve={timeCurve}
+            xAxis={xAxis}
           />
         </div>
       </div>
