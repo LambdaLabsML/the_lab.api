@@ -12,8 +12,7 @@ import {
   showRunning,
   clipOutliers,
   ideaMean,
-  chartPointSize,
-  chartTimeAxis,
+  chartView,
   chartTimeCurve,
   colorblindMode,
 } from "../../state/settings";
@@ -40,8 +39,7 @@ export function MetricsChart({ instanceId, initialMetric, hideClone }: { instanc
   const reversed = reverseTime.value;
   const clip = clipOutliers.value;
   const mean = ideaMean.value;
-  const pointSize = chartPointSize.value === "x" ? "none" : chartPointSize.value;
-  const timeAxis = chartTimeAxis.value;
+  const view = chartView.value;
   const timeCurve = chartTimeCurve.value;
   const _cb = colorblindMode.value; // subscribe — colors recompute on change
 
@@ -131,54 +129,40 @@ export function MetricsChart({ instanceId, initialMetric, hideClone }: { instanc
         <Toggle active={logScale} onClick={() => { setLogScale(!logScale); }} title="Logarithmic Y axis">
           Log Y
         </Toggle>
-        {/* Dot size (click the active size again for no dots) and, independently,
-            the time axis: x + a size = dots over time with the curve; x alone =
-            the curve only. All persisted. */}
-        <span class="chart-ptsize" title="Dot size">
-          {(["s", "m", "l"] as const).map((sz) => (
+        {/* View (persisted): x = purple line only, time axis, full width;
+            s / m / l = dots in experiment order, tight to roomy. */}
+        <span class="chart-ptsize" title="Chart view">
+          {(["x", "s", "m", "l"] as const).map((v) => (
             <button
-              key={sz}
+              key={v}
               type="button"
-              class={`chart-ptsize-btn${pointSize === sz ? " is-active" : ""}`}
-              onClick={() => {
-                // Without dots the time axis is the only thing left to show.
-                chartPointSize.value = pointSize === sz && timeAxis ? "none" : sz;
-              }}
-              title={`Dot size: ${sz === "s" ? "small" : sz === "m" ? "medium" : "large"}`
-                + (timeAxis ? " (click again to hide dots)" : "")}
+              class={`chart-ptsize-btn${view === v ? " is-active" : ""}`}
+              onClick={() => { chartView.value = v; }}
+              title={{
+                x: "Purple line only, on a time axis, fit to the full width",
+                s: "Very small, tightly packed dots with the purple line",
+                m: "Small dots, medium spacing",
+                l: "Roomy: larger dots, wide spacing",
+              }[v]}
             >
-              {sz}
+              {v}
             </button>
           ))}
-          <button
-            type="button"
-            class={`chart-ptsize-btn${timeAxis ? " is-active" : ""}`}
-            onClick={() => {
-              chartTimeAxis.value = !timeAxis;
-              // Leaving the time axis needs dots again.
-              if (timeAxis && pointSize === "none") chartPointSize.value = "m";
-            }}
-            title={timeAxis ? "x axis: real time (click for experiment order)" : "x axis: experiment order (click for real time, fit to the panel)"}
-          >
-            x
-          </button>
         </span>
-        {/* Time-axis curve — only meaningful (and only shown) with the time axis. */}
-        {timeAxis && (
-          <span class="chart-ptsize" title="Time-mode curve">
-            {(["best", "avg"] as const).map((c) => (
-              <button
-                key={c}
-                type="button"
-                class={`chart-ptsize-btn${timeCurve === c ? " is-active" : ""}`}
-                onClick={() => { chartTimeCurve.value = c; }}
-                title={c === "best" ? "Best-so-far over time" : "Moving average — window auto-sized from result count and noise"}
-              >
-                {c}
-              </button>
-            ))}
-          </span>
-        )}
+        {/* The purple line: best so far, or a moving average. */}
+        <span class="chart-ptsize" title="Purple line">
+          {(["best", "avg"] as const).map((c) => (
+            <button
+              key={c}
+              type="button"
+              class={`chart-ptsize-btn${timeCurve === c ? " is-active" : ""}`}
+              onClick={() => { chartTimeCurve.value = c; }}
+              title={c === "best" ? "Best so far" : "Moving average — window auto-sized from result count and noise"}
+            >
+              {c === "best" ? "max" : "avg"}
+            </button>
+          ))}
+        </span>
         {/* Clone is hidden in the single-chart review (hideClone); kept in the workbench */}
         {!hideClone && (
           <IconButton onClick={() => { if (cloneChartPanel) cloneChartPanel("metrics", metric); }} title="Clone this chart as a new tab">
@@ -276,8 +260,7 @@ export function MetricsChart({ instanceId, initialMetric, hideClone }: { instanc
             mean={mean}
             logScale={logScale}
             clip={clip}
-            pointSize={pointSize}
-            timeAxis={timeAxis}
+            pointSize={view}
             timeCurve={timeCurve}
           />
         </div>

@@ -22,14 +22,16 @@
  * experiment after that last record (the current "dry streak") as normal dots.
  * Flat stretches between early records collapse to their step points.
  *
- * Point size: dot radii are multiplied by a factor driven by chartPointSize
- * (s | m | l → 0.75 | 1 | 1.4).
+ * View (chartView): s / m / l draw dots in experiment order, from tiny tightly
+ * packed dots (s) to roomy (l) — see PX_PER_POINT / PT_SIZE_SCALE. x draws no
+ * dots: X is wall-clock time (finished_at, else started_at/created_at),
+ * squeezed to the panel width so the whole history is visible without
+ * scrolling, with time ticks and a hover readout.
  *
- * Time mode (chartPointSize "x"): no dots. X is wall-clock time (finished_at,
- * else started_at/created_at), squeezed to the panel width so the whole
- * history is visible without scrolling. Only one curve is drawn (raw or
- * idea-mean), with time ticks on the x axis: the best-so-far step line, or
- * (timeCurve "avg") a trailing moving average, window from pickAvgWindow.
+ * The purple line (timeCurve) is the best-so-far step line, or "avg": a
+ * trailing moving average (window from pickAvgWindow) — in every view.
+ *
+ * Log Y ranges over the positive values; values <= 0 are drawn at the floor.
  */
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
@@ -42,13 +44,16 @@ import { fmtMetricName, scoreFormatter } from "../../lib/format";
 import { experimentTipContent } from "../ui";
 import type { Experiment, IdeaNode, SubwayLayout } from "../../lib/types";
 
-const MIN_PX_PER_POINT = 8;
+// Horizontal room per experiment (the plot scrolls past the panel width) and
+// dot radius multiplier per size: s packs the run tight with tiny dots, l is
+// the roomy view. x draws no dots and fits the full width (time axis).
+const PX_PER_POINT: Record<"s" | "m" | "l", number> = { s: 2.5, m: 4.5, l: 8 };
 const PAD = { l: 34, r: 12, t: 10, b: 18 };
 const TIP_MARGIN = 8; // min gap from viewport edge (matches shared Tooltip)
 const TIP_GAP = 8;    // gap between dot and card
 
-/** Dot-radius multiplier per chartPointSize step. */
-const PT_SIZE_SCALE: Record<"s" | "m" | "l" | "none", number> = { s: 0.75, m: 1, l: 1.4, none: 1 };
+/** Dot-radius multiplier per view. */
+const PT_SIZE_SCALE: Record<"s" | "m" | "l", number> = { s: 0.35, m: 0.55, l: 0.75 };
 
 /**
  * Moving-average window for time mode, sized from the data: the k whose
@@ -234,7 +239,7 @@ function MiniTooltip({ anchor, children }: { anchor: DOMRect; children: any }) {
 export function MiniMetricsChart({
   metric, experiments, ideas, layout, hiddenStatuses, hideRunning,
   impOnly, colorMode, tags, tagMode, reversed, mean, logScale = false, clip = false,
-  pointSize = "m", timeAxis = false, timeCurve = "best",
+  pointSize = "l", timeCurve = "best",
 }: {
   metric: string;
   experiments: Experiment[];
@@ -250,11 +255,9 @@ export function MiniMetricsChart({
   mean: boolean;
   logScale?: boolean;
   clip?: boolean;
-  /** Dot size; "none" draws only the curve. */
-  pointSize?: "s" | "m" | "l" | "none";
-  /** x axis is wall-clock time (fit to the panel) instead of experiment order. */
-  timeAxis?: boolean;
-  /** Time mode only: best-so-far step line, or trailing moving average. */
+  /** x: curve only on a time axis, fit to the width; s/m/l: dot density. */
+  pointSize?: "x" | "s" | "m" | "l";
+  /** The purple line: best-so-far steps, or a trailing moving average. */
   timeCurve?: "best" | "avg";
 }) {
   // hovered dot index + its screen rect (for the HTML overlay tooltip)
@@ -308,9 +311,11 @@ export function MiniMetricsChart({
   }
 
   const lower = isLowerBetter(metric);
-  const sizeScale = PT_SIZE_SCALE[pointSize] ?? 1;
-  const timeMode = !!timeAxis;
-  const showDots = pointSize !== "none" || !timeMode;
+  const timeMode = pointSize === "x";
+  const showDots = !timeMode;
+  const dotSize = pointSize === "x" ? "l" : pointSize;
+  const sizeScale = PT_SIZE_SCALE[dotSize] ?? 0.75;
+  const avgMode = timeCurve === "avg";
 
   // ── Milestone (record) detection over the FULL ordered list ──────────────────
   // `chartData` is already in display order (buildChartData reverses when
@@ -336,6 +341,27 @@ export function MiniMetricsChart({
       const isBetter = isFinite(v) && (best === null || (lower ? v < best : v > best));
       if (isBetter) { best = v; fullMilestones.add(d); lastRecordChrono = c; }
       runningBestFull[d] = best ?? v;
+    }
+  }
+  // Moving average along the run (chronological), window sized from the data
+  // (pickAvgWindow); used for the purple line when "avg" is selected.
+  const avgFull: number[] = new Array(fullN).fill(NaN);
+  let indexAvgWindow = 0;
+  if (avgMode && !timeMode) {
+    const chrono: number[] = [];
+    for (let c = 0; c < fullN; c++) if (isFinite(fullValues[toDisplay(c)])) chrono.push(fullValues[toDisplay(c)]);
+    indexAvgWindow = pickAvgWindow(chrono);
+    let sum = 0, k = 0, last = NaN;
+    for (let c = 0; c < fullN; c++) {
+      const d = toDisplay(c);
+      const v = fullValues[d];
+      if (isFinite(v)) {
+        sum += v;
+        if (k >= indexAvgWindow) sum -= chrono[k - indexAvgWindow];
+        k += 1;
+        last = sum / Math.min(k, indexAvgWindow);
+      }
+      avgFull[d] = last;
     }
   }
 
@@ -364,6 +390,7 @@ export function MiniMetricsChart({
   const expData = keepIdx.map((d) => chartData.expData[d]);
   const labels = keepIdx.map((d) => chartData.labels[d]);
   const runningBest = keepIdx.map((d) => runningBestFull[d]);
+  const runningAvg = keepIdx.map((d) => avgFull[d]);
   const milestones = new Set<number>();
   keepIdx.forEach((srcD, dstI) => { if (fullMilestones.has(srcD)) milestones.add(dstI); });
   const n = values.length;
@@ -375,7 +402,6 @@ export function MiniMetricsChart({
   // progress, so they never enter the curve; they only extend the axis to "now".
   // The curve always uses the FULL run (records-only only thins the dots).
   // ``exp`` on a best point is the experiment that set that best.
-  const avgMode = timeMode && timeCurve === "avg";
   const timed: { t: number; y: number; exp?: Experiment }[] = [];
   let avgWindow = 0;
   const fullExp = chartData.expData as (Experiment & { _running?: boolean })[];
@@ -447,9 +473,13 @@ export function MiniMetricsChart({
   const tickStep = (yMax - yMin) / (nTicks - 1);
   const yTicks = Array.from({ length: nTicks }, (_, i) => yMin + i * tickStep);
   // Bottom-right readout: the best value, or the latest moving average.
-  const bestVal = timeMode && timed.length
-    ? timed[timed.length - 1].y
-    : (lower ? Math.min(...finite) : Math.max(...finite));
+  // Readout: the best value, or the latest moving average (and its window).
+  const shownWindow = timeMode ? avgWindow : indexAvgWindow;
+  const bestVal = avgMode
+    ? (timeMode ? timed[timed.length - 1]?.y ?? NaN : avgFull[toDisplay(fullN - 1)])
+    : timeMode && timed.length
+      ? timed[timed.length - 1].y
+      : (lower ? Math.min(...finite) : Math.max(...finite));
   // One notation for the axis + best label, chosen from what is on screen.
   const yTickVals = yTicks.map((ty) => (useLog ? Math.pow(10, ty) : ty));
   const fmtVal = scoreFormatter([...yTickVals, bestVal]);
@@ -461,7 +491,7 @@ export function MiniMetricsChart({
   const containerW = size.w;
   const H = Math.max(120, size.h);
   // Time mode never scrolls: the full time range is squeezed into the panel.
-  const minSvgW = timeMode ? 0 : padL + n * MIN_PX_PER_POINT + PAD.r;
+  const minSvgW = timeMode ? 0 : padL + n * PX_PER_POINT[dotSize] + PAD.r;
   const svgW = Math.max(containerW, minSvgW);
   const needsScroll = svgW > containerW + 0.5;
   const padB = timeMode ? PAD.b + font.xs + 6 : PAD.b; // extra row for time ticks
@@ -507,7 +537,9 @@ export function MiniMetricsChart({
   if (timeMode) {
     stepPoints = timed.map((p) => [toXT(p.t), toY(p.y)] as const);
   } else {
-    stepPoints = values.map((_, i) => [toX(i), toY(runningBest[i])] as const);
+    const line = avgMode ? runningAvg : runningBest;
+    stepPoints = values.map((_, i) => [toX(i), toY(line[i])] as const)
+      .filter(([, y]) => isFinite(y));
   }
   const stepStartX = stepPoints.length ? stepPoints[0][0] : padL;
   const stepEndX = timeMode ? (reversed ? padL : rightEdge) : rightEdge;
@@ -621,7 +653,7 @@ export function MiniMetricsChart({
             {atFloor > 0 ? ` · ${atFloor} value${atFloor === 1 ? "" : "s"} ≤ 0 at floor` : ""}
           </text>
           <text x={rightEdge} y={H - 5} text-anchor="end" fill="var(--purple)">
-            {avgMode ? `avg of last ${avgWindow}` : "current best"} {fmtVal(bestVal)}
+            {avgMode ? `avg of last ${shownWindow}` : "current best"} {fmtVal(bestVal)}
           </text>
         </g>
       </svg>

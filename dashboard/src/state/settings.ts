@@ -166,17 +166,19 @@ export const chartMinified = useSetting("chartMinified", false);
 
 /** Chart point/dot size: s | m | l, or x = no dots, time-scaled x axis fit to width. */
 export const chartPointSize = useSetting<"s" | "m" | "l" | "none" | "x">("chartPointSize", "m");
+const chartTimeAxisLegacy = useSetting<boolean>("chartTimeAxis", false);
 
-/** Metrics chart x axis: real time (fit to the panel) instead of experiment order. */
-export const chartTimeAxis = useSetting<boolean>("chartTimeAxis", false);
+/** Metrics chart view: x = purple line only on a time axis, fit to the width;
+ *  s / m / l = dots in experiment order with the purple line, from tightly
+ *  packed tiny dots (s) to roomy (l). Replaces chartPointSize (+ chartTimeAxis),
+ *  whose s/m/l meant something else: a stored time-axis / no-dots choice
+ *  becomes x, anything else l (the old default look). */
+export const chartView = useSetting<"x" | "s" | "m" | "l">(
+  "chartView",
+  chartPointSize.value === "x" || chartPointSize.value === "none" || chartTimeAxisLegacy.value ? "x" : "l",
+);
 
-// "x" used to mean "time axis, no dots" in one setting; it is now two settings.
-if (chartPointSize.value === "x") {
-  chartPointSize.value = "none";
-  chartTimeAxis.value = true;
-}
-
-/** Time-axis curve: best-so-far step line, or moving average. */
+/** The purple line: best-so-far step line, or moving average. */
 export const chartTimeCurve = useSetting<"best" | "avg">("chartTimeCurve", "best");
 
 /** Review metrics-graph height in px (user-adjustable via chevron steppers). */
