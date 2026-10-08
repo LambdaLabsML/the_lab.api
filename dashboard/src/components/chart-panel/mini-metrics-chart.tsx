@@ -48,13 +48,13 @@ import type { Experiment, IdeaNode, SubwayLayout } from "../../lib/types";
 // Horizontal room per experiment (the plot scrolls past the panel width) and
 // dot radius multiplier per size: s packs the run tight with tiny dots, l is
 // the roomy view. x draws no dots and fits the full width (time axis).
-const PX_PER_POINT: Record<"s" | "m" | "l", number> = { s: 2.5, m: 4.5, l: 8 };
+const PX_PER_POINT: Record<"s" | "m" | "l", number> = { s: 1.2, m: 2.5, l: 8 };
 const PAD = { l: 34, r: 12, t: 10, b: 18 };
 const TIP_MARGIN = 8; // min gap from viewport edge (matches shared Tooltip)
 const TIP_GAP = 8;    // gap between dot and card
 
 /** Dot-radius multiplier per view. */
-const PT_SIZE_SCALE: Record<"s" | "m" | "l", number> = { s: 0.35, m: 0.55, l: 0.75 };
+const PT_SIZE_SCALE: Record<"s" | "m" | "l", number> = { s: 0.22, m: 0.35, l: 0.75 };
 
 /**
  * Moving-average window for time mode, sized from the data: the k whose

@@ -140,8 +140,8 @@ export function MetricsChart({ instanceId, initialMetric, hideClone }: { instanc
               onClick={() => { chartView.value = v; }}
               title={{
                 x: "Purple line only, on a time axis, fit to the full width",
-                s: "Very small, tightly packed dots with the purple line",
-                m: "Small dots, medium spacing",
+                s: "Tiniest dots, densest packing, with the purple line",
+                m: "Very small, tightly packed dots with the purple line",
                 l: "Roomy: larger dots, wide spacing",
               }[v]}
             >
