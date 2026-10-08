@@ -99,6 +99,19 @@
   color: var(--text-faint);
   font-size: var(--text-xs);
 }
+/* "Read all" sits between the thread count and Filters. */
+.thread-read-all {
+  appearance: none;
+  background: transparent;
+  border: none;
+  padding: 0;
+  margin-left: auto;
+  margin-right: var(--space-3);
+  font: inherit;
+  color: var(--text-muted);
+  cursor: pointer;
+  &:hover { color: var(--accent); }
+}
 .thread-filters summary {
   cursor: pointer;
   color: var(--text-muted);

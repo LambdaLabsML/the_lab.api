@@ -21,6 +21,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { listAgents, listMessages, sendMessage } from "../../state/api";
+import { registerDashboardUserMessage } from "../../state/messages";
 import { subscribeWsEvents } from "../../state/ws";
 import {
   allExperiments,
@@ -309,7 +310,7 @@ export function ActivityPane() {
     setSending(true);
     setSendError(null);
     try {
-      await sendMessage(to, text);
+      registerDashboardUserMessage(await sendMessage(to, text));
       setInput("");
       const updated = await listMessages(40);
       setMessages(updated);

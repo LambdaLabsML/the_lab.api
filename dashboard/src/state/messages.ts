@@ -1,29 +1,32 @@
-// Dashboard-user message notifications.
+// Dashboard-user message notifications, per browser.
 //
-// The API deliberately has no "human inbox" identity: the dashboard is an
-// operator view.  This small client-side store therefore keeps the human's
-// read state separate from agents' `read_by` acknowledgements.
-//
-// We inspect only the newest 200 messages.  On a browser's first snapshot we
-// baseline broadcasts at the newest id, so opening an old, chatty lab does not
-// produce a giant badge.  Direct messages to the dashboard user are still
-// shown as unread.  Future websocket events reconcile that bounded window.
+// The API deliberately has no "human inbox" identity: every person on the
+// dashboard posts as "user".  This client-side store therefore decides per
+// browser what is addressed to the person using it, and keeps their read
+// state (separate from agents' `read_by` acknowledgements).  A message is
+// addressed to this browser's user when it is
+//   - sent directly to "user", or
+//   - a reply to a message sent from this browser, or
+//   - mentions one of the names set in this browser (messagesMyNames), since
+//     agents address the human by name inside thread posts ("→ David 5843").
+// Agent chatter and broadcasts never count.  The newest 200 messages are
+// inspected; websocket events reconcile that bounded window.
 
 import { effect, signal } from "@preact/signals";
 import { listMessagesPage } from "./api";
-import { messagesReadByMe } from "./settings";
+import { messagesMyNames, messagesReadByMe } from "./settings";
 import { subscribeWsEvents } from "./ws";
 import type { MessageEntry } from "../lib/types";
 
-const STORAGE_KEY = "the-lab:messagesUnreadBaseline";
-const THREADS_KEY = "the-lab:messagesUserThreads";
-const PENDING_KEY = "the-lab:messagesUnreadPending";
+// v2: the addressing rule changed (no broadcasts / whole threads any more),
+// so ids collected under the old rule are dropped.
+const PENDING_KEY = "the-lab:messagesUnreadPending.v2";
+const MINE_KEY = "the-lab:messagesSentHere";
 const HIGH_WATER_KEY = "the-lab:messagesUnreadHighWater";
 const BACKFILL_KEY = "the-lab:messagesUnreadBackfill";
 const PAGE_LIMIT = 200;
 const MAX_RECONCILE_PAGES = 4;
 
-interface Baseline { broadcastsThroughId: number }
 interface Backfill { targetId: number; offset: number; newestId: number }
 
 function load<T>(key: string, fallback: T): T {
@@ -39,25 +42,20 @@ function save(key: string, value: unknown): void {
   try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* unavailable storage */ }
 }
 
-let baseline: Baseline | null = load<Baseline | null>(STORAGE_KEY, null);
 let highWaterId = load<number>(HIGH_WATER_KEY, 0);
 let backfill = load<Backfill | null>(BACKFILL_KEY, null);
-const userThreads = new Set<number>(load<number[]>(THREADS_KEY, []));
+// Messages sent from THIS browser (ids from the POST responses).
+const sentHere = new Set<number>(load<number[]>(MINE_KEY, []));
 // Keep qualifying ids after they leave the newest-200 API window.  The read
 // map remains the source of truth, so toggling a message back to unread works.
 const pendingUnreadIds = new Set<number>(load<number[]>(PENDING_KEY, []));
 let messages: MessageEntry[] = [];
 
-/** Number of unread incoming messages relevant to the dashboard user. */
+/** Number of unread messages addressed to this browser's user. */
 export const messagesUnreadCount = signal(0);
 
 /** Newest message id seen; bounds which bare numbers in text can be message refs. */
 export const latestMessageId = signal(0);
-
-function isDashboardUserSender(m: MessageEntry): boolean {
-  // Do not treat null as human: legacy/system messages may be anonymous.
-  return m.from_agent === "user" || m.from_agent === "agent:user";
-}
 
 function isDirectToDashboardUser(m: MessageEntry): boolean {
   return m.to === "user" || m.to === "agent:user";
@@ -67,18 +65,46 @@ function threadOf(m: MessageEntry): number {
   return m.thread_id ?? m.id;
 }
 
+function escapeRe(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+let namesKey = "";
+let namesRe: RegExp | null = null;
+function myNamesRe(): RegExp | null {
+  const raw = messagesMyNames.value;
+  if (raw !== namesKey) {
+    namesKey = raw;
+    const names = raw.split(/[,;]/).map((n) => n.trim()).filter((n) => n.length >= 2);
+    namesRe = names.length
+      ? new RegExp(`(?<![\\w@])@?(?:${names.map(escapeRe).join("|")})(?!\\w)`, "i")
+      : null;
+  }
+  return namesRe;
+}
+
+/** Whether a message is addressed to the person using this browser. */
+export function isAddressedToMe(m: MessageEntry): boolean {
+  if (sentHere.has(m.id)) return false;
+  if (isDirectToDashboardUser(m)) return true;
+  if (m.in_reply_to != null && sentHere.has(m.in_reply_to)) return true;
+  const re = myNamesRe();
+  return !!re && (re.test(m.tldr ?? "") || re.test(m.text));
+}
+
+/** Whether a message was sent from this browser. */
+export function isSentHere(m: MessageEntry): boolean {
+  return sentHere.has(m.id);
+}
+
 /**
- * Record a dashboard-authored message (or a direct message to the dashboard)
- * as participation in its conversation.  Exported for composers which have
- * the POST response immediately; ingestion also discovers it on refresh.
+ * Record a message sent from this browser, so replies to it notify here.
+ * Composers call it with the POST response.
  */
 export function registerDashboardUserMessage(m: MessageEntry): void {
-  if (!isDashboardUserSender(m) && !isDirectToDashboardUser(m)) return;
-  const id = threadOf(m);
-  if (!userThreads.has(id)) {
-    userThreads.add(id);
-    save(THREADS_KEY, [...userThreads]);
-  }
+  if (sentHere.has(m.id)) return;
+  sentHere.add(m.id);
+  save(MINE_KEY, [...sentHere]);
 }
 
 /** Use the same persisted read map as the full Messages view. */
@@ -96,6 +122,11 @@ export function markThreadReadByMe(threadId: number): void {
   markMessagesReadByMe(messages.filter((m) => threadOf(m) === threadId).map((m) => m.id));
 }
 
+/** "Read all": every pending notification plus the given loaded messages. */
+export function markAllMessagesReadByMe(loadedIds: number[] = []): void {
+  markMessagesReadByMe([...pendingUnreadIds, ...messages.map((m) => m.id), ...loadedIds]);
+}
+
 function recompute(): void {
   const read = messagesReadByMe.value;
   messagesUnreadCount.value = [...pendingUnreadIds].reduce(
@@ -104,34 +135,40 @@ function recompute(): void {
   );
 }
 
-function ingest(next: MessageEntry[]): void {
-  messages = next;
-  const newest = next.reduce((max, m) => Math.max(max, m.id), 0);
-  if (newest > latestMessageId.value) latestMessageId.value = newest;
-  for (const message of next) registerDashboardUserMessage(message);
-  if (baseline == null) {
-    baseline = { broadcastsThroughId: next.reduce((max, m) => Math.max(max, m.id), 0) };
-    save(STORAGE_KEY, baseline);
-  }
-  const broadcastFloor = baseline.broadcastsThroughId;
+function qualify(batch: MessageEntry[]): void {
   let pendingChanged = false;
-  for (const m of next) {
-    if (isDashboardUserSender(m)) continue;
-    const direct = isDirectToDashboardUser(m);
-    const recentBroadcast = m.to === "all" && m.id > broadcastFloor;
-    // Only replies or thread posts in a conversation in which the human was
-    // explicitly a sender/recipient qualify.  This prevents agent-to-agent
-    // chatter from leaking into the global badge.
-    const replyToMyThread =
-      (m.in_reply_to != null || m.to.startsWith("thread:")) && userThreads.has(threadOf(m));
-    if ((direct || recentBroadcast || replyToMyThread) && !pendingUnreadIds.has(m.id)) {
+  for (const m of batch) {
+    if (isAddressedToMe(m) && !pendingUnreadIds.has(m.id)) {
       pendingUnreadIds.add(m.id);
       pendingChanged = true;
     }
   }
   if (pendingChanged) save(PENDING_KEY, [...pendingUnreadIds]);
+}
+
+/** ``newest``: this batch is the newest page (the window "Read all", thread
+ *  reads and name changes work on); backfill pages only qualify. */
+function ingest(next: MessageEntry[], newestPage = true): void {
+  if (newestPage) messages = next;
+  const newest = next.reduce((max, m) => Math.max(max, m.id), 0);
+  if (newest > latestMessageId.value) latestMessageId.value = newest;
+  qualify(next);
   recompute();
 }
+
+// Changing the names re-evaluates the loaded window: drop what no longer
+// matches, add the new matches.
+let lastNames: string | null = null;
+effect(() => {
+  const names = messagesMyNames.value;
+  if (lastNames === null) { lastNames = names; return; }
+  if (names === lastNames) return;
+  lastNames = names;
+  for (const m of messages) if (!isAddressedToMe(m)) pendingUnreadIds.delete(m.id);
+  save(PENDING_KEY, [...pendingUnreadIds]);
+  qualify(messages);
+  recompute();
+});
 
 // Reading the existing signal makes view actions update the rail immediately.
 effect(recompute);
@@ -150,7 +187,7 @@ export async function refreshMessageNotifications(): Promise<void> {
   refreshing = true;
   try {
     const first = await listMessagesPage(PAGE_LIMIT);
-    const firstSnapshot = baseline == null;
+    const firstSnapshot = highWaterId === 0;
     ingest(first.messages);
 
     // A burst larger than the newest page can push messages out before this
@@ -160,8 +197,8 @@ export async function refreshMessageNotifications(): Promise<void> {
     const previousHighWater = highWaterId;
     const newestId = first.messages.reduce((max, m) => Math.max(max, m.id), 0);
     if (!backfill && firstSnapshot && first.total > first.messages.length) {
-      // Direct messages from before the newest page are still meaningful on a
-      // first visit.  Broadcasts remain suppressed by the baseline above.
+      // Messages addressed to this user from before the newest page are still
+      // meaningful on a first visit ("Read all" clears them).
       backfill = { targetId: 0, offset: PAGE_LIMIT, newestId };
       save(BACKFILL_KEY, backfill);
     } else if (!backfill && previousHighWater > 0 && first.messages.length && first.messages[first.messages.length - 1].id > previousHighWater) {
@@ -184,7 +221,7 @@ export async function refreshMessageNotifications(): Promise<void> {
       while (pages < MAX_RECONCILE_PAGES && !reached) {
         const page = await listMessagesPage(PAGE_LIMIT, backfill.offset);
         if (!page.messages.length) { reached = true; break; }
-        ingest(page.messages);
+        ingest(page.messages, false);
         reached = page.messages.some((m) => m.id <= backfill!.targetId);
         backfill.offset += page.messages.length;
         pages += 1;
