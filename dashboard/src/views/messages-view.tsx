@@ -13,11 +13,14 @@ import { useLiveRefresh } from "../lib/hooks";
 import type { AgentEntry, MessageEntry, ThreadMeta } from "../lib/types";
 import { Badge, EmptyState, IconButton } from "../components/ui";
 import { agentColor, agentInitials } from "../lib/colors";
-import { messagesReadByMe, serverDemoMode } from "../state/settings";
+import { messagesMyNames, messagesReadByMe, serverDemoMode } from "../state/settings";
 import {
   markMessagesReadByMe,
   markThreadReadByMe,
+  markAllMessagesReadByMe,
   registerDashboardUserMessage,
+  isAddressedToMe,
+  isSentHere,
 } from "../state/messages";
 import { focusMessageId } from "../state/agent-activity";
 import { RichText, stripRouting } from "../components/rich-text";
@@ -137,6 +140,7 @@ export function MessagesView() {
   const followNewestRef = useRef(true);
   const scrollSnapshot = useRef<{ thread: number; first: number; last: number; height: number; top: number } | null>(null);
   const readMap = messagesReadByMe.value;
+  const myNames = messagesMyNames.value; // re-render when the names change
   const demo = serverDemoMode.value;
   const readByMe = (id: number) => !!readMap[String(id)];
   const setReadByMe = (ids: number[], read: boolean) =>
@@ -173,12 +177,12 @@ export function MessagesView() {
   }, [messages]);
   const relevant = (m: MessageEntry) =>
     !inPerspective || inboxOf(m, viewAs, roleByAgent[viewAs], participants);
+  // For you, only messages addressed to you (see state/messages) can be
+  // unread: agent chatter and broadcasts never ask for your attention.
   const isRead = (m: MessageEntry) =>
     inPerspective
       ? (m.read_by || []).includes(viewAs)
-      : m.from_agent === "user" ||
-        m.from_agent === "agent:user" ||
-        readByMe(m.id);
+      : isSentHere(m) || readByMe(m.id) || !isAddressedToMe(m);
 
   async function refresh() {
     try {
@@ -306,7 +310,7 @@ export function MessagesView() {
           .includes(q)
       );
     });
-  }, [messages, query, agentFilter, readFilter, viewAs, readMap, roleByAgent]);
+  }, [messages, query, agentFilter, readFilter, viewAs, readMap, roleByAgent, myNames]);
   const threads = useMemo(() => {
     const groups = new Map<number, MessageEntry[]>();
     displayed.forEach((m) =>
@@ -339,7 +343,7 @@ export function MessagesView() {
           ? timeOf(b.latest) - timeOf(a.latest)
           : timeOf(a.latest) - timeOf(b.latest),
       );
-  }, [displayed, sort, readMap, viewAs, conversationScope, threadMeta]);
+  }, [displayed, sort, readMap, viewAs, conversationScope, threadMeta, myNames]);
   const focusId = focusMessageId.value;
   useLayoutEffect(() => {
     const list = messageListRef.current;
@@ -509,6 +513,16 @@ export function MessagesView() {
           </div>
           <div class="thread-sidebar-subhead">
             <span>{loaded ? `${threads.length} threads` : "Loading…"}</span>
+            {!inPerspective && (
+              <button
+                type="button"
+                class="thread-read-all"
+                onClick={() => markAllMessagesReadByMe([...messages, ...threadMessages].map((m) => m.id))}
+                title="Mark everything read (in this browser)"
+              >
+                ✓ Read all
+              </button>
+            )}
             <details class="thread-filters">
               <summary>Filters</summary>
               <div class="thread-filter-menu">
@@ -518,6 +532,15 @@ export function MessagesView() {
                     <option value="">you (dashboard)</option>
                     {agents.map((a) => <option key={a.agent_id} value={a.agent_id}>{labelAgent(a.agent_id)}</option>)}
                   </select>
+                </label>
+                <label title="Messages that mention one of these names notify you (this browser only); so do direct messages and replies to what you sent from here">
+                  <span>Your names</span>
+                  <input
+                    class="messages-select"
+                    value={myNames}
+                    onChange={(e) => { messagesMyNames.value = (e.target as HTMLInputElement).value; }}
+                    placeholder="e.g. David, Dave"
+                  />
                 </label>
                 <label>
                   <span>Participant</span>

@@ -10,6 +10,7 @@ import { agentStates } from "../../state/agent-activity";
 import { agentColor } from "../../lib/colors";
 import { useEscape } from "../../lib/hooks/use-key";
 import { sendMessage } from "../../state/api";
+import { registerDashboardUserMessage } from "../../state/messages";
 
 export function AgentQuickChat() {
   if (serverDemoMode.value) return null; // read-only demo: no messaging
@@ -37,7 +38,7 @@ export function AgentQuickChat() {
     if (!body || state === "sending") return;
     setState("sending");
     try {
-      await sendMessage(to === "all" ? "all" : `agent:${to}`, body);
+      registerDashboardUserMessage(await sendMessage(to === "all" ? "all" : `agent:${to}`, body));
       setText("");
       if (taRef.current) taRef.current.style.height = "auto";
       setState("sent");

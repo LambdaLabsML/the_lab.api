@@ -5,6 +5,7 @@
  */
 import { useState, useEffect, useRef } from "preact/hooks";
 import { listMessages, sendMessage } from "../state/api";
+import { registerDashboardUserMessage } from "../state/messages";
 import { subscribeWsEvents } from "../state/ws";
 import type { MessageEntry } from "../lib/types";
 
@@ -100,7 +101,7 @@ export function ChatPanel() {
     setSending(true);
     setError(null);
     try {
-      await sendMessage(to, text);
+      registerDashboardUserMessage(await sendMessage(to, text));
       setInput("");
       const updated = await listMessages(30);
       setMessages(updated);

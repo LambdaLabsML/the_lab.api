@@ -216,6 +216,9 @@ export const uiTexture = useSetting("uiTexture", true);
 /** Message ids the UI user has personally marked read. Client-side only (per
  *  browser) — kept separate from each message's agent `read_by` list. */
 export const messagesReadByMe = useSetting<Record<string, boolean>>("messagesReadByMe", {});
+/** Names this browser's user goes by in messages ("David, Dave"): agents
+ *  address the human by name inside thread posts, so mentions notify. */
+export const messagesMyNames = useSetting<string>("messagesMyNames", "");
 
 /** Detail rows shown per agent in the activity tree (stepper-adjustable). */
 export const agentHistoryLimit = useSetting("agentHistoryLimit", 3);
