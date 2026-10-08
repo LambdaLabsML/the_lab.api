@@ -168,14 +168,21 @@ export const chartMinified = useSetting("chartMinified", false);
 export const chartPointSize = useSetting<"s" | "m" | "l" | "none" | "x">("chartPointSize", "m");
 const chartTimeAxisLegacy = useSetting<boolean>("chartTimeAxis", false);
 
-/** Metrics chart view: x = purple line only on a time axis, fit to the width;
- *  s / m / l = dots in experiment order with the purple line, from tightly
- *  packed tiny dots (s) to roomy (l). Replaces chartPointSize (+ chartTimeAxis),
+/** Metrics chart view: x = purple line only, fit to the width; s / m / l =
+ *  dots with the purple line, from tightly packed tiny dots (s) to roomy (l). Replaces chartPointSize (+ chartTimeAxis),
  *  whose s/m/l meant something else: a stored time-axis / no-dots choice
  *  becomes x, anything else l (the old default look). */
 export const chartView = useSetting<"x" | "s" | "m" | "l">(
   "chartView",
   chartPointSize.value === "x" || chartPointSize.value === "none" || chartTimeAxisLegacy.value ? "x" : "l",
+);
+
+/** Metrics chart x axis: experiment order, experiments grouped by idea,
+ *  finish time, or cumulative experiment runtime. Until now the x view was the
+ *  time axis and s/m/l experiment order, so the default follows the view. */
+export const chartXAxis = useSetting<"experiments" | "ideas" | "time" | "compute">(
+  "chartXAxis",
+  chartView.value === "x" ? "time" : "experiments",
 );
 
 /** The purple line: best-so-far step line, or moving average. */
