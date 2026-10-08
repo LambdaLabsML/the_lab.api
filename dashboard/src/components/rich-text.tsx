@@ -5,7 +5,8 @@ import { ExpLink } from "./exp-link";
 import { IdeaLink } from "./idea-link";
 import { AgentPill } from "./agent-pill";
 import { allExperiments, allIdeas } from "../state/signals";
-import { agentStates } from "../state/agent-activity";
+import { agentStates, focusMessageId, showMessagePreviewById, hideMessagePreview } from "../state/agent-activity";
+import { latestMessageId } from "../state/messages";
 import { agentColor } from "../lib/colors";
 
 export function stripRouting(text: string): string {
@@ -30,6 +31,42 @@ function trimUrlPunctuation(value: string): [string, string] {
   return [value.slice(0, end), value.slice(end)];
 }
 
+/** A message reference ("msg 5510", "thread 4123", or a bare id): hover shows
+ *  the message, click opens it in its thread in Messages. */
+function MsgRef({ id, bare = false, children }: { id: number; bare?: boolean; children: ComponentChildren }) {
+  return (
+    <a
+      class={`rt-msg${bare ? " rt-msg-bare" : ""}`}
+      href="#messages"
+      onMouseEnter={(e) => showMessagePreviewById(id, e.currentTarget as Element)}
+      onMouseLeave={hideMessagePreview}
+      onClick={(e) => {
+        e.preventDefault();
+        hideMessagePreview();
+        focusMessageId.value = id;
+        window.location.hash = "#messages";
+      }}
+    >
+      {children}
+    </a>
+  );
+}
+
+// "msg 5510", "msgs 4165/4171", "messages 5843, 5847 and 5851", "thread 4123"
+// (a thread's id is its first message's id).
+const MSG_REF = /^(msgs?|messages?|thread)(\s*#?)(\d+(?:\s*(?:\/|,|&|and)\s*#?\d+)*)$/i;
+
+function msgRefNodes(value: string, key: { value: number }): ComponentChildren[] {
+  const m = MSG_REF.exec(value)!;
+  const out: ComponentChildren[] = [m[1] + m[2]];
+  const parts = m[3].split(/(\d+)/);
+  for (const part of parts) {
+    if (/^\d+$/.test(part)) out.push(<MsgRef key={`rt-${key.value++}`} id={Number(part)}>{part}</MsgRef>);
+    else if (part) out.push(part);
+  }
+  return out;
+}
+
 function knownAgent(id: string, agents: Record<string, unknown>): string | null {
   const lower = id.toLowerCase();
   if (lower === "all") return "all";
@@ -40,7 +77,8 @@ function entityNodes(text: string, key: { value: number }): ComponentChildren[] 
   const ideas = allIdeas.value;
   const experiments = allExperiments.value;
   const agents = agentStates.value as Record<string, unknown>;
-  const token = /(exp\/\d+\.\d+|idea\/\d+|#\d+|@[a-z][a-z0-9_-]*\b|\b\d+\.\d+\b|\b\d+\b|\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b|\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,12}\b)/gi;
+  const newestMsg = latestMessageId.value;
+  const token = /((?:msgs?|messages?|thread)\s*#?\d+(?:\s*(?:\/|,|&|and)\s*#?\d+)*\b|exp\/\d+\.\d+|idea\/\d+|#\d+|@[a-z][a-z0-9_-]*\b|\b\d+\.\d+\b|\b\d+\b|\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b|\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,12}\b)/gi;
   const out: ComponentChildren[] = [];
   let last = 0;
   const hasExperiment = (label: string) => experiments.some((exp) => String(exp.label ?? exp.id) === label);
@@ -48,7 +86,12 @@ function entityNodes(text: string, key: { value: number }): ComponentChildren[] 
   for (let match = token.exec(text); match; match = token.exec(text)) {
     const value = match[0], lower = value.toLowerCase();
     let node: ComponentChildren | null = null;
-    if (lower.startsWith("exp/")) {
+    if (MSG_REF.test(value)) {
+      if (match.index > last) out.push(text.slice(last, match.index));
+      out.push(...msgRefNodes(value, key));
+      last = match.index + value.length;
+      continue;
+    } else if (lower.startsWith("exp/")) {
       const label = value.slice(4);
       if (hasExperiment(label)) node = <ExpLink key={`rt-${key.value++}`} label={label} />;
     } else if (lower.startsWith("idea/")) {
@@ -65,7 +108,10 @@ function entityNodes(text: string, key: { value: number }): ComponentChildren[] 
       node = <ExpLink key={`rt-${key.value++}`} label={value} />;
     } else if (/^\d+$/.test(value)) {
       const id = Number(value);
+      // Ideas win; other numbers in the message id range may be bare message
+      // refs ("→ David 5843:", "(5843/5847)"): hover to check, click to open.
       node = ideas[id] ? <IdeaLink key={`rt-${key.value++}`} id={id} />
+        : id >= 100 && id <= newestMsg ? <MsgRef key={`rt-${key.value++}`} id={id} bare><span class="rt-num">{value}</span></MsgRef>
         : <span key={`rt-${key.value++}`} class="rt-num">{value}</span>;
     } else if (/^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$/.test(value) || /^(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,12}$/i.test(value)) {
       node = <code key={`rt-${key.value++}`} class="rt-env">{value}</code>;

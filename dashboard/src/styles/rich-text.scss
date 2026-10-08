@@ -5,5 +5,10 @@
 .rt-link:hover { color: var(--text); text-decoration-color: currentColor; }
 .rt-code, .rt-env { font-family: var(--font-mono); font-size: 0.92em; color: var(--text); background: var(--bg-hi); border-radius: var(--radius-sm); padding: 0 4px; }
 .rt-num { color: var(--text); font-variant-numeric: tabular-nums; }
+/* Message refs: "msg 5510" reads as a link; a bare id only shows it on hover. */
+.rt-msg { color: var(--accent); text-decoration: underline dotted; text-decoration-color: color-mix(in srgb, var(--accent) 55%, transparent); text-underline-offset: 2px; font-variant-numeric: tabular-nums; cursor: pointer; }
+.rt-msg:hover { color: var(--text); text-decoration-color: currentColor; }
+.rt-msg-bare { color: inherit; text-decoration-color: transparent; }
+.rt-msg-bare:hover { text-decoration-color: var(--accent); }
 .rt-mention { color: var(--accent); font-weight: 600; white-space: nowrap; }
 .rt-mention-known .aa-msg-pill { color: inherit; border-color: color-mix(in srgb, currentColor 40%, var(--border-soft)); }

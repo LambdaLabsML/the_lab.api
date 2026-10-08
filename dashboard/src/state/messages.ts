@@ -51,6 +51,9 @@ let messages: MessageEntry[] = [];
 /** Number of unread incoming messages relevant to the dashboard user. */
 export const messagesUnreadCount = signal(0);
 
+/** Newest message id seen; bounds which bare numbers in text can be message refs. */
+export const latestMessageId = signal(0);
+
 function isDashboardUserSender(m: MessageEntry): boolean {
   // Do not treat null as human: legacy/system messages may be anonymous.
   return m.from_agent === "user" || m.from_agent === "agent:user";
@@ -103,6 +106,8 @@ function recompute(): void {
 
 function ingest(next: MessageEntry[]): void {
   messages = next;
+  const newest = next.reduce((max, m) => Math.max(max, m.id), 0);
+  if (newest > latestMessageId.value) latestMessageId.value = newest;
   for (const message of next) registerDashboardUserMessage(message);
   if (baseline == null) {
     baseline = { broadcastsThroughId: next.reduce((max, m) => Math.max(max, m.id), 0) };

@@ -449,6 +449,7 @@
 .aa-sub .rt-env { background: transparent; padding: 0; color: inherit; }
 
 // lab-call hover card rows (shared .msg-preview shell)
+.msg-preview-id { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-faint); }
 .msg-preview-fn {
   color: var(--yellow);
   font-weight: 600;
