@@ -373,6 +373,12 @@
 .thread-message-meta time {
   margin-left: auto;
 }
+/* A message jumped to via a reference flashes once. */
+@keyframes thread-message-flash {
+  0%, 35% { background: color-mix(in srgb, var(--accent) 22%, transparent); box-shadow: inset 3px 0 var(--accent); }
+  100% { background: transparent; box-shadow: inset 3px 0 transparent; }
+}
+.thread-message.is-flash { animation: thread-message-flash 2.2s ease-out; }
 /* Message id: what agents cite ("msg 5510"); click copies it. */
 .thread-message-id {
   appearance: none;
