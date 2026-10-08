@@ -97,22 +97,18 @@
   color: var(--text-faint);
 }
 
-/* Point-size control (s | m | l) — segmented hairline group, ghost chrome.
-   Drives chartPointSize; the mini chart scales its dot radii by it.
-   Height/padding/line-height mirror .ui-toggle so it lines up evenly with the
-   other toolbar pills: same 1px border, same --radius-md, same 3px vertical
-   padding + --text-xs / line-height 1.2. The segment buttons carry NO vertical
-   padding or border of their own (the container owns them) so the row height
-   matches a single .ui-toggle exactly. */
+/* Segmented control (axis / view / line) — hairline group, ghost chrome.
+   Same height as a .ui-toggle: the container owns the 1px border and
+   --radius-md; each button carries .ui-toggle's 3px vertical padding,
+   --text-xs and line-height 1.5, so the active fill spans the full height. */
 .chart-ptsize {
   display: inline-flex;
   align-items: stretch;
-  padding: 3px 0;                 /* same vertical padding as .ui-toggle */
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-md);
   overflow: hidden;
   flex-shrink: 0;
-  line-height: 1.2;
+  line-height: 1.5;
 }
 .chart-ptsize-btn {
   appearance: none;
@@ -122,8 +118,8 @@
   font: inherit;
   font-family: var(--font-mono);
   font-size: var(--text-xs);
-  line-height: 1.2;
-  padding: 0 8px;                 /* horizontal only — height comes from the container */
+  line-height: 1.5;
+  padding: 3px 8px;               /* vertical padding as .ui-toggle */
   cursor: pointer;
   transition: color var(--transition-fast), background var(--transition-fast);
   /* hairline divider between segments */
