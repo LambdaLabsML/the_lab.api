@@ -24,8 +24,9 @@
  *
  * X axis (xAxis): experiment order, experiments grouped by idea, finish time
  * (finished_at, else started_at/created_at), or cumulative experiment runtime
- * in hours. Time and hours always fit the panel width; experiments and ideas
- * scroll at the view's spacing.
+ * in hours. Every axis gets the same width as experiment order (points × the
+ * view's spacing, scrolling past the panel); time and hours place the points
+ * proportionally within it.
  *
  * View (chartView): s / m / l draw dots, from tiny tightly packed dots (s) to
  * roomy (l) — see PX_PER_POINT / PT_SIZE_SCALE. x draws no dots and fits any
@@ -330,10 +331,9 @@ export function MiniMetricsChart({
   const dotSize = pointSize === "x" ? "l" : pointSize;
   const sizeScale = PT_SIZE_SCALE[dotSize] ?? 0.75;
   const avgMode = timeCurve === "avg";
-  // Continuous axes always fit the panel; discrete ones (experiments, ideas)
-  // scroll at the view's spacing unless the line-only view (x) fits them.
+  // Every axis scrolls at the view's spacing; the line-only view (x) fits.
   const continuousAxis = xAxis === "time" || xAxis === "compute";
-  const fitWidth = !showDots || continuousAxis;
+  const fitWidth = !showDots;
 
   // ── Milestone (record) detection over the FULL ordered list ──────────────────
   // `chartData` is already in display order (buildChartData reverses when
@@ -526,7 +526,8 @@ export function MiniMetricsChart({
   const padL = Math.max(PAD.l, Math.ceil(Math.max(...yTickLabels.map((l) => l.length)) * font.xs * 0.62) + 8);
   const containerW = size.w;
   const H = Math.max(120, size.h);
-  const units = xAxis === "experiments" ? n : xAxis === "ideas" ? xuMax : 0;
+  // Width budget: one slot per point (ideas: per experiment in the blocks).
+  const units = xAxis === "ideas" ? xuMax : n;
   const minSvgW = fitWidth ? 0 : padL + units * PX_PER_POINT[dotSize] + PAD.r;
   const svgW = Math.max(containerW, minSvgW);
   const needsScroll = svgW > containerW + 0.5;
