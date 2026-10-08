@@ -11,6 +11,7 @@ import { useState } from "preact/hooks";
 import { Panel, PanelHeader, PanelBody, Eyebrow, Toggle, IconButton, Separator } from "./ui";
 import {
   colorTheme,
+  uiContrast,
   fontFamily,
   fontSize,
   colorblindMode,
@@ -66,8 +67,17 @@ const FONT_PICKER: FontPickerDef[] = [
 
 const FONT_SIZES = ["xs", "s", "m", "l", "xl", "xxl"] as const;
 
+const CONTRASTS = [
+  { level: -2, label: "−−", title: "Much softer" },
+  { level: -1, label: "−", title: "Softer" },
+  { level: 0, label: "○", title: "As the theme is designed" },
+  { level: 1, label: "+", title: "Higher contrast" },
+  { level: 2, label: "++", title: "Highest contrast" },
+] as const;
+
 export function SettingsPanel(props: SettingsPanelProps) {
   const activeTheme  = colorTheme.value;
+  const contrast     = uiContrast.value;
   const activeFont   = fontFamily.value;
   const activeFontSz = fontSize.value;
   const isColorblind = colorblindMode.value;
@@ -119,6 +129,24 @@ export function SettingsPanel(props: SettingsPanelProps) {
                     ))}
                   </span>
                   <span class="settings-swatch-name">{t.name}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div class="settings-field">
+            <span class="settings-field-label">Contrast</span>
+            <div class="settings-seg" role="group" aria-label="Contrast">
+              {CONTRASTS.map((c) => (
+                <button
+                  key={c.level}
+                  type="button"
+                  class={`settings-seg-btn${contrast === c.level ? " is-active" : ""}`}
+                  onClick={() => { uiContrast.value = c.level; }}
+                  title={c.title}
+                  aria-pressed={contrast === c.level}
+                >
+                  {c.label}
                 </button>
               ))}
             </div>
