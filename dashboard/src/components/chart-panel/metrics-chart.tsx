@@ -97,9 +97,10 @@ export function MetricsChart({ instanceId, initialMetric, hideClone }: { instanc
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
       <div class="chart-toolbar">
-        <span>
-          Metric:{" "}
-          <select value={metric} onChange={(e) => { setMetric((e.target as HTMLSelectElement).value); }}>
+        {/* Row 1: what is plotted — metric + data filters. */}
+        <div class="chart-toolbar-row">
+        <span class="chart-metric">
+          <select title="Metric" value={metric} onChange={(e) => { setMetric((e.target as HTMLSelectElement).value); }}>
             {grouped.metrics.length > 0 && <optgroup label="Metrics">{grouped.metrics.map((k) => <option key={k} value={k}>{fmtMetricName(k)}</option>)}</optgroup>}
             {grouped.nested.length > 0 && <optgroup label="Nested">{grouped.nested.map((k) => <option key={k} value={k}>{fmtMetricName(k)}</option>)}</optgroup>}
             {grouped.timing.length > 0 && <optgroup label="Timing">{grouped.timing.map((k) => <option key={k} value={k}>{fmtMetricName(k)}</option>)}</optgroup>}
@@ -131,7 +132,19 @@ export function MetricsChart({ instanceId, initialMetric, hideClone }: { instanc
         <Toggle active={logScale} onClick={() => { setLogScale(!logScale); }} title="Logarithmic Y axis">
           Log Y
         </Toggle>
-        {/* X axis (persisted). */}
+        {/* Clone is hidden in the single-chart review (hideClone); kept in the workbench */}
+        {!hideClone && (
+          <span class="chart-toolbar-end">
+            <IconButton onClick={() => { if (cloneChartPanel) cloneChartPanel("metrics", metric); }} title="Clone this chart as a new tab">
+              + Clone
+            </IconButton>
+          </span>
+        )}
+        </div>
+        {/* Row 2: how it is drawn — x axis, view, purple line (all persisted). */}
+        <div class="chart-toolbar-row">
+        <span class="chart-seg">
+        <span class="chart-seg-label">axis</span>
         <span class="chart-ptsize" title="X axis">
           {(["experiments", "ideas", "time", "compute"] as const).map((a) => (
             <button
@@ -150,8 +163,10 @@ export function MetricsChart({ instanceId, initialMetric, hideClone }: { instanc
             </button>
           ))}
         </span>
-        {/* View (persisted): x = purple line only, full width;
-            s / m / l = dots, tight to roomy. */}
+        </span>
+        {/* View: x = purple line only, full width; s / m / l = dots, tight to roomy. */}
+        <span class="chart-seg">
+        <span class="chart-seg-label">view</span>
         <span class="chart-ptsize" title="Chart view">
           {(["x", "s", "m", "l"] as const).map((v) => (
             <button
@@ -170,7 +185,10 @@ export function MetricsChart({ instanceId, initialMetric, hideClone }: { instanc
             </button>
           ))}
         </span>
+        </span>
         {/* The purple line: best so far, or a moving average. */}
+        <span class="chart-seg">
+        <span class="chart-seg-label">line</span>
         <span class="chart-ptsize" title="Purple line">
           {(["best", "avg"] as const).map((c) => (
             <button
@@ -184,12 +202,8 @@ export function MetricsChart({ instanceId, initialMetric, hideClone }: { instanc
             </button>
           ))}
         </span>
-        {/* Clone is hidden in the single-chart review (hideClone); kept in the workbench */}
-        {!hideClone && (
-          <IconButton onClick={() => { if (cloneChartPanel) cloneChartPanel("metrics", metric); }} title="Clone this chart as a new tab">
-            + Clone
-          </IconButton>
-        )}
+        </span>
+        </div>
       </div>
       {/* Data distribution hint — shown when most values cluster near bottom */}
       {(() => {

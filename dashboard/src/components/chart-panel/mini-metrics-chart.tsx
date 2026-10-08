@@ -484,20 +484,26 @@ export function MiniMetricsChart({
   const positives = finite.filter((v) => v > 0);
   const useLog = logScale && positives.length > 0;
   const rangeVals = useLog ? positives : finite;
-  const atFloor = useLog ? values.filter((v) => isFinite(v) && v <= 0).length : 0;
+  const atFloor = useLog && showDots ? values.filter((v) => isFinite(v) && v <= 0).length : 0;
   let dataMin = Math.min(...rangeVals);
   let dataMax = Math.max(...rangeVals);
+  const tform = useLog ? Math.log10 : (x: number) => x;
+  const untform = useLog ? (t: number) => Math.pow(10, t) : (t: number) => t;
   if (clip && rangeVals.length >= 4) {
-    const sorted = [...rangeVals].sort((a, b) => a - b);
+    // Fence in the plotted space: on log Y, tiny positive scores (orders of
+    // magnitude below the rest) are outliers too.
+    const sorted = rangeVals.map(tform).sort((a, b) => a - b);
     const q1 = sorted[Math.floor(sorted.length * 0.25)];
     const q3 = sorted[Math.floor(sorted.length * 0.75)];
     const iqr = q3 - q1;
     if (iqr > 0) {
-      dataMin = Math.max(dataMin, q1 - 1.5 * iqr);
-      dataMax = Math.min(dataMax, q3 + 1.5 * iqr);
+      dataMin = Math.max(dataMin, untform(q1 - 1.5 * iqr));
+      dataMax = Math.min(dataMax, untform(q3 + 1.5 * iqr));
     }
   }
-  const tform = useLog ? Math.log10 : (x: number) => x;
+  // Log Y + Outliers: scores below the lower fence join the ≤ 0 ones as × marks.
+  const offLog = (v: number) => useLog && isFinite(v) && (v <= 0 || (clip && v < dataMin));
+  const belowFence = useLog && clip && showDots ? values.filter((v) => isFinite(v) && v > 0 && v < dataMin).length : 0;
   const tMin = tform(dataMin);
   const tMax = tform(dataMax);
   const tPad = (tMax - tMin) * 0.12 || Math.abs(tMax) * 0.05 || 0.01;
@@ -544,7 +550,7 @@ export function MiniMetricsChart({
   };
 
   // Line path (in axis order), skipping values that are off a log scale.
-  const onScale = (v: number) => isFinite(v) && (!useLog || v > 0);
+  const onScale = (v: number) => isFinite(v) && !offLog(v);
   const linePts = curve
     .filter((p) => onScale(p.y))
     .sort((a, b) => a.xu - b.xu)
@@ -711,7 +717,7 @@ export function MiniMetricsChart({
               key={i}
               exp={e}
               x={x} y={toY(v)} baselineY={baselineY}
-              excluded={useLog && v <= 0}
+              excluded={offLog(v)}
               color={pointColors[i] ?? "var(--text-muted)"}
               isMilestone={isMs}
               fontXs={font.xs}
@@ -728,7 +734,12 @@ export function MiniMetricsChart({
         <g font-family="var(--font-mono)" font-size={font.xs}>
           <text x={padL} y={H - 5} fill="var(--text-faint)">
             {arrow}
-            {atFloor > 0 ? ` · ${atFloor} value${atFloor === 1 ? "" : "s"} ≤ 0 off the log scale (×)` : ""}
+            {atFloor + belowFence > 0
+              ? ` · ${[
+                  atFloor ? `${atFloor} ≤ 0` : "",
+                  belowFence ? `${belowFence} below the outlier fence` : "",
+                ].filter(Boolean).join(", ")} off the log scale (×)`
+              : ""}
           </text>
           <text x={rightEdge} y={H - 5} text-anchor="end" fill="var(--purple)">
             {avgMode ? `avg of last ${avgWindow}` : "current best"} {isFinite(bestVal) ? fmtVal(bestVal) : "—"}
