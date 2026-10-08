@@ -296,6 +296,34 @@
   text-transform: none;
   letter-spacing: normal;
 }
+/* Inline thread rename: pencil next to the title, input in its place. */
+.thread-rename-btn {
+  appearance: none;
+  background: transparent;
+  border: none;
+  padding: 0 2px;
+  color: var(--text-faint);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+  &:hover { color: var(--text); }
+}
+.thread-detail-head > .thread-rename-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 480px;
+  padding: 1px 6px;
+  background: var(--bg-elev);
+  color: var(--text);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: normal;
+  outline: none;
+}
 .thread-summary {
   flex: 0 0 auto;
   padding: var(--space-2) 0;

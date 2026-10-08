@@ -105,6 +105,17 @@ export function MessagesView() {
     [threadLoading, setThreadLoading] = useState(false),
     [threadError, setThreadError] = useState<string | null>(null);
   const [threadMeta, setThreadMeta] = useState<Map<number, ThreadMeta>>(new Map());
+  // Inline rename of the open thread: the draft title while editing, else null.
+  const [renameDraft, setRenameDraft] = useState<string | null>(null);
+  // Escape unmounts the input, which can still fire blur with the old draft.
+  const renameCancelled = useRef(false);
+  useEffect(() => { setRenameDraft(null); }, [selectedThread]);
+  // Focus + select the title when editing starts (autoFocus misses dblclick).
+  const renameInputRef = useRef<HTMLInputElement>(null);
+  const renaming = renameDraft !== null;
+  useEffect(() => {
+    if (renaming) { renameInputRef.current?.focus(); renameInputRef.current?.select(); }
+  }, [renaming]);
   const [newTo, setNewTo] = useState("all"),
     [newTitle, setNewTitle] = useState(""),
     [newTldr, setNewTldr] = useState(""),
@@ -607,9 +618,54 @@ export function MessagesView() {
             <>
               <div class="thread-detail-head">
                 <button class="thread-back" type="button" onClick={() => setSelectedThread(null)} aria-label="Back to conversations">←</button>
-                <span class="thread-detail-title">
-                  {threadMeta.get(selectedThread)?.title ?? `Thread #${selectedThread}`}
-                </span>
+                {renameDraft !== null ? (
+                  <input
+                    class="thread-rename-input"
+                    ref={renameInputRef}
+                    maxLength={200}
+                    value={renameDraft}
+                    aria-label="Thread title"
+                    onInput={(e) => setRenameDraft((e.target as HTMLInputElement).value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                      if (e.key === "Escape") { renameCancelled.current = true; setRenameDraft(null); }
+                    }}
+                    onBlur={async () => {
+                      const title = renameDraft?.trim() ?? "";
+                      const cancelled = renameCancelled.current;
+                      renameCancelled.current = false;
+                      setRenameDraft(null);
+                      if (cancelled || !title || title === threadMeta.get(selectedThread)?.title) return;
+                      try {
+                        await updateThread(selectedThread, { title });
+                        await refresh();
+                      } catch (e) {
+                        setSendError(e instanceof Error ? e.message : String(e));
+                      }
+                    }}
+                  />
+                ) : (
+                  <span
+                    class="thread-detail-title"
+                    onDblClick={() => {
+                      const meta = threadMeta.get(selectedThread);
+                      if (meta && !inPerspective && !demo) setRenameDraft(meta.title ?? "");
+                    }}
+                  >
+                    {threadMeta.get(selectedThread)?.title ?? `Thread #${selectedThread}`}
+                  </span>
+                )}
+                {threadMeta.get(selectedThread) && !inPerspective && !demo && renameDraft === null && (
+                  <button
+                    type="button"
+                    class="thread-rename-btn"
+                    onClick={() => setRenameDraft(threadMeta.get(selectedThread)!.title ?? "")}
+                    title="Rename this thread (or double-click the title)"
+                    aria-label="Rename thread"
+                  >
+                    ✎
+                  </button>
+                )}
                 {selected && (
                   <span>{selected.items.length} recent messages</span>
                 )}
