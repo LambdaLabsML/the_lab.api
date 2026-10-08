@@ -301,6 +301,26 @@ export function MiniMetricsChart({
     return () => ro.disconnect();
   }, []);
 
+  // Scroll to the newest end (right for oldest → newest, left when reversed)
+  // when the chart loads or its metric / axis / view / order changes, and keep
+  // following it as experiments arrive — unless the user scrolled away.
+  const followNewest = useRef(true);
+  const scrollKey = useRef("");
+  useLayoutEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const key = `${metric}|${xAxis}|${pointSize}|${reversed}|${impOnly}`;
+    if (key !== scrollKey.current) { scrollKey.current = key; followNewest.current = true; }
+    if (followNewest.current) el.scrollLeft = reversed ? 0 : el.scrollWidth;
+  });
+  const onWrapScroll = () => {
+    const el = wrapRef.current;
+    if (!el) return;
+    followNewest.current = reversed
+      ? el.scrollLeft <= 4
+      : el.scrollLeft + el.clientWidth >= el.scrollWidth - 4;
+  };
+
   // Build the FULL run (impOnly handled below by our own step-collapse rule, so
   // buildChartData is always called with improvementsOnly=false). This keeps
   // milestone detection consistent and lets us show post-record experiments.
@@ -643,6 +663,7 @@ export function MiniMetricsChart({
   return (
     <div
       ref={wrapRef}
+      onScroll={onWrapScroll}
       style={{ width: "100%", height: "100%", overflowX: needsScroll ? "auto" : "hidden", overflowY: "hidden" }}
     >
       <svg
