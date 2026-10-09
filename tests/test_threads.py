@@ -154,6 +154,43 @@ class ThreadRouteTests(unittest.TestCase):
         self.assertEqual(self.client.get("/api/v1/messages/search?q=oom", headers=self.h("b")).json()["total"], 2)
         self.assertEqual(self.client.get("/api/v1/messages/search", headers=self.h("b")).status_code, 400)
 
+    def test_search_accepts_query_as_alias_for_q(self):
+        tid = self.thread(text=f"exp {self.exp} OOMs at 200k context")["thread"]["id"]
+        res = self.client.get("/api/v1/messages/search?query=oom", headers=self.h("c")).json()
+        self.assertEqual([r["id"] for r in res["results"]], [tid])
+        # Both given: q wins (it's checked first), but either alone works.
+        res2 = self.client.get("/api/v1/messages/search?q=oom&query=unrelated-noise", headers=self.h("c")).json()
+        self.assertEqual([r["id"] for r in res2["results"]], [tid])
+
+    def test_get_thread_pages_by_recency_with_before_id_and_fields(self):
+        tid = self.thread()["thread"]["id"]
+        ids = [tid]
+        for i in range(5):
+            m = self.client.post("/api/v1/messages", json={"thread_id": tid, "text": f"m{i}"},
+                                 headers=self.h("a")).json()
+            ids.append(m["id"])
+        # Newest-3 default page.
+        page1 = self.client.get(f"/api/v1/threads/{tid}?limit=3", headers=self.h("a")).json()
+        self.assertEqual([m["id"] for m in page1["messages"]], ids[-3:])
+        self.assertIn("next_before_id", page1)
+        self.assertEqual(page1["next_before_id"], ids[-3])
+        # Page further back with before_id — stable, chronological.
+        page2 = self.client.get(
+            f"/api/v1/threads/{tid}?limit=3&before_id={page1['next_before_id']}", headers=self.h("a"),
+        ).json()
+        self.assertEqual([m["id"] for m in page2["messages"]], ids[:3])
+        self.assertNotIn("next_before_id", page2)
+        # Legacy offset=0 still returns the newest page (old behavior kept).
+        legacy = self.client.get(f"/api/v1/threads/{tid}?limit=3&offset=0", headers=self.h("a")).json()
+        self.assertEqual([m["id"] for m in legacy["messages"]], ids[-3:])
+        self.assertEqual(legacy["offset"], 0)
+        # fields=tldr gives compact previews, not full text.
+        compact = self.client.get(f"/api/v1/threads/{tid}?limit=3&fields=tldr", headers=self.h("a")).json()
+        self.assertEqual([m["id"] for m in compact["messages"]], ids[-3:])
+        self.assertIn("preview", compact["messages"][0])
+        self.assertNotIn("text", compact["messages"][0])
+        self.assertEqual(self.client.get(f"/api/v1/threads/{tid}?fields=bogus", headers=self.h("a")).status_code, 400)
+
     def test_mentions_become_references_only_when_they_exist(self):
         r = self.client.post("/api/v1/messages", json={
             "to": "all", "text": f"exp {self.exp} beats idea {self.idea_id}; exp 99.9 and idea 999 don't exist"},

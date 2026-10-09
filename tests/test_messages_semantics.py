@@ -92,6 +92,31 @@ class MessageRouteTests(unittest.TestCase):
         r = self.client.post("/api/v1/messages", headers=self.h(), json={"to":"agent:b", "text":"no", "in_reply_to":hidden["id"]})
         self.assertEqual(r.status_code, 400)
 
+    def test_thread_id_matching_a_message_in_the_thread_is_resolved_not_rejected(self):
+        # A common mistake: pass the id of a message IN the thread (e.g. the
+        # last one seen) as thread_id, instead of the thread's own id. This
+        # should resolve to the same thread rather than bouncing as a
+        # "thread_id must match parent" contradiction.
+        root = messages.add_message(self.repo, from_agent="b", from_role=None, to="agent:a", text="root")
+        reply1 = self.client.post("/api/v1/messages", headers=self.h(), json={
+            "to": "agent:b", "text": "r1", "in_reply_to": root["id"],
+        }).json()
+        r = self.client.post("/api/v1/messages", headers=self.h("b"), json={
+            "text": "r2", "in_reply_to": reply1["id"], "thread_id": root["id"],
+        })
+        self.assertEqual(r.status_code, 201, r.text)
+        self.assertEqual(r.json()["thread_id"], root["id"])
+
+    def test_thread_id_genuinely_different_thread_is_a_clear_rejection(self):
+        root = messages.add_message(self.repo, from_agent="b", from_role=None, to="agent:a", text="root")
+        other_root = messages.add_message(self.repo, from_agent="c", from_role=None, to="agent:a", text="other")
+        r = self.client.post("/api/v1/messages", headers=self.h(), json={
+            "to": "agent:b", "text": "no", "in_reply_to": root["id"], "thread_id": other_root["id"],
+        })
+        self.assertEqual(r.status_code, 400)
+        self.assertIn(str(root["id"]), r.json()["detail"])
+        self.assertIn(str(other_root["id"]), r.json()["detail"])
+
     def test_read_all_optional_bounded_and_get_delivers_not_reads(self):
         one = messages.add_message(self.repo, from_agent="b", from_role=None, to="agent:a", text="one")
         self.assertEqual(self.client.get("/api/v1/messages", headers=self.h()).status_code, 200)
@@ -130,12 +155,40 @@ class MessageRouteTests(unittest.TestCase):
         self.assertNotIn("tldr", blank.json())
         self.assertNotIn("tldr", messages.get_message(self.repo, blank.json()["id"]))
 
-    def test_tldr_too_long_is_a_clear_bad_request(self):
+    def test_tldr_too_long_is_truncated_not_rejected(self):
         r = self.client.post("/api/v1/messages", headers=self.h(), json={
             "to": "agent:b", "text": "Update", "tldr": "x" * 501,
         })
-        self.assertEqual(r.status_code, 400)
-        self.assertIn("at most 500 characters", r.json()["detail"])
+        self.assertEqual(r.status_code, 201)
+        tldr = r.json()["tldr"]
+        self.assertEqual(len(tldr), 500)
+        self.assertTrue(tldr.endswith("…"))
+        self.assertTrue(any("500 characters" in w for w in r.json()["warnings"]))
+        saved = messages.get_message(self.repo, r.json()["id"])
+        self.assertEqual(saved["tldr"], tldr)
+
+    def test_tldr_too_long_truncates_at_a_word_boundary(self):
+        words = "word " * 120  # well past 500 chars, plenty of spaces
+        r = self.client.post("/api/v1/messages", headers=self.h(), json={
+            "to": "agent:b", "text": "Update", "tldr": words,
+        })
+        self.assertEqual(r.status_code, 201)
+        tldr = r.json()["tldr"]
+        self.assertLessEqual(len(tldr), 500)
+        self.assertTrue(tldr.endswith("…"))
+        self.assertNotIn(" …", tldr[-2:])  # didn't cut mid-word before the ellipsis
+        self.assertTrue(tldr[:-1].strip().endswith("word"))
+
+    def test_empty_text_defaults_to_tldr(self):
+        r = self.client.post("/api/v1/messages", headers=self.h(), json={
+            "to": "agent:b", "tldr": "Status: ready",
+        })
+        self.assertEqual(r.status_code, 201)
+        self.assertEqual(r.json()["text"], "Status: ready")
+        r2 = self.client.post("/api/v1/messages", headers=self.h(), json={
+            "to": "agent:b",
+        })
+        self.assertEqual(r2.status_code, 400)
 
     def test_anonymous_admin_dashboard_is_stamped_as_reserved_user(self):
         r = self.client.post("/api/v1/messages", headers={
