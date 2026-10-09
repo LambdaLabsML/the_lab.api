@@ -1861,6 +1861,7 @@ function ExperimentItem({
           {isMilestone && <span class="exp-milestone-star" title="New global best at this point">★</span>}
           exp/{exp.label || exp.id}
         </span>
+        <HideToggle exp={exp} />
         {/* Primary metric value — most important number at a glance; reads like a <Stat>. */}
         {metricKey && exp.metrics && typeof exp.metrics[metricKey] === "number" && !exp._running && (
           <span class="exp-metric-badge" title={`${metricKey} = ${exp.metrics[metricKey]}`}>
@@ -1881,7 +1882,6 @@ function ExperimentItem({
             ⟲ restarted{attemptAgoLabel ? ` · attempt start ${attemptAgoLabel}` : ""}
           </span>
         )}
-        <HideToggle exp={exp} />
       </div>
       <div class="exp-desc">{exp.description}</div>
       {hasSlurmLifecycle && (
@@ -1906,9 +1906,14 @@ function ExperimentItem({
           )}
         </div>
       )}
-      {exp.tags && exp.tags.length > 0 && (
-        <div class="exp-tags">{exp.tags.map((t) => <span key={t} class="tag-pill">{t}</span>)}</div>
-      )}
+      {(() => {
+        // Live list first, so hide/unhide (here or elsewhere) shows at once.
+        const label = String(exp.label ?? exp.id);
+        const tags = allExperiments.value.find((e) => String(e.label ?? e.id) === label)?.tags ?? exp.tags;
+        return tags && tags.length > 0 && (
+          <div class="exp-tags">{tags.map((t) => <span key={t} class="tag-pill">{t}</span>)}</div>
+        );
+      })()}
       {progress && Object.keys(progress).length > 0 ? (
         <JsonView data={progress} label="progress" labelColor={statusColor} startCollapsed />
       ) : exp.status === "running" ? (

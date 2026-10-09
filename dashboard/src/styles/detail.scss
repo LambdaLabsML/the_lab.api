@@ -185,7 +185,6 @@
   font-size: var(--text-sm);
   cursor: pointer;
   transition: color var(--transition-fast);
-  margin-right: auto;
 }
 .exp-item .exp-id:hover { color: var(--accent-dim); text-decoration: underline; }
 .exp-milestone-star { color: var(--yellow); margin-right: var(--space-1); font-size: var(--text-sm); }
@@ -779,9 +778,10 @@
   .review-detail-flush #detail-panel { position: relative; overflow-y: visible; }
 }
 
-// Hide/unhide an experiment from charts, table and idea means.
+// Hide/unhide an experiment from charts, table and idea means. Sits right
+// after the exp id and takes the free space, so the score stays top right.
 .exp-item .exp-hide-toggle {
-  margin-left: auto;
+  margin-right: auto;
   padding: 0 var(--space-2);
   border: 1px solid var(--border);
   border-radius: 4px;
