@@ -544,7 +544,9 @@ export function App() {
   const containerRef = useRef<HTMLDivElement>(null);
   const dockviewRef = useRef<DockviewComponent | null>(null);
   const initialNav = parseNavHash();
-  if (initialNav.section === "artifacts") artifactPath.value = initialNav.artifact;
+  // Deep link #artifacts/<path>: apply once — App re-renders on every
+  // artifact selection, and re-reading the hash then would undo the click.
+  useState(() => { if (initialNav.section === "artifacts") artifactPath.value = initialNav.artifact; });
   const [navSection, setNavSection] = useState<NavSection>(initialNav.section);
   const [toolView, setToolView] = useState<ToolView>(initialNav.tool);
   const [settingsOpen, setSettingsOpen] = useState(false);
