@@ -56,6 +56,28 @@ def _metrics_from_result(result: dict) -> tuple[dict, dict]:
     return metrics, meta
 
 
+def _expected_commit_conflict(meta: dict, git_commit: str | None) -> str | None:
+    """Error message if *meta*'s ``EXPECTED_COMMIT`` conflicts with the commit
+    about to be dispatched, else ``None``.
+
+    ``EXPECTED_COMMIT`` is a convention agents set by hand on experiment meta
+    (e.g. from an idea-pinning workflow) to record which commit a run is
+    supposed to execute. A conflict here means the Lab is about to dispatch a
+    different commit than the one the experiment was created to run at —
+    almost always because the idea's branch moved between creation and
+    dispatch. Pin the commit at creation time instead (``create_idea`` /
+    ``POST /experiments/clone``'s ``commit`` field) to make this a non-issue.
+    """
+    expected = meta.get("EXPECTED_COMMIT") if isinstance(meta, dict) else None
+    if not expected or not git_commit or expected == git_commit:
+        return None
+    return (
+        f"EXPECTED_COMMIT ({expected}) does not match the commit the Lab is "
+        f"about to dispatch ({git_commit}) — refusing before the GPU job "
+        f"starts."
+    )
+
+
 def _parse_log_progress(lines: list[str]) -> dict | None:
     """Scan log lines and return a progress snapshot with the same schema as
     the final metrics, plus ``pct_complete`` (0–100).
@@ -1186,6 +1208,22 @@ class ExperimentRunner:
                     pass
             except Exception as e:
                 print(f"[the-lab] could not resolve git context for {label}: {e}")
+
+        # Pre-dispatch commit check (fail before the GPU starts, not ~7 min
+        # in). Agents have long set meta.EXPECTED_COMMIT by hand as a
+        # self-check, but the only place that was ever verified was a script
+        # guard that runs AFTER venv/model warm-up on the allocated node — by
+        # then the GPU time is already spent. Catch the mismatch here, before
+        # executor.submit ever talks to Slurm.
+        commit_conflict = _expected_commit_conflict(exp_meta, git_commit)
+        if commit_conflict:
+            self._store.update_experiment(
+                label, status="failed", error=commit_conflict,
+                status_msg="error: commit mismatch",
+                finished_at=datetime.now(timezone.utc).isoformat(),
+            )
+            print(f"[the-lab] errored experiment {label}: {commit_conflict}")
+            return {"status": "error", "reason": commit_conflict}
 
         # Generate a run token — the SCRIPT_GUARD in every experiment script
         # requires THE_LAB_TOKEN to be set (prevents accidental direct execution).

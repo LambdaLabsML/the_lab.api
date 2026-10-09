@@ -1243,6 +1243,11 @@ def _build_chart_data():
     _CHART_FIELDS = (
         "id", "label", "idea_id", "description", "status",
         "started_at", "finished_at", "created_at", "runtime", "tags",
+        # Additive restart/timing fields (see Store._enrich_experiment):
+        # attempt is 1-based; attempt_started_at is the best signal of when
+        # the CURRENT attempt began, for marking/annotating restarted runs
+        # on the dashboard charts without a second fetch.
+        "attempt", "attempt_started_at",
     )
 
     for exp in all_exps:

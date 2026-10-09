@@ -122,11 +122,99 @@ class NativeRequeueWrapperTests(unittest.TestCase):
         wrapper = self._executor()._build_wrapper("7.1", "/tmp/jobs/7.1", "/tmp/jobs/7.1/worktree")
         self.assertIn("#SBATCH --requeue", wrapper)
         self.assertIn("SLURM_RESTART_COUNT", wrapper)
-        self.assertIn("attempts/${_THE_LAB_PREVIOUS_GENERATION", wrapper)
+        # attempts/<n>/ is keyed by 1-based ATTEMPT NUMBER, not the raw
+        # zero-based Slurm restart-count generation (see
+        # test_restart_archive_uses_1based_attempt_number_and_is_generic).
+        self.assertIn("attempts/$_THE_LAB_ARCHIVE_NAME", wrapper)
         self.assertIn(": > \"/tmp/jobs/7.1/script.log\"", wrapper)
         self.assertNotIn("/experiments/7.1/requeue", wrapper)
         self.assertIn("X-The-Lab-Restart-Count", wrapper)
         self.assertNotIn('rm -rf "/tmp/jobs/7.1/worktree"', wrapper)
+
+    def _restart_archive_block(self, remote_job_dir: str) -> str:
+        """Extract the self-contained generation-rotation bash block from the
+        generated wrapper (no sbatch/model/git dependencies — safe to execute
+        standalone against a fake job dir)."""
+        wrapper = self._executor()._build_wrapper("7.1", remote_job_dir, f"{remote_job_dir}/worktree")
+        start = wrapper.index('_THE_LAB_GENERATION="${SLURM_RESTART_COUNT:-0}"')
+        end = wrapper.index("# Slurm owns native requeue.")
+        return "#!/bin/bash\nset -e\n" + wrapper[start:end]
+
+    def test_restart_archive_uses_1based_attempt_number_and_is_generic(self):
+        """Restart-bug regression: attempts/<n>/ must be 1-based (attempt 1 is
+        the killed/finished attempt, never the live one), and the solver's
+        per-attempt files (chat_history*, stage_timing.*) must move there too
+        instead of accumulating in the job root — while everything shared by
+        all attempts stays put (above all the attestation helper and the
+        submit receipt: every restart's pre-start attestation needs them)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            job_dir = Path(tmp) / "7.1"
+            job_dir.mkdir()
+            # Persistent entries that must NEVER be archived.
+            (job_dir / "experiment.json").write_text("{}")
+            (job_dir / "script.sh").write_text("#!/bin/bash\n")
+            (job_dir / "wrapper.sh").write_text("#!/bin/bash\n")
+            (job_dir / "worktree").mkdir()
+            (job_dir / "worktree" / "code.py").write_text("x = 1\n")
+            (job_dir / "script.log").write_text("attempt 0 output\n")
+            (job_dir / "worktree_attestation.py").write_text("# helper\n")
+            (job_dir / "source-attestation-submit.json").write_text("{}")
+            (job_dir / "code").mkdir()
+            (job_dir / "code" / "snapshot.py").write_text("y = 2\n")
+            # Per-attempt files: the fixed-list ones AND two the old allowlist
+            # never knew about.
+            (job_dir / "script.progress").write_text("{}")
+            (job_dir / "chat_history.json").write_text("[]")
+            (job_dir / "stage_timing.w3.deadbeef.summary.json").write_text("{}")
+            # Marker left by attempt 0's own boot (a real first boot writes
+            # this but skips archiving — nothing to archive yet).
+            (job_dir / ".the_lab_generation").write_text("0")
+            script = Path(tmp) / "rotate.sh"
+            script.write_text(self._restart_archive_block(str(job_dir)))
+            env = {**os.environ, "SLURM_RESTART_COUNT": "1"}
+            result = subprocess.run(["bash", str(script)], env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+            # Previous generation was 0 (unset) → archived under attempts/1
+            # (1-based: this is the FIRST attempt), not attempts/0.
+            archive = job_dir / "attempts" / "1"
+            self.assertTrue(archive.is_dir(), result.stderr)
+            self.assertTrue((archive / "script.progress").exists())
+            self.assertTrue((archive / "chat_history.json").exists())
+            self.assertTrue((archive / "stage_timing.w3.deadbeef.summary.json").exists())
+
+            # Persistent entries stayed in the job root, untouched.
+            self.assertTrue((job_dir / "experiment.json").exists())
+            self.assertTrue((job_dir / "script.sh").exists())
+            self.assertTrue((job_dir / "wrapper.sh").exists())
+            self.assertTrue((job_dir / "worktree" / "code.py").exists())
+            for shared in ("worktree_attestation.py", "source-attestation-submit.json", "code/snapshot.py"):
+                self.assertTrue((job_dir / shared).exists(), f"{shared} must survive a restart")
+            self.assertFalse((job_dir / "chat_history.json").exists())
+            self.assertFalse((job_dir / "stage_timing.w3.deadbeef.summary.json").exists())
+            self.assertFalse((job_dir / "script.progress").exists())
+
+            # script.log was truncated in place (not moved/archived).
+            self.assertEqual((job_dir / "script.log").read_text(), "")
+            self.assertFalse((archive / "script.log").exists())
+            self.assertEqual((job_dir / ".the_lab_generation").read_text().strip(), "1")
+
+    def test_restart_archive_second_restart_uses_attempt_number_two(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            job_dir = Path(tmp) / "7.1"
+            job_dir.mkdir()
+            (job_dir / "experiment.json").write_text("{}")
+            (job_dir / "script.sh").write_text("#!/bin/bash\n")
+            (job_dir / ".the_lab_generation").write_text("1")  # already past attempt 1
+            (job_dir / "script.err").write_text("second attempt's stderr capture\n")
+            script = Path(tmp) / "rotate.sh"
+            script.write_text(self._restart_archive_block(str(job_dir)))
+            env = {**os.environ, "SLURM_RESTART_COUNT": "2"}
+            result = subprocess.run(["bash", str(script)], env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            # Previous generation (1) archives as attempt 2 (1-based).
+            self.assertTrue((job_dir / "attempts" / "2" / "script.err").exists(), result.stderr)
+            self.assertEqual((job_dir / ".the_lab_generation").read_text().strip(), "2")
 
     def test_accounting_uses_root_not_extern(self):
         executor = self._executor()
@@ -200,16 +288,26 @@ class NativeRequeueWrapperTests(unittest.TestCase):
             self.assertEqual(first.returncode, 143)
             self.assertEqual((root / ".the_lab_generation").read_text(), "0\n")
             for name in ("model.ready.json", "script.progress", "script.metrics.jsonl",
-                         "script.output.md", "script.output.html", "script.err", ".heartbeat"):
+                         "script.output.md", "script.output.html", "script.err", ".heartbeat",
+                         # Not on the old fixed allowlist — must still be archived
+                         # generically, not left behind to accumulate (restart
+                         # bug: stage_timing/chat_history piling up in the root).
+                         "chat_history.json", "stage_timing.w3.deadbeef.summary.json"):
                 (root / name).write_text(name)
             env["SLURM_RESTART_COUNT"] = "1"
             second = subprocess.run(["bash", str(wrapper_path)], cwd=worktree, env=env, timeout=10)
             self.assertEqual(second.returncode, 143)
-            archived = root / "attempts" / "0"
+            # attempts/<n>/ is keyed by 1-based ATTEMPT NUMBER: previous
+            # generation 0 is attempt 1 (the first, just-killed attempt) —
+            # never attempts/0, which read ambiguously (generation vs. attempt).
+            archived = root / "attempts" / "1"
             self.assertEqual((root / ".the_lab_generation").read_text(), "1\n")
             self.assertTrue((archived / "script.progress").exists())
             self.assertTrue((archived / "script.output.md").exists())
+            self.assertTrue((archived / "chat_history.json").exists())
+            self.assertTrue((archived / "stage_timing.w3.deadbeef.summary.json").exists())
             self.assertFalse((root / "script.progress").exists())
+            self.assertFalse((root / "chat_history.json").exists())
             self.assertEqual((root / "experiment.json").read_text(), '{"workers":16}\n')
 
     def test_signal_during_model_warmup_exits_promptly(self):
@@ -254,6 +352,33 @@ class NativeRequeueWrapperTests(unittest.TestCase):
             self.assertFalse((local / "script.heartbeats").exists())
             self.assertFalse((local / "model.ready.json.smoke.json").exists())
             self.assertEqual((local / "experiment.json").read_text(), "keep")
+
+    def test_stable_staged_pull_evicts_unlisted_stale_attempt_file(self):
+        """Restart/timing fix: an unlisted per-attempt file (not on the fixed
+        `managed` allowlist — e.g. a solver's own stage_timing summary or
+        chat_history.json) must be evicted locally when it disappears from
+        the remote job root on restart, exactly like the explicitly managed
+        names — otherwise it piles up locally across every attempt."""
+        with tempfile.TemporaryDirectory() as tmp:
+            base, local = Path(tmp) / "remote", Path(tmp) / "local"
+            job = base / "7.1"; job.mkdir(parents=True); local.mkdir()
+            (job / ".the_lab_generation").write_text("1\n")
+            (job / "script.log").write_text("new log")
+            # Stale local copies from a PREVIOUS attempt, now archived away
+            # remotely (absent from the staged snapshot).
+            (local / "chat_history.json").write_text("stale chat")
+            (local / "stage_timing.w3.deadbeef.summary.json").write_text("stale timing")
+            (local / "experiment.json").write_text("keep")
+            # A directory must never be swept by this generic eviction.
+            (local / "rollouts").mkdir()
+            (local / "rollouts" / "keep").write_text("x")
+            executor = SlurmExecutor("local", {"partition": "lowprio", "shared_fs": False, "remote_base": str(base)})
+            self.assertEqual(executor.pull_results("7.1", local), 1)
+            self.assertEqual((local / "script.log").read_text(), "new log")
+            self.assertFalse((local / "chat_history.json").exists())
+            self.assertFalse((local / "stage_timing.w3.deadbeef.summary.json").exists())
+            self.assertEqual((local / "experiment.json").read_text(), "keep")
+            self.assertTrue((local / "rollouts" / "keep").exists())
 
     def test_missing_managed_name_does_not_remove_local_directory(self):
         with tempfile.TemporaryDirectory() as tmp:

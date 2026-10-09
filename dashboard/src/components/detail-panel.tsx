@@ -1784,6 +1784,24 @@ function ExperimentItem({
     : slurmState === "RUNNING" ? "running"
     : slurmState?.toLowerCase();
 
+  // Restart/timing fix: `attempt` is 1-based (slurm_restart_count + 1, added
+  // by the backend); `attempt_started_at` is the best signal the Lab has for
+  // when the CURRENT attempt began running (falls back to started_at when
+  // there's been no restart). A freshly-restarted running experiment must
+  // not read like a comparable twin to one that's been running for hours —
+  // see isRestarted/attemptAgoLabel below.
+  const attempt = typeof exp.attempt === "number" ? exp.attempt : null;
+  const attemptStartedAt = exp.attempt_started_at ?? exp.started_at;
+  const isRestarted = exp.status === "running" && attempt !== null && attempt > 1;
+  const attemptAgoLabel = (() => {
+    if (!attemptStartedAt) return null;
+    const secs = (Date.now() - new Date(attemptStartedAt).getTime()) / 1000;
+    if (!Number.isFinite(secs) || secs < 0) return null;
+    return secs < 60 ? `${Math.round(secs)}s ago`
+      : secs < 3600 ? `${Math.round(secs / 60)}m ago`
+      : `${(secs / 3600).toFixed(1)}h ago`;
+  })();
+
   // Experiment-header → graph navigation + hover-highlight via the shared hook.
   const nav = useEntityNav(exp.idea_id);
 
@@ -1819,12 +1837,38 @@ function ExperimentItem({
           </span>
         )}
         <span dangerouslySetInnerHTML={{ __html: badgeHtml(exp.status, progress?.pct_complete ?? progress?.pct) }} />
+        {isRestarted && (
+          <span
+            style={{ color: "var(--yellow)", fontWeight: 600, fontSize: "var(--text-xs)", marginLeft: "var(--space-2)" }}
+            title={
+              `This run was preempted and restarted by Slurm — currently on attempt ${attempt}` +
+              (attemptAgoLabel ? `, which started ${attemptAgoLabel}` : "") +
+              `. Its elapsed time/ETA are measured from this attempt's start, not the original ` +
+              `dispatch — don't read it next to a same-age twin that never restarted as if they're comparable.`
+            }
+          >
+            ⟲ restarted{attemptAgoLabel ? ` · attempt start ${attemptAgoLabel}` : ""}
+          </span>
+        )}
       </div>
       <div class="exp-desc">{exp.description}</div>
       {hasSlurmLifecycle && (
         <div class="exp-slurm" title={slurmState ? `Slurm state: ${slurmState}` : "Native Slurm job"}>
           <span>Slurm{slurmLabel ? ` · ${slurmLabel}` : ""}</span>
           {slurmJobId && <span>job {slurmJobId}</span>}
+          {attempt !== null && (
+            <span
+              title={
+                attempt > 1
+                  ? `Attempt ${attempt} (this experiment has restarted ${attempt - 1} time${attempt - 1 === 1 ? "" : "s"}). ` +
+                    `Started ${attemptStartedAt ? formatTime(attemptStartedAt) : "unknown"} — earlier attempts' ` +
+                    `files/timing moved to attempts/${attempt - 1}/ and are not this attempt's.`
+                  : `Attempt ${attempt} — no restarts yet.`
+              }
+            >
+              attempt {attempt}
+            </span>
+          )}
           {slurmRestartCount !== null && (
             <span>{slurmRestartCount} {slurmRestartCount === 1 ? "restart" : "restarts"}</span>
           )}
@@ -1843,13 +1887,22 @@ function ExperimentItem({
       <div class="exp-timestamps">
         created: {formatTime(exp.created_at)}
         {exp.started_at && <> | started: {formatTime(exp.started_at)}</>}
+        {isRestarted && attemptStartedAt && attemptStartedAt !== exp.started_at && (
+          <> | attempt {attempt} started: {formatTime(attemptStartedAt)}</>
+        )}
         {exp.finished_at && <> | finished: {formatTime(exp.finished_at)}</>}
         {exp.runtime && <> | runtime: {exp.runtime}</>}
       </div>
-      {exp.status === "running" && exp.started_at && (() => {
+      {exp.status === "running" && attemptStartedAt && (() => {
         const pct = progress?.pct_complete ?? progress?.pct;
         if (typeof pct !== "number" || pct <= 0) return null;
-        const elapsed = (Date.now() - new Date(exp.started_at).getTime()) / 1000;
+        // Restart/timing fix: measure elapsed from the CURRENT attempt's
+        // start (attempt_started_at), not the original dispatch (started_at,
+        // which includes queue time and — after a restart — the earlier
+        // attempt's runtime too). Otherwise a 20-minute-old restart's ETA
+        // looks like it's 2.5 hours into the run.
+        const elapsed = (Date.now() - new Date(attemptStartedAt).getTime()) / 1000;
+        if (elapsed < 0) return null;
         const total = elapsed / (pct / 100);
         const remaining = Math.max(0, total - elapsed);
         const eta = new Date(Date.now() + remaining * 1000);
@@ -1861,6 +1914,7 @@ function ExperimentItem({
         return (
           <div class="exp-eta">
             ETA: {fmtRemaining} remaining ({eta.toLocaleTimeString()})
+            {isRestarted && <> · from attempt {attempt} start</>}
           </div>
         );
       })()}

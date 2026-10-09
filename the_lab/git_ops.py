@@ -87,6 +87,17 @@ def branch_exists(branch: str, cwd: str | Path | None = None) -> bool:
     return result.returncode == 0
 
 
+def resolve_commit(commit: str, cwd: str | Path | None = None) -> str:
+    """Resolve *commit* (any committish) to its full SHA. Raises GitError if
+    it doesn't name a commit in this repo — used to validate a caller-supplied
+    ``commit`` (idea pinning / clone) with a clean 400 instead of letting a
+    bad value fail deep inside a later ``git branch``."""
+    result = _run(["rev-parse", "--verify", f"{commit}^{{commit}}"], cwd=cwd, check=False)
+    if result.returncode != 0 or not result.stdout.strip():
+        raise GitError(f"'{commit}' does not resolve to a commit in this repo")
+    return result.stdout.strip()
+
+
 def _has_commits(cwd: str | Path | None = None) -> bool:
     """Check if the repo has any commits."""
     result = _run(["rev-parse", "HEAD"], cwd=cwd, check=False)

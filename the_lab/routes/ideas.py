@@ -28,6 +28,7 @@ from ..git_ops import (
     create_branch_from_merge,
     get_current_branch,
     get_default_branch,
+    resolve_commit,
 )
 from ..schemas import (
     NewIdeaRequest,
@@ -78,6 +79,12 @@ def create_idea(req: NewIdeaRequest, request: Request):
     Example:
         POST /api/v1/ideas/new {"parent_ids": [1], "description": "test new hypothesis"}
         -> {"id": 3, "branch": "idea/3", "status": "active", "similar_ideas": [...]}
+
+    Pass ``commit`` to pin the new branch to an exact commit instead of
+    branching from the parent/base HEAD — the branch is created with a plain
+    ``git branch`` (no checkout anywhere), so ``auto_checkout`` is ignored
+    (always reported as ``checked_out: false``) and nothing is staged/stashed
+    in the caller's worktree. Only valid with zero or one ``parent_ids``.
     """
     cwd = agent_cwd(request)
     # parent_ids semantics:
@@ -100,12 +107,31 @@ def create_idea(req: NewIdeaRequest, request: Request):
         if not store.get_idea(pid):
             raise HTTPException(404, f"parent idea {pid} not found")
 
+    if req.commit and len(parent_ids) > 1:
+        raise HTTPException(400, "commit cannot be combined with multiple parent_ids (a merge requires a worktree)")
+
+    resolved_commit = None
+    if req.commit:
+        try:
+            resolved_commit = resolve_commit(req.commit, cwd=cwd)
+        except GitError as e:
+            raise HTTPException(400, sanitize_error(e))
+
     idea = store.create_idea(req.description, parent_ids, branch="")
     idea_id = idea["id"]
     branch_name = f"idea/{idea_id}"
     idea["branch"] = branch_name
 
     try:
+        if resolved_commit:
+            # Pin directly: plain `git branch <name> <commit>` never checks
+            # anything out, so the caller's worktree (and any uncommitted
+            # work in it) is untouched — no stash/carry-over commit risk.
+            create_branch_from(branch_name, resolved_commit, cwd=cwd)
+            store.save_idea(idea)
+            similar = store.find_similar_ideas(req.description)
+            similar = [s for s in similar if s["id"] != idea["id"]]
+            return _new_idea_response(idea, similar=similar, checked_out=False)
         if len(parent_ids) == 0:
             base = get_default_branch(cwd=cwd)
             create_branch_from(branch_name, base, cwd=cwd)

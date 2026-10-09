@@ -17,6 +17,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response
 
 from .. import jsonio
+from ..git_ops import GitError, resolve_commit
 from ..deps import (
     sanitize_error,
     store,
@@ -26,9 +27,14 @@ from ..deps import (
     _branch_diff_summary,
     _description_short,
     _wrap_script,
+    LAB_WRITTEN_META_KEYS,
+    reject_runtime_meta_keys,
+    meta_settings_diff,
 )
 from ..schemas import (
     NewExperimentRequest,
+    BatchCreateExperimentsRequest,
+    CloneExperimentRequest,
     StartExperimentRequest,
     RenameTagRequest,
     UpdateTagsRequest,
@@ -207,6 +213,8 @@ async def create_experiment(idea_id: int, req: NewExperimentRequest):
     if idea["status"] != "active":
         raise HTTPException(400, f"idea is {idea['status']}, cannot add experiments")
 
+    reject_runtime_meta_keys(req.meta)
+
     # Build the queue-related fields into meta so they survive the existing
     # store API (no schema migration needed).
     extra_meta = {}
@@ -241,7 +249,7 @@ async def create_experiment(idea_id: int, req: NewExperimentRequest):
 
 
 @router.post("/ideas/{idea_id}/experiments/batch", status_code=201)
-async def batch_create_experiments(idea_id: int, request: Request):
+async def batch_create_experiments(idea_id: int, req: BatchCreateExperimentsRequest):
     """Batch-create queued experiments that share one script (feedback M1).
 
     Creates one queued experiment per entry in ``metas``, each reusing the same
@@ -257,7 +265,11 @@ async def batch_create_experiments(idea_id: int, request: Request):
 
     ``label`` is advisory only (recorded on meta as ``requested_label``); the
     store assigns the canonical ``<idea>.<seq>`` label. Returns a compact
-    summary. Fails 400 on empty/invalid ``metas``.
+    summary. Fails 422 on empty/invalid ``metas``, on a ``metas[i]`` entry
+    with unexpected top-level keys (hyperparameters must be nested under
+    ``meta``, not flattened — a flattened ``meta`` used to be silently
+    stored as empty), or on a ``meta`` that sets a lab-written runtime key
+    (``slurm_*``, ``git_*``, ``scorecard``, …) — see ``LAB_WRITTEN_META_KEYS``.
 
     Example:
         POST /api/v1/ideas/1/experiments/batch
@@ -269,43 +281,26 @@ async def batch_create_experiments(idea_id: int, request: Request):
     if idea["status"] != "active":
         raise HTTPException(400, f"idea is {idea['status']}, cannot add experiments")
 
-    try:
-        body = await request.json()
-    except Exception:
-        raise HTTPException(400, "body must be valid JSON")
-    if not isinstance(body, dict):
-        raise HTTPException(400, "body must be a JSON object")
-
-    shared_script_content = body.get("shared_script_content")
-    if shared_script_content is not None and not isinstance(shared_script_content, str):
-        raise HTTPException(400, "shared_script_content must be a string")
-
-    metas = body.get("metas")
-    if not isinstance(metas, list) or not metas:
-        raise HTTPException(400, "metas must be a non-empty list")
+    if not req.metas:
+        raise HTTPException(422, "metas must be a non-empty list")
 
     # Validate every entry up front so we don't half-create the batch.
-    for i, m in enumerate(metas):
-        if not isinstance(m, dict):
-            raise HTTPException(400, f"metas[{i}] must be an object")
-        if "meta" in m and m["meta"] is not None and not isinstance(m["meta"], dict):
-            raise HTTPException(400, f"metas[{i}].meta must be an object")
-        if "tags" in m and m["tags"] is not None and not isinstance(m["tags"], list):
-            raise HTTPException(400, f"metas[{i}].tags must be a list")
+    for i, m in enumerate(req.metas):
+        reject_runtime_meta_keys(m.meta, where=f"metas[{i}].meta")
 
     created = []
-    for m in metas:
+    for m in req.metas:
         # Preserve an advisory label on meta (store assigns the real one).
-        merged_meta = dict(m.get("meta") or {})
-        if m.get("label"):
-            merged_meta.setdefault("requested_label", m["label"])
-        description = m.get("description") or "batch experiment"
+        merged_meta = dict(m.meta or {})
+        if m.label:
+            merged_meta.setdefault("requested_label", m.label)
+        description = m.description or "batch experiment"
         exp = _create_and_queue_experiment(
             idea_id,
             description,
             merged_meta,
-            m.get("tags"),
-            shared_script_content,
+            m.tags,
+            req.shared_script_content,
         )
         created.append({"id": exp["id"], "label": exp.get("label") or str(exp["id"])})
 
@@ -1433,6 +1428,131 @@ async def rerun_experiment(exp_ref: str):
         "message": (
             f"queued copy of {src_label} — full record: "
             f"GET /api/v1/experiments/{label}"
+        ),
+    }
+
+
+@router.post("/experiments/clone", status_code=201)
+async def clone_experiment(req: CloneExperimentRequest):
+    """Create new, queued experiment(s) that copy a source run's settings
+    and script, with overrides applied.
+
+    Replaces the hand-rolled "copy ~85 meta keys, strip the ones the Lab
+    writes, submit" dance agents did when launching a sibling arm. The copied
+    meta always drops every lab-written runtime key (see
+    ``LAB_WRITTEN_META_KEYS`` in the_lab/deps.py — Slurm bookkeeping, git
+    context, the ARC solver's scorecard/card_id/competition_mode result) so a
+    brand-new clone never inherits the PARENT's running state or scores.
+    ``overrides`` is applied on top of the cleaned copy; it may not set a
+    lab-written runtime key either (422 if it tries).
+
+    - ``seed``: written to ``meta.seed``; with ``count`` > 1, each clone gets
+      ``seed + i`` (0-based) unless ``overrides`` also sets ``seed``, which
+      wins for every clone.
+    - ``commit``: pins the clone(s) to an exact commit — sets ``meta.git_commit``
+      / ``meta.git_branch`` directly (trusted), bypassing the normal
+      resolve-from-idea-branch-at-dispatch-time path, so the clone runs
+      exactly the code it was cloned at regardless of what the idea branch
+      does afterwards. Combine with ``overrides: {"EXPECTED_COMMIT": ...}``
+      for a belt-and-suspenders pre-dispatch check (see runner.py's
+      ``_expected_commit_conflict``).
+    - ``count``: number of clones to create (default 1), all on the source's
+      idea.
+
+    Returns the created experiments plus a settings diff vs the source
+    (``added`` / ``changed`` / ``removed`` meta keys — secret-ish values
+    masked as ``[REDACTED]``, never echoed).
+
+    Example:
+        POST /api/v1/experiments/clone
+        {"clone_of": "1026.1", "overrides": {"lr": 0.003}, "seed": 1, "count": 3}
+        -> {"clone_of": "1026.1", "created": [{"id": "1026.5", "label": "1026.5"}, ...],
+            "count": 3, "diff": [{"label": "1026.5", "diff": {"added": {...},
+            "changed": {...}, "removed": {"slurm_state": "...", "scorecard": {...}}}}, ...]}
+    """
+    source = _resolve_exp(req.clone_of)
+    idea_id = source["idea_id"]
+    idea = store.get_idea(idea_id)
+    if not idea:
+        raise HTTPException(404, "parent idea not found")
+    if idea["status"] != "active":
+        raise HTTPException(400, f"idea is {idea['status']}, reopen it before cloning onto it")
+
+    reject_runtime_meta_keys(req.overrides, where="overrides")
+
+    script_path = REPO_DIR / source["script"]
+    if not script_path.exists():
+        raise HTTPException(400, f"script file not found: {source['script']}")
+    script_content = script_path.read_text()
+
+    # Drop every lab-written runtime key from the copied meta — the parent's
+    # Slurm state/scores must never land on a brand-new, not-yet-started
+    # clone (this is the exact bug the clone endpoint exists to prevent).
+    source_meta = source.get("meta") or {}
+    base_meta = {k: v for k, v in source_meta.items() if k not in LAB_WRITTEN_META_KEYS}
+
+    resolved_commit = None
+    if req.commit:
+        try:
+            resolved_commit = resolve_commit(req.commit, cwd=REPO_DIR)
+        except GitError as e:
+            raise HTTPException(400, sanitize_error(e))
+
+    src_label = source.get("label", str(source["id"]))
+    base_desc = req.description or f"clone of {src_label}"
+    tags = list(req.tags) if req.tags is not None else list(source.get("tags") or [])
+
+    created = []
+    diffs = []
+    for i in range(req.count):
+        clone_meta = dict(base_meta)
+        if req.seed is not None:
+            clone_meta["seed"] = req.seed + i
+        if req.overrides:
+            clone_meta.update(req.overrides)
+        trusted_meta = False
+        if resolved_commit:
+            # Pin directly (trusted) — bypass the runner's normal
+            # resolve-from-idea-branch-at-dispatch-time fallback.
+            clone_meta["git_commit"] = resolved_commit
+            clone_meta["git_branch"] = idea["branch"]
+            trusted_meta = True
+        description = base_desc if req.count == 1 else f"{base_desc} ({i + 1}/{req.count})"
+
+        new_exp = store.create_experiment(
+            idea_id, description, meta=clone_meta, tags=tags, trusted_meta=trusted_meta,
+        )
+        new_script_path = REPO_DIR / new_exp["script"]
+        new_script_path.parent.mkdir(parents=True, exist_ok=True)
+        new_script_path.write_text(script_content)
+        os.chmod(new_script_path, 0o755)
+
+        label = new_exp.get("label") or str(new_exp["id"])
+        store.update_experiment(
+            label, status="queued", queued_at=datetime.now(timezone.utc).isoformat(),
+        )
+        new_exp = store.get_experiment(label) or new_exp
+        try:
+            from .. import ws as ws_mod
+            ws_mod.broadcaster.broadcast_soon({
+                "type": "experiment_queued", "label": label, "idea_id": idea_id,
+            })
+        except Exception:
+            pass
+        created.append({"id": new_exp["id"], "label": label})
+        diffs.append({"label": label, "diff": meta_settings_diff(source_meta, new_exp.get("meta") or {})})
+
+    runner.wake_scheduler()
+
+    return {
+        "clone_of": src_label,
+        "idea_id": idea_id,
+        "created": created,
+        "count": len(created),
+        "diff": diffs[0]["diff"] if len(diffs) == 1 else diffs,
+        "message": (
+            f"queued — full record: GET /api/v1/experiments/{created[0]['label']}"
+            if created else None
         ),
     }
 

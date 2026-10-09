@@ -57,6 +57,28 @@ class LinkResultsTests(unittest.TestCase):
     def test_shared_fs_flag_overrides_host_default(self):
         self.assertFalse(SlurmExecutor("local", {"remote_base": str(self.jobs), "shared_fs": False}).shares_filesystem)
 
+    def test_stale_link_is_pruned_when_remote_entry_is_archived_away(self):
+        """Restart/timing fix: once the wrapper archives a per-attempt file
+        into attempts/<n>/ on restart, the top-level entry disappears from
+        the job dir — the local symlink to it must be pruned too, or the
+        dashboard keeps resolving a dangling link to the PREVIOUS attempt's
+        file forever instead of seeing it move under attempts/."""
+        (self.job / "chat_history.json").write_text("[]")
+        self.ex.link_results("12.3", self.exp)
+        self.assertTrue((self.exp / "chat_history.json").is_symlink())
+        # Simulate a restart: the wrapper moves chat_history.json into
+        # attempts/1/ and it's gone from the job root.
+        (self.job / "chat_history.json").unlink()
+        (self.job / "attempts" / "1").mkdir(parents=True)
+        (self.job / "attempts" / "1" / "chat_history.json").write_text("[]")
+        self.ex.link_results("12.3", self.exp)
+        self.assertFalse((self.exp / "chat_history.json").exists())
+        self.assertFalse((self.exp / "chat_history.json").is_symlink())
+        # The still-present entries (including the new attempts/ dir) keep
+        # their links.
+        self.assertTrue((self.exp / "attempts").is_symlink())
+        self.assertTrue((self.exp / "script.log").is_symlink())
+
 
 class SharedJobFilesRouteTests(unittest.TestCase):
     def setUp(self):

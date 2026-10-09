@@ -94,6 +94,112 @@ _LOWER_IS_BETTER_PATTERNS = (
 _INTERNAL_META_KEYS = {"git_branch", "git_commit", "worktree"}
 
 
+# Every ``meta`` key the Lab's own code paths write at RUNTIME (after
+# creation) — never values a caller sets intentionally at submit time. This
+# is the single source of truth for "lab-written runtime keys" referenced by
+# create/batch-create/clone validation: a caller supplying one of these is
+# almost always copying a parent/source run's meta wholesale (e.g. cloning
+# manually) and ending up with the Lab's bookkeeping from that OTHER run —
+# the dashboard then shows the parent's Slurm state/scores on a brand-new,
+# not-yet-started arm. Derived directly from the write sites, not guessed:
+#
+#   store.py        Store._SERVER_OWNED_META_KEYS   (outdir/worktree/git_*)
+#   runner.py        dispatch meta (slurm_job_id, slurm_native_requeue,
+#                    slurm_state, slurm_restart_count, slurm_run_token,
+#                    slurm_last_restart_at, assigned_resource, assigned_units,
+#                    git_branch, git_commit)
+#   routes/experiments.py  slurm_attempts (requeue bookkeeping),
+#                    budget_completion_recovery /
+#                    context_budget_completion_recovery (recovery audits)
+#   The result-JSON merge the runner performs at completion
+#   (``_metrics_from_result``) always carries card_id/competition_mode/
+#   scorecard — see /home/davidh/architects/arc3_lab/postamble.sh's
+#   ``_META_KEYS`` — the ARC-AGI-3 solver's own final-score report, merged
+#   into experiment.meta by the Lab, not set by the caller.
+LAB_WRITTEN_META_KEYS = frozenset({
+    # Server-owned git/output state (store.py Store._SERVER_OWNED_META_KEYS)
+    "outdir", "worktree", "git_branch", "git_commit",
+    # Slurm scheduler/requeue bookkeeping (runner.py, executors/slurm.py)
+    "slurm_job_id", "slurm_native_requeue", "slurm_state",
+    "slurm_restart_count", "slurm_run_token", "slurm_last_restart_at",
+    "slurm_attempts", "assigned_resource", "assigned_units",
+    # ARC-AGI-3 solver result merged into meta at completion (postamble.sh)
+    "card_id", "competition_mode", "scorecard",
+    # Budget-recovery audit trails (routes/experiments.py recover-* routes)
+    "budget_completion_recovery", "context_budget_completion_recovery",
+})
+
+
+# Key-NAME hints for secret-ish meta values (mirrors app.py's
+# ``_SECRET_BODY_FIELDS`` used to redact the stats replay buffer) — reused
+# here to mask values in the clone settings-diff response so a cloned
+# experiment's diff never echoes a secret back to the caller.
+_SECRET_META_KEY_HINTS = (
+    "password", "passwd", "secret", "token", "api_key", "apikey",
+    "authorization", "credential", "private_key",
+)
+
+
+def is_secret_meta_key(key: str) -> bool:
+    """True if *key*'s name suggests it holds a secret value (case-insensitive
+    substring match against the same hint list app.py redacts in request-body
+    logging)."""
+    low = key.lower()
+    return any(hint in low for hint in _SECRET_META_KEY_HINTS)
+
+
+def mask_secret_meta_value(key: str, value):
+    """Return *value*, or ``"[REDACTED]"`` when *key* looks secret-ish."""
+    return "[REDACTED]" if is_secret_meta_key(key) else value
+
+
+def reject_runtime_meta_keys(meta: dict | None, *, where: str = "meta") -> None:
+    """422 if *meta* sets any key the Lab itself writes at runtime.
+
+    Previously these were silently ACCEPTED on create/batch-create, so a
+    caller who copied ~85 keys from a parent run's experiment.json (then
+    forgot — or didn't know — to strip the Lab's own bookkeeping) got a new,
+    not-yet-started experiment whose meta already claimed the PARENT's
+    card_id/scorecard/slurm_state. Reject loudly instead.
+    """
+    if not meta:
+        return
+    bad = sorted(set(meta) & LAB_WRITTEN_META_KEYS)
+    if bad:
+        raise HTTPException(
+            422,
+            f"{where} sets lab-written runtime key(s) {bad} — these are "
+            f"recorded by the Lab itself while a job runs/finishes and "
+            f"cannot be set by the caller. Remove them from {where} "
+            f"(see LAB_WRITTEN_META_KEYS in the_lab/deps.py).",
+        )
+
+
+def meta_settings_diff(source: dict | None, new: dict | None) -> dict:
+    """Added / changed / removed keys between a source run's meta and a new
+    one — used by ``POST /experiments/clone`` to report what the clone
+    actually differs by (lab-written runtime keys already stripped out of
+    both sides by the caller). Secret-ish values (see ``is_secret_meta_key``)
+    are masked in every bucket: this diff goes straight into an API
+    response, so a secret copied verbatim from the source run must never be
+    echoed back in the clear.
+    """
+    source, new = source or {}, new or {}
+    added: dict = {}
+    changed: dict = {}
+    removed: dict = {}
+    for k, v in new.items():
+        if k not in source:
+            added[k] = mask_secret_meta_value(k, v)
+        elif source[k] != v:
+            changed[k] = {"from": mask_secret_meta_value(k, source[k]),
+                          "to": mask_secret_meta_value(k, v)}
+    for k, v in source.items():
+        if k not in new:
+            removed[k] = mask_secret_meta_value(k, v)
+    return {"added": added, "changed": changed, "removed": removed}
+
+
 # --- Helper functions ---
 
 def sanitize_error(exc: BaseException | str) -> str:
