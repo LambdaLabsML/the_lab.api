@@ -1283,7 +1283,11 @@ function OutputDocFrame({ content, basePath, linkRef }: {
     <iframe
       ref={ref}
       class="lightbox-doc-frame"
-      sandbox="allow-scripts allow-same-origin"
+      // Downloads (PNG/GIF exports), new-tab links and the share sheet are
+      // blocked in a sandboxed frame unless allowed; scripts already run
+      // same-origin, so these add no real reach.
+      sandbox="allow-scripts allow-same-origin allow-downloads allow-popups allow-popups-to-escape-sandbox"
+      allow="web-share; clipboard-write"
       srcdoc={srcdoc}
       title="experiment output"
     />
