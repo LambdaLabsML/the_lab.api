@@ -120,3 +120,21 @@ class AttemptFieldExposureTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RunPctTests(unittest.TestCase):
+    """run_pct: wall-clock progress next to the solver's games-picked pct."""
+
+    def test_from_budget_and_max_wall(self):
+        from the_lab.deps import with_run_pct
+        src = {"pct_complete": 100.0, "budget_remaining_s": 4500}
+        out = with_run_pct(src, {"MAX_WALL_SECONDS": "9000"})
+        self.assertEqual(out["run_pct"], 50.0)
+        self.assertNotIn("run_pct", src)           # input (often cached) untouched
+        self.assertEqual(with_run_pct({"budget_remaining_s": -5}, {"MAX_WALL_SECONDS": 9000})["run_pct"], 100.0)
+
+    def test_missing_inputs_leave_progress_alone(self):
+        from the_lab.deps import with_run_pct
+        self.assertNotIn("run_pct", with_run_pct({"pct_complete": 40}, {"MAX_WALL_SECONDS": 9000}))
+        self.assertNotIn("run_pct", with_run_pct({"budget_remaining_s": 10}, {}))
+        self.assertNotIn("run_pct", with_run_pct({"budget_remaining_s": 10}, {"MAX_WALL_SECONDS": "x"}))

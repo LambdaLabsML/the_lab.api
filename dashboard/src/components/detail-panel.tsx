@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useState, useRef } from "preact/hooks";
+import { progressPct } from "../lib/progress";
 import { selectedIdea, selectedMetric, detailTimeline, detailSortNewest, colorTheme } from "../state/settings";
 import { scrollToExperiment, runningProgress, allExperiments } from "../state/signals";
 import { getIdea, getExperimentProgress, getExperimentLog, getExperimentScript, getExperimentOutput, getIdeaDiff, getIdeaMentions, type ThreadMention } from "../state/api";
@@ -300,7 +301,7 @@ export function DetailPanel({ embedded = false }: { embedded?: boolean } = {}) {
         getExperimentProgress(label).then((data) => {
           if (data.progress) {
             setProgressData((prev) => ({ ...prev, [String(exp.id)]: data.progress as Record<string, any> }));
-            const pct = (data.progress as any).pct_complete ?? (data.progress as any).pct;
+            const pct = progressPct(data.progress as Record<string, unknown>);
             if (typeof pct === "number") {
               runningProgress.value = { ...runningProgress.value, [label]: pct };
             }
@@ -319,7 +320,7 @@ export function DetailPanel({ embedded = false }: { embedded?: boolean } = {}) {
       const prog = ev.progress as Record<string, any> | null | undefined;
       if (!exp || !prog) return;
       setProgressData((prev) => ({ ...prev, [String(exp.id)]: prog }));
-      const pct = prog.pct_complete ?? prog.pct;
+      const pct = progressPct(prog);
       if (typeof pct === "number") {
         runningProgress.value = { ...runningProgress.value, [ev.label as string]: pct };
       }
@@ -1836,7 +1837,7 @@ function ExperimentItem({
             {fmtScoreShort(exp.metrics[metricKey] as number)}
           </span>
         )}
-        <span dangerouslySetInnerHTML={{ __html: badgeHtml(exp.status, progress?.pct_complete ?? progress?.pct) }} />
+        <span dangerouslySetInnerHTML={{ __html: badgeHtml(exp.status, progressPct(progress)) }} />
         {isRestarted && (
           <span
             style={{ color: "var(--yellow)", fontWeight: 600, fontSize: "var(--text-xs)", marginLeft: "var(--space-2)" }}
@@ -1894,7 +1895,7 @@ function ExperimentItem({
         {exp.runtime && <> | runtime: {exp.runtime}</>}
       </div>
       {exp.status === "running" && attemptStartedAt && (() => {
-        const pct = progress?.pct_complete ?? progress?.pct;
+        const pct = progressPct(progress);
         if (typeof pct !== "number" || pct <= 0) return null;
         // Restart/timing fix: measure elapsed from the CURRENT attempt's
         // start (attempt_started_at), not the original dispatch (started_at,
