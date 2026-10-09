@@ -135,7 +135,7 @@ export function ArtifactsSidebar() {
 
 // ── Main pane ────────────────────────────────────────────────────────────────
 
-function Breadcrumb({ path }: { path: string }) {
+function Breadcrumb({ path, isDir }: { path: string; isDir: boolean }) {
   const parts = path.split("/").filter(Boolean);
   return (
     <div class="art-crumbs">
@@ -152,7 +152,7 @@ function Breadcrumb({ path }: { path: string }) {
           </span>
         );
       })}
-      {path && !selectedIsDir.value && (
+      {path && !isDir && (
         <a class="art-raw" href={artifactUrl(path)} target="_blank" rel="noopener noreferrer">raw ↗</a>
       )}
     </div>
@@ -245,26 +245,27 @@ function FileView({ path }: { path: string }) {
   return <>{cut}<pre class="art-pre">{state.text}</pre></>;
 }
 
+/** Folder or file? From the parent's listing once loaded, else by extension. */
+function isDirPath(path: string): boolean {
+  if (!path) return true;
+  const listing = listings.value[parentOf(path)];
+  const name = path.split("/").pop() || "";
+  if (Array.isArray(listing)) {
+    const entry = listing.find((e) => e.name === name);
+    if (entry) return entry.kind === "dir";
+  }
+  return selectedIsDir.value && !/\.[a-z0-9]{1,8}$/i.test(name);
+}
+
 export function ArtifactsView() {
   const path = artifactPath.value;
-  // A deep link to a folder or file: decide by its parent's listing.
-  useEffect(() => {
-    if (!path) { selectedIsDir.value = true; return; }
-    const parent = parentOf(path);
-    void loadListing(parent).then(() => {
-      const listing = listings.value[parent];
-      const name = path.split("/").pop();
-      if (Array.isArray(listing)) {
-        const entry = listing.find((e) => e.name === name);
-        if (entry) selectedIsDir.value = entry.kind === "dir";
-      }
-    });
-  }, [path]);
+  useEffect(() => { if (path) void loadListing(parentOf(path)); }, [path]);
+  const isDir = isDirPath(path);
   return (
     <main class="artifacts-page">
-      <Breadcrumb path={path} />
+      <Breadcrumb path={path} isDir={isDir} />
       <div class="art-content">
-        {selectedIsDir.value ? <FolderView path={path} /> : <FileView key={path} path={path} />}
+        {isDir ? <FolderView path={path} /> : <FileView key={path} path={path} />}
       </div>
     </main>
   );
