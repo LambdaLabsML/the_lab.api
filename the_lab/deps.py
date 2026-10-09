@@ -490,3 +490,22 @@ def _write_task(text: str) -> dict:
     if store is not None:
         store._version += 1
     return task
+
+
+def with_run_pct(progress: dict, meta: dict | None) -> dict:
+    """``progress`` plus ``run_pct``: how much of the run's wall-clock budget
+    is used (0-100), when the progress reports ``budget_remaining_s`` and the
+    run's settings give ``MAX_WALL_SECONDS``. The solver's own ``pct_complete``
+    counts games picked up, so it reads 100 for the whole last stretch of a run.
+    Returns a copy; the input (often a cached dict) is never modified."""
+    if not isinstance(progress, dict):
+        return progress
+    try:
+        remaining = float(progress.get("budget_remaining_s"))
+        total = float((meta or {}).get("MAX_WALL_SECONDS"))
+    except (TypeError, ValueError):
+        return progress
+    if not (total > 0) or remaining != remaining:   # NaN guard
+        return progress
+    pct = max(0.0, min(100.0, 100.0 * (1.0 - remaining / total)))
+    return {**progress, "run_pct": round(pct, 1)}

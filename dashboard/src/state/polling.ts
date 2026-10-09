@@ -26,6 +26,7 @@
 // ------------------------------------------------------------
 
 import { getBacklog, getGraph, getChartData, getAllIdeas, getExperimentProgress } from "./api";
+import { progressPct } from "../lib/progress";
 import { resetGlobalBestBeforeCache, setMetricDirectionOverrides } from "../lib/colors";
 import {
   backlogData,
@@ -157,7 +158,7 @@ function pollChartData(): Promise<void> {
       for (const e of running) {
         const label = e.label || String(e.id);
         const m = e.metrics as Record<string, unknown> | undefined;
-        const pct = m?.["pct_complete"] ?? m?.["pct"];
+        const pct = progressPct(m);
         if (typeof pct === "number") progress[label] = pct;
         else if (label) missing.push(label);
       }
@@ -166,7 +167,7 @@ function pollChartData(): Promise<void> {
           missing.map(async (label) => {
             try {
               const resp = await getExperimentProgress(label);
-              const pct = resp.progress?.pct_complete ?? resp.progress?.pct;
+              const pct = progressPct(resp.progress as Record<string, unknown> | undefined);
               if (typeof pct === "number") progress[label] = pct;
             } catch { /* ignore */ }
           }),
@@ -427,7 +428,7 @@ function numericMetrics(obj: Record<string, unknown>, prefix = ""): Record<strin
  *  this; as a slow reconcile it no longer can). */
 export function patchProgress(label: string, prog: Record<string, unknown>): void {
   if (!label || !prog || typeof prog !== "object") return;
-  const pct = (prog as any).pct_complete ?? (prog as any).pct;
+  const pct = progressPct(prog);
   if (typeof pct === "number") {
     runningProgress.value = { ...runningProgress.value, [label]: pct };
   }
