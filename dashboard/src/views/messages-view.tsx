@@ -14,8 +14,8 @@ import { useLiveRefresh } from "../lib/hooks";
 import type { AgentEntry, HumanEntry, MessageEntry, ThreadMeta } from "../lib/types";
 import { Badge, EmptyState, IconButton } from "../components/ui";
 import { agentColor, registerAgents, agentInitials } from "../lib/colors";
-import { isHuman, humanDisplayName } from "../lib/identity";
-import { messagesMyNames, messagesReadByMe, myName, serverDemoMode } from "../state/settings";
+import { isHuman, humanDisplayName, humanIdForName } from "../lib/identity";
+import { messagesMyNames, messagesReadByMe, myName, serverDemoMode, threadStatusFilter, threadOpenedByMe } from "../state/settings";
 import {
   markMessagesReadByMe,
   markThreadReadByMe,
@@ -158,6 +158,9 @@ export function MessagesView() {
   const scrollSnapshot = useRef<{ thread: number; first: number; last: number; height: number; top: number } | null>(null);
   const readMap = messagesReadByMe.value;
   const myNames = messagesMyNames.value; // re-render when the names change
+  const statusFilter = threadStatusFilter.value;
+  const openedByMeOnly = threadOpenedByMe.value;
+  const myHumanId = humanIdForName(myName.value || "");
   const demo = serverDemoMode.value;
   const readByMe = (id: number) => !!readMap[String(id)];
   const setReadByMe = (ids: number[], read: boolean) =>
@@ -374,6 +377,21 @@ export function MessagesView() {
           isHuman(threadMeta.get(thread.id)?.created_by) ||
           thread.items.some((m) => isHuman(m.from_agent) || isHuman(m.to)),
       )
+      .filter((thread) => {
+        if (!openedByMeOnly) return true;
+        // Opened by you: created as your user:<name>, its first message was
+        // sent from this browser, or created as the plain "user" (every human
+        // posted as "user" before names existed).
+        const createdBy = threadMeta.get(thread.id)?.created_by;
+        if (createdBy === "user" || (myHumanId && createdBy === myHumanId)) return true;
+        if (isSentHere({ id: thread.id } as MessageEntry)) return true;
+        const root = thread.items.find((m) => m.id === thread.id);
+        return !!root && !!myHumanId && root.from_agent === myHumanId;
+      })
+      .filter(
+        // Threads without stored metadata (plain conversations) count as open.
+        (thread) => statusFilter === "all" || (threadMeta.get(thread.id)?.status ?? "open") === statusFilter,
+      )
       .filter(
         (thread) =>
           humanFilter.size === 0 ||
@@ -384,7 +402,7 @@ export function MessagesView() {
           ? timeOf(b.latest) - timeOf(a.latest)
           : timeOf(a.latest) - timeOf(b.latest),
       );
-  }, [displayed, sort, readMap, viewAs, conversationScope, threadMeta, myNames, humanFilter, threadHumans]);
+  }, [displayed, sort, readMap, viewAs, conversationScope, threadMeta, myNames, humanFilter, threadHumans, statusFilter, openedByMeOnly, myHumanId]);
   const focusId = focusMessageId.value;
   useLayoutEffect(() => {
     const list = messageListRef.current;
@@ -609,6 +627,28 @@ export function MessagesView() {
           )}
           <div class="thread-sidebar-subhead">
             <span>{loaded ? `${threads.length} threads` : "Loading…"}</span>
+            <span class="thread-status-seg" role="group" aria-label="Thread status">
+              {(["open", "closed", "all"] as const).map((v) => (
+                <button
+                  key={v}
+                  type="button"
+                  class={`thread-status-btn${statusFilter === v ? " is-active" : ""}`}
+                  aria-pressed={statusFilter === v}
+                  onClick={() => { threadStatusFilter.value = v; }}
+                >
+                  {v}
+                </button>
+              ))}
+            </span>
+            <button
+              type="button"
+              class={`thread-status-btn thread-mine-btn${openedByMeOnly ? " is-active" : ""}`}
+              aria-pressed={openedByMeOnly}
+              title="Only threads you opened (as your name, from this browser, or as plain 'user' before names existed)"
+              onClick={() => { threadOpenedByMe.value = !openedByMeOnly; }}
+            >
+              by me
+            </button>
             {!inPerspective && (
               <button
                 type="button"

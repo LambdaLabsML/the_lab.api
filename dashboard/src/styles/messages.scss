@@ -668,3 +668,20 @@
     min-height: 38svh;
   }
 }
+
+/* Open / closed / all switch above the thread list. */
+.thread-status-seg {
+  display: inline-flex; margin-left: var(--space-2);
+  border: 1px solid var(--border-soft); border-radius: var(--radius-sm); overflow: hidden;
+}
+.thread-status-btn {
+  appearance: none; border: 0; background: transparent; padding: 0 7px;
+  color: var(--text-faint); font: inherit; font-size: var(--text-xs); line-height: 1.6; cursor: pointer;
+  box-shadow: inset 1px 0 var(--border-soft);
+  &:first-child { box-shadow: none; }
+  &:hover { color: var(--text); background: var(--bg-hi); }
+  &.is-active { color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+}
+.thread-mine-btn {
+  margin-left: 4px; border: 1px solid var(--border-soft); border-radius: var(--radius-sm); box-shadow: none;
+}
