@@ -4,22 +4,23 @@
 // lists folders lazily; the main pane renders Markdown, images, HTML (sandboxed)
 // and text, or lists a folder.
 import { signal } from "@preact/signals";
-import { useEffect, useMemo, useRef, useState } from "preact/hooks";
-import { listArtifacts, artifactUrl, getArtifactText, readArtifactFile, writeArtifactFile, type ArtifactEntry } from "../state/api";
+import { useEffect, useMemo, useState } from "preact/hooks";
+import { listArtifacts, artifactUrl, getArtifactText, writeArtifactFile, type ArtifactEntry } from "../state/api";
 import { renderMarkdown } from "../components/detail-panel";
 import { Eyebrow, EmptyState } from "../components/ui";
+import { CollabEditor } from "../components/collab-editor";
+import { collabActiveCounts } from "../state/collab";
 
 /** Selected artifact path ("" = root), mirrored in the URL as #artifacts/<path>. */
 export const artifactPath = signal<string>("");
 /** Whether the selection is a folder (decided from its listing entry). */
 const selectedIsDir = signal<boolean>(true);
-/** Artifact path open in the editor (null = viewing). */
-const editingPath = signal<string | null>(null);
+/** Artifact path open in the live collab editor (null = viewing). */
+export const editingPath = signal<string | null>(null);
 /** Bumped after a save so the read-only view reloads the file. */
 const fileRevision = signal(0);
 // Text files the dashboard user may create / edit (mirrors the server list).
 const EDIT_EXT = new Set(["md", "markdown", "txt", "json", "csv", "tsv", "yaml", "yml", "toml"]);
-const DRAFT_PREFIX = "the-lab:artifactDraft:";
 
 // Listings by folder path, shared by the tree and the folder view.
 const listings = signal<Record<string, ArtifactEntry[] | "loading" | "error">>({});
@@ -54,10 +55,21 @@ function fmtTime(iso: string | null): string {
 }
 
 export function openArtifact(path: string, isDir: boolean): void {
-  // Leaving the editor keeps the unsaved text as a draft (see Editor).
   if (editingPath.value && editingPath.value !== path) editingPath.value = null;
   selectedIsDir.value = isDir;
   artifactPath.value = path;
+}
+
+/** Select a file and open it directly in the live collab editor (used by the
+ *  "Join" toast action and by "+ New file"). */
+export function openArtifactForEdit(path: string): void {
+  selectedIsDir.value = false;
+  artifactPath.value = path;
+  editingPath.value = path;
+  // From another section (e.g. a toast on the Overview): switch to Artifacts.
+  if (!location.hash.startsWith("#artifacts")) {
+    location.hash = `#artifacts/${path.split("/").map(encodeURIComponent).join("/")}`;
+  }
 }
 
 // ── Sidebar tree ─────────────────────────────────────────────────────────────
@@ -94,6 +106,11 @@ function TreeLevel({ dir, depth, filter, open, toggle }: {
             >
               <span class="art-tree-icon">{e.kind === "dir" ? (isOpen ? "▾" : "▸") : extOf(e.name) === "md" ? "≡" : "·"}</span>
               <span class="art-tree-name">{e.name}</span>
+              {e.kind === "file" && collabActiveCounts.value[path] > 0 && (
+                <span class="art-collab-badge" title={`${collabActiveCounts.value[path]} editing now`}>
+                  ● {collabActiveCounts.value[path]}
+                </span>
+              )}
             </button>
             {e.kind === "dir" && isOpen && (
               <TreeLevel dir={path} depth={depth + 1} filter="" open={open} toggle={toggle} />
@@ -111,6 +128,8 @@ export function ArtifactsSidebar() {
   const [open, setOpen] = useState<Set<string>>(() => {
     // Open the folders on the way to a deep-linked artifact.
     const parts = artifactPath.value.split("/").filter(Boolean);
+    // A deep link to a file opens its folders, not the file itself.
+    if (parts.length && /\.[a-z0-9]{1,8}$/i.test(parts[parts.length - 1])) parts.pop();
     return new Set(parts.map((_, i) => parts.slice(0, i + 1).join("/")));
   });
   useEffect(() => { void loadListing(""); }, []);
@@ -191,8 +210,7 @@ function NewFile({ folder }: { folder: string }) {
       if (r.conflict) { setError("a file with that name exists"); return; }
       setName(null); setError(null);
       void loadListing(parentOf(path), true);
-      openArtifact(path, false);
-      editingPath.value = path;
+      openArtifactForEdit(path);
     } catch (e) {
       setError(String((e as Error).message || e));
     }
@@ -219,126 +237,21 @@ function NewFile({ folder }: { folder: string }) {
 }
 
 // ── Editor ───────────────────────────────────────────────────────────────────
-// Single editor per browser for now: the server rejects a save whose base
-// version is outdated (an agent or another browser changed the file), and the
-// banner offers reload or overwrite. Unsaved text is kept as a per-browser
-// draft, so switching files or reloading the page never loses it.
+// Live collaborative editor (see ../components/collab-editor + ../state/collab):
+// edits are synced over a websocket (OT), saved server-side on a debounce, and
+// never lost to a "someone else changed it" conflict — there's no REST
+// save/draft/conflict path any more.
 
-interface Draft { content: string; baseVersion: string; ts: number }
-function loadDraft(path: string): Draft | null {
-  try { const raw = localStorage.getItem(DRAFT_PREFIX + path); return raw ? JSON.parse(raw) as Draft : null; } catch { return null; }
-}
-function saveDraft(path: string, d: Draft | null): void {
-  try { if (d) localStorage.setItem(DRAFT_PREFIX + path, JSON.stringify(d)); else localStorage.removeItem(DRAFT_PREFIX + path); } catch { /* storage unavailable */ }
-}
-
-function Editor({ path }: { path: string }) {
-  const isMd = extOf(path) === "md" || extOf(path) === "markdown";
-  const [text, setText] = useState("");
-  const [saved, setSaved] = useState<{ content: string; version: string } | null>(null);
-  const [status, setStatus] = useState<{ kind: "info" | "ok" | "error"; text: string } | null>(null);
-  const [conflict, setConflict] = useState<{ version?: string } | null>(null);
-  const [preview, setPreview] = useState(isMd);
-  const [busy, setBusy] = useState(false);
-  const textRef = useRef(text);
-  textRef.current = text;
-
-  const load = async (keepDraft: boolean) => {
-    setStatus({ kind: "info", text: "Loading…" });
-    try {
-      const f = await readArtifactFile(path);
-      setSaved({ content: f.content, version: f.version });
-      const draft = keepDraft ? loadDraft(path) : null;
-      if (draft && draft.content !== f.content) {
-        setText(draft.content);
-        setStatus({ kind: "info", text: `Restored your unsaved draft from ${new Date(draft.ts).toLocaleString()}.` });
-      } else {
-        setText(f.content);
-        saveDraft(path, null);
-        setStatus(null);
-      }
-      setConflict(null);
-    } catch (e) {
-      setStatus({ kind: "error", text: String((e as Error).message || e) });
-    }
-  };
-  useEffect(() => { void load(true); }, [path]);
-
-  const dirty = saved != null && text !== saved.content;
-  // Keep the draft in this browser while there are unsaved changes.
-  useEffect(() => {
-    if (!saved) return;
-    if (dirty) saveDraft(path, { content: text, baseVersion: saved.version, ts: Date.now() });
-    else saveDraft(path, null);
-  }, [text, saved]);
-
-  const save = async (overwriteVersion?: string) => {
-    if (!saved || busy) return;
-    setBusy(true);
-    try {
-      const content = textRef.current;
-      const r = await writeArtifactFile(path, content, { baseVersion: overwriteVersion ?? saved.version });
-      if (r.conflict) {
-        setConflict({ version: r.version });
-        setStatus({ kind: "error", text: "Not saved: the file changed since you opened it." });
-      } else {
-        setSaved({ content, version: r.version });
-        saveDraft(path, null);
-        setConflict(null);
-        setStatus({ kind: "ok", text: `Saved ${new Date().toLocaleTimeString()}` });
-        fileRevision.value += 1;
-        void loadListing(parentOf(path), true);
-      }
-    } catch (e) {
-      setStatus({ kind: "error", text: String((e as Error).message || e) });
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const close = () => {
-    if (dirty && !confirm("Close the editor? Your unsaved text stays as a draft in this browser.")) return;
-    editingPath.value = null;
-  };
-
-  const html = useMemo(
-    () => (isMd && preview ? renderMarkdown(text, `.the_lab/artifacts${parentOf(path) ? `/${parentOf(path)}` : ""}`) : ""),
-    [text, preview, isMd, path],
-  );
-
+function ArtifactEditor({ path }: { path: string }) {
   return (
-    <div class="art-editor" onKeyDown={(e) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") { e.preventDefault(); void save(); }
-    }}>
-      <div class="art-editor-bar">
-        <button type="button" class="art-btn is-primary" disabled={!dirty || busy} onClick={() => void save()} title="Save (Ctrl/⌘+S)">
-          {busy ? "Saving…" : "Save"}
-        </button>
-        <button type="button" class="art-btn" onClick={close}>Close</button>
-        {isMd && (
-          <label class="art-toggle"><input type="checkbox" checked={preview} onChange={() => setPreview(!preview)} /> preview</label>
-        )}
-        <span class={`art-status${dirty ? " is-dirty" : ""}`}>{dirty ? "unsaved changes (kept as a draft)" : "no changes"}</span>
-        {status && <span class={`art-status is-${status.kind}`}>{status.text}</span>}
-      </div>
-      {conflict && (
-        <div class="art-conflict">
-          Someone (an agent, or another browser) changed this file after you opened it.
-          <button type="button" class="art-btn" onClick={() => { if (confirm("Discard your text and load the current file?")) void load(false); }}>Load theirs (discard mine)</button>
-          <button type="button" class="art-btn is-danger" onClick={() => void save(conflict.version)}>Overwrite with mine</button>
-          <a href={artifactUrl(path)} target="_blank" rel="noopener noreferrer">compare: open current ↗</a>
-        </div>
-      )}
-      <div class={`art-editor-panes${isMd && preview ? " is-split" : ""}`}>
-        <textarea
-          class="art-editor-text"
-          value={text}
-          spellcheck={isMd}
-          onInput={(e) => setText((e.target as HTMLTextAreaElement).value)}
-        />
-        {isMd && preview && <div class="md-output art-md art-editor-preview" dangerouslySetInnerHTML={{ __html: html }} />}
-      </div>
-    </div>
+    <CollabEditor
+      key={path}
+      path={path}
+      onClose={() => {
+        editingPath.value = null;
+        fileRevision.value += 1; // pick up the latest saved content in the read-only view
+      }}
+    />
   );
 }
 
@@ -449,7 +362,7 @@ export function ArtifactsView() {
       <Breadcrumb path={path} isDir={isDir} />
       <div class="art-content">
         {isDir ? <FolderView path={path} />
-          : editingPath.value === path ? <Editor key={path} path={path} />
+          : editingPath.value === path ? <ArtifactEditor path={path} />
           : <FileView key={`${path}@${fileRevision.value}`} path={path} />}
       </div>
     </main>

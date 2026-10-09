@@ -56,6 +56,7 @@ import { ArtifactsSidebar, ArtifactsView, artifactPath } from "./views/artifacts
 import { ActivityPane } from "./components/activity/activity-pane";
 import { ActivitySidebar } from "./components/activity/activity-sidebar";
 import { MessagePreviewOverlay } from "./components/agent-activity/message-preview";
+import { Toasts, startCollabNotifications } from "./components/toasts";
 import { startAgentActivity } from "./state/agent-activity";
 import { SettingsPanel } from "./components/settings-panel";
 import {
@@ -907,12 +908,14 @@ export function App() {
     startWs();
     startAgentActivity();
     const stopMessageNotifications = startMessageNotifications();
+    const stopCollabNotifications = startCollabNotifications();
     const dispose = effect(syncUrlFromSignals);
     return () => {
       window.removeEventListener("popstate", readFiltersFromUrl);
       stopPolling();
       stopWs();
       stopMessageNotifications();
+      stopCollabNotifications();
       dispose();
     };
   }, []);
@@ -1213,6 +1216,7 @@ export function App() {
         <AgentBar />
         {/* hover-preview of sidebar message rows, floating over the main area */}
         <MessagePreviewOverlay />
+        <Toasts />
         <div class="app-content">
           {navSection === "activity" && <ActivityPane />}
           {navSection === "messages" && (

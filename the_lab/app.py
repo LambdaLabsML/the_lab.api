@@ -168,6 +168,13 @@ def _emit_agent_api_call(agent_id: str, method: str, path: str, status: int,
 # inject_notifications) — parse/re-dump cost on the loop outweighs the value.
 _NOTIF_INJECT_MAX_BYTES = 512 * 1024
 
+# GET /api/v1/threads/{id} (a single thread's full message history) is
+# excluded from _notifications injection below: it can already be the
+# largest response an agent fetches, and padding it with notifications it
+# will see again on its next ordinary call just grows it further for no
+# benefit.
+_THREAD_DETAIL_RE = re.compile(r"^/api/v1/threads/\d+$")
+
 _notif_seen_lock = threading.Lock()
 _notif_seen_cache: dict | None = None  # in-memory authority; loaded once
 
@@ -808,6 +815,7 @@ async def inject_notifications(request, call_next):
             or path.startswith("/api/v1/stats")
             or path == "/api/v1/notifications"
             or path == "/api/v1/health"  # liveness probe — keep it minimal
+            or (request.method == "GET" and _THREAD_DETAIL_RE.match(path))
             or response.status_code >= 400):
         _emit_call()
         return response
@@ -1214,6 +1222,31 @@ async def ws_endpoint(websocket: WebSocket, since: int = 0, token: str = ""):
         _ws_mod.broadcaster.unsubscribe(q)
 
 
+# --- Live collaborative artifact editing ---
+
+@app.websocket("/api/v1/artifacts/collab")
+async def artifacts_collab_endpoint(websocket: WebSocket, path: str = "", token: str = "",
+                                     name: str = "", client: str = ""):
+    """Live collaborative editing of one artifact (OT; see ``the_lab/collab.py``).
+
+    Connect with ``ws[s]://host/api/v1/artifacts/collab?path=<relative path>
+    &name=<display name>&client=<id chosen by the browser, per tab>``. Auth
+    mirrors ``/ws``: pass ``?token=<base64 user:pass>`` when auth is enabled
+    (close 1008 on failure). A bad/missing ``path`` or a non-editable file
+    is reported as an ``{"type":"error",...}`` frame, then the socket closes.
+    """
+    # Handshake must complete before any WS-level frame (see /ws for rationale).
+    await websocket.accept()
+
+    if _AUTH_ENABLED:
+        if not secrets.compare_digest(token, _AUTH_EXPECTED):
+            await websocket.close(code=1008)
+            return
+
+    from . import collab
+    await collab.handle_collab_socket(websocket, path, name, client or secrets.token_hex(4))
+
+
 # --- Agent-scoped messages WebSocket ---
 
 class _NotifRequestShim:
@@ -1266,7 +1299,8 @@ async def messages_ws_endpoint(websocket: WebSocket):
     ``Authorization: Basic`` handshake header for parity).
 
     Frames (JSON):
-      * initial    — ``{"type":"init","messages":[...],"notifications":[...]}``
+      * initial    — ``{"type":"init","messages":[...],"notifications":[...],
+                      "cursor":<id>,"backlog":{"older_unread":N,"hint":...}?}``
       * message    — ``{"type":"message","messages":[<full msg>...]}`` as they arrive
       * notify     — ``{"type":"notifications","notifications":[...]}`` on churn
       * experiment — ``{"type":"experiment","event":"experiment_...", ...payload}``
@@ -1277,6 +1311,15 @@ async def messages_ws_endpoint(websocket: WebSocket):
     client POSTs /messages/{id}/delivered after consuming the frame. Reconnects
     can replay unacknowledged IDs; clients should deduplicate them.
     ``?peek=1`` selects explicit unread history without claiming delivery.
+
+    ``?since=<message id>`` resumes from a cursor: only messages with id >
+    since are ever considered (for the initial frame and every later
+    sweep) — pass back the ``cursor`` this connection last reported.
+    Without ``since`` on a fresh connect, the initial frame is bounded to
+    the newest ~20 messages rather than the whole unread backlog; an
+    ``older_unread`` count and a fetch hint are included when more exist.
+    Those older messages are never auto-delivered through the socket — they
+    stay available via ``GET /api/v1/messages?unread=1``.
     """
     import asyncio as _asyncio
     if _DEMO:
@@ -1289,11 +1332,18 @@ async def messages_ws_endpoint(websocket: WebSocket):
     # Handshake must complete before any WS-level frame (see /ws for rationale).
     await websocket.accept()
 
-    # Query params: token (auth), agent_id (fallback), peek.
+    # Query params: token (auth), agent_id (fallback), peek, since (cursor).
     qp = websocket.query_params
     token = qp.get("token", "") or ""
     peek = qp.get("peek", "") in ("1", "true", "yes")
     acknowledged_delivery = qp.get("ack", "") in ("1", "true", "yes")
+    cursor: int | None = None
+    _since_raw = (qp.get("since") or "").strip()
+    if _since_raw:
+        try:
+            cursor = max(0, int(_since_raw))
+        except ValueError:
+            cursor = None
 
     # Auth gate — mirror /ws (token query param) but also accept the standard
     # Authorization: Basic handshake header the CLI sends for parity.
@@ -1324,27 +1374,36 @@ async def messages_ws_endpoint(websocket: WebSocket):
     shim = _NotifRequestShim(agent_id)
 
     def _fetch_deliver() -> list[dict]:
-        """Select this agent's unread messages for delivery.
+        """Select this agent's unread messages newer than ``cursor`` for delivery.
 
         Normally CLAIM them (select + mark delivered atomically) so the same
         message can't also be delivered via the piggyback/poll channel. When
         ?peek=1, select WITHOUT claiming (unread_for) so the caller sees them
-        but they remain deliverable elsewhere.
+        but they remain deliverable elsewhere. Every sweep is bounded by
+        ``cursor`` (advanced below) so a connection never re-walks — or,
+        without ?peek, re-claims — messages it already saw: without this, a
+        long-lived connection with a large historical backlog would drain
+        that whole backlog a page at a time on every retry.
         """
+        nonlocal cursor
         try:
             if acknowledged_delivery:
-                return messages_mod.undelivered_for(
-                    REPO_DIR, agent_id=agent_id, role=role, limit=50,
+                msgs = messages_mod.undelivered_for(
+                    REPO_DIR, agent_id=agent_id, role=role, limit=50, since=cursor,
                 )
-            if peek:
-                return messages_mod.unread_for(
-                    REPO_DIR, agent_id=agent_id, role=role, limit=50,
+            elif peek:
+                msgs = messages_mod.unread_for(
+                    REPO_DIR, agent_id=agent_id, role=role, limit=50, since=cursor,
                 )
-            return messages_mod.claim_unread_for(
-                REPO_DIR, agent_id=agent_id, role=role, limit=50,
-            )
+            else:
+                msgs = messages_mod.claim_unread_for(
+                    REPO_DIR, agent_id=agent_id, role=role, limit=50, since=cursor,
+                )
         except Exception:
             return []
+        if msgs:
+            cursor = max([cursor or 0, *(m.get("id", 0) for m in msgs)])
+        return msgs
 
     # Record the poll-heuristic timestamp so the dashboard "listening" flag
     # (agents.is_listening) lights up immediately, without waiting for a GET.
@@ -1360,16 +1419,50 @@ async def messages_ws_endpoint(websocket: WebSocket):
         # initial frame must still wake the listener.
         q = _ws_mod.broadcaster.subscribe()
         # ── Initial frame: current unread messages + current notifications ──
-        init_unread = await _asyncio.to_thread(_fetch_deliver)
+        # A fresh connect with no cursor gets a bounded recent slice instead
+        # of the whole unread backlog (one real agent accumulated 1,448
+        # unread messages, which a naive "deliver everything" replay dumped
+        # on it at once / over the first few retries). An explicit ?since=
+        # (or one remembered from an earlier frame) skips straight to the
+        # cursor-bounded sweep below.
+        backlog = None
+        if cursor is None:
+            init_unread, older, new_cursor = await _asyncio.to_thread(
+                messages_mod.connect_snapshot_for, REPO_DIR, agent_id=agent_id,
+                role=role, recent_limit=messages_mod._RECENT_BACKLOG_LIMIT,
+                # ack=1 defers claiming to the client's explicit POST
+                # .../delivered after it prints the frame (same contract as
+                # the cursor-bounded sweep below); only the plain
+                # claim-on-delivery mode claims the snapshot itself.
+                claim=not (peek or acknowledged_delivery),
+            )
+            if new_cursor is not None:
+                cursor = new_cursor
+            if older:
+                backlog = {
+                    "older_unread": older,
+                    "hint": (
+                        "Older backlog, not auto-delivered here. Fetch it explicitly: "
+                        "GET /api/v1/messages?unread=1&peek=1"
+                        f"&offset={messages_mod._RECENT_BACKLOG_LIMIT} (page further with &limit=N)."
+                    ),
+                }
+        else:
+            init_unread = await _asyncio.to_thread(_fetch_deliver)
         try:
             init_notifs = await _asyncio.to_thread(build_notifications, shim)
         except Exception:
             init_notifs = []
-        await websocket.send_json({
+        init_frame = {
             "type": "init",
             "messages": init_unread,
             "notifications": init_notifs,
-        })
+        }
+        if cursor is not None:
+            init_frame["cursor"] = cursor
+        if backlog:
+            init_frame["backlog"] = backlog
+        await websocket.send_json(init_frame)
 
         async def _send_loop():
             while True:
