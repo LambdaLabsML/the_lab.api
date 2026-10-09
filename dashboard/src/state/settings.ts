@@ -218,9 +218,24 @@ export const uiTexture = useSetting("uiTexture", true);
 /** Message ids the UI user has personally marked read. Client-side only (per
  *  browser) — kept separate from each message's agent `read_by` list. */
 export const messagesReadByMe = useSetting<Record<string, boolean>>("messagesReadByMe", {});
-/** Names this browser's user goes by in messages ("David, Dave"): agents
- *  address the human by name inside thread posts, so mentions notify. */
+/** This browser's name ("David"): the primary human identity, sent as
+ *  `as_user` on every message/thread this browser composes (stored as
+ *  "user:<slug>"). Per browser, until real accounts exist. */
+export const myName = useSetting<string>("myName", "");
+/** Extra names/aliases this browser's user also goes by ("Dave, DH"):
+ *  mentioning one inside a thread post still counts as addressed to them,
+ *  on top of their primary name above. */
 export const messagesMyNames = useSetting<string>("messagesMyNames", "");
+
+// Migration: seed the primary name from the first alias already set (the
+// pre-identity "Your names" field), once — if myName has never been set and
+// an alias exists, adopt it as the primary name. Persists itself via
+// useSetting's effect, so it only ever runs on a browser's first load after
+// this feature shipped.
+if (!myName.value) {
+  const first = messagesMyNames.value.split(/[,;]/).map((s) => s.trim()).filter(Boolean)[0];
+  if (first) myName.value = first;
+}
 
 /** Detail rows shown per agent in the activity tree (stepper-adjustable). */
 export const agentHistoryLimit = useSetting("agentHistoryLimit", 3);

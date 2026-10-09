@@ -75,7 +75,7 @@
 }
 .thread-sidebar-toolbar {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-3);
@@ -87,6 +87,70 @@
 }
 .thread-new-button {
   white-space: nowrap;
+}
+/* "You: David ✎" — this browser's send-as identity (settings.myName). */
+.messages-whoami {
+  appearance: none;
+  background: transparent;
+  border: 1px solid transparent;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--text-xs);
+  white-space: nowrap;
+  cursor: pointer;
+  em { color: var(--text-faint); font-style: normal; }
+  &:hover { color: var(--text); border-color: var(--border-soft); }
+}
+.messages-whoami-input {
+  width: 120px;
+  padding: 2px 6px;
+  color: var(--text);
+  background: var(--bg-elev);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: var(--text-xs);
+  outline: none;
+}
+/* Person filter: multi-select pills above the thread list. */
+.thread-human-filter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border-soft);
+}
+.thread-human-chip {
+  appearance: none;
+  padding: 1px 8px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-pill, 999px);
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+  &:hover { color: var(--text); border-color: var(--text-muted); }
+}
+.thread-human-chip.is-active {
+  color: var(--bg);
+  background: var(--text-muted);
+  border-color: var(--text-muted);
+}
+.thread-human-chip-clear {
+  appearance: none;
+  background: transparent;
+  border: none;
+  padding: 0 4px;
+  color: var(--text-faint);
+  font: inherit;
+  font-size: var(--text-xs);
+  text-decoration: underline;
+  cursor: pointer;
+  &:hover { color: var(--text); }
 }
 .thread-sidebar-subhead {
   position: relative;
@@ -263,6 +327,20 @@
   font-weight: 600;
   color: var(--text);
 }
+/* Humans active in a thread (posted in it, or addressed in it). */
+.thread-list-humans {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+.thread-human-pill {
+  padding: 0 6px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-pill, 999px);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
 .thread-list-meta {
   width: 100%;
   justify-content: space-between;
@@ -425,12 +503,20 @@
   box-shadow: inset 2px 0 0 color-mix(in srgb, var(--yellow) 40%, transparent);
 }
 .thread-message.is-for-me.is-unread { box-shadow: inset 3px 0 0 var(--yellow); }
-/* Messages from the human (user): highlighted, neutral instead of an agent colour. */
+/* Messages from the dashboard's own user (you): highlighted, neutral
+   instead of an agent colour. */
 .thread-message.is-from-user {
   background: color-mix(in srgb, var(--text) 6%, transparent);
   padding-left: var(--space-2);
   box-shadow: inset 3px 0 0 var(--text-muted);
   .thread-participant:first-of-type { color: var(--text); }
+}
+/* Messages from another human: a distinct, quieter neutral tint — not an
+   agent colour, and not "you" either. */
+.thread-message.is-from-human {
+  background: color-mix(in srgb, var(--text-muted) 5%, transparent);
+  padding-left: var(--space-2);
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--text-muted) 55%, transparent);
 }
 .thread-message-meta time {
   margin-left: auto;

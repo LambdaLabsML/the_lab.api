@@ -65,6 +65,30 @@ THREAD_STATUSES = ("open", "closed")
 THREAD_KINDS = ("discussion", "suggestion")
 _lock = threading.Lock()
 
+# Human identities: before real accounts exist, every person on the
+# dashboard is addressable as the catch-all "user", or — once they've named
+# themselves — personally as "user:<name>". Both are "human" for every
+# predicate below (visibility, membership, delivery); only the dashboard
+# (never an agent) may ever send or act as one, enforced in routes/messages.py.
+_HUMAN_PREFIX = f"{UI_USER}:"
+HUMAN_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
+
+
+def is_human(identity: str | None) -> bool:
+    """True for the catch-all ``user`` or a named ``user:<name>``."""
+    return identity == UI_USER or bool(identity) and identity.startswith(_HUMAN_PREFIX)
+
+
+def human_id(name: str) -> str:
+    """Validate a human name slug and return its ``user:<name>`` identity."""
+    name = (name or "").strip().lower()
+    if not HUMAN_NAME_RE.match(name):
+        raise ValueError(
+            f"invalid user name {name!r}; expected lowercase, "
+            "[a-z0-9][a-z0-9_-]{0,31}"
+        )
+    return f"{_HUMAN_PREFIX}{name}"
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -240,8 +264,10 @@ def _write(repo_dir: Path, data: dict) -> None:
 
 
 def _validate_to(to: str) -> None:
-    """Recipient must be an agent, role, all agents, a thread, or the dashboard user."""
+    """Recipient must be an agent, role, all agents, a thread, or a human."""
     if to in ("all", UI_USER):
+        return
+    if to.startswith(_HUMAN_PREFIX) and HUMAN_NAME_RE.match(to[len(_HUMAN_PREFIX):]):
         return
     if to.startswith("agent:") and len(to) > len("agent:"):
         return
@@ -250,8 +276,8 @@ def _validate_to(to: str) -> None:
     if to.startswith("thread:") and to[len("thread:"):].isdigit():
         return
     raise ValueError(
-        f"invalid recipient {to!r}; expected 'user', 'agent:<id>', 'role:<role>', "
-        "'thread:<id>', or 'all'"
+        f"invalid recipient {to!r}; expected 'user', 'user:<name>', 'agent:<id>', "
+        "'role:<role>', 'thread:<id>', or 'all'"
     )
 
 
@@ -424,10 +450,14 @@ def is_for(msg: dict, *, agent_id: str | None, role: str | None,
         meta = _threads_view(threads).get(to[len("thread:"):])
         member = ((meta or {}).get("members") or {}).get(agent_id)
         return bool(member) and not member.get("muted")
-    # ``user`` is a reserved dashboard identity, not a registered agent.  The
-    # explicit agent:user spelling is retained as an input-compatible alias.
+    # ``user`` is the catch-all human identity, not a registered agent — it
+    # reaches every human, named or not. The explicit agent:user spelling is
+    # retained as an input-compatible alias. A named ``user:<name>`` only
+    # reaches that one human.
     if to in (UI_USER, f"agent:{UI_USER}"):
-        return agent_id == UI_USER
+        return is_human(agent_id)
+    if to.startswith(_HUMAN_PREFIX):
+        return agent_id == to
     if to == "all":
         return not (agent_id and msg.get("from_agent") == agent_id)
     if agent_id and to == f"agent:{agent_id}":
@@ -471,7 +501,7 @@ def automatic_delivery_eligible(
     Direct messages remain available regardless of age.  Explicit inbox/history
     listing is intentionally not subject to this cutoff.
     """
-    if msg.get("to", "").startswith("agent:"):
+    if msg.get("to", "").startswith("agent:") or is_human(msg.get("to", "")):
         return True
     if msg.get("to", "").startswith("thread:"):
         # Thread delivery starts when you joined; history is read explicitly.
@@ -831,10 +861,12 @@ def _derive_thread(root: dict, group: list[dict] | None = None) -> dict:
     group = group or [root]
     to = root.get("to") or ""
     members: dict[str, dict] = {}
-    for aid in (to[len("agent:"):] if to.startswith("agent:") else None,
-                UI_USER if to == UI_USER else None):
-        if aid:
-            members[aid] = {"joined_at": root.get("created_at")}
+    if to.startswith("agent:") and to != f"agent:{UI_USER}":
+        members[to[len("agent:"):]] = {"joined_at": root.get("created_at")}
+    elif is_human(to):
+        members[to] = {"joined_at": root.get("created_at")}
+    elif to == f"agent:{UI_USER}":
+        members[UI_USER] = {"joined_at": root.get("created_at")}
     for m in group:
         aid = m.get("from_agent")
         if aid and aid not in members:
@@ -1309,6 +1341,46 @@ def thread_meta(repo_dir: Path, thread_id: int) -> dict | None:
             return None
         count = sum(1 for m in data["messages"] if thread_key(m) == thread_id)
         return {**meta, "members": dict(meta.get("members") or {}), "message_count": count}
+
+
+def list_humans(repo_dir: Path) -> list[dict]:
+    """Distinct human identities seen as a sender, recipient, or thread member.
+
+    Each entry is ``{"id": "user:david", "name": "david" | None,
+    "last_active": "<iso>"}`` (``name`` is ``None`` for the catch-all
+    ``"user"``), newest-active first. Lets the dashboard build name pills /
+    filters and agents see whom they can address personally.
+    """
+    with _lock:
+        data = _read(repo_dir)
+        msgs = list(data["messages"])
+        threads = dict(data["threads"])
+    last_active: dict[str, str] = {}
+
+    def bump(identity: str | None, ts: str | None) -> None:
+        if not identity or not is_human(identity) or not ts:
+            return
+        if ts > last_active.get(identity, ""):
+            last_active[identity] = ts
+
+    for m in msgs:
+        ts = m.get("created_at")
+        bump(m.get("from_agent"), ts)
+        to = m.get("to") or ""
+        bump(UI_USER if to == f"agent:{UI_USER}" else to, ts)
+    for meta in threads.values():
+        for member, info in (meta.get("members") or {}).items():
+            bump(member, info.get("joined_at"))
+    out = [
+        {
+            "id": identity,
+            "name": identity[len(_HUMAN_PREFIX):] if identity != UI_USER else None,
+            "last_active": ts,
+        }
+        for identity, ts in last_active.items()
+    ]
+    out.sort(key=lambda h: h["last_active"] or "", reverse=True)
+    return out
 
 
 def threads_digest(repo_dir: Path, *, agent_id: str | None, role: str | None, limit: int = 5) -> dict:

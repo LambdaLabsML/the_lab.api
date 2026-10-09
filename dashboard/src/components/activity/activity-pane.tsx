@@ -30,6 +30,7 @@ import {
   agentCostMap,
 } from "../../state/signals";
 import { isLowerBetter } from "../../lib/colors";
+import { isHuman, humanDisplayName } from "../../lib/identity";
 import { ideaTitle, fmtMetricName } from "../../lib/format";
 import { AgentTree } from "../agent-activity/agent-tree";
 import { ActivityFeed } from "../agent-activity/activity-feed";
@@ -271,16 +272,19 @@ export function ActivityPane() {
   const messageEntries = useMemo<FeedEntry[]>(() => {
     return messages.map((m) => {
       const t = m.created_at ? Date.parse(m.created_at) : 0;
-      const who = m.from_agent
-        ? (m.from_role ? `${m.from_agent} (${m.from_role})` : m.from_agent)
-        : "you";
+      const who = !m.from_agent
+        ? "you"
+        : isHuman(m.from_agent)
+          ? humanDisplayName(m.from_agent)
+          : (m.from_role ? `${m.from_agent} (${m.from_role})` : m.from_agent);
+      const dest = isHuman(m.to) ? humanDisplayName(m.to) : m.to;
       return {
         key: `msg-${m.id}`,
         kind: "message" as FeedKind,
         t: Number.isNaN(t) ? 0 : t,
         agentId: m.from_agent ?? undefined,
         tone: "accent" as const,
-        label: `${who} → ${m.to}`,
+        label: `${who} → ${dest}`,
         text: m.text,
       };
     });

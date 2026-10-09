@@ -218,10 +218,12 @@ class MessageRequest(BaseModel):
         default=None,
         description=(
             "Recipient: 'agent:<id>' (one agent), 'role:<role>' (every agent "
-            "with that role), 'all' (every agent), 'user' (the human in the "
-            "dashboard), or 'thread:<id>' (the thread's members). May be "
-            "omitted when thread_id or in_reply_to is given — the message "
-            "then goes to that thread."
+            "with that role), 'all' (every agent), 'user' (every human — the "
+            "catch-all, before accounts exist), 'user:<name>' (one named "
+            "human — see GET /api/v1/humans for who's known), or "
+            "'thread:<id>' (the thread's members). May be omitted when "
+            "thread_id or in_reply_to is given — the message then goes to "
+            "that thread."
         ),
     )
     text: str = Field(
@@ -258,6 +260,13 @@ class MessageRequest(BaseModel):
                     "'exp 12.3' or 'idea 42' in the text are added automatically "
                     "when they exist.",
     )
+    as_user: str | None = Field(
+        default=None,
+        description="Dashboard only: the operator's name slug "
+                    "([a-z0-9][a-z0-9_-]{0,31}), e.g. 'david'. Stamps the message as "
+                    "'user:<name>' instead of the plain 'user' catch-all. Ignored "
+                    "for agent callers — an agent can never post as a human.",
+    )
 
 
 class ThreadCreateRequest(BaseModel):
@@ -287,6 +296,10 @@ class ThreadCreateRequest(BaseModel):
         default=[], description="Same shape as MessageRequest.references, for "
                                  "the opening message.",
     )
+    as_user: str | None = Field(
+        default=None, description="Same as MessageRequest.as_user: dashboard-only "
+                    "name slug, stamping the creator as 'user:<name>'.",
+    )
 
 
 class ThreadUpdateRequest(BaseModel):
@@ -301,10 +314,18 @@ class ThreadUpdateRequest(BaseModel):
     conclusion: str | None = Field(
         default=None, description="Outcome text posted to the thread when closing it.")
     visibility: str | None = Field(default=None, description="'public' or 'private'.")
+    as_user: str | None = Field(
+        default=None, description="Same as MessageRequest.as_user: attributes this "
+                    "edit (and any closing message) to 'user:<name>'.",
+    )
 
 
 class ThreadMembersRequest(BaseModel):
     agent_ids: list[str] = Field(description="Agent ids to add as members of this thread.")
+    as_user: str | None = Field(
+        default=None, description="Same as MessageRequest.as_user: attributes the "
+                    "add to 'user:<name>'.",
+    )
 
 
 class RequeueRequest(BaseModel):

@@ -6,6 +6,7 @@
 
 import type { Experiment, IdeaNode, SubwayLayout } from './types';
 import { getCssVar } from './css-vars';
+import { isHuman, humanDisplayName } from './identity';
 
 /** Per-status background / border / font colors for station nodes. */
 export const STATUS_COLORS: Record<string, { bg: string; border: string; font: string }> = {
@@ -67,9 +68,10 @@ export const AGENT_PALETTE: string[] = [
   '#ff7b72', '#a5d64c', '#79c0ff', '#ffa198', '#7ee787', '#b392f0',
 ];
 
-/** Humans and group addresses ("user", "everyone", "thread members",
- *  "role:x") are not agents: they keep the neutral default colour. */
-const NON_AGENT = /^(?:agent:)?user$|^everyone$|^all$|^thread members$|^thread:|^role:/;
+/** Group addresses ("everyone", "thread members", "role:x") are not agents:
+ *  they keep the neutral default colour. Humans (isHuman) are handled
+ *  separately below so every named human shares the one neutral colour too. */
+const NON_AGENT = /^everyone$|^all$|^thread members$|^thread:|^role:/;
 export const DEFAULT_PARTICIPANT_COLOR = 'var(--text-muted)';
 
 function hashSlot(id: string): number {
@@ -86,7 +88,7 @@ let assigned = new Map<string, string>();
 export function registerAgents(ids: Iterable<string | null | undefined>): void {
   let changed = false;
   for (const id of ids) {
-    if (id && !NON_AGENT.test(id) && !knownAgents.has(id)) { knownAgents.add(id); changed = true; }
+    if (id && !isHuman(id) && !NON_AGENT.test(id) && !knownAgents.has(id)) { knownAgents.add(id); changed = true; }
   }
   if (!changed) return;
   const used = new Set<number>();
@@ -100,16 +102,18 @@ export function registerAgents(ids: Iterable<string | null | undefined>): void {
   assigned = next;
 }
 
-/** Stable per-agent color (see registerAgents); non-agents get the default. */
+/** Stable per-agent color (see registerAgents); humans and other non-agents
+ *  get the neutral default so identity colour never implies "agent". */
 export function agentColor(id: string | null | undefined): string {
   if (!id) return 'var(--text-faint)';
-  if (NON_AGENT.test(id)) return DEFAULT_PARTICIPANT_COLOR;
+  if (isHuman(id) || NON_AGENT.test(id)) return DEFAULT_PARTICIPANT_COLOR;
   return assigned.get(id) ?? AGENT_PALETTE[hashSlot(id)];
 }
 
-/** 1–2 char initials for an agent avatar. */
+/** 1–2 char initials for an agent (or human) avatar. */
 export function agentInitials(id: string | null | undefined): string {
   if (!id) return '··';
+  if (isHuman(id)) return humanDisplayName(id).slice(0, 2).toUpperCase();
   const clean = id.replace(/[^a-zA-Z0-9]/g, '');
   return (clean || id).slice(0, 2).toUpperCase();
 }
