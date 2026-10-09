@@ -89,6 +89,9 @@ export function DetailPanel({ embedded = false }: { embedded?: boolean } = {}) {
   const [outputLoading, setOutputLoading] = useState(false);
   const [outputFollowing, setOutputFollowing] = useState(true);
   const outputBodyRef = useRef<HTMLDivElement>(null);
+  // Link handler for full-document HTML outputs (their iframe's clicks never
+  // reach outputBodyRef); set by the link-intercept effect below.
+  const outputFrameLinkRef = useRef<((e: MouseEvent) => void) | null>(null);
   const outputPollRef = useRef<number | null>(null);
   // Remember open/closed state of <details> across polls so collapsible
   // sections survive the 5s refresh. Keyed by summary text; falls back to
@@ -574,11 +577,15 @@ export function DetailPanel({ embedded = false }: { embedded?: boolean } = {}) {
   useEffect(() => {
     const root = outputBodyRef.current;
     if (!root || !outputExp) return;
-    const handler = (e: MouseEvent) => {
+    const handler = (e: MouseEvent, fromFrame = false) => {
+      // Modified / middle clicks keep the browser default (new tab etc.).
+      if (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
       const anchor = (e.target as HTMLElement | null)?.closest?.("a") as HTMLAnchorElement | null;
       if (!anchor) return;
       const hrefAttr = anchor.getAttribute("href") || "";
       if (!hrefAttr) return;
+      // Inside an HTML output the frame handles its own #anchors.
+      if (fromFrame && hrefAttr.startsWith("#")) return;
 
       // Pure same-page anchor (#section) — scroll to the matching id WITHOUT
       // navigating or pushing onto the stack. Avoids a hash change that
@@ -595,16 +602,25 @@ export function DetailPanel({ embedded = false }: { embedded?: boolean } = {}) {
       }
 
       // Resolve to an absolute URL so we can compare origin + pathname.
+      // anchor.href is resolved by the link's own document — for an HTML
+      // output that is the frame, whose <base> points at the output folder.
       let resolved: URL;
       try {
-        resolved = new URL(hrefAttr, window.location.href);
+        resolved = new URL(anchor.href || hrefAttr, window.location.href);
       } catch { return; }
       if (resolved.origin !== window.location.origin) return;
       if (!resolved.pathname.startsWith("/api/v1/files/")) return;
       if (!/\.(md|html?)$/i.test(resolved.pathname)) return;
+      let filePath: string;
+      try {
+        filePath = decodeURIComponent(resolved.pathname.slice("/api/v1/files/".length));
+      } catch { return; }
+      // Links from an HTML output (its scripts build them) are followed in
+      // place only inside this experiment's own folder; anything else keeps
+      // the browser default.
+      if (fromFrame && !isInsideFolder(filePath, experimentRootDir(outputBasePath))) return;
 
       e.preventDefault();
-      const filePath = decodeURIComponent(resolved.pathname.slice("/api/v1/files/".length));
       const slashIdx = filePath.lastIndexOf("/");
       const newBasePath = slashIdx >= 0 ? filePath.slice(0, slashIdx) : "";
       const linkFormat: "md" | "html" = /\.html?$/i.test(filePath) ? "html" : "md";
@@ -641,9 +657,14 @@ export function DetailPanel({ embedded = false }: { embedded?: boolean } = {}) {
         })
         .finally(() => setOutputFileLoading(false));
     };
-    root.addEventListener("click", handler);
-    return () => root.removeEventListener("click", handler);
-  }, [outputExp]);
+    const rootHandler = (e: MouseEvent) => handler(e);
+    root.addEventListener("click", rootHandler);
+    outputFrameLinkRef.current = (e: MouseEvent) => handler(e, true);
+    return () => {
+      root.removeEventListener("click", rootHandler);
+      outputFrameLinkRef.current = null;
+    };
+  }, [outputExp, outputBasePath]);
 
   function openOutput(exp: Experiment) {
     // Switching experiments clears the persisted state — different
@@ -1087,7 +1108,7 @@ export function DetailPanel({ embedded = false }: { embedded?: boolean } = {}) {
               displayedContent.startsWith("(") ? (
                 <div class="lightbox-loading lightbox-loading--italic">{displayedContent}</div>
               ) : isDoc ? (
-                <OutputDocFrame content={displayedContent} basePath={displayedBasePath} />
+                <OutputDocFrame content={displayedContent} basePath={displayedBasePath} linkRef={outputFrameLinkRef} />
               ) : (
                 <div
                   class="md-output"
@@ -1157,6 +1178,21 @@ function isLightColor(hex: string): boolean {
   return 0.299 * r + 0.587 * g + 0.114 * b > 140;
 }
 
+/** The experiment folder (.the_lab/experiments/<idea>/<seq>) an output
+ *  base path lies in; the base path itself if it isn't one. */
+export function experimentRootDir(basePath: string): string {
+  const m = basePath.match(/^(.*?\.the_lab\/experiments\/[^/]+\/[^/]+)(?:\/|$)/);
+  return m ? m[1] : basePath.replace(/\/+$/, "");
+}
+
+/** True if repo-relative *filePath* lies strictly inside folder *dir*
+ *  (no "." / ".." segments, no absolute paths). */
+export function isInsideFolder(filePath: string, dir: string): boolean {
+  if (!dir || filePath.startsWith("/")) return false;
+  if (filePath.split("/").some((seg) => seg === ".." || seg === "." || seg === "")) return false;
+  return filePath.startsWith(dir + "/");
+}
+
 /**
  * Wrap a standalone HTML output for the themed iframe: a <base> so its
  * relative asset links resolve under /api/v1/files/, plus defaults (inserted
@@ -1207,10 +1243,34 @@ function applyThemePalette(frame: HTMLIFrameElement): void {
 /** Sandboxed, colorscheme-following host for full-document HTML outputs.
  *  Scripts run inside the frame (isolated from the app DOM); the palette
  *  re-applies on load and whenever Settings → colorscheme changes. */
-function OutputDocFrame({ content, basePath }: { content: string; basePath: string }) {
+function OutputDocFrame({ content, basePath, linkRef }: {
+  content: string;
+  basePath: string;
+  /** Click handler for links inside the frame (follows same-experiment files in place). */
+  linkRef?: { current: ((e: MouseEvent) => void) | null };
+}) {
   const theme = colorTheme.value;
   const ref = useRef<HTMLIFrameElement>(null);
   const srcdoc = useMemo(() => baseOutputDoc(content, basePath), [content, basePath]);
+  useEffect(() => {
+    const frame = ref.current;
+    if (!frame || !linkRef) return;
+    // Same-origin frame (allow-same-origin): listen on its document. Capture
+    // phase, so the output's own handlers can't swallow the click first.
+    const onClick = (e: MouseEvent) => linkRef.current?.(e);
+    let doc: Document | null = null;
+    const attach = () => {
+      doc?.removeEventListener("click", onClick, true);
+      doc = frame.contentDocument;
+      doc?.addEventListener("click", onClick, true);
+    };
+    if (frame.contentDocument && frame.contentDocument.readyState !== "loading") attach();
+    frame.addEventListener("load", attach);
+    return () => {
+      frame.removeEventListener("load", attach);
+      doc?.removeEventListener("click", onClick, true);
+    };
+  }, [srcdoc, linkRef]);
   useEffect(() => {
     const frame = ref.current;
     if (!frame) return;
@@ -1390,9 +1450,11 @@ function inlineMd(raw: string, basePath = ""): string {
   // Escape remaining HTML, then apply text formatting
   s = escapeHtml(s);
   s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-  s = s.replace(/__([^_]+)__/g, "<strong>$1</strong>");
+  // Underscore emphasis only at word boundaries (GFM): snake_case names
+  // like active_slots or budget_level_s stay as they are.
+  s = s.replace(/(^|[^\w])__([^_\n]+)__(?!\w)/g, "$1<strong>$2</strong>");
   s = s.replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
-  s = s.replace(/_([^_\n]+)_/g, "<em>$1</em>");
+  s = s.replace(/(^|[^\w])_([^_\n]+)_(?!\w)/g, "$1<em>$2</em>");
 
   // Repeatedly substitute placeholders until none remain — a saved item
   // (e.g. a link) can contain another placeholder (e.g. a code span used
@@ -1443,11 +1505,22 @@ function _isPipeTableRow(line: string): boolean {
 
 function _isPipeTableSeparator(line: string): boolean {
   const t = line.trim();
-  if (!t.startsWith("|")) return false;
+  // A separator without a leading pipe still needs one somewhere ("--- | ---"),
+  // else it's a thematic break.
+  if (!t.startsWith("|") && !t.includes("|")) return false;
   const inner = t.replace(/^\|/, "").replace(/\|$/, "");
   const cells = inner.split("|");
   if (cells.length === 0) return false;
-  return cells.every((c) => /^\s*:?-{2,}:?\s*$/.test(c));
+  return cells.every((c) => /^\s*:?-+:?\s*$/.test(c));
+}
+
+/** Start of a GFM table at lines[i]: a header row plus a separator row with
+ *  the same number of cells. Leading/trailing pipes are optional (GFM); the
+ *  separator row is what keeps ordinary text with a "|" from becoming one. */
+function _tableStartsAt(lines: string[], i: number): boolean {
+  const line = lines[i];
+  if (!line.includes("|") || i + 1 >= lines.length || !_isPipeTableSeparator(lines[i + 1])) return false;
+  return _splitTableRow(line).length === _parseTableAligns(lines[i + 1]).length;
 }
 
 function _splitTableRow(line: string): string[] {
@@ -1636,19 +1709,17 @@ export function renderMarkdown(md: string, basePath = ""): string {
       continue;
     }
 
-    // GFM pipe table — header row + separator row + body. Standard syntax
-    // (leading/trailing pipes optional, GFM allows omitting them but the
-    // common case includes them and that's what the agent emits).
-    if (
-      _isPipeTableRow(line) &&
-      i + 1 < lines.length &&
-      _isPipeTableSeparator(lines[i + 1])
-    ) {
+    // GFM pipe table — header row + separator row + body; leading/trailing
+    // pipes optional.
+    if (_tableStartsAt(lines, i)) {
       const headers = _splitTableRow(line);
       const aligns = _parseTableAligns(lines[i + 1]);
+      const piped = line.trim().startsWith("|");
       i += 2;
       const body: string[][] = [];
-      while (i < lines.length && _isPipeTableRow(lines[i])) {
+      // Body rows run until a line without a pipe (pipe-less tables) or one
+      // not starting with a pipe (piped tables, as before).
+      while (i < lines.length && (piped ? _isPipeTableRow(lines[i]) : lines[i].trim() !== "" && lines[i].includes("|"))) {
         body.push(_splitTableRow(lines[i]));
         i++;
       }
