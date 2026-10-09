@@ -4,22 +4,25 @@ import {
   getMessage,
   getMessagePage,
   listAgents,
+  listHumans,
   listMessagesPage,
   listThreads,
   sendMessage,
   updateThread,
 } from "../state/api";
 import { useLiveRefresh } from "../lib/hooks";
-import type { AgentEntry, MessageEntry, ThreadMeta } from "../lib/types";
+import type { AgentEntry, HumanEntry, MessageEntry, ThreadMeta } from "../lib/types";
 import { Badge, EmptyState, IconButton } from "../components/ui";
 import { agentColor, registerAgents, agentInitials } from "../lib/colors";
-import { messagesMyNames, messagesReadByMe, serverDemoMode } from "../state/settings";
+import { isHuman, humanDisplayName } from "../lib/identity";
+import { messagesMyNames, messagesReadByMe, myName, serverDemoMode } from "../state/settings";
 import {
   markMessagesReadByMe,
   markThreadReadByMe,
   markAllMessagesReadByMe,
   registerDashboardUserMessage,
   isAddressedToMe,
+  isMine,
   isSentHere,
   countsAsNew,
 } from "../state/messages";
@@ -33,11 +36,13 @@ type SortOrder = "newest" | "oldest";
 const threadKey = (m: MessageEntry) => m.thread_id ?? m.id;
 const timeOf = (m: MessageEntry) => Date.parse(m.created_at) || m.id;
 const recipientOf = (m: MessageEntry) =>
-  m.from_agent && m.from_agent !== "user"
-    ? `agent:${m.from_agent}`
-    : m.from_role && m.from_role !== "user"
-      ? `role:${m.from_role}`
-      : null;
+  m.from_agent && isHuman(m.from_agent)
+    ? (m.from_agent === "agent:user" ? "user" : m.from_agent)
+    : m.from_agent
+      ? `agent:${m.from_agent}`
+      : m.from_role && m.from_role !== "user"
+        ? `role:${m.from_role}`
+        : null;
 
 function relativeTime(iso: string) {
   const s = Math.max(0, Math.floor((Date.now() - Date.parse(iso)) / 1000));
@@ -66,12 +71,19 @@ function inboxOf(
 
 function Participant({ id }: { id: string }) {
   const color = agentColor(id);
+  const label = isHuman(id) ? humanDisplayName(id) : id;
   return (
     <span class="thread-participant" style={{ "--participant-color": color } as Record<string, string>}>
       <span class="thread-participant-avatar" aria-hidden="true">{agentInitials(id)}</span>
-      <span>{id}</span>
+      <span>{label}</span>
     </span>
   );
+}
+
+/** Small neutral pill for a human active in a thread ("the catch-all "user"
+ *  shows as a neutral 'user' pill" per design). */
+function HumanPill({ id }: { id: string }) {
+  return <span class="thread-human-pill" title={id}>{humanDisplayName(id)}</span>;
 }
 
 function MessageReferences({ message }: { message: MessageEntry }) {
@@ -91,6 +103,10 @@ function MessageReferences({ message }: { message: MessageEntry }) {
 export function MessagesView() {
   const [agents, setAgents] = useState<AgentEntry[]>([]),
     [messages, setMessages] = useState<MessageEntry[]>([]);
+  const [humans, setHumans] = useState<HumanEntry[]>([]);
+  const [humanFilter, setHumanFilter] = useState<Set<string>>(new Set());
+  const [editingName, setEditingName] = useState(false),
+    [nameDraft, setNameDraft] = useState("");
   const [loaded, setLoaded] = useState(false),
     [error, setError] = useState<string | null>(null);
   const [messageTotal, setMessageTotal] = useState(0);
@@ -178,6 +194,23 @@ export function MessagesView() {
     }
     return map;
   }, [messages]);
+  // Humans active per thread (posted in it, or addressed in it) — for the
+  // thread list's name pills and the person filter. Normalizes the legacy
+  // "agent:user" spelling to the catch-all "user".
+  const threadHumans = useMemo(() => {
+    const map = new Map<number, Set<string>>();
+    const add = (k: number, id: string | null | undefined) => {
+      if (!id || !isHuman(id)) return;
+      if (!map.has(k)) map.set(k, new Set());
+      map.get(k)!.add(id === "agent:user" ? "user" : id);
+    };
+    for (const m of messages) {
+      const k = threadKey(m);
+      add(k, m.from_agent);
+      add(k, m.to);
+    }
+    return map;
+  }, [messages]);
   const relevant = (m: MessageEntry) =>
     !inPerspective || inboxOf(m, viewAs, roleByAgent[viewAs], participants);
   // Two kinds of unread for you: addressed to you (@user, see state/messages)
@@ -191,13 +224,15 @@ export function MessagesView() {
 
   async function refresh() {
     try {
-      const [a, m, t] = await Promise.all([
+      const [a, m, t, hu] = await Promise.all([
         listAgents().catch(() => []),
         listMessagesPage(200),
         listThreads({ status: "all", limit: 100 }).catch(() => null),
+        listHumans().catch(() => []),
       ]);
       if (!cancelled.current) {
         setAgents(a);
+        setHumans(hu);
         if (t) setThreadMeta(new Map(t.threads.map((x) => [x.id, x])));
         setMessages((old) => [...new Map([...old, ...m.messages].map((item) => [item.id, item])).values()]);
         setMessageTotal(m.total);
@@ -336,21 +371,20 @@ export function MessagesView() {
       .filter(
         (thread) =>
           conversationScope === "all" ||
-          threadMeta.get(thread.id)?.created_by === "user" ||
-          thread.items.some(
-            (m) =>
-              m.from_agent === "user" ||
-              m.from_agent === "agent:user" ||
-              m.to === "user" ||
-              m.to === "agent:user",
-          ),
+          isHuman(threadMeta.get(thread.id)?.created_by) ||
+          thread.items.some((m) => isHuman(m.from_agent) || isHuman(m.to)),
+      )
+      .filter(
+        (thread) =>
+          humanFilter.size === 0 ||
+          [...(threadHumans.get(thread.id) || [])].some((h) => humanFilter.has(h)),
       )
       .sort((a, b) =>
         sort === "newest"
           ? timeOf(b.latest) - timeOf(a.latest)
           : timeOf(a.latest) - timeOf(b.latest),
       );
-  }, [displayed, sort, readMap, viewAs, conversationScope, threadMeta, myNames]);
+  }, [displayed, sort, readMap, viewAs, conversationScope, threadMeta, myNames, humanFilter, threadHumans]);
   const focusId = focusMessageId.value;
   useLayoutEffect(() => {
     const list = messageListRef.current;
@@ -475,7 +509,9 @@ export function MessagesView() {
     >
       {threadId != null && <option value={`thread:${threadId}`}>Thread members</option>}
       <option value="all">All agents</option>
-      {value !== "all" && value !== `thread:${threadId}` && !agents.some((a) => value === `agent:${a.agent_id}`) && !roles.some((r) => value === `role:${r}`) && <option value={value}>{value}</option>}
+      {value !== "all" && value !== `thread:${threadId}` && !agents.some((a) => value === `agent:${a.agent_id}`) && !roles.some((r) => value === `role:${r}`) && (
+        <option value={value}>{isHuman(value) ? humanDisplayName(value) : value}</option>
+      )}
       <optgroup label="Agents">
         {agents.map((a) => (
           <option key={a.agent_id} value={`agent:${a.agent_id}`}>
@@ -501,6 +537,30 @@ export function MessagesView() {
       <div class="thread-layout">
         <div class="thread-sidebar">
           <div class="thread-sidebar-toolbar">
+            {editingName ? (
+              <input
+                class="messages-whoami-input"
+                autoFocus
+                value={nameDraft}
+                aria-label="Your name"
+                placeholder="e.g. David"
+                onInput={(e) => setNameDraft((e.target as HTMLInputElement).value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                  if (e.key === "Escape") { setEditingName(false); }
+                }}
+                onBlur={() => { myName.value = nameDraft.trim(); setEditingName(false); }}
+              />
+            ) : (
+              <button
+                type="button"
+                class="messages-whoami"
+                title="Set the name messages you send are stamped with"
+                onClick={() => { setNameDraft(myName.value); setEditingName(true); }}
+              >
+                You: {myName.value || <em>set your name</em>} ✎
+              </button>
+            )}
             <input
               class="messages-search"
               type="search"
@@ -523,6 +583,30 @@ export function MessagesView() {
             </button>
             <IconButton onClick={refresh} title="Refresh">↺</IconButton>
           </div>
+          {humans.length > 0 && (
+            <div class="thread-human-filter" role="group" aria-label="Filter by person">
+              {humans.map((h) => (
+                <button
+                  key={h.id}
+                  type="button"
+                  class={`thread-human-chip${humanFilter.has(h.id) ? " is-active" : ""}`}
+                  onClick={() => setHumanFilter((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(h.id)) next.delete(h.id); else next.add(h.id);
+                    return next;
+                  })}
+                  title={`Show only threads ${humanDisplayName(h.id)} is active in`}
+                >
+                  {humanDisplayName(h.id)}
+                </button>
+              ))}
+              {humanFilter.size > 0 && (
+                <button type="button" class="thread-human-chip-clear" onClick={() => setHumanFilter(new Set())}>
+                  clear
+                </button>
+              )}
+            </div>
+          )}
           <div class="thread-sidebar-subhead">
             <span>{loaded ? `${threads.length} threads` : "Loading…"}</span>
             {!inPerspective && (
@@ -545,13 +629,13 @@ export function MessagesView() {
                     {agents.map((a) => <option key={a.agent_id} value={a.agent_id}>{labelAgent(a.agent_id)}</option>)}
                   </select>
                 </label>
-                <label title="Messages that mention one of these names notify you (this browser only); so do direct messages and replies to what you sent from here">
-                  <span>Your names</span>
+                <label title="Extra names agents might use for you in messages; a mention still notifies you even though it isn't your primary name above">
+                  <span>Also known as</span>
                   <input
                     class="messages-select"
                     value={myNames}
                     onChange={(e) => { messagesMyNames.value = (e.target as HTMLInputElement).value; }}
-                    placeholder="e.g. David, Dave"
+                    placeholder="e.g. Dave, DH"
                   />
                 </label>
                 <label>
@@ -603,6 +687,11 @@ export function MessagesView() {
               <span class="thread-list-preview">
                 {stripRouting(t.latest.tldr || t.latest.text)}
               </span>
+              {threadHumans.get(t.id) && threadHumans.get(t.id)!.size > 0 && (
+                <span class="thread-list-humans">
+                  {[...threadHumans.get(t.id)!].map((h) => <HumanPill key={h} id={h} />)}
+                </span>
+              )}
               <span class="thread-list-meta">
                 <span>
                   {t.items.length} msg{t.items.length === 1 ? "" : "s"}
@@ -794,7 +883,7 @@ export function MessagesView() {
                   <li
                     id={`thread-message-${m.id}`}
                     key={m.id}
-                    class={`thread-message${isRead(m) ? " is-read" : " is-unread"}${!inPerspective && !isSentHere(m) && isAddressedToMe(m) ? " is-for-me" : ""}${m.from_agent === "user" || m.from_agent === "agent:user" ? " is-from-user" : ""}`}
+                    class={`thread-message${isRead(m) ? " is-read" : " is-unread"}${!inPerspective && !isSentHere(m) && isAddressedToMe(m) ? " is-for-me" : ""}${isMine(m) ? " is-from-user" : isHuman(m.from_agent) ? " is-from-human" : ""}`}
                   >
                     <div class="thread-message-meta">
                       <span

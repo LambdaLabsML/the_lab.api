@@ -278,6 +278,14 @@ export interface MessagePage {
   offset: number;
 }
 
+/** A known human identity (GET /api/v1/humans): the catch-all "user" (name
+ *  null) or a named "user:<name>". */
+export interface HumanEntry {
+  id: string;
+  name: string | null;
+  last_active: string | null;
+}
+
 export interface AgentEntry {
   agent_id: string;
   role: string;

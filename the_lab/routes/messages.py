@@ -1,12 +1,19 @@
 """Inter-agent messages and threads: send, list, search, join, mark read.
 
 Messages address a specific agent (``to=agent:<id>``), a role
-(``to=role:<role>``), every agent (``to=all``), or a thread's members
-(``to=thread:<id>``). Threads are shared spaces: public ones can be listed,
-searched, read in full and joined by any agent. Unread messages for the
-caller are surfaced by the notifications middleware on every dict-shaped
+(``to=role:<role>``), every agent (``to=all``), every human (``to=user``), a
+named human (``to=user:<name>`` — see ``GET /api/v1/humans``), or a thread's
+members (``to=thread:<id>``). Threads are shared spaces: public ones can be
+listed, searched, read in full and joined by any agent. Unread messages for
+the caller are surfaced by the notifications middleware on every dict-shaped
 API response, and an arriving message wakes any ``/wait`` long-poll the
 recipient is parked on.
+
+Human identities are an interim stand-in for real accounts: ``user`` is the
+catch-all (every person using the dashboard, until they've named themselves)
+and ``user:<name>`` addresses one of them personally. Only the dashboard
+itself may post or act as a human (via ``as_user``, admin-tier and
+anonymous) — agents can address a human but never impersonate one.
 """
 from __future__ import annotations
 
@@ -48,9 +55,22 @@ def _is_dashboard_user_sender(request: Request, agent_id: str | None) -> bool:
     )
 
 
+def _as_user(request: Request, agent_id: str | None, as_user: str | None) -> str | None:
+    """Resolve an ``as_user`` field/param to a ``user:<name>`` identity.
+
+    Only the dashboard (anonymous, admin-tier, ``X-The-Lab-Source: dashboard``)
+    may name itself this way — an agent always carries ``X-Agent-Id`` and so
+    never reaches this branch, which is how agents are kept from posting as
+    a human. Raises ``ValueError`` (→ 400 at the call site) for a bad name.
+    """
+    if not as_user or not _is_dashboard_user_sender(request, agent_id):
+        return None
+    return messages_mod.human_id(as_user)
+
+
 @router.post("/api/v1/messages", status_code=201)
 def send_message(req: MessageRequest, request: Request):
-    """Send a message to an agent, a role, all agents, or the dashboard user.
+    """Send a message to an agent, a role, all agents, a human, or a thread.
 
     The sender's ``X-Agent-Id`` (and role, looked up from the registry) is
     stamped onto the message automatically. The body's ``to`` field accepts:
@@ -59,7 +79,9 @@ def send_message(req: MessageRequest, request: Request):
       - ``role:<role>`` — every agent currently registered with that role
         (resolved at read-time, not at send-time)
       - ``all`` — every agent
-
+      - ``user`` — every human (the dashboard's catch-all identity before
+        real accounts exist); ``user:<name>`` — one named human, see
+        ``GET /api/v1/humans`` for who's known
       - ``thread:<id>`` (or omit ``to`` and pass ``thread_id`` /
         ``in_reply_to``) — the members of that thread
 
@@ -77,9 +99,15 @@ def send_message(req: MessageRequest, request: Request):
         POST /api/v1/messages {"thread_id": 42, "text": "exp 12.3 confirms it"}
     """
     from_agent, from_role = _resolve_sender(request)
-    if _is_dashboard_user_sender(request, from_agent):
-        from_agent = from_role = messages_mod.UI_USER
     operator = _is_operator(request)
+    try:
+        as_user = _as_user(request, from_agent, req.as_user)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if as_user:
+        from_agent = from_role = as_user
+    elif _is_dashboard_user_sender(request, from_agent):
+        from_agent = from_role = messages_mod.UI_USER
     try:
         parent = None
         if req.in_reply_to is not None:
@@ -277,8 +305,8 @@ def _validate_references(references: list[dict]) -> list[dict]:
 
 
 def _recipient_listening(to: str) -> list[dict]:
-    if to in (messages_mod.UI_USER, f"agent:{messages_mod.UI_USER}"):
-        # The UI user is browser-local; it is never an agent listener.
+    if to in (messages_mod.UI_USER, f"agent:{messages_mod.UI_USER}") or to.startswith("user:"):
+        # Humans are browser-local; never an agent listener.
         return []
     members: dict = {}
     if to.startswith("thread:"):
@@ -432,6 +460,23 @@ def _caller(request: Request) -> tuple[str | None, str | None, bool]:
     if not (agent_id or operator):
         raise HTTPException(403, "identify yourself with X-Agent-Id")
     return agent_id, role, operator
+
+
+@router.get("/api/v1/humans")
+def list_humans(request: Request):
+    """Known human identities: the catch-all ``user`` plus any named
+    ``user:<name>`` seen as a sender, recipient, or thread member, each with
+    the time they were last active. Address one personally with
+    ``to: "user:<name>"``, or every human with ``to: "user"``. Read-only.
+
+    Example:
+        GET /api/v1/humans
+        -> {"humans": [{"id": "user:david", "name": "david",
+                        "last_active": "2026-10-09T12:00:00Z"},
+                       {"id": "user", "name": null, "last_active": "..."}]}
+    """
+    _caller(request)
+    return {"humans": messages_mod.list_humans(REPO_DIR)}
 
 
 @router.get("/api/v1/ideas/{idea_id}/mentions")
@@ -593,12 +638,13 @@ def create_thread(req: ThreadCreateRequest, request: Request):
             "message": {"id": 57, ...}}
     """
     agent_id, role, operator = _caller(request)
-    creator = agent_id or messages_mod.UI_USER
-    creator_role = role if agent_id else messages_mod.UI_USER
     try:
+        as_user = _as_user(request, agent_id, req.as_user)
         references = _merge_references(_validate_references(req.references), req.text)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    creator = as_user or agent_id or messages_mod.UI_USER
+    creator_role = as_user or (role if agent_id else messages_mod.UI_USER)
     meta, root = _thread_errors(
         messages_mod.create_thread, REPO_DIR, from_agent=creator, from_role=creator_role,
         title=req.title, text=req.text, tldr=req.tldr, visibility=req.visibility,
@@ -607,7 +653,7 @@ def create_thread(req: ThreadCreateRequest, request: Request):
     out = {"thread": meta, "message": {**root, "recipients": _recipient_listening(root["to"])}}
     hints = []
     unknown = [a for a in req.members
-               if a != messages_mod.UI_USER and not agents_mod.lookup_agent(REPO_DIR, a)]
+               if not messages_mod.is_human(a) and not agents_mod.lookup_agent(REPO_DIR, a)]
     if unknown:
         hints.append(f"Not currently registered (added anyway): {', '.join(unknown)}")
     if hints:
@@ -708,32 +754,50 @@ def get_thread(
 
 
 @router.post("/api/v1/threads/{thread_id}/join")
-def join_thread(thread_id: int, request: Request, muted: bool | None = None):
+def join_thread(
+    thread_id: int, request: Request, muted: bool | None = None,
+    as_user: str | None = Query(default=None, description="Dashboard only: join as "
+                                 "'user:<name>' instead of the plain 'user' catch-all."),
+):
     """Join a thread you can see so its messages reach you. Idempotent.
 
     Pass ``?muted=1`` to stay a member without delivery (read it on demand),
     ``?muted=0`` to unmute.
     """
     agent_id, role, operator = _caller(request)
-    who = agent_id or messages_mod.UI_USER
+    try:
+        who = _as_user(request, agent_id, as_user) or agent_id or messages_mod.UI_USER
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     return _thread_errors(messages_mod.join_thread, REPO_DIR, thread_id, agent_id=who,
                           role=role, operator=operator, muted=muted)
 
 
 @router.post("/api/v1/threads/{thread_id}/leave")
-def leave_thread(thread_id: int, request: Request):
+def leave_thread(
+    thread_id: int, request: Request,
+    as_user: str | None = Query(default=None, description="Dashboard only: leave as "
+                                 "'user:<name>' instead of the plain 'user' catch-all."),
+):
     """Stop receiving a thread's messages. You can still read public threads."""
     agent_id, _, _ = _caller(request)
-    return _thread_errors(messages_mod.leave_thread, REPO_DIR, thread_id,
-                          agent_id=agent_id or messages_mod.UI_USER)
+    try:
+        who = _as_user(request, agent_id, as_user) or agent_id or messages_mod.UI_USER
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return _thread_errors(messages_mod.leave_thread, REPO_DIR, thread_id, agent_id=who)
 
 
 @router.post("/api/v1/threads/{thread_id}/members")
 def add_thread_members(thread_id: int, req: ThreadMembersRequest, request: Request):
     """Add agents to a thread you belong to (how private threads grow)."""
     agent_id, _, operator = _caller(request)
+    try:
+        as_user = _as_user(request, agent_id, req.as_user)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     return _thread_errors(messages_mod.add_thread_members, REPO_DIR, thread_id, req.agent_ids,
-                          requester=agent_id or messages_mod.UI_USER,
+                          requester=as_user or agent_id or messages_mod.UI_USER,
                           operator=operator)
 
 
@@ -748,9 +812,15 @@ def update_thread(thread_id: int, req: ThreadUpdateRequest, request: Request):
         PATCH /api/v1/threads/57 {"status": "closed", "conclusion": "Fixed in exp 12.6"}
     """
     agent_id, role, operator = _caller(request)
+    try:
+        as_user = _as_user(request, agent_id, req.as_user)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    requester = as_user or agent_id or messages_mod.UI_USER
+    requester_role = as_user or (role if agent_id else messages_mod.UI_USER)
     meta, _closing = _thread_errors(
         messages_mod.update_thread, REPO_DIR, thread_id,
-        requester=agent_id or messages_mod.UI_USER, requester_role=role if agent_id else messages_mod.UI_USER,
+        requester=requester, requester_role=requester_role,
         operator=operator, title=req.title, summary=req.summary,
         status=req.status, conclusion=req.conclusion, visibility=req.visibility,
     )

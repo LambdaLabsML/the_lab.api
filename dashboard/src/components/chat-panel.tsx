@@ -7,6 +7,7 @@ import { useState, useEffect, useRef } from "preact/hooks";
 import { listMessages, sendMessage } from "../state/api";
 import { registerDashboardUserMessage } from "../state/messages";
 import { subscribeWsEvents } from "../state/ws";
+import { isHuman } from "../lib/identity";
 import type { MessageEntry } from "../lib/types";
 
 const FAB_SIZE = 44;
@@ -158,9 +159,9 @@ export function ChatPanel() {
               </div>
             ) : (
               [...messages].reverse().map((m) => (
-                <div key={m.id} class={`chat-msg chat-msg-${m.from_agent ? "agent" : "user"}`}>
+                <div key={m.id} class={`chat-msg chat-msg-${m.from_agent && !isHuman(m.from_agent) ? "agent" : "user"}`}>
                   <div class="chat-msg-label">
-                    {m.from_agent
+                    {m.from_agent && !isHuman(m.from_agent)
                       ? (m.from_role ? `${m.from_agent} (${m.from_role})` : m.from_agent)
                       : "you"}
                     <span class="chat-msg-time">{m.created_at ? relTime(m.created_at) : ""}</span>

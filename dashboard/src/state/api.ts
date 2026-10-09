@@ -9,6 +9,7 @@ import type {
   BacklogResponse,
   GraphResponse,
   ChartDataResponse,
+  HumanEntry,
   IdeaDetail,
   Experiment,
   MessageEntry,
@@ -24,6 +25,15 @@ import type {
   ThreadMeta,
   ThreadPage,
 } from "../lib/types";
+import { myName } from "./settings";
+import { nameToSlug } from "../lib/identity";
+
+/** This browser's `as_user` slug, or {} once there's no name set — spread
+ *  into a POST body so every composer identifies the same way automatically. */
+function asUserBody(): { as_user: string } | Record<string, never> {
+  const slug = nameToSlug(myName.value);
+  return slug ? { as_user: slug } : {};
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -353,7 +363,8 @@ export async function getMessage(id: number): Promise<MessageEntry> {
   return fetchJson<MessageEntry>(`/api/v1/messages/${id}`);
 }
 
-/** POST /api/v1/messages — send a message to agents */
+/** POST /api/v1/messages — send a message to agents. Identifies this
+ *  browser's human as `as_user` (see settings.myName) when a name is set. */
 export async function sendMessage(
   to: string,
   text: string,
@@ -362,7 +373,7 @@ export async function sendMessage(
   return fetchJson<MessageEntry>("/api/v1/messages", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ to, text, ...options }),
+    body: JSON.stringify({ to, text, ...options, ...asUserBody() }),
   });
 }
 
@@ -449,7 +460,8 @@ export async function listThreads(
   return fetchJson<ThreadPage>(`/api/v1/threads?${qs}`);
 }
 
-/** POST /api/v1/threads — start a titled thread with an opening message. */
+/** POST /api/v1/threads — start a titled thread with an opening message.
+ *  Identifies this browser's human as `as_user` when a name is set. */
 export async function createThread(body: {
   title: string;
   text: string;
@@ -461,11 +473,19 @@ export async function createThread(body: {
   return fetchJson("/api/v1/threads", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ ...body, ...asUserBody() }),
   });
 }
 
-/** PATCH /api/v1/threads/:id — title, summary, status (open|closed), conclusion. */
+/** GET /api/v1/humans — known human identities (for pills/filters). */
+export async function listHumans(): Promise<HumanEntry[]> {
+  const r = await fetchJson<{ humans: HumanEntry[] }>("/api/v1/humans");
+  return r.humans || [];
+}
+
+/** PATCH /api/v1/threads/:id — title, summary, status (open|closed), conclusion.
+ *  Identifies this browser's human as `as_user` when a name is set (so e.g.
+ *  a closing message is attributed to them, not the plain "user" catch-all). */
 export async function updateThread(
   id: number,
   patch: Partial<Pick<ThreadMeta, "title" | "summary" | "status" | "conclusion" | "visibility">>,
@@ -473,7 +493,7 @@ export async function updateThread(
   return fetchJson(`/api/v1/threads/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(patch),
+    body: JSON.stringify({ ...patch, ...asUserBody() }),
   });
 }
 

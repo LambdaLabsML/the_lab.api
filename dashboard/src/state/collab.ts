@@ -12,7 +12,7 @@
 
 import { signal } from "@preact/signals";
 import { getWsToken, subscribeWsEvents } from "./ws";
-import { messagesMyNames } from "./settings";
+import { messagesMyNames, myName } from "./settings";
 import { append, applyOp, transformX, changesFromOps, type Op, type TextChangeSpec } from "../lib/ot";
 
 export interface Participant {
@@ -51,9 +51,12 @@ export function getClientId(): string {
   }
 }
 
-/** Display name: first name from the "Your names" setting (comma/semicolon
- *  separated), else a persisted "guest-xxxx" (localStorage, per browser). */
+/** Display name: this browser's primary identity (settings.myName), else the
+ *  first alias from "Your names" (comma/semicolon separated), else a
+ *  persisted "guest-xxxx" (localStorage, per browser). */
 export function getDisplayName(): string {
+  const primary = myName.value.trim();
+  if (primary) return primary;
   const names = messagesMyNames.value.split(/[,;]/).map((s) => s.trim()).filter(Boolean);
   if (names.length) return names[0];
   try {

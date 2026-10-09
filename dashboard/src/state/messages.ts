@@ -1,20 +1,23 @@
 // Dashboard-user message notifications, per browser.
 //
-// The API deliberately has no "human inbox" identity: every person on the
-// dashboard posts as "user".  This client-side store therefore decides per
-// browser what is addressed to the person using it, and keeps their read
-// state (separate from agents' `read_by` acknowledgements).  A message is
+// Humans are addressable as the catch-all "user" or, once named, personally
+// as "user:<name>" (see the_lab/messages.py). This client-side store decides
+// per browser what is addressed to the person using it, and keeps their read
+// state (separate from agents' `read_by` acknowledgements). A message is
 // addressed to this browser's user when it is
-//   - sent directly to "user", or
-//   - a reply to a message sent from this browser, or
+//   - sent to the catch-all "user" (everyone), or directly to this browser's
+//     own "user:<name>" (see settings.myName), or
+//   - a reply to a message sent from this browser, or as this browser's name
+//     from elsewhere, or
 //   - mentions one of the names set in this browser (messagesMyNames), since
 //     agents address the human by name inside thread posts ("→ David 5843").
-// Agent chatter and broadcasts never count.  The newest 200 messages are
-// inspected; websocket events reconcile that bounded window.
+// Agent chatter, broadcasts, and other humans' messages never count. The
+// newest 200 messages are inspected; websocket events reconcile that window.
 
 import { effect, signal } from "@preact/signals";
 import { listMessagesPage } from "./api";
-import { messagesMyNames, messagesReadByMe } from "./settings";
+import { messagesMyNames, messagesReadByMe, myName } from "./settings";
+import { humanIdForName } from "../lib/identity";
 import { subscribeWsEvents } from "./ws";
 import type { MessageEntry } from "../lib/types";
 
@@ -62,14 +65,26 @@ let anyBaselineId = load<number | null>(ANY_BASELINE_KEY, null);
 
 /** Whether a message counts towards the @anyone number (unread state aside). */
 export function countsAsNew(m: MessageEntry): boolean {
-  return !sentHere.has(m.id) && anyBaselineId != null && m.id > anyBaselineId;
+  return !isMine(m) && anyBaselineId != null && m.id > anyBaselineId;
 }
 
 /** Newest message id seen; bounds which bare numbers in text can be message refs. */
 export const latestMessageId = signal(0);
 
 function isDirectToDashboardUser(m: MessageEntry): boolean {
-  return m.to === "user" || m.to === "agent:user";
+  if (m.to === "user" || m.to === "agent:user") return true;
+  const mine = humanIdForName(myName.value);
+  return !!mine && m.to === mine;
+}
+
+/** Whether *m* replies to something this browser's user sent — either from
+ *  this browser (sentHere) or, elsewhere, as this browser's named identity. */
+function isReplyToMine(m: MessageEntry): boolean {
+  if (m.in_reply_to == null) return false;
+  if (sentHere.has(m.in_reply_to)) return true;
+  const mine = humanIdForName(myName.value);
+  if (!mine) return false;
+  return messages.some((x) => x.id === m.in_reply_to && x.from_agent === mine);
 }
 
 function threadOf(m: MessageEntry): number {
@@ -94,14 +109,24 @@ function myNamesRe(): RegExp | null {
   return namesRe;
 }
 
-/** Whether a message is addressed to the person using this browser. */
+/** Whether a message is addressed to the person using this browser. Your
+ *  own messages (sent here, or as your named identity elsewhere) never
+ *  count — see isMine. */
 export function isAddressedToMe(m: MessageEntry, { names = true }: { names?: boolean } = {}): boolean {
-  if (sentHere.has(m.id)) return false;
+  if (isMine(m)) return false;
   if (isDirectToDashboardUser(m)) return true;
-  if (m.in_reply_to != null && sentHere.has(m.in_reply_to)) return true;
+  if (isReplyToMine(m)) return true;
   if (!names) return false;
   const re = myNamesRe();
   return !!re && (re.test(m.tldr ?? "") || re.test(m.text));
+}
+
+/** Whether *m* was sent by the person using this browser: from this browser
+ *  (sentHere), or — once named — as their "user:<name>" identity, period. */
+export function isMine(m: MessageEntry): boolean {
+  if (sentHere.has(m.id)) return true;
+  const mine = humanIdForName(myName.value);
+  return !!mine && m.from_agent === mine;
 }
 
 /** Whether a message was sent from this browser. */
@@ -177,11 +202,11 @@ function ingest(next: MessageEntry[], newestPage = true): void {
   recompute();
 }
 
-// Changing the names re-evaluates the loaded window: drop what no longer
-// matches, add the new matches.
+// Changing your name or aliases re-evaluates the loaded window: drop what no
+// longer matches, add the new matches.
 let lastNames: string | null = null;
 effect(() => {
-  const names = messagesMyNames.value;
+  const names = `${myName.value}\n${messagesMyNames.value}`;
   if (lastNames === null) { lastNames = names; return; }
   if (names === lastNames) return;
   lastNames = names;

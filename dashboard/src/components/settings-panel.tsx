@@ -17,6 +17,8 @@ import {
   colorblindMode,
   uiTexture,
   reverseTime,
+  myName,
+  messagesMyNames,
 } from "../state/settings";
 
 export interface SettingsPanelProps {
@@ -102,10 +104,49 @@ export function SettingsPanel(props: SettingsPanelProps) {
     setLayoutVersion((v) => v + 1);
   };
 
+  const name = myName.value;
+  const aliases = messagesMyNames.value;
+
   return (
     <Panel scroll class="settings-panel">
       <PanelHeader title="Settings" />
       <PanelBody class="settings-panel-body">
+
+        {/* ── Identity ─────────────────────────────────────────────── */}
+        <section class="settings-section">
+          <Eyebrow>Identity</Eyebrow>
+
+          <div class="settings-field">
+            <span class="settings-field-label">Your name</span>
+            <input
+              class="settings-input"
+              value={name}
+              placeholder="e.g. David"
+              onInput={(e) => { myName.value = (e.target as HTMLInputElement).value; }}
+            />
+            <p class="settings-empty">
+              Messages and thread posts you send from this browser are stamped with
+              this name instead of the plain "user". Per browser, until real
+              accounts exist.
+            </p>
+          </div>
+
+          <div class="settings-field">
+            <span class="settings-field-label">Also known as</span>
+            <input
+              class="settings-input"
+              value={aliases}
+              placeholder="e.g. Dave, DH"
+              onInput={(e) => { messagesMyNames.value = (e.target as HTMLInputElement).value; }}
+            />
+            <p class="settings-empty">
+              Extra names agents might use for you in messages ("→ Dave 5843"); a
+              mention still notifies you even though it isn't your primary name.
+            </p>
+          </div>
+        </section>
+
+        <Separator />
 
         {/* ── Appearance ───────────────────────────────────────────── */}
         <section class="settings-section">
