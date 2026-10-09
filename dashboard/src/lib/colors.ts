@@ -61,17 +61,50 @@ export const IDEA_PALETTE: string[] = [
 /** Identity palette for agents: cool hues only, so identity can never collide
  *  with the status color language (no red=failed / green=done / yellow=running
  *  / strong purple=milestone). See DESIGN.md § Status color language. */
+// Twelve clearly different hues (yellow is kept for "addressed to you").
 export const AGENT_PALETTE: string[] = [
-  '#58a6ff', '#39c5cf', '#79c0ff', '#f778ba', '#b392f0', '#56d4dd',
+  '#58a6ff', '#f0883e', '#56d364', '#f778ba', '#39c5cf', '#d2a8ff',
+  '#ff7b72', '#a5d64c', '#79c0ff', '#ffa198', '#7ee787', '#b392f0',
 ];
 
-/** Stable per-agent color: hash the agent id into the identity palette so an
- *  agent keeps the same color across renders and components. */
-export function agentColor(id: string | null | undefined): string {
-  if (!id) return 'var(--text-faint)';
+/** Humans and group addresses ("user", "everyone", "thread members",
+ *  "role:x") are not agents: they keep the neutral default colour. */
+const NON_AGENT = /^(?:agent:)?user$|^everyone$|^all$|^thread members$|^thread:|^role:/;
+export const DEFAULT_PARTICIPANT_COLOR = 'var(--text-muted)';
+
+function hashSlot(id: string): number {
   let h = 0;
   for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
-  return AGENT_PALETTE[h % AGENT_PALETTE.length];
+  return h % AGENT_PALETTE.length;
+}
+
+// Known agents get distinct colours: assigned in sorted order, each at its
+// hash slot or the next free one (stable across reloads while the set of
+// agents is stable; distinct for up to 12 agents).
+const knownAgents = new Set<string>();
+let assigned = new Map<string, string>();
+export function registerAgents(ids: Iterable<string | null | undefined>): void {
+  let changed = false;
+  for (const id of ids) {
+    if (id && !NON_AGENT.test(id) && !knownAgents.has(id)) { knownAgents.add(id); changed = true; }
+  }
+  if (!changed) return;
+  const used = new Set<number>();
+  const next = new Map<string, string>();
+  for (const id of [...knownAgents].sort()) {
+    let slot = hashSlot(id);
+    for (let k = 0; k < AGENT_PALETTE.length && used.has(slot); k++) slot = (slot + 1) % AGENT_PALETTE.length;
+    used.add(slot);
+    next.set(id, AGENT_PALETTE[slot]);
+  }
+  assigned = next;
+}
+
+/** Stable per-agent color (see registerAgents); non-agents get the default. */
+export function agentColor(id: string | null | undefined): string {
+  if (!id) return 'var(--text-faint)';
+  if (NON_AGENT.test(id)) return DEFAULT_PARTICIPANT_COLOR;
+  return assigned.get(id) ?? AGENT_PALETTE[hashSlot(id)];
 }
 
 /** 1–2 char initials for an agent avatar. */

@@ -19,6 +19,7 @@ import { signal } from "@preact/signals";
 import { subscribeWsEvents, wsConnected } from "./ws";
 import { listAgents } from "./api";
 import type { AgentEntry } from "../lib/types";
+import { registerAgents } from "../lib/colors";
 
 export interface ActivityEvent {
   key: string;            // stable unique id (for keyed rendering)
@@ -409,6 +410,7 @@ function rebuildAgentStates(events: ActivityEvent[]): void {
     st.lastWorkTs = _lastWork[st.agentId] ?? 0;
     st.active = st.listening || (st.lastActiveTs > 0 && now - st.lastActiveTs < ACTIVE_WINDOW_MS);
   }
+  registerAgents(Object.keys(next));
   agentStates.value = next;
 }
 

@@ -12,7 +12,7 @@ import {
 import { useLiveRefresh } from "../lib/hooks";
 import type { AgentEntry, MessageEntry, ThreadMeta } from "../lib/types";
 import { Badge, EmptyState, IconButton } from "../components/ui";
-import { agentColor, agentInitials } from "../lib/colors";
+import { agentColor, registerAgents, agentInitials } from "../lib/colors";
 import { messagesMyNames, messagesReadByMe, serverDemoMode } from "../state/settings";
 import {
   markMessagesReadByMe,
@@ -65,7 +65,7 @@ function inboxOf(
 }
 
 function Participant({ id }: { id: string }) {
-  const color = id === "everyone" ? "var(--text-faint)" : agentColor(id);
+  const color = agentColor(id);
   return (
     <span class="thread-participant" style={{ "--participant-color": color } as Record<string, string>}>
       <span class="thread-participant-avatar" aria-hidden="true">{agentInitials(id)}</span>
@@ -146,6 +146,8 @@ export function MessagesView() {
   const readByMe = (id: number) => !!readMap[String(id)];
   const setReadByMe = (ids: number[], read: boolean) =>
     markMessagesReadByMe(ids, read);
+  // Distinct colours for every agent in view (registry in lib/colors).
+  registerAgents([...agents.map((a) => a.agent_id), ...messages.map((m) => m.from_agent)]);
   const roles = useMemo(
     () => [...new Set(agents.map((a) => a.role).filter(Boolean))].sort(),
     [agents],
@@ -582,7 +584,7 @@ export function MessagesView() {
           {threads.map((t) => (
             <button
               key={t.id}
-              class={`thread-list-row${selectedThread === t.id ? " is-selected" : ""}${t.unreadForMe > 0 ? " has-unread-for-me" : t.forMe ? " has-for-me" : ""}`}
+              class={`thread-list-row${selectedThread === t.id ? " is-selected" : ""}${t.unreadForMe > 0 ? " has-unread-for-me" : t.forMe ? " has-for-me" : ""}${t.unread > 0 ? " has-unread" : ""}`}
               onClick={() => {
                 setSendError(null);
                 setNewThreadOpen(false);
@@ -612,7 +614,7 @@ export function MessagesView() {
                   <span class="thread-unread-me" title={`${t.unreadForMe} unread message${t.unreadForMe === 1 ? "" : "s"} for you`}>@{t.unreadForMe}</span>
                 )}
                 {t.unread - t.unreadForMe > 0 && (
-                  <span class="thread-unread-any" title="other unread messages in this thread">{t.unread - t.unreadForMe} new</span>
+                  <span class="thread-unread-any" title="unread messages in this thread (not addressed to you)">{t.unread - t.unreadForMe} unread</span>
                 )}
               </span>
             </button>
@@ -743,10 +745,18 @@ export function MessagesView() {
                 )}
               </div>
               {(threadMeta.get(selectedThread)?.summary || threadMeta.get(selectedThread)?.conclusion) && (
-                <div class="thread-summary">
-                  {threadMeta.get(selectedThread)!.summary && <p><strong>Summary</strong> {threadMeta.get(selectedThread)!.summary}</p>}
-                  {threadMeta.get(selectedThread)!.conclusion && <p><strong>Conclusion</strong> {threadMeta.get(selectedThread)!.conclusion}</p>}
-                </div>
+                // Collapsed by default (summaries get long); the header shows
+                // what is inside plus the start of the text.
+                <details class="thread-summary" key={`summary-${selectedThread}`}>
+                  <summary>
+                    <strong>{[threadMeta.get(selectedThread)!.summary && "Summary", threadMeta.get(selectedThread)!.conclusion && "Conclusion"].filter(Boolean).join(" · ")}</strong>
+                    <span class="thread-summary-preview">
+                      {stripRouting(threadMeta.get(selectedThread)!.conclusion || threadMeta.get(selectedThread)!.summary || "").replace(/\s+/g, " ").slice(0, 160)}
+                    </span>
+                  </summary>
+                  {threadMeta.get(selectedThread)!.summary && <div class="thread-summary-part"><strong>Summary</strong><RichText text={threadMeta.get(selectedThread)!.summary!} /></div>}
+                  {threadMeta.get(selectedThread)!.conclusion && <div class="thread-summary-part"><strong>Conclusion</strong><RichText text={threadMeta.get(selectedThread)!.conclusion!} /></div>}
+                </details>
               )}
               {threadError && <div class="agents-error">{threadError}</div>}
               {sendError && <div class="agents-error">{sendError}</div>}
@@ -784,7 +794,7 @@ export function MessagesView() {
                   <li
                     id={`thread-message-${m.id}`}
                     key={m.id}
-                    class={`thread-message${isRead(m) ? " is-read" : " is-unread"}${!inPerspective && !isSentHere(m) && isAddressedToMe(m) ? " is-for-me" : ""}`}
+                    class={`thread-message${isRead(m) ? " is-read" : " is-unread"}${!inPerspective && !isSentHere(m) && isAddressedToMe(m) ? " is-for-me" : ""}${m.from_agent === "user" || m.from_agent === "agent:user" ? " is-from-user" : ""}`}
                   >
                     <div class="thread-message-meta">
                       <span

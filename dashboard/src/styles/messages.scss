@@ -189,21 +189,30 @@
 .thread-list-row.is-selected {
   box-shadow: inset 2px 0 0 var(--accent);
 }
-/* Threads with messages for you (@user): unread ones stand out (tint, bar,
-   bold title); already-read ones keep a faint bar so they stay findable. */
-.thread-list-row.has-unread-for-me {
-  background: color-mix(in srgb, var(--accent) 9%, transparent);
-  box-shadow: inset 3px 0 0 var(--accent);
+/* Thread list, two kinds of news:
+   - unread (anything new): light — bold title, a small dot, an outlined count;
+   - @user (addressed to you): yellow — bar, tint and a filled count.
+   Already-read @user threads keep a faint yellow bar so they stay findable. */
+.thread-list-row.has-unread {
   color: var(--text);
   .thread-list-title { color: var(--text); font-weight: 700; }
+  .thread-list-line::after {
+    content: ""; order: 2; width: 7px; height: 7px; border-radius: 50%;
+    background: var(--accent); flex: 0 0 auto;
+  }
 }
-.thread-list-row.has-for-me:not(.is-selected) {
-  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--accent) 35%, transparent);
+.thread-list-row.has-unread-for-me {
+  background: color-mix(in srgb, var(--yellow) 9%, transparent);
+  box-shadow: inset 3px 0 0 var(--yellow);
+  .thread-list-line::after { background: var(--yellow); }
+}
+.thread-list-row.has-for-me:not(.is-selected):not(.has-unread-for-me) {
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--yellow) 40%, transparent);
 }
 .thread-unread-me {
   padding: 0 5px;
   border-radius: var(--radius-sm);
-  background: var(--accent);
+  background: var(--yellow);
   color: var(--bg);
   font-family: var(--font-mono);
   font-size: var(--text-xs);
@@ -211,9 +220,13 @@
   line-height: 1.5;
 }
 .thread-unread-any {
-  color: var(--text-muted);
+  padding: 0 5px;
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  border-radius: var(--radius-sm);
+  color: var(--accent);
   font-family: var(--font-mono);
   font-size: var(--text-xs);
+  line-height: 1.4;
 }
 .thread-list-line,
 .thread-list-meta,
@@ -365,21 +378,30 @@
 }
 .thread-summary {
   flex: 0 0 auto;
-  padding: var(--space-2) 0;
+  padding: var(--space-1) 0;
   border-bottom: 1px solid var(--border-soft);
   font-size: var(--text-sm);
   color: var(--text-muted);
+  max-height: 45vh;
+  overflow: auto;
 }
-.thread-summary p {
-  margin: 0;
+.thread-summary > summary {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+  cursor: pointer;
+  list-style: none;
+  padding: 2px 0;
 }
-.thread-summary p + p {
-  margin-top: var(--space-1);
-}
-.thread-summary strong {
-  margin-right: var(--space-1);
-  color: var(--text);
-}
+.thread-summary > summary::-webkit-details-marker { display: none; }
+.thread-summary > summary::before { content: "▸"; color: var(--text-faint); font-size: var(--text-xs); }
+.thread-summary[open] > summary::before { content: "▾"; }
+.thread-summary strong { color: var(--text); white-space: nowrap; }
+.thread-summary-preview { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-faint); }
+.thread-summary[open] .thread-summary-preview { display: none; }
+.thread-summary-part { margin: var(--space-1) 0 var(--space-2) 14px; }
+.thread-summary-part > strong { display: block; margin-bottom: 2px; }
 .thread-message-list {
   list-style: none;
   padding: 0;
@@ -398,11 +420,18 @@
 }
 /* Messages for you (@user): tinted, with a full accent bar while unread. */
 .thread-message.is-for-me {
-  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  background: color-mix(in srgb, var(--yellow) 6%, transparent);
   padding-left: var(--space-2);
-  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--accent) 35%, transparent);
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--yellow) 40%, transparent);
 }
-.thread-message.is-for-me.is-unread { box-shadow: inset 3px 0 0 var(--accent); }
+.thread-message.is-for-me.is-unread { box-shadow: inset 3px 0 0 var(--yellow); }
+/* Messages from the human (user): highlighted, neutral instead of an agent colour. */
+.thread-message.is-from-user {
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  padding-left: var(--space-2);
+  box-shadow: inset 3px 0 0 var(--text-muted);
+  .thread-participant:first-of-type { color: var(--text); }
+}
 .thread-message-meta time {
   margin-left: auto;
 }
