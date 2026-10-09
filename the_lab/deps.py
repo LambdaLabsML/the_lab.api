@@ -492,6 +492,36 @@ def _write_task(text: str) -> dict:
     return task
 
 
+_LIVE_BASELINES: tuple[float, dict] = (0.0, {})
+
+
+def live_baselines(max_age_s: float = 600.0) -> dict:
+    """Per-level human baselines from the newest closed scorecard, cached (lab 6588). They stay
+    Lab-side: the agent never receives them, so competition mode is unchanged."""
+    global _LIVE_BASELINES
+    import time as _time
+    from .live_score import baselines_from_scorecard
+
+    at, cached = _LIVE_BASELINES
+    if cached and _time.time() - at < max_age_s:
+        return cached
+    done = [e for e in (store.list_all_experiments() if store is not None else []) if e.get("status") == "completed"]
+    for exp in sorted(done, key=lambda e: str(e.get("finished_at") or ""), reverse=True):
+        found = baselines_from_scorecard((exp.get("meta") or {}).get("scorecard"))
+        if len(found) >= 25:
+            _LIVE_BASELINES = (_time.time(), found)
+            return found
+    return cached
+
+
+def with_progress_views(progress: dict, meta: dict | None) -> dict:
+    """The one view of a running experiment's progress used by the chart, GET progress and the
+    WebSocket: run_pct plus the exact live score (live_score.with_live_score)."""
+    from .live_score import with_live_score
+
+    return with_live_score(with_run_pct(progress, meta), live_baselines())
+
+
 def with_run_pct(progress: dict, meta: dict | None) -> dict:
     """``progress`` plus ``run_pct``: how much of the run's wall-clock budget
     is used (0-100), when the progress reports ``budget_remaining_s`` and the

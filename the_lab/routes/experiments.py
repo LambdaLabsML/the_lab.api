@@ -19,6 +19,7 @@ from fastapi.responses import FileResponse, Response
 from .. import jsonio
 from ..git_ops import GitError, resolve_commit
 from ..deps import (
+    with_progress_views,
     with_run_pct,
     sanitize_error,
     store,
@@ -1843,7 +1844,7 @@ def get_experiment_progress(exp_ref: str):
     progress_path = REPO_DIR / exp["script"].replace(".sh", ".progress")
     if progress_path.exists():
         try:
-            result["progress"] = with_run_pct(json.loads(progress_path.read_text()), exp.get("meta"))
+            result["progress"] = with_progress_views(json.loads(progress_path.read_text()), exp.get("meta"))
         except (json.JSONDecodeError, OSError):
             pass
     return result
@@ -1919,7 +1920,7 @@ async def post_experiment_progress(exp_ref: str, request: Request):
         "type": "experiment_progress_updated",
         "label": label,
         "idea_id": exp.get("idea_id"),
-        "progress": with_run_pct(body, exp.get("meta")),
+        "progress": with_progress_views(body, exp.get("meta")),
     })
 
     return {"ok": True}
