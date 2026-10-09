@@ -789,6 +789,68 @@ class _MessageDeduper:
         return result
 
 
+# ---------------------------------------------------------------------------
+# Messages cursor state — remembers the last delivered message id per agent
+# so a reconnect (new process or new socket) resumes with ?since=<id>
+# instead of re-fetching/re-delivering its whole unread backlog. One file,
+# keyed by agent id (not by repo/worktree — the identity is what matters).
+# THE_LAB_STATE_DIR overrides the location (used by tests to avoid touching
+# the real home directory).
+# ---------------------------------------------------------------------------
+
+def _cursor_state_path() -> Path:
+    base = os.environ.get("THE_LAB_STATE_DIR", "").strip()
+    d = Path(base).expanduser() if base else (Path.home() / ".the_lab")
+    d.mkdir(parents=True, exist_ok=True)
+    return d / "messages_cursor.json"
+
+
+def _load_cursor(agent_id: str | None) -> int | None:
+    if not agent_id:
+        return None
+    try:
+        import json as _json
+        data = _json.loads(_cursor_state_path().read_text())
+    except (OSError, ValueError):
+        return None
+    value = data.get(agent_id) if isinstance(data, dict) else None
+    return value if isinstance(value, int) else None
+
+
+def _save_cursor(agent_id: str | None, last_id: int) -> None:
+    if not agent_id or last_id is None:
+        return
+    import json as _json
+    path = _cursor_state_path()
+    try:
+        data = _json.loads(path.read_text())
+        if not isinstance(data, dict):
+            data = {}
+    except (OSError, ValueError):
+        data = {}
+    if last_id <= (data.get(agent_id) or -1):
+        return  # never move the cursor backwards
+    data[agent_id] = last_id
+    try:
+        path.write_text(_json.dumps(data))
+    except OSError:
+        pass  # best-effort — a failed save just means the next connect re-peeks
+
+
+def _print_ndjson(obj) -> None:
+    """Write one NDJSON line to stdout and flush immediately.
+
+    stdout may be a pipe held open by a background watcher (``the-lab
+    messages ... &``, or a supervising process reading line-by-line) — an
+    unflushed write can sit in a buffer for the lifetime of the connection,
+    which once cost an agent an hour of missed messages. Every line this
+    CLI prints goes through here for exactly that reason.
+    """
+    import json as _json
+    sys.stdout.write(_json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+
 def _api_get_json(url: str, headers: dict, ctx, timeout: float = 15):
     """GET `url` and parse JSON, with a clear error when the body isn't JSON —
     HTML from the dashboard SPA (base URL missing /api/v1), an empty body, etc.
@@ -1056,10 +1118,24 @@ def cmd_messages():
       --once             restore the old behavior: print the first batch of
                          unread/notifications, then exit (for callers that rely
                          on exit-to-notify).
-      --peek             show messages but leave them unread (passed to server).
+      --peek             show messages but leave them unread (don't mark them
+                         read — delivery is tracked separately from read state;
+                         neither --once nor the default marks anything read).
       --no-notifications ignore the notifications stream (messages only).
       --timeout N        max seconds to stay connected (default 300).
       --poll N           polling interval used ONLY by the HTTP fallback.
+      --since ID         resume cursor: only messages with id > ID are ever
+                         delivered. Defaults to the id this agent last saw
+                         (remembered in a small per-agent state file — see
+                         THE_LAB_STATE_DIR); pass 0 to force a full backlog
+                         scan. Without a cursor, a fresh connect gets a
+                         bounded recent slice (~20 messages) plus a one-line
+                         {"backlog": {...}} note instead of the whole unread
+                         backlog — older messages stay available via
+                         `the-lab messages --peek` or GET /messages?unread=1.
+      --jsonl            no-op: output is always newline-delimited JSON
+                         (NDJSON), one object per line, flushed immediately —
+                         this flag just documents/asserts that contract.
 
     If the WebSocket connect fails (older server without the endpoint, handshake
     error), falls back to the legacy HTTP polling loop so it still works. Uses
@@ -1069,6 +1145,15 @@ def cmd_messages():
     import urllib.parse as _uparse, base64 as _b64
     import socket as _socket_mod
     _socket_timeout = getattr(_socket_mod, "timeout", TimeoutError)
+
+    # Defensive: every write below already flushes explicitly, but force
+    # line-buffering too so nothing printed through a plain print() ever
+    # sits unflushed in a pipe (the original report: a background watcher
+    # saw zero output for 30 minutes because of exactly this).
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+    except (AttributeError, ValueError, OSError):
+        pass
 
     p = _ap.ArgumentParser(prog="the-lab messages")
     p.add_argument("--port", type=int, default=8000)
@@ -1084,6 +1169,11 @@ def cmd_messages():
                    help="Print the first batch of unread/notifications, then exit (legacy exit-to-notify mode).")
     p.add_argument("--no-notifications", dest="notifications", action="store_false",
                    help="Ignore the notifications stream; surface inter-agent messages only.")
+    p.add_argument("--since", type=int, default=None,
+                   help="Resume cursor (message id): only deliver messages newer than this. "
+                        "Defaults to the last id remembered for this agent; pass 0 for a full scan.")
+    p.add_argument("--jsonl", action="store_true",
+                   help="No-op: output is already one JSON object per line, flushed immediately.")
     args = p.parse_args(sys.argv[2:])
 
     api_base, _ssl_ctx = _client_api(args)
@@ -1108,13 +1198,25 @@ def cmd_messages():
     host = parsed.hostname or "localhost"
     port = parsed.port or (443 if use_ssl else 80)
 
-    def _emit(obj) -> None:
-        sys.stdout.write(_json.dumps(obj) + "\n")
-        sys.stdout.flush()
+    _emit = _print_ndjson
 
     # A reconnect can replay its initial snapshot.  IDs are stable server-side,
     # so retain a small rolling set for the lifetime of this invocation.
     deduper = _MessageDeduper()
+
+    # Resume cursor: explicit --since, else the last id remembered for this
+    # agent (see _cursor_state_path). Advances as frames arrive; persisted
+    # (unless --peek) so the NEXT invocation also skips the backlog.
+    cursor: int | None = args.since if args.since is not None else _load_cursor(agent_id)
+
+    def _advance_cursor(messages) -> None:
+        nonlocal cursor
+        ids = [m.get("id") for m in messages if isinstance(m, dict) and isinstance(m.get("id"), int)]
+        if not ids:
+            return
+        cursor = max([cursor or 0, *ids])
+        if not args.peek:
+            _save_cursor(agent_id, cursor)
 
     def _status(message: str) -> None:
         print(f"the-lab messages: {message}", file=sys.stderr, flush=True)
@@ -1140,26 +1242,32 @@ def cmd_messages():
     def _run_ws() -> bool:
         """Connect and stream. Returns True on success (do not fall back),
         False if the connection could not be established (fall back to poll)."""
-        # Build the WS path with token (parity with /ws), identity, and explicit
-        # post-print delivery acknowledgement mode.
-        qs = {}
-        if _basic:
-            qs["token"] = _basic
-        if agent_id:
-            qs["agent_id"] = agent_id
-        if not args.peek:
-            qs["ack"] = "1"
-        if args.peek:
-            qs["peek"] = "1"
-        # Preserve any reverse-proxy API prefix selected by --url/env, rather
-        # than silently reconnecting to a different root-level endpoint.
-        path_qs = parsed.path.rstrip("/") + "/messages/ws"
-        if qs:
-            path_qs += "?" + _uparse.urlencode(qs)
-
+        nonlocal cursor
         # Handshake headers: X-Agent-Id + Authorization (Basic) as the task
         # requires; token is also on the query string for parity with /ws.
         hs_headers = dict(headers)
+
+        def _path_qs() -> str:
+            # Rebuilt on every (re)connect attempt so a cursor learned from an
+            # earlier frame is carried into the next handshake's ?since=.
+            qs = {}
+            if _basic:
+                qs["token"] = _basic
+            if agent_id:
+                qs["agent_id"] = agent_id
+            if not args.peek:
+                qs["ack"] = "1"
+            if args.peek:
+                qs["peek"] = "1"
+            if cursor is not None:
+                qs["since"] = cursor
+            # Preserve any reverse-proxy API prefix selected by --url/env,
+            # rather than silently reconnecting to a different root-level
+            # endpoint.
+            path_qs = parsed.path.rstrip("/") + "/messages/ws"
+            if qs:
+                path_qs += "?" + _uparse.urlencode(qs)
+            return path_qs
 
         deadline = _time.monotonic() + args.timeout
         connected_once = False
@@ -1167,7 +1275,7 @@ def cmd_messages():
         while _time.monotonic() < deadline:
             sock = None
             try:
-                sock = _ws_handshake(host, port, path_qs, use_ssl, _ssl_ctx, hs_headers)
+                sock = _ws_handshake(host, port, _path_qs(), use_ssl, _ssl_ctx, hs_headers)
                 connected_once = True
                 attempts = 0
                 _status("WebSocket connected")
@@ -1224,11 +1332,19 @@ def cmd_messages():
                         received = event.get("messages") or []
                         msgs = deduper.fresh(received)
                         notifs = event.get("notifications") or []
+                        backlog = event.get("backlog")
                         if msgs:
                             _emit({"messages": msgs})
                         if notifs and args.notifications:
                             _emit({"notifications": notifs})
+                        if backlog:
+                            _emit({"backlog": backlog})
                         _ack_delivered(received)
+                        if isinstance(event.get("cursor"), int):
+                            cursor = max(cursor or 0, event["cursor"])
+                            if not args.peek:
+                                _save_cursor(agent_id, cursor)
+                        _advance_cursor(received)
                         if args.once:
                             # Legacy exit-to-notify: emit combined batch and stop.
                             if not (msgs or (notifs and args.notifications)):
@@ -1242,6 +1358,7 @@ def cmd_messages():
                         if msgs:
                             _emit({"messages": msgs})
                         _ack_delivered(received)
+                        _advance_cursor(received)
                         continue
 
                     if etype == "notifications":
@@ -1292,6 +1409,11 @@ def _cmd_messages_poll(args, api_base, _ssl_ctx, agent_id, headers, *, deduper=N
 
     Delivery is deliberately distinct from read state, matching the WebSocket
     client and preventing a failed print/read from silently consuming content.
+    Uses the same ``since`` resume cursor as the WebSocket path (remembered
+    per agent — see ``_cursor_state_path``) so a long-lived or
+    frequently-restarted poller doesn't re-drain its whole historical
+    backlog a page at a time; a fresh (cursorless) first fetch instead gets
+    a one-line ``{"backlog": {...}}`` note when more unread exist.
     """
     import json as _json, time as _time
     import urllib.request as _urlreq
@@ -1313,18 +1435,41 @@ def _cmd_messages_poll(args, api_base, _ssl_ctx, agent_id, headers, *, deduper=N
             except Exception:
                 pass
 
+    cursor = getattr(args, "since", None)
+    if cursor is None and agent_id:
+        cursor = _load_cursor(agent_id)
+
+    def _advance_cursor(ids: list) -> None:
+        nonlocal cursor
+        if not ids:
+            return
+        cursor = max([cursor or 0, *ids])
+        if agent_id and not args.peek:
+            _save_cursor(agent_id, cursor)
+
+    first_fetch = True
     deadline = _time.monotonic() + args.timeout
     while True:
         try:
             # Delivery and read state are separate. Fetch undelivered messages
             # without mutation, print them, then acknowledge delivery only.
             qs = "limit=50&for_me=1&undelivered=1&peek=1" if agent_id else "limit=50"
+            if agent_id and cursor is not None:
+                qs += f"&since={cursor}"
             data = _get(f"{api_base}/messages?{qs}")
             msgs = data.get("messages", [])
             if agent_id:
                 unread = msgs
+                total = data.get("total", len(msgs))
+                if first_fetch and cursor is None and total > len(msgs):
+                    _print_ndjson({"backlog": {
+                        "older_unread": total - len(msgs),
+                        "hint": "GET /api/v1/messages?unread=1&peek=1&offset="
+                                f"{len(msgs)} to review the rest without consuming them.",
+                    }})
             else:
                 unread = [m for m in msgs if not m.get("read_by")]
+            first_fetch = False
 
             notifs = []
             if args.notifications:
@@ -1340,15 +1485,18 @@ def _cmd_messages_poll(args, api_base, _ssl_ctx, agent_id, headers, *, deduper=N
                 # supervising process before acknowledging delivery.  Ack all
                 # received rows, including replay-deduplicated ones, so a lost
                 # prior ACK cannot keep a message pending forever.
-                sys.stdout.write(_json.dumps({"messages": fresh, "notifications": notifs}) + "\n")
-                sys.stdout.flush()
+                _print_ndjson({"messages": fresh, "notifications": notifs})
                 if args.once:
-                    _ack_delivered([m["id"] for m in unread if isinstance(m, dict) and "id" in m])
+                    ids = [m["id"] for m in unread if isinstance(m, dict) and "id" in m]
+                    _ack_delivered(ids)
+                    _advance_cursor(ids)
                     sys.exit(0)
             # A replay may have been deduplicated above, but it was previously
             # flushed; retry its ACK without writing a duplicate stdout line.
             if unread:
-                _ack_delivered([m["id"] for m in unread if isinstance(m, dict) and "id" in m])
+                ids = [m["id"] for m in unread if isinstance(m, dict) and "id" in m]
+                _ack_delivered(ids)
+                _advance_cursor(ids)
         except Exception as e:
             # Polling is the resilience path; a transient outage should not
             # turn a background listener into a dead process.  Keep stdout
@@ -1357,8 +1505,7 @@ def _cmd_messages_poll(args, api_base, _ssl_ctx, agent_id, headers, *, deduper=N
 
         if _time.monotonic() >= deadline:
             if args.once:
-                sys.stdout.write(_json.dumps({"messages": [], "notifications": []}) + "\n")
-                sys.stdout.flush()
+                _print_ndjson({"messages": [], "notifications": []})
             sys.exit(0)
 
         _time.sleep(min(args.poll, max(0, deadline - _time.monotonic())))

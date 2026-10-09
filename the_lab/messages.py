@@ -69,6 +69,24 @@ _lock = threading.Lock()
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
+
+def clamp_tldr(tldr: str, limit: int = TLDR_MAX_LENGTH) -> tuple[str, bool]:
+    """Clamp *tldr* to *limit* characters at a word boundary, adding "…".
+
+    Returns ``(clamped, was_truncated)``. A tldr is meant to be short, so an
+    over-long one is shortened rather than rejected — callers that want to
+    tell the sender it happened can compare the input length to *limit*
+    (or check the returned flag) and surface a warning.
+    """
+    tldr = tldr or ""
+    if len(tldr) <= limit:
+        return tldr, False
+    cut = tldr[: limit - 1]
+    sp = cut.rfind(" ")
+    if sp > limit * 0.6:  # don't over-shorten on a stray early space
+        cut = cut[:sp]
+    return cut.rstrip() + "…", True
+
 # Global wake event — set whenever a message lands. /wait listeners
 # race this against the experiment-finished queue. Reset by the loop in
 # wait_any after it reads it (so the next message re-wakes everyone).
@@ -263,11 +281,14 @@ def _append_locked(
     _validate_to(to)
     to = _canonical_to(to)
     text = (text or "").strip()
+    tldr = (tldr or "").strip()
+    tldr, _truncated = clamp_tldr(tldr)
+    if not text:
+        # A tldr-only post (no separate body) is still a real message — let
+        # the summary stand in for the text rather than bouncing it.
+        text = tldr
     if not text:
         raise ValueError("message text is empty")
-    tldr = (tldr or "").strip()
-    if len(tldr) > TLDR_MAX_LENGTH:
-        raise ValueError(f"message tldr must be at most {TLDR_MAX_LENGTH} characters")
     msg = {
         "id": data["next_id"],
         "from_agent": from_agent,
@@ -474,10 +495,14 @@ def unread_for(
     role: str | None,
     limit: int | None = None,
     automatic_only: bool = False,
+    since: int | None = None,
 ) -> list[dict]:
     """Messages addressed to this agent that they haven't marked read.
 
     Newest first. Senders' own messages are excluded from their own inbox.
+    ``since``, when given, excludes messages with id <= since — a cursor a
+    long-running listener can use to resume without re-scanning (or
+    re-delivering) everything it already saw.
     """
     if not agent_id and not role:
         return []
@@ -486,6 +511,8 @@ def unread_for(
     registered_at = _created_at_for(repo_dir, agent_id) if automatic_only and agent_id else None
     out = []
     for m in reversed(all_msgs):
+        if since is not None and m.get("id", 0) <= since:
+            continue
         if not is_for(m, agent_id=agent_id, role=role):
             continue
         if m.get("from_agent") and m["from_agent"] == agent_id:
@@ -501,8 +528,11 @@ def unread_for(
 
 
 def undelivered_for(repo_dir: Path, *, agent_id: str | None, role: str | None,
-                    limit: int | None = None) -> list[dict]:
-    """Inbox messages awaiting automatic delivery (read status is irrelevant)."""
+                    limit: int | None = None, since: int | None = None) -> list[dict]:
+    """Inbox messages awaiting automatic delivery (read status is irrelevant).
+
+    ``since`` excludes messages with id <= since (see ``unread_for``).
+    """
     if not agent_id:
         return []
     with _lock:
@@ -510,6 +540,8 @@ def undelivered_for(repo_dir: Path, *, agent_id: str | None, role: str | None,
     registered_at = _created_at_for(repo_dir, agent_id)
     out = []
     for m in reversed(all_msgs):
+        if since is not None and m.get("id", 0) <= since:
+            continue
         if not is_for(m, agent_id=agent_id, role=role) or m.get("from_agent") == agent_id:
             continue
         if _delivered(m, agent_id) or not automatic_delivery_eligible(repo_dir, m, agent_id, registered_at=registered_at):
@@ -526,6 +558,7 @@ def claim_unread_for(
     agent_id: str | None,
     role: str | None,
     limit: int | None = None,
+    since: int | None = None,
 ) -> list[dict]:
     """Atomically select AND claim delivery without marking messages read.
 
@@ -537,7 +570,10 @@ def claim_unread_for(
 
     Selection excludes already-delivered (including legacy ``read_by``) and
     applies the new-registration cutoff for role/all broadcasts. ``agent_id``
-    is required because delivery acknowledgement is per agent.
+    is required because delivery acknowledgement is per agent. ``since``
+    excludes messages with id <= since (see ``unread_for``) — a connected
+    listener uses this to keep claiming only newly-arrived messages instead
+    of re-draining its whole historical backlog on every retry.
     """
     if not agent_id:
         return []
@@ -547,6 +583,8 @@ def claim_unread_for(
         changed = False
         registered_at = _created_at_for(repo_dir, agent_id)
         for m in reversed(data["messages"]):
+            if since is not None and m.get("id", 0) <= since:
+                continue
             # Same predicate as unread_for (kept in lock-step to avoid drift).
             if not is_for(m, agent_id=agent_id, role=role):
                 continue
@@ -564,6 +602,60 @@ def claim_unread_for(
         if changed:
             _write(repo_dir, data)
     return out
+
+
+_RECENT_BACKLOG_LIMIT = 20
+
+
+def connect_snapshot_for(
+    repo_dir: Path, *, agent_id: str | None, role: str | None,
+    recent_limit: int = _RECENT_BACKLOG_LIMIT, claim: bool = True,
+) -> tuple[list[dict], int, int | None]:
+    """Bounded snapshot for a fresh (cursorless) connect.
+
+    Returns ``(recent, older_count, cursor)``:
+
+      - ``recent`` — the newest *recent_limit* currently-undelivered messages
+        (newest first).
+      - ``older_count`` — how many more undelivered messages exist beyond
+        that slice. They are deliberately left alone (never auto-claimed or
+        pushed) so a disconnected/slow listener can't be flooded with its
+        whole historical backlog on reconnect — the caller surfaces
+        ``older_count`` as a one-line hint and the agent fetches them
+        explicitly (``GET /api/v1/messages?unread=1``) if it wants them.
+      - ``cursor`` — the highest message id considered, newest-first; pass
+        it back as ``since=`` on the next connect (or keep tracking locally)
+        so this backlog is never re-scanned.
+
+    When *claim* is true (the normal, non-peek case) the returned ``recent``
+    slice is marked delivered; ``peek`` callers pass ``claim=False`` so
+    nothing is mutated.
+    """
+    if not agent_id:
+        return [], 0, None
+    with _lock:
+        data = _read(repo_dir)
+        registered_at = _created_at_for(repo_dir, agent_id)
+        candidates = []
+        for m in reversed(data["messages"]):
+            if not is_for(m, agent_id=agent_id, role=role):
+                continue
+            if m.get("from_agent") and m["from_agent"] == agent_id:
+                continue
+            if _delivered(m, agent_id):
+                continue
+            if not automatic_delivery_eligible(repo_dir, m, agent_id, registered_at=registered_at):
+                continue
+            candidates.append(m)
+        total = len(candidates)
+        recent = candidates[:recent_limit]
+        if claim and recent:
+            for m in recent:
+                m.setdefault("delivered_by", []).append(agent_id)
+            _write(repo_dir, data)
+    older = max(total - len(recent), 0)
+    cursor = candidates[0]["id"] if candidates else None
+    return recent, older, cursor
 
 
 def mark_delivered_many(repo_dir: Path, ids, agent_id: str) -> int:
@@ -1032,13 +1124,36 @@ def list_threads(
     return out[offset: offset + limit], len(out)
 
 
-def get_thread(repo_dir: Path, thread_id: int, *, agent_id: str | None, role: str | None,
-               operator: bool = False, limit: int = 50, offset: int = 0) -> dict:
+def _compact_entry(m: dict) -> dict:
+    """Skim-friendly message shape: no full text, just enough to triage.
+
+    Fetch one in full via ``GET /api/v1/messages/{id}``.
+    """
+    return {
+        "id": m["id"], "from_agent": m.get("from_agent"), "from_role": m.get("from_role"),
+        "to": m.get("to"), "created_at": m.get("created_at"), "preview": _preview(m),
+    }
+
+
+def get_thread(
+    repo_dir: Path, thread_id: int, *, agent_id: str | None, role: str | None,
+    operator: bool = False, limit: int = _RECENT_BACKLOG_LIMIT, offset: int | None = None,
+    before_id: int | None = None, fields: str | None = None,
+) -> dict:
     """Thread metadata, members and the messages the caller can see.
 
-    Messages are chronological; ``offset`` counts back from the newest, so
-    ``offset=0`` returns the latest ``limit`` messages. Raises KeyError /
-    PermissionError.
+    Pages by recency: the default and ``before_id`` modes return the newest
+    ``limit`` messages (or the ``limit`` messages immediately before
+    ``before_id``), in chronological order — stable even while the thread
+    keeps growing between calls. ``offset`` is the legacy position-counted
+    mode kept for existing callers: ``offset=0`` is the newest ``limit``,
+    but a growing thread can shift what a later ``offset`` lands on.
+
+    ``fields="tldr"`` returns compact entries (id, from_agent, to,
+    created_at, preview) instead of full messages, for a cheap skim before
+    fetching one message in full via ``GET /api/v1/messages/{id}``.
+
+    Raises KeyError / PermissionError.
     """
     with _lock:
         data = _read(repo_dir)
@@ -1055,12 +1170,23 @@ def get_thread(repo_dir: Path, thread_id: int, *, agent_id: str | None, role: st
         members = [{"agent_id": aid, **info} for aid, info in (meta.get("members") or {}).items()]
         out = _public_meta(meta, agent_id=agent_id)
     total = len(group)
-    end = max(total - offset, 0)
+    if before_id is not None:
+        end = next((i for i, m in enumerate(group) if m["id"] >= before_id), total)
+    elif offset is not None:
+        end = max(total - offset, 0)
+    else:
+        end = total
+    start = max(end - limit, 0)
+    window = group[start:end]
+    next_before_id = window[0]["id"] if start > 0 and window else None
+    offset_out = offset if offset is not None else max(total - end, 0)
     out.update({
         "members": members,
-        "messages": group[max(end - limit, 0): end],
-        "total": total, "limit": limit, "offset": offset,
+        "messages": [_compact_entry(m) for m in window] if fields == "tldr" else window,
+        "total": total, "limit": limit, "offset": offset_out,
     })
+    if next_before_id is not None:
+        out["next_before_id"] = next_before_id
     return out
 
 

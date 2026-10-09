@@ -33,6 +33,14 @@ class _SocketWithCoalescedFrame:
 
 
 class CliMessagesTests(unittest.TestCase):
+    def setUp(self):
+        # Messages-cursor state (see _cursor_state_path) defaults to
+        # ~/.the_lab — point it at a throwaway directory so these tests
+        # never touch the real home directory.
+        self._state_tmp = TemporaryDirectory()
+        self.addCleanup(self._state_tmp.cleanup)
+        self.state_dir = self._state_tmp.name
+
     def test_url_env_is_used_but_explicit_url_wins_and_normalizes(self):
         args = Namespace(url=None, https=False, port=8123)
         with patch.dict(os.environ, {"THE_LAB_API_URL": "https://service.example/lab"}, clear=True):
@@ -88,7 +96,7 @@ class CliMessagesTests(unittest.TestCase):
         response.read.return_value = b"{}"
         stdout = io.StringIO()
         event = {"type": "init", "messages": [{"id": 41, "text": "hello"}], "notifications": []}
-        with patch.dict(os.environ, {"THE_LAB_AGENT_ID": "agent-x"}, clear=True), \
+        with patch.dict(os.environ, {"THE_LAB_AGENT_ID": "agent-x", "THE_LAB_STATE_DIR": self.state_dir}, clear=True), \
              patch("sys.argv", ["the-lab", "messages", "--once", "--url", "http://example.test/lab/api/v1"]), \
              patch("the_lab.cli._ws_handshake", return_value=socket_obj) as handshake, \
              patch("the_lab.cli._ws_recv_frame", return_value=(1, __import__("json").dumps(event).encode())), \
@@ -108,7 +116,7 @@ class CliMessagesTests(unittest.TestCase):
         socket_obj = MagicMock()
         stdout = io.StringIO()
         event = {"type": "init", "messages": [{"id": 42}], "notifications": []}
-        with patch.dict(os.environ, {"THE_LAB_AGENT_ID": "agent-x"}, clear=True), \
+        with patch.dict(os.environ, {"THE_LAB_AGENT_ID": "agent-x", "THE_LAB_STATE_DIR": self.state_dir}, clear=True), \
              patch("sys.argv", ["the-lab", "messages", "--once", "--peek", "--url", "http://host/api/v1"]), \
              patch("the_lab.cli._ws_handshake", return_value=socket_obj) as handshake, \
              patch("the_lab.cli._ws_recv_frame", return_value=(1, __import__("json").dumps(event).encode())), \
@@ -139,7 +147,7 @@ class CliMessagesTests(unittest.TestCase):
                 raise item
             return item
 
-        with patch.dict(os.environ, {"THE_LAB_AGENT_ID": "agent-x"}, clear=True), \
+        with patch.dict(os.environ, {"THE_LAB_AGENT_ID": "agent-x", "THE_LAB_STATE_DIR": self.state_dir}, clear=True), \
              patch("sys.argv", ["the-lab", "messages", "--timeout", "0.02", "--url", "http://host/api/v1"]), \
              patch("the_lab.cli._ws_handshake", return_value=socket_obj) as handshake, \
              patch("the_lab.cli._ws_recv_frame", side_effect=receive), \
@@ -165,7 +173,8 @@ class CliMessagesTests(unittest.TestCase):
         # deadline setup, first loop check/sleep, second loop check/sleep,
         # then expiry after the third request.
         clocks = iter([0, 0, 0, 0, 0, 11])
-        with patch("the_lab.cli._api_get_json", side_effect=lambda *_: next(batches)), \
+        with patch.dict(os.environ, {"THE_LAB_STATE_DIR": self.state_dir}), \
+             patch("the_lab.cli._api_get_json", side_effect=lambda *_: next(batches)), \
              patch("urllib.request.urlopen", return_value=response) as urlopen, \
              patch("time.monotonic", side_effect=lambda: next(clocks)), patch("time.sleep"), \
              patch("sys.stdout", stdout):
@@ -182,7 +191,8 @@ class CliMessagesTests(unittest.TestCase):
     def test_poll_fallback_peek_does_not_ack(self):
         args = Namespace(peek=True, notifications=False, once=True, timeout=10, poll=1)
         stdout = io.StringIO()
-        with patch("the_lab.cli._api_get_json", return_value={"messages": [{"id": 7}]}), \
+        with patch.dict(os.environ, {"THE_LAB_STATE_DIR": self.state_dir}), \
+             patch("the_lab.cli._api_get_json", return_value={"messages": [{"id": 7}]}), \
              patch("urllib.request.urlopen") as urlopen, patch("sys.stdout", stdout):
             with self.assertRaises(SystemExit) as stopped:
                 _cmd_messages_poll(args, "http://host/api/v1", None, "agent-x", {"X-Agent-Id": "agent-x"})

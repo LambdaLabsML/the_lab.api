@@ -98,13 +98,19 @@ def send_message(req: MessageRequest, request: Request):
         if req.to and req.to.startswith("thread:"):
             addressed = int(req.to[len("thread:"):]) if req.to[len("thread:"):].isdigit() else None
             if thread_id is not None and addressed != thread_id:
-                raise ValueError("to='thread:<id>' must match thread_id")
-            thread_id = addressed
+                thread_id = _resolve_thread_id_conflict(
+                    addressed, thread_id, what="to='thread:<id>'",
+                )
+            else:
+                thread_id = addressed
         if parent:
             inherited = parent.get("thread_id") or parent["id"]
             if thread_id is not None and thread_id != inherited:
-                raise ValueError("thread_id must match the parent message thread")
-            thread_id = inherited
+                thread_id = _resolve_thread_id_conflict(
+                    inherited, thread_id, what="the parent message's thread",
+                )
+            else:
+                thread_id = inherited
         elif thread_id is not None:
             try:
                 visible = messages_mod.thread_visible(
@@ -117,7 +123,15 @@ def send_message(req: MessageRequest, request: Request):
         to = req.to or ("thread" if thread_id is not None else None)
         if not to:
             raise ValueError("'to' is required unless thread_id or in_reply_to is given")
-        references = _merge_references(_validate_references(req.references), req.text)
+        # A tldr-only post (no separate body) falls back to the tldr for
+        # mention-scanning too, matching what add_message will store.
+        effective_text = (req.text or "").strip() or (req.tldr or "").strip()
+        references = _merge_references(_validate_references(req.references), effective_text)
+        warnings = []
+        if len((req.tldr or "").strip()) > messages_mod.TLDR_MAX_LENGTH:
+            warnings.append(
+                f"tldr exceeded {messages_mod.TLDR_MAX_LENGTH} characters; shortened to fit."
+            )
         msg = messages_mod.add_message(
             REPO_DIR,
             from_agent=from_agent,
@@ -140,7 +154,27 @@ def send_message(req: MessageRequest, request: Request):
     hints = _send_hints(msg)
     if hints:
         out["hints"] = hints
+    if warnings:
+        out["warnings"] = warnings
     return out
+
+
+def _resolve_thread_id_conflict(expected: int, given: int, *, what: str) -> int:
+    """Lenient thread_id check: resolve *given* before rejecting a mismatch.
+
+    Agents sometimes pass the id of a message that belongs to the right
+    thread (e.g. the thread's last message) rather than the thread's own
+    id. Resolve it through that message's own thread key and only raise if
+    it genuinely points elsewhere.
+    """
+    candidate = messages_mod.get_message(REPO_DIR, given)
+    resolved = messages_mod.thread_key(candidate) if candidate else None
+    if resolved == expected:
+        return resolved
+    raise ValueError(
+        f"thread_id {given} does not match {what} (thread {expected}); "
+        "omit thread_id to infer it automatically"
+    )
 
 
 # Mentions turned into reference handles: "exp 12.3", "experiment/12.3",
@@ -283,12 +317,22 @@ def list_messages(
     peek: bool = False,
     thread_id: int | None = None,
     undelivered: bool = False,
+    since: int | None = Query(
+        default=None,
+        description="Only messages with id > since. A cursor for a long-running "
+                    "listener to resume with — pass back the highest id you've "
+                    "already seen instead of re-paging from offset 0, which would "
+                    "otherwise re-walk (and, without peek, re-acknowledge) the "
+                    "whole backlog on every reconnect.",
+    ),
 ):
     """List messages, newest first.
 
     Use ``?for_me=1`` to restrict to messages addressed to the caller (by id,
     role, or ``all``), and ``?unread=1`` for unread-only. Both flags require
-    ``X-Agent-Id``. Supports pagination via ``?limit=N&offset=N``.
+    ``X-Agent-Id``. Supports pagination via ``?limit=N&offset=N``, or cursor
+    paging via ``?since=<id>`` (combine with ``unread=1``/``undelivered=1``
+    for a watch loop that never re-scans what it already delivered).
 
     Returns ``{messages, total, limit, offset}`` so callers can page through.
     """
@@ -307,16 +351,19 @@ def list_messages(
             pass
     if limit < 1 or limit > 200 or offset < 0:
         raise HTTPException(400, "limit must be 1..200 and offset must be non-negative")
+    if since is not None and since < 0:
+        raise HTTPException(400, "since must be non-negative")
     if undelivered and not agent_id:
         raise HTTPException(400, "undelivered requires X-Agent-Id")
     msgs: list[dict] = []
     if unread:
-        msgs = messages_mod.unread_for(REPO_DIR, agent_id=agent_id, role=role, limit=None)
+        msgs = messages_mod.unread_for(REPO_DIR, agent_id=agent_id, role=role, limit=None, since=since)
         total = len(msgs)
         page = msgs[offset: offset + limit]
     elif for_me:
         all_msgs, _ = messages_mod.list_messages(REPO_DIR, limit=None)
-        msgs = [m for m in all_msgs if messages_mod.is_for(m, agent_id=agent_id, role=role)]
+        msgs = [m for m in all_msgs if messages_mod.is_for(m, agent_id=agent_id, role=role)
+                and (since is None or m.get("id", 0) > since)]
         total = len(msgs)
         page = msgs[offset: offset + limit]
     elif agent_id or role:
@@ -328,14 +375,17 @@ def list_messages(
         all_msgs, _ = messages_mod.list_messages(REPO_DIR, limit=None)
         msgs = [
             m for m in all_msgs
-            if messages_mod.is_for(m, agent_id=agent_id, role=role)
-            or (agent_id and m.get("from_agent") == agent_id)
+            if (messages_mod.is_for(m, agent_id=agent_id, role=role)
+                or (agent_id and m.get("from_agent") == agent_id))
+            and (since is None or m.get("id", 0) > since)
         ]
         total = len(msgs)
         page = msgs[offset: offset + limit]
     elif _is_operator(request):
         # The dashboard/operator view legitimately shows the whole message log.
         page, total = messages_mod.list_messages(REPO_DIR, limit=limit, offset=offset)
+        if since is not None:
+            page = [m for m in page if m.get("id", 0) > since]
     else:
         raise HTTPException(
             403,
@@ -344,7 +394,7 @@ def list_messages(
         )
 
     if undelivered:
-        msgs = messages_mod.undelivered_for(REPO_DIR, agent_id=agent_id, role=role, limit=None)
+        msgs = messages_mod.undelivered_for(REPO_DIR, agent_id=agent_id, role=role, limit=None, since=since)
         total = len(msgs)
         page = msgs[offset: offset + limit]
     if thread_id is not None:
@@ -408,6 +458,7 @@ def idea_experiment_mentions(idea_id: int, request: Request):
 def search_messages(
     request: Request,
     q: str | None = Query(default=None, description="Space-separated terms; all must match (case-insensitive)"),
+    query: str | None = Query(default=None, description="Alias for q (accepted so either name works)"),
     from_agent: str | None = Query(default=None, description="Only messages sent by this agent id"),
     thread_id: int | None = Query(default=None, description="Only messages in this thread"),
     ref: str | None = Query(default=None, description="Reference handle, e.g. experiment:12.3, idea:42, resource:path"),
@@ -418,14 +469,16 @@ def search_messages(
 
     Covers your inbox, your own messages and every public thread. Combine
     filters, e.g. who discussed an experiment: ``?ref=experiment:12.3``.
-    Does not change delivery or read state.
+    Does not change delivery or read state. ``query`` is accepted as an
+    alias for ``q``.
 
     Example:
         GET /api/v1/messages/search?q=kv cache oom
         GET /api/v1/messages/search?ref=experiment:747.1
     """
+    q = q or query
     if not (q or from_agent or thread_id is not None or ref):
-        raise HTTPException(400, "give at least one of q, from_agent, thread_id, ref")
+        raise HTTPException(400, "give at least one of q (or query), from_agent, thread_id, ref")
     agent_id, role, operator = _caller(request)
     results, total = messages_mod.search_messages(
         REPO_DIR, agent_id=agent_id, role=role, operator=operator, q=q,
@@ -552,10 +605,17 @@ def create_thread(req: ThreadCreateRequest, request: Request):
         members=req.members, announce=req.announce, references=references,
     )
     out = {"thread": meta, "message": {**root, "recipients": _recipient_listening(root["to"])}}
+    hints = []
     unknown = [a for a in req.members
                if a != messages_mod.UI_USER and not agents_mod.lookup_agent(REPO_DIR, a)]
     if unknown:
-        out["hints"] = [f"Not currently registered (added anyway): {', '.join(unknown)}"]
+        hints.append(f"Not currently registered (added anyway): {', '.join(unknown)}")
+    if hints:
+        out["hints"] = hints
+    if len((req.tldr or "").strip()) > messages_mod.TLDR_MAX_LENGTH:
+        out["warnings"] = [
+            f"tldr exceeded {messages_mod.TLDR_MAX_LENGTH} characters; shortened to fit."
+        ]
     return out
 
 
@@ -594,25 +654,54 @@ def list_threads(
 def get_thread(
     thread_id: int,
     request: Request,
-    limit: int = Query(default=50, ge=1, le=200),
-    offset: int = Query(default=0, ge=0, description="Messages to skip, counting back from the newest"),
+    limit: int = Query(
+        default=messages_mod._RECENT_BACKLOG_LIMIT, ge=1, le=200,
+        description="Max messages to return (newest-first window; default 20).",
+    ),
+    offset: int | None = Query(
+        default=None,
+        ge=0,
+        description="Legacy paging: messages to skip, counting back from the newest. "
+                    "Kept for existing callers; omit it and use before_id instead — "
+                    "offset can skip or repeat entries if the thread grows between calls.",
+    ),
+    before_id: int | None = Query(
+        default=None,
+        ge=1,
+        description="Return the `limit` messages immediately before this id. Stable "
+                    "paging further back in time: pass the oldest id from the "
+                    "previous page (also returned as next_before_id).",
+    ),
+    fields: str | None = Query(
+        default=None,
+        description="'tldr' returns compact entries (id, from_agent, to, created_at, "
+                    "preview) instead of full messages, for a cheap skim — fetch one "
+                    "message in full via GET /api/v1/messages/{id}.",
+    ),
     peek: bool = Query(default=False, description="Do not acknowledge delivery"),
 ):
-    """Read a thread: metadata, members and its messages (chronological).
+    """Read a thread: metadata, members and its messages, newest first page by default.
 
     Public threads are readable in full by any agent, including messages
-    from before you joined. ``offset=0`` returns the newest ``limit``
-    messages; page back with larger offsets. Reading acknowledges delivery of
-    messages addressed to you unless ``peek=1``.
+    from before you joined. Without ``offset``, this returns the newest
+    ``limit`` messages (default 20); page further back with
+    ``before_id=<oldest id you've seen>`` — stable even while the thread
+    keeps growing. ``offset`` is the legacy position-counted mode, kept for
+    existing callers. ``fields=tldr`` trims each message to a compact
+    preview. Reading acknowledges delivery of messages addressed to you
+    unless ``peek=1``.
     """
+    if fields is not None and fields != "tldr":
+        raise HTTPException(400, "fields must be 'tldr' if given")
     agent_id, role, operator = _caller(request)
     out = _thread_errors(
         messages_mod.get_thread, REPO_DIR, thread_id, agent_id=agent_id, role=role,
-        operator=operator, limit=limit, offset=offset,
+        operator=operator, limit=limit, offset=offset, before_id=before_id, fields=fields,
     )
     if agent_id and not peek:
         ids = [m["id"] for m in out["messages"]
-               if messages_mod.is_for(m, agent_id=agent_id, role=role)]
+               if isinstance(m, dict) and "id" in m
+               and messages_mod.is_for(m, agent_id=agent_id, role=role)]
         if ids:
             messages_mod.mark_delivered_many(REPO_DIR, ids, agent_id)
     return out

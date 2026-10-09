@@ -62,6 +62,7 @@ INCLUDE = {
     ("get",  "/api/v1/ideas/{idea_id}/notes"):     "list_notes",
     ("post", "/api/v1/ideas/{idea_id}/experiments"): "create_experiment",
     ("post", "/api/v1/ideas/{idea_id}/experiments/batch"): "create_experiments",
+    ("post", "/api/v1/experiments/clone"): "clone_experiment",
     ("get",  "/api/v1/experiments"):               "list_experiments",
     ("get",  "/api/v1/experiments/log"):           "get_failed_logs",
     ("get",  "/api/v1/experiments/tags"):          "list_tags",
@@ -174,6 +175,12 @@ def flatten_optional(schema, spec):
     against and often stringifies dicts/lists, which the proxy then re-encodes
     on top — the agent sees ``"meta"`` arrive as a JSON string. Picking the
     first non-null branch (resolving any inner $ref) restores the type info.
+
+    Pydantic puts ``description``/``title``/``default`` on the OUTER anyOf
+    wrapper, not inside the branch itself — every ``Field(description=...)``
+    on an ``Optional`` field lived there and was silently dropped by this
+    unwrap (the MCP tool showed the field with no description at all).
+    Preserve them onto the flattened branch.
     """
     if "anyOf" in schema:
         for branch in schema["anyOf"]:
@@ -181,7 +188,11 @@ def flatten_optional(schema, spec):
                 continue
             if "$ref" in branch:
                 branch = resolve_ref(branch["$ref"], spec)
-            return branch
+            merged = dict(branch)
+            for k in ("description", "title", "default"):
+                if k in schema and k not in merged:
+                    merged[k] = schema[k]
+            return merged
     if "$ref" in schema:
         return resolve_ref(schema["$ref"], spec)
     return schema
