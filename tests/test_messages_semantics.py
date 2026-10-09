@@ -219,3 +219,28 @@ class MessageRouteTests(unittest.TestCase):
 
 
 if __name__ == "__main__": unittest.main()
+
+
+class ExperimentMentionTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = TemporaryDirectory(); self.repo = Path(self.tmp.name); reset_cache()
+        self.addCleanup(self.tmp.cleanup); self.addCleanup(reset_cache)
+
+    def test_text_shorthand_and_references_group_by_experiment_and_thread(self):
+        root = messages.add_message(self.repo, from_agent="a", from_role=None, to="all",
+                                    text="launched 1035.1/.2 (C) on 1026's head")
+        messages.add_message(self.repo, from_agent="b", from_role=None, to="all",
+                             text="exp/1035.2 final 28.19", thread_id=root["id"], in_reply_to=root["id"])
+        other = messages.add_message(self.repo, from_agent="b", from_role=None, to="all",
+                                     text="unrelated: 11035.1, 10351.1 and 1035.12 tokens",
+                                     references=[{"kind": "experiment", "id": "1035.3"}])
+        got = messages.experiment_mentions(self.repo, 1035, agent_id=None, role=None, operator=True)
+        self.assertEqual(sorted(got), ["1035.1", "1035.12", "1035.2", "1035.3"])
+        [t2] = got["1035.2"]
+        self.assertEqual((t2["thread_id"], t2["count"], t2["first_id"]), (root["id"], 2, root["id"]))
+        self.assertEqual(got["1035.3"][0]["thread_id"], other["id"])
+
+    def test_agents_only_see_mentions_in_messages_they_can_see(self):
+        messages.add_message(self.repo, from_agent="b", from_role=None, to="agent:c", text="private 7.1")
+        self.assertEqual(messages.experiment_mentions(self.repo, 7, agent_id="a", role=None), {})
+        self.assertIn("7.1", messages.experiment_mentions(self.repo, 7, agent_id="c", role=None))
