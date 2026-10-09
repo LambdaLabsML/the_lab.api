@@ -48,6 +48,7 @@ import inspect
 import time
 import uuid
 import sys
+from fnmatch import fnmatch
 from contextlib import contextmanager
 from contextvars import ContextVar
 from functools import wraps
@@ -68,6 +69,22 @@ class UncertainCommandCompletion(RuntimeError):
 
 
 _HELD_LIFECYCLES = ContextVar("slurm_git_lifecycles", default=frozenset())
+
+# Files in a job root that belong to ONE attempt: archived into attempts/<n>/
+# when a native Slurm restart begins, and evicted from local result copies
+# when they disappear remotely. Everything else in the job root is shared by
+# all attempts (e.g. worktree_attestation.py and source-attestation-submit.json,
+# needed by every restart's pre-start attestation and the final cleanup), so
+# this is an explicit list, never "everything but".
+SLURM_PER_ATTEMPT_GLOBS = (
+    "model.ready*.json", "script.progress", "script.metrics.jsonl", "exit-status.json",
+    "script.err", "script.output.md", "script.output.html", "script.heartbeats",
+    "chat_history.json", "chat_history.w*", "stage_timing.*",
+)
+
+
+def is_per_attempt_file(name: str) -> bool:
+    return any(fnmatch(name, pattern) for pattern in SLURM_PER_ATTEMPT_GLOBS)
 
 
 def _serialized_git_lifecycle(fn):
@@ -574,6 +591,7 @@ fi
 fi
 """ if source_guard else ""
 
+        per_attempt_globs = " ".join(f'"{remote_job_dir}"/{g}' for g in SLURM_PER_ATTEMPT_GLOBS)
         return f"""#!/bin/bash
 #SBATCH --partition={self.partition}
 #SBATCH --job-name=thelab-{label}
@@ -597,18 +615,44 @@ fi
 _THE_LAB_GENERATION="${{SLURM_RESTART_COUNT:-0}}"
 case "$_THE_LAB_GENERATION" in ''|*[!0-9]*) _THE_LAB_GENERATION=0;; esac
 export THE_LAB_RESTART_COUNT="$_THE_LAB_GENERATION"
+# No marker file yet means this is the very first boot of this allocation —
+# nothing has run, so there is no previous attempt's output to archive (and
+# nothing staged at submit time, e.g. model_server.sh, should ever be swept
+# by the archive loop below).
+_THE_LAB_FIRST_BOOT=0
+[ -f "{remote_job_dir}/.the_lab_generation" ] || _THE_LAB_FIRST_BOOT=1
 _THE_LAB_PREVIOUS_GENERATION="$(cat {remote_job_dir}/.the_lab_generation 2>/dev/null || true)"
 case "$_THE_LAB_PREVIOUS_GENERATION" in ''|*[!0-9]*) _THE_LAB_PREVIOUS_GENERATION="unknown";; esac
 if [ "$_THE_LAB_PREVIOUS_GENERATION" != "$_THE_LAB_GENERATION" ]; then
-    _THE_LAB_ARCHIVE="{remote_job_dir}/attempts/${{_THE_LAB_PREVIOUS_GENERATION:-unknown}}"
-    mkdir -p "$_THE_LAB_ARCHIVE"
-    for _the_lab_path in "{remote_job_dir}"/model.ready*.json "{remote_job_dir}"/script.progress "{remote_job_dir}"/script.metrics.jsonl "{remote_job_dir}"/exit-status.json "{remote_job_dir}"/script.err "{remote_job_dir}"/script.output.md "{remote_job_dir}"/script.output.html "{remote_job_dir}"/script.heartbeats; do
-        # mv moves a symlink itself, never its target.  Do not follow a stale
-        # script-produced link while resetting a native attempt.
-        [ -e "$_the_lab_path" ] || [ -L "$_the_lab_path" ] || continue
-        mv -f -- "$_the_lab_path" "$_THE_LAB_ARCHIVE/" || true
-    done
-    : > "{remote_job_dir}/script.log"
+    if [ "$_THE_LAB_FIRST_BOOT" != "1" ]; then
+        # attempts/<n>/ is keyed by ATTEMPT NUMBER (1-based: attempt N is
+        # Slurm restart generation N-1, matching the Lab API's additive
+        # `attempt` field), NOT by the raw zero-based Slurm restart-count
+        # generation. attempts/1/ is always the first (just-finished-or-
+        # killed) attempt, never the live one — the old generation-numbered
+        # folders read like the opposite to a human skimming the directory.
+        if [ "$_THE_LAB_PREVIOUS_GENERATION" = "unknown" ]; then
+            _THE_LAB_ARCHIVE_NAME="unknown"
+        else
+            _THE_LAB_ARCHIVE_NAME=$((_THE_LAB_PREVIOUS_GENERATION + 1))
+        fi
+        _THE_LAB_ARCHIVE="{remote_job_dir}/attempts/$_THE_LAB_ARCHIVE_NAME"
+        mkdir -p "$_THE_LAB_ARCHIVE"
+        # Archive the previous attempt's per-attempt files (SLURM_PER_ATTEMPT_GLOBS):
+        # the wrapper's progress/metrics/output files plus the solver's own
+        # per-attempt outputs (chat_history*, stage_timing.*), which used to
+        # pile up across attempts. Only these: everything else in the job
+        # root is shared by all attempts — notably worktree_attestation.py
+        # and source-attestation-submit.json, which every restart's
+        # pre-start attestation and the final worktree cleanup need.
+        for _the_lab_path in {per_attempt_globs}; do
+            # mv moves a symlink itself, never its target.  Do not follow a
+            # stale script-produced link while resetting a native attempt.
+            [ -e "$_the_lab_path" ] || [ -L "$_the_lab_path" ] || continue
+            mv -f -- "$_the_lab_path" "$_THE_LAB_ARCHIVE/" || true
+        done
+        : > "{remote_job_dir}/script.log"
+    fi
     printf '%s\\n' "$_THE_LAB_GENERATION" > "{remote_job_dir}/.the_lab_generation"
 fi
 
@@ -955,10 +999,12 @@ exit $_EXIT
         job_dir = self._job_dir_path(label)
         if not job_dir.is_dir():
             raise RuntimeError(f"job dir for {label} not found at {job_dir}")
+        current_names: set[str] = set()
         for entry in os.scandir(job_dir):
             name = entry.name
             if name in self._LINK_SKIP:
                 continue
+            current_names.add(name)
             want = str(job_dir / name)
             target = destination / name
             if target.is_symlink():
@@ -971,6 +1017,14 @@ exit $_EXIT
             os.unlink(temporary_name)
             os.symlink(want, temporary_name)
             os.replace(temporary_name, target)
+        # Prune links to per-attempt files the wrapper archived away on
+        # restart (moved into attempts/<n>/), so a previous attempt's
+        # chat_history / stage_timing never looks live.
+        for entry in list(destination.iterdir()):
+            if entry.name in self._LINK_SKIP or entry.name in current_names:
+                continue
+            if entry.is_symlink() and is_per_attempt_file(entry.name):
+                entry.unlink()
         marker = job_dir / ".the_lab_generation"
         try:
             text = marker.read_text().strip()
@@ -1019,13 +1073,24 @@ exit $_EXIT
             managed = {"model.ready.json", "model.ready.json.smoke.json", "script.progress",
                        "script.metrics.jsonl", "exit-status.json", "script.err", "script.output.md",
                        "script.output.html", "script.heartbeats"}
-            # Reset only explicit current-attempt files that disappeared in the
-            # stable remote snapshot; never broadly delete a local experiment.
+            # Reset explicit current-attempt files that disappeared in the
+            # stable remote snapshot; never broadly delete a local experiment
+            # (directories are never touched by this reset — see
+            # test_missing_managed_name_does_not_remove_local_directory).
             for name in managed:
                 if not (staging / name).exists() and not (staging / name).is_symlink():
                     old = destination / name
                     if old.is_file() or old.is_symlink():
                         old.unlink()
+            # Same for the solver's per-attempt files (SLURM_PER_ATTEMPT_GLOBS:
+            # chat_history*, stage_timing.*) that the restart archived away.
+            staged_names = {item.name for item in staging.iterdir()}
+            for old in destination.iterdir():
+                if (old.name in protected or old.name in managed or old.name in staged_names
+                        or not is_per_attempt_file(old.name)):
+                    continue
+                if old.is_file() or old.is_symlink():
+                    old.unlink()
             for item in staging.iterdir():
                 if item.name in protected:
                     continue

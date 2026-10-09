@@ -274,6 +274,9 @@ def experiment_payload(exp: dict | None) -> dict | None:
         "started_at": exp.get("started_at"),
         "finished_at": exp.get("finished_at"),
         "runtime": exp.get("runtime"),
+        # Additive restart/timing fields — see Store._enrich_experiment.
+        "attempt": exp.get("attempt"),
+        "attempt_started_at": exp.get("attempt_started_at"),
     }
 
 

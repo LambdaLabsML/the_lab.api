@@ -60,6 +60,28 @@ def _enrich_experiment(exp: dict) -> dict:
                 exp["runtime"] = f"{diff/3600:.1f}h"
         except (ValueError, TypeError):
             pass
+
+    # Additive attempt-timing fields (preemption/restart fix). ``attempt`` is
+    # the 1-based count of how many times this experiment's job has (re)run —
+    # slurm_restart_count is Slurm's own 0-based native-requeue generation, so
+    # attempt == slurm_restart_count + 1; non-Slurm/never-restarted runs are
+    # always attempt 1. ``attempt_started_at`` is the best signal the Lab has
+    # for when the CURRENT attempt began running: the timestamp it last
+    # detected a new restart generation (meta.slurm_last_restart_at — set by
+    # the runner's Slurm poll/accounting loop the moment it learns of a
+    # requeue), or ``started_at`` (original dispatch time) when there has been
+    # no restart yet. The Lab cannot observe the solver process's own start
+    # directly, so this poll-detection timestamp is the closest available
+    # proxy — document this rather than claim more precision than it has.
+    # ``started_at`` itself is left untouched (dispatch/submit time, includes
+    # queue wait) for backwards compatibility with existing readers.
+    meta = exp.get("meta") or {}
+    try:
+        restart_count = int(meta.get("slurm_restart_count") or 0)
+    except (TypeError, ValueError):
+        restart_count = 0
+    exp["attempt"] = restart_count + 1
+    exp["attempt_started_at"] = meta.get("slurm_last_restart_at") or exp.get("started_at")
     return exp
 
 
