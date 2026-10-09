@@ -32,6 +32,7 @@ from ..deps import (
     LAB_WRITTEN_META_KEYS,
     reject_runtime_meta_keys,
     meta_settings_diff,
+    mask_secret_meta_value,
 )
 from ..schemas import (
     NewExperimentRequest,
@@ -250,6 +251,38 @@ async def create_experiment(idea_id: int, req: NewExperimentRequest):
     }
 
 
+def _short(text: str | None, n: int = 90) -> str:
+    """First line of *text*, cut at *n* characters with an ellipsis."""
+    line = (text or "").strip().splitlines()[0] if (text or "").strip() else ""
+    return line if len(line) <= n else line[: n - 1].rstrip() + "…"
+
+
+def _settings_summary(changes: dict, limit: int = 4) -> str:
+    """'KEY=value, …' for a few changed settings (secret values masked)."""
+    parts = []
+    for key, value in list(changes.items())[:limit]:
+        shown = mask_secret_meta_value(key, value)
+        parts.append(f"{key}={_short(str(shown), 40)}")
+    if len(changes) > limit:
+        parts.append(f"+{len(changes) - limit} more")
+    return ", ".join(parts)
+
+
+def _batch_descriptions(idea: dict, metas: list[dict]) -> list[str]:
+    """Default descriptions for batch entries without one: the idea's title
+    plus the settings that differ between the entries (e.g. the seed), so the
+    runs are told apart in lists and charts instead of all reading
+    'batch experiment'."""
+    title = _short(idea.get("description"), 70) or f"idea {idea.get('id')}"
+    keys = sorted({k for m in metas for k in m})
+    varying = [k for k in keys if len({json.dumps(m.get(k), sort_keys=True, default=str) for m in metas}) > 1]
+    out = []
+    for m in metas:
+        summary = _settings_summary({k: m.get(k) for k in varying if k in m})
+        out.append(f"{title} — {summary}" if summary else title)
+    return out
+
+
 @router.post("/ideas/{idea_id}/experiments/batch", status_code=201)
 async def batch_create_experiments(idea_id: int, req: BatchCreateExperimentsRequest):
     """Batch-create queued experiments that share one script (feedback M1).
@@ -291,12 +324,13 @@ async def batch_create_experiments(idea_id: int, req: BatchCreateExperimentsRequ
         reject_runtime_meta_keys(m.meta, where=f"metas[{i}].meta")
 
     created = []
-    for m in req.metas:
+    defaults = _batch_descriptions(idea, [dict(m.meta or {}) for m in req.metas])
+    for m, default_description in zip(req.metas, defaults):
         # Preserve an advisory label on meta (store assigns the real one).
         merged_meta = dict(m.meta or {})
         if m.label:
             merged_meta.setdefault("requested_label", m.label)
-        description = m.description or "batch experiment"
+        description = m.description or default_description
         exp = _create_and_queue_experiment(
             idea_id,
             description,
@@ -1501,7 +1535,7 @@ async def clone_experiment(req: CloneExperimentRequest):
             raise HTTPException(400, sanitize_error(e))
 
     src_label = source.get("label", str(source["id"]))
-    base_desc = req.description or f"clone of {src_label}"
+    src_desc = _short(source.get("description"), 70)
     tags = list(req.tags) if req.tags is not None else list(source.get("tags") or [])
 
     created = []
@@ -1519,7 +1553,17 @@ async def clone_experiment(req: CloneExperimentRequest):
             clone_meta["git_commit"] = resolved_commit
             clone_meta["git_branch"] = idea["branch"]
             trusted_meta = True
-        description = base_desc if req.count == 1 else f"{base_desc} ({i + 1}/{req.count})"
+        clone_meta["cloned_from"] = src_label
+        if req.description:
+            description = req.description if req.count == 1 else f"{req.description} ({i + 1}/{req.count})"
+        else:
+            # What differs from the source, then where it came from.
+            changes = dict(req.overrides or {})
+            if req.seed is not None:
+                changes["seed"] = req.seed + i
+            summary = _settings_summary(changes)
+            origin = f"{src_label}: {src_desc}" if src_desc else src_label
+            description = f"{summary} · from {origin}" if summary else f"repeat of {origin}"
 
         new_exp = store.create_experiment(
             idea_id, description, meta=clone_meta, tags=tags, trusted_meta=trusted_meta,

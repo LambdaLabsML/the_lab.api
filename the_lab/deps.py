@@ -119,6 +119,8 @@ _INTERNAL_META_KEYS = {"git_branch", "git_commit", "worktree"}
 LAB_WRITTEN_META_KEYS = frozenset({
     # Server-owned git/output state (store.py Store._SERVER_OWNED_META_KEYS)
     "outdir", "worktree", "git_branch", "git_commit",
+    # Set by the clone endpoint (the source experiment's label)
+    "cloned_from",
     # Slurm scheduler/requeue bookkeeping (runner.py, executors/slurm.py)
     "slurm_job_id", "slurm_native_requeue", "slurm_state",
     "slurm_restart_count", "slurm_run_token", "slurm_last_restart_at",

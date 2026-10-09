@@ -105,6 +105,21 @@ class ExperimentCreationValidationTests(unittest.TestCase):
             self.assertTrue((self.repo / exp["script"]).exists())
 
 
+    def test_batch_without_description_names_the_idea_and_what_differs(self):
+        resp = self.client.post(f"/api/v1/ideas/{self.idea_id}/experiments/batch", json={
+            "shared_script_content": "#!/bin/bash\necho hi\n",
+            "metas": [{"meta": {"SEED": 0, "T": 0.6}}, {"meta": {"SEED": 1, "T": 0.6}},
+                      {"meta": {"SEED": 2}, "description": "explicit wins"}],
+        })
+        self.assertEqual(resp.status_code, 201, resp.text)
+        descs = [self.store.get_experiment(c["label"])["description"] for c in resp.json()["created"]]
+        idea_title = self.store.get_idea(self.idea_id)["description"].splitlines()[0]
+        self.assertTrue(descs[0].startswith(idea_title), descs[0])
+        self.assertIn("SEED=0", descs[0]); self.assertIn("SEED=1", descs[1])
+        self.assertEqual(descs[2], "explicit wins")
+        self.assertNotIn("batch experiment", " ".join(descs))
+
+
 class CloneExperimentTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
@@ -174,6 +189,21 @@ class CloneExperimentTests(unittest.TestCase):
         # echoing either the old or the new secret value.
         self.assertEqual(diff["changed"]["api_key"], {"from": "[REDACTED]", "to": "[REDACTED]"})
         self.assertEqual(new_exp["meta"]["api_key"], "new-secret-value")
+
+    def test_clone_default_description_says_what_changed_and_where_from(self):
+        resp = self.client.post("/api/v1/experiments/clone", json={
+            "clone_of": self.source["label"], "overrides": {"lr": 0.02, "api_key": "x"}, "seed": 3,
+        })
+        self.assertEqual(resp.status_code, 201, resp.text)
+        new_exp = self.store.get_experiment(resp.json()["created"][0]["label"])
+        desc = new_exp["description"]
+        self.assertIn("lr=0.02", desc); self.assertIn("seed=3", desc)
+        self.assertIn(f"from {self.source['label']}: parent run", desc)
+        self.assertNotIn("x", desc.split("api_key=")[1][:3] if "api_key=" in desc else "")  # secret masked
+        self.assertEqual(new_exp["meta"]["cloned_from"], self.source["label"])
+        plain = self.client.post("/api/v1/experiments/clone", json={"clone_of": self.source["label"]})
+        self.assertEqual(self.store.get_experiment(plain.json()["created"][0]["label"])["description"],
+                         f"repeat of {self.source['label']}: parent run")
 
     def test_clone_rejects_lab_written_key_in_overrides(self):
         resp = self.client.post("/api/v1/experiments/clone", json={
