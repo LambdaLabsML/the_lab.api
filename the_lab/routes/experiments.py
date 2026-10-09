@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -924,6 +925,119 @@ def list_artifacts(path: str = Query(default="", description="Directory under .t
     rel = "" if target == root else target.relative_to(root).as_posix()
     return {"path": rel, "base": ".the_lab/artifacts", "entries": entries[:ARTIFACTS_LIST_MAX],
             "truncated": len(entries) > ARTIFACTS_LIST_MAX}
+
+
+# ── Editable artifacts (dashboard user) ─────────────────────────────────────
+# Text files the human can create and edit from the dashboard. Writes need the
+# version (content hash) the edit started from, so a change made meanwhile (by
+# an agent, or another browser) is reported as a conflict instead of being
+# overwritten. Multi-user collaboration builds on the same versions later.
+ARTIFACT_EDIT_EXT = {".md", ".markdown", ".txt", ".json", ".csv", ".tsv", ".yaml", ".yml", ".toml"}
+ARTIFACT_EDIT_MAX_BYTES = 2_000_000
+
+
+def _artifacts_root() -> Path:
+    return (REPO_DIR / ".the_lab" / "artifacts").resolve()
+
+
+def _artifact_target(path: str) -> Path:
+    """Resolve a file path inside the artifacts root (403 when it escapes)."""
+    raw = (path or "").strip()
+    requested = Path(raw)
+    if (not raw or raw.startswith("/") or requested.is_absolute() or ".." in requested.parts or "\\" in path
+            or any(part.startswith(".") for part in requested.parts)):
+        raise HTTPException(403, "access denied")
+    root = _artifacts_root()
+    target = (root / requested).resolve()
+    if root not in target.parents:
+        raise HTTPException(403, "access denied")
+    return target
+
+
+def _artifact_version(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()[:16]
+
+
+def _is_dashboard_user(request: Request) -> bool:
+    return (getattr(request.state, "auth_tier", "admin") == "admin"
+            and not getattr(request.state, "agent_id", None)
+            and not request.headers.get("x-agent-id")
+            and request.headers.get("x-the-lab-source") == "dashboard")
+
+
+@router.get("/artifacts/file", include_in_schema=False)
+def read_artifact_file(path: str = Query(...)):
+    """A text artifact for editing: its content and current version."""
+    target = _artifact_target(path)
+    if not target.is_file():
+        raise HTTPException(404, "file not found")
+    data = target.read_bytes()
+    if len(data) > ARTIFACT_EDIT_MAX_BYTES:
+        raise HTTPException(413, "file too large to edit")
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        raise HTTPException(415, "not a UTF-8 text file")
+    st = target.stat()
+    return {"path": target.relative_to(_artifacts_root()).as_posix(), "content": text,
+            "version": _artifact_version(data), "size": len(data),
+            "mtime": datetime.fromtimestamp(st.st_mtime, timezone.utc).isoformat(),
+            "editable": target.suffix.lower() in ARTIFACT_EDIT_EXT}
+
+
+@router.put("/artifacts/file", include_in_schema=False)
+async def write_artifact_file(request: Request, path: str = Query(...)):
+    """Create or update a text artifact as the dashboard user.
+
+    Body: ``{"content": str, "base_version": str | null, "create": bool}``.
+    ``create`` refuses an existing file (409); otherwise ``base_version`` must
+    match the file's current version, else 409 with the current version so the
+    editor can offer reload / overwrite. Writes are atomic and logged to
+    ``.the_lab/artifact_edits.jsonl``.
+    """
+    if not _is_dashboard_user(request):
+        raise HTTPException(403, "only the dashboard user can edit artifacts")
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "body must be JSON")
+    content = body.get("content")
+    if not isinstance(content, str):
+        raise HTTPException(400, "content must be a string")
+    data = content.encode("utf-8")
+    if len(data) > ARTIFACT_EDIT_MAX_BYTES:
+        raise HTTPException(413, "content too large")
+    target = _artifact_target(path)
+    if target.suffix.lower() not in ARTIFACT_EDIT_EXT:
+        raise HTTPException(415, f"only {', '.join(sorted(ARTIFACT_EDIT_EXT))} files can be edited here")
+    exists = target.exists()
+    if exists and not target.is_file():
+        raise HTTPException(409, "a folder has that name")
+    if body.get("create"):
+        if exists:
+            raise HTTPException(409, "file exists")
+    else:
+        if not exists:
+            raise HTTPException(404, "file not found")
+        current = _artifact_version(target.read_bytes())
+        if body.get("base_version") != current:
+            from fastapi.responses import JSONResponse
+            return JSONResponse(status_code=409, content={
+                "detail": "the file changed since you opened it", "version": current})
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+    tmp.write_bytes(data)
+    os.replace(tmp, target)
+    version = _artifact_version(data)
+    rel = target.relative_to(_artifacts_root()).as_posix()
+    try:
+        with open(REPO_DIR / ".the_lab" / "artifact_edits.jsonl", "a") as log:
+            log.write(json.dumps({"ts": datetime.now(timezone.utc).isoformat(), "user": "user",
+                                  "path": rel, "version": version, "bytes": len(data),
+                                  "created": not exists}) + "\n")
+    except OSError:
+        pass
+    return {"path": rel, "version": version, "size": len(data), "created": not exists}
 
 
 @router.api_route("/files/{file_path:path}", methods=["GET", "HEAD"], include_in_schema=False)

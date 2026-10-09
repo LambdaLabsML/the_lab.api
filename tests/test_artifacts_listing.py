@@ -49,5 +49,49 @@ class ArtifactsListingTests(unittest.TestCase):
             self.assertEqual(self.client.get("/api/v1/artifacts", params={"path": missing}).status_code, 404, missing)
 
 
+
+class ArtifactEditingTests(unittest.TestCase):
+    H = {"X-The-Lab-Source": "dashboard"}
+
+    def setUp(self):
+        from the_lab.routes import experiments
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.repo = Path(self.tmp.name).resolve()
+        (self.repo / ".the_lab" / "artifacts").mkdir(parents=True)
+        for p in (patch.object(experiments, "REPO_DIR", self.repo), patch("the_lab.deps.REPO_DIR", self.repo)):
+            p.start(); self.addCleanup(p.stop)
+        app = FastAPI(); app.include_router(experiments.router)
+        self.client = TestClient(app)
+
+    def put(self, path, body, headers=None):
+        return self.client.put("/api/v1/artifacts/file", params={"path": path}, json=body,
+                               headers=self.H if headers is None else headers)
+
+    def test_create_edit_and_conflict(self):
+        r = self.put("notes/plan.md", {"content": "# Plan\n", "create": True})
+        self.assertEqual(r.status_code, 200, r.text); v1 = r.json()["version"]
+        self.assertTrue(r.json()["created"])
+        self.assertEqual((self.repo / ".the_lab/artifacts/notes/plan.md").read_text(), "# Plan\n")
+        self.assertEqual(self.put("notes/plan.md", {"content": "x", "create": True}).status_code, 409)
+        got = self.client.get("/api/v1/artifacts/file", params={"path": "notes/plan.md"}).json()
+        self.assertEqual((got["content"], got["version"], got["editable"]), ("# Plan\n", v1, True))
+        r = self.put("notes/plan.md", {"content": "# Plan\n- a\n", "base_version": v1})
+        self.assertEqual(r.status_code, 200); v2 = r.json()["version"]
+        # An edit based on the old version is a conflict, not an overwrite.
+        r = self.put("notes/plan.md", {"content": "stale", "base_version": v1})
+        self.assertEqual((r.status_code, r.json()["version"]), (409, v2))
+        self.assertEqual((self.repo / ".the_lab/artifacts/notes/plan.md").read_text(), "# Plan\n- a\n")
+        log = (self.repo / ".the_lab/artifact_edits.jsonl").read_text().strip().splitlines()
+        self.assertEqual(len(log), 2)
+
+    def test_only_the_dashboard_user_writes_and_only_inside_artifacts(self):
+        self.assertEqual(self.put("a.md", {"content": "x", "create": True}, headers={}).status_code, 403)
+        self.assertEqual(self.put("a.md", {"content": "x", "create": True},
+                                  headers={**self.H, "X-Agent-Id": "zdqvo"}).status_code, 403)
+        for bad in ("../x.md", "/etc/x.md", "a/../../x.md", ".hidden.md", ""):
+            self.assertEqual(self.put(bad, {"content": "x", "create": True}).status_code, 403, bad)
+        self.assertEqual(self.put("run.sh", {"content": "x", "create": True}).status_code, 415)
+
+
 if __name__ == "__main__":
     unittest.main()
