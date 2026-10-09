@@ -226,6 +226,10 @@ export const myName = useSetting<string>("myName", "");
  *  mentioning one inside a thread post still counts as addressed to them,
  *  on top of their primary name above. */
 export const messagesMyNames = useSetting<string>("messagesMyNames", "");
+/** Messages thread list: which threads to show by status. */
+export const threadStatusFilter = useSetting<"open" | "closed" | "all">("threadStatusFilter", "open");
+/** Messages thread list: only threads opened by you. */
+export const threadOpenedByMe = useSetting<boolean>("threadOpenedByMe", false);
 
 // Migration: seed the primary name from the first alias already set (the
 // pre-identity "Your names" field), once — if myName has never been set and
