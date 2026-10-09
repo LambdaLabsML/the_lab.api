@@ -10,6 +10,7 @@ from starlette.concurrency import run_in_threadpool
 
 from ..cache import cached_response
 from ..deps import (
+    with_progress_views,
     with_run_pct,
     store,
     runner,
@@ -1269,7 +1270,7 @@ def _build_chart_data():
             progress_path = REPO_DIR / exp["script"].replace(".sh", ".progress")
             progress = _read_progress_cached(progress_path)
             if progress and len(progress) > 0:
-                base["metrics"] = (_numeric_metrics(with_run_pct(progress, exp.get("meta")))
+                base["metrics"] = (_numeric_metrics(with_progress_views(progress, exp.get("meta")))
                                    if isinstance(progress, dict) else progress)
                 base["_running"] = True
                 running_progress.append(base)
