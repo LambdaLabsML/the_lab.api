@@ -778,3 +778,19 @@
   /* But when embedded, keep the de-nested behavior — let the page scroll. */
   .review-detail-flush #detail-panel { position: relative; overflow-y: visible; }
 }
+
+// Hide/unhide an experiment from charts, table and idea means.
+.exp-item .exp-hide-toggle {
+  margin-left: auto;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+  cursor: pointer;
+  &:hover:not(:disabled) { color: var(--text); border-color: var(--text-faint); }
+  &.is-hidden { color: var(--yellow); border-color: var(--yellow); }
+  &:disabled { opacity: 0.5; cursor: wait; }
+}

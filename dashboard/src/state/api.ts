@@ -196,6 +196,19 @@ export async function getExperimentProgress(
 // Tags
 // ---------------------------------------------------------------------------
 
+/** PATCH /api/v1/experiments/{label}/tags — returns the new tag list. */
+export async function updateExperimentTags(
+  label: string,
+  add: string[],
+  remove: string[],
+): Promise<{ tags?: string[] }> {
+  return fetchJson<{ tags?: string[] }>(`/api/v1/experiments/${encodeURIComponent(label)}/tags`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ add, remove }),
+  });
+}
+
 /** POST /api/v1/experiments/tags/rename */
 export async function renameTag(
   oldTag: string,

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "preact/hooks";
-import { allExperiments, allIdeas, currentLayout, cloneChartPanel, updatePanelTitle } from "../../state/signals";
+import { allIdeas, currentLayout, cloneChartPanel, updatePanelTitle } from "../../state/signals";
+import { plotExperiments, hiddenExperimentCount } from "../../state/hidden";
 import {
   selectedMetric,
   colorMode,
@@ -15,8 +16,7 @@ import {
   chartView,
   chartTimeCurve,
   chartXAxis,
-  colorblindMode,
-} from "../../state/settings";
+  colorblindMode, showHiddenExperiments } from "../../state/settings";
 import { collectChartKeys } from "../../lib/chart-data";
 import { isLowerBetter } from "../../lib/colors";
 import { fmtMetricName, fmtScoreShort, scoreFormatter } from "../../lib/format";
@@ -29,7 +29,7 @@ export function MetricsChart({ instanceId, initialMetric, hideClone }: { instanc
   const [localMetric, setLocalMetric] = useState(initialMetric || "");
   const [logScale, setLogScale] = useState(false);
 
-  const experiments = allExperiments.value;
+  const experiments = plotExperiments.value;
   const ideas = allIdeas.value;
   const layout = currentLayout.value;
   const metric = isClone ? localMetric : selectedMetric.value;
@@ -40,6 +40,8 @@ export function MetricsChart({ instanceId, initialMetric, hideClone }: { instanc
   const reversed = reverseTime.value;
   const clip = clipOutliers.value;
   const mean = ideaMean.value;
+  const hiddenCount = hiddenExperimentCount.value;
+  const showHidden = showHiddenExperiments.value;
   const view = chartView.value;
   const timeCurve = chartTimeCurve.value;
   const xAxis = chartXAxis.value;
@@ -132,6 +134,17 @@ export function MetricsChart({ instanceId, initialMetric, hideClone }: { instanc
         <Toggle active={logScale} onClick={() => { setLogScale(!logScale); }} title="Logarithmic Y axis">
           Log Y
         </Toggle>
+        {hiddenCount > 0 && (
+          <Toggle
+            active={showHidden}
+            onClick={() => { showHiddenExperiments.value = !showHidden; }}
+            title={showHidden
+              ? "Hidden experiments are included in charts, table and idea means — click to leave them out"
+              : `${hiddenCount} experiment${hiddenCount === 1 ? " is" : "s are"} hidden (tag "hidden") from charts, table and idea means — click to include them. Hide/unhide in an experiment's details.`}
+          >
+            {hiddenCount} hidden
+          </Toggle>
+        )}
         {/* Clone is hidden in the single-chart review (hideClone); kept in the workbench */}
         {!hideClone && (
           <span class="chart-toolbar-end">
@@ -207,7 +220,7 @@ export function MetricsChart({ instanceId, initialMetric, hideClone }: { instanc
       </div>
       {/* Data distribution hint — shown when most values cluster near bottom */}
       {(() => {
-        const vals = allExperiments.value.filter(e => !e._running && typeof e.metrics?.[metric] === "number").map(e => e.metrics![metric] as number);
+        const vals = experiments.filter(e => !e._running && typeof e.metrics?.[metric] === "number").map(e => e.metrics![metric] as number);
         if (vals.length < 5) return null;
         const lower = isLowerBetter(metric);
         const peak = lower ? Math.min(...vals) : Math.max(...vals);
@@ -229,7 +242,7 @@ export function MetricsChart({ instanceId, initialMetric, hideClone }: { instanc
             <span style={{ color: "var(--text-faint)" }}> · </span>
             <span style={{ color: "var(--purple)", fontWeight: 600 }}>·</span>
             {" "}best {scoreFormatter([median, peak])(peak)}
-            {impOnly && allExperiments.value.some(e => e._running) && (
+            {impOnly && experiments.some(e => e._running) && (
               <>
                 <span style={{ color: "var(--text-faint)" }}> · </span>
                 <span style={{ color: "var(--yellow)", fontSize: "var(--text-xs)" }}>△ running</span>
