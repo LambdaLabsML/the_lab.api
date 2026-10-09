@@ -78,9 +78,27 @@ fi
 # SGLang revision (see docs/prefix_reuse_serving.md for citations).
 SGLANG_SCHEDULE_POLICY="${SGLANG_SCHEDULE_POLICY:-}"
 case "$SGLANG_SCHEDULE_POLICY" in
-  ""|lpm|random|fcfs|dfs-weight|lof|priority|routing-key) ;;
+  ""|lpm|random|fcfs|dfs-weight|lof|priority|routing-key|hrrn) ;;
   *) echo "invalid SGLANG_SCHEDULE_POLICY" >&2; exit 1 ;;
 esac
+# Request-priority scheduling (opt-in): the waiting queue is ordered by each
+# request's integer `priority` (higher first), then arrival.  SGLang accepts it
+# only with schedule policy fcfs or lof, and gives a request without a
+# priority the lowest possible value unless SGLANG_DEFAULT_PRIORITY_VALUE is set.
+SGLANG_ENABLE_PRIORITY_SCHEDULING="${SGLANG_ENABLE_PRIORITY_SCHEDULING:-0}"
+case "$SGLANG_ENABLE_PRIORITY_SCHEDULING" in 0|1) ;; *) echo "invalid SGLANG_ENABLE_PRIORITY_SCHEDULING" >&2; exit 1 ;; esac
+SGLANG_DEFAULT_PRIORITY_VALUE="${SGLANG_DEFAULT_PRIORITY_VALUE:-}"
+if [ -n "$SGLANG_DEFAULT_PRIORITY_VALUE" ] && ! [[ "$SGLANG_DEFAULT_PRIORITY_VALUE" =~ ^-?[0-9]+$ ]]; then
+  echo "invalid SGLANG_DEFAULT_PRIORITY_VALUE" >&2; exit 1
+fi
+if [ "$SGLANG_ENABLE_PRIORITY_SCHEDULING" = 1 ]; then
+  case "$SGLANG_SCHEDULE_POLICY" in
+    fcfs|lof) ;;
+    *) echo "SGLANG_ENABLE_PRIORITY_SCHEDULING=1 requires SGLANG_SCHEDULE_POLICY fcfs or lof" >&2; exit 1 ;;
+  esac
+elif [ -n "$SGLANG_DEFAULT_PRIORITY_VALUE" ]; then
+  echo "SGLANG_DEFAULT_PRIORITY_VALUE requires SGLANG_ENABLE_PRIORITY_SCHEDULING=1" >&2; exit 1
+fi
 SGLANG_ENABLE_HICACHE="${SGLANG_ENABLE_HICACHE:-0}"
 case "$SGLANG_ENABLE_HICACHE" in 0|1) ;; *) echo "invalid SGLANG_ENABLE_HICACHE" >&2; exit 1 ;; esac
 SGLANG_HICACHE_SIZE_GB="${SGLANG_HICACHE_SIZE_GB:-}"
@@ -149,7 +167,7 @@ PY
 fi
 export SGLANG_SCHEDULE_POLICY SGLANG_ENABLE_HICACHE SGLANG_HICACHE_SIZE_GB \
   SGLANG_HICACHE_WRITE_POLICY SGLANG_HICACHE_IO_BACKEND SGLANG_HICACHE_MEM_LAYOUT SGLANG_PAGE_SIZE \
-  SGLANG_ENABLE_STRICT_THINKING
+  SGLANG_ENABLE_STRICT_THINKING SGLANG_ENABLE_PRIORITY_SCHEDULING SGLANG_DEFAULT_PRIORITY_VALUE
 export CHUNKED_PREFILL_SIZE DECODE_GRAPH_MAX_BS
 for value in "$MAX_RUNNING_REQUESTS" "$CHUNKED_PREFILL_SIZE" "$DECODE_GRAPH_MAX_BS"; do
   [[ "$value" =~ ^[1-9][0-9]*$ ]] || { echo "invalid inference batch/prefill setting" >&2; exit 1; }
@@ -189,6 +207,7 @@ trap cleanup EXIT INT TERM
 echo "[the-lab] starting $MODEL_NAME on ${SLURMD_NODENAME:-unknown}:$SGLANG_PORT"
 CONTAINER_ENVS=VLLM_API_KEY,MODEL,MODEL_NAME,GPU_MEMORY_FRACTION,CONTEXT_LENGTH,MAX_RUNNING_REQUESTS,SGLANG_PORT,TOKENIZERS_PARALLELISM,CHUNKED_PREFILL_SIZE,DECODE_GRAPH_MAX_BS,MAMBA_CACHE_SIZE,DISABLE_RADIX_CACHE,SPECULATIVE_STEPS,SPECULATIVE_DRAFT_QUANTIZATION,INFERENCE_CAPTURE_SCRIPT,INFERENCE_CAPTURE_DIR,SGLANG_SCHEDULE_POLICY,SGLANG_ENABLE_HICACHE,SGLANG_HICACHE_SIZE_GB,SGLANG_HICACHE_WRITE_POLICY,SGLANG_HICACHE_IO_BACKEND,SGLANG_HICACHE_MEM_LAYOUT,SGLANG_PAGE_SIZE,SGLANG_ENABLE_STRICT_THINKING
 CONTAINER_ENVS+=,KV_CACHE_DTYPE,MAMBA_SSM_DTYPE,MAMBA_TRACK_INTERVAL,SPECULATIVE_DRAFT_KV_CACHE_DTYPE,SPECULATIVE_TOKEN_MAP,DECODE_GRAPH_BS,WATCHDOG_TIMEOUT_S
+CONTAINER_ENVS+=,SGLANG_ENABLE_PRIORITY_SCHEDULING,SGLANG_DEFAULT_PRIORITY_VALUE
 if [ -n "${PYTORCH_CUDA_ALLOC_CONF:-}" ]; then
   export PYTORCH_CUDA_ALLOC_CONF
   CONTAINER_ENVS+=,PYTORCH_CUDA_ALLOC_CONF
@@ -240,6 +259,8 @@ srun --container-image="$SGLANG_CONTAINER_IMAGE" \
     if [ -n "$DECODE_GRAPH_BS" ]; then EXTRA+=(--cuda-graph-bs-decode ${DECODE_GRAPH_BS//,/ }); fi
     if [ -n "$WATCHDOG_TIMEOUT_S" ]; then EXTRA+=(--watchdog-timeout "$WATCHDOG_TIMEOUT_S"); fi
     if [ -n "$SGLANG_SCHEDULE_POLICY" ]; then EXTRA+=(--schedule-policy "$SGLANG_SCHEDULE_POLICY"); fi
+    if [ "$SGLANG_ENABLE_PRIORITY_SCHEDULING" = 1 ]; then EXTRA+=(--enable-priority-scheduling); fi
+    if [ -n "$SGLANG_DEFAULT_PRIORITY_VALUE" ]; then EXTRA+=(--default-priority-value "$SGLANG_DEFAULT_PRIORITY_VALUE"); fi
     if [ "$SGLANG_ENABLE_HICACHE" = 1 ]; then
       EXTRA+=(--enable-hierarchical-cache)
       if [ -n "$SGLANG_HICACHE_SIZE_GB" ]; then EXTRA+=(--hicache-size "$SGLANG_HICACHE_SIZE_GB"); fi
@@ -278,6 +299,13 @@ until curl -fsS --max-time 5 "http://127.0.0.1:$SGLANG_PORT/health" >/dev/null; 
   fi
   sleep 10
 done
+# The answer must come from THIS launcher's server. If ours already exited (for
+# example its port bind failed), another job's server on the same port answered
+# and this run would silently share it (lab thread 2862 msg 5813).
+if ! kill -0 "$SERVER_STEP_PID" 2>/dev/null; then
+  echo "SGLang health answered on port $SGLANG_PORT, but this launcher's server has exited (port taken by another server?)" >&2
+  exit 1
+fi
 
 # Health alone can be true before the OpenAI route has completed initialization.
 curl -fsS --max-time 180 \
@@ -292,6 +320,10 @@ if "17" not in (message.get("content") or message.get("reasoning_content") or ""
     raise SystemExit(f"unexpected model smoke response: {message!r}")
 PY
 
+if ! kill -0 "$SERVER_STEP_PID" 2>/dev/null; then
+  echo "SGLang smoke test answered on port $SGLANG_PORT, but this launcher's server has exited (port taken by another server?)" >&2
+  exit 1
+fi
 python3 - "$THE_LAB_MODEL_READY_FILE" <<'PY'
 import json, os, sys, time
 path = sys.argv[1]
