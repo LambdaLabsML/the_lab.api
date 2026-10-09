@@ -12,3 +12,26 @@
 .rt-msg-bare:hover { text-decoration-color: var(--accent); }
 .rt-mention { color: var(--accent); font-weight: 600; white-space: nowrap; }
 .rt-mention-known .aa-msg-pill { color: inherit; border-color: color-mix(in srgb, currentColor 40%, var(--border-soft)); }
+
+/* Block markdown in messages (lists, tables, headings, code, quotes). */
+.rich-text--blocks > :first-child { margin-top: 0; }
+.rich-text--blocks > :last-child { margin-bottom: 0; }
+.rt-p { margin: 0 0 0.55em; }
+.rt-list { margin: 0.2em 0 0.55em; padding-left: 1.5em; }
+.rt-list .rt-list { margin: 0.1em 0; }
+.rt-list li { margin: 0.1em 0; }
+.rt-list li::marker { color: var(--text-faint); }
+.rt-h { margin: 0.7em 0 0.35em; color: var(--text); font-weight: 700; line-height: 1.3; }
+.rt-h1 { font-size: 1.2em; } .rt-h2 { font-size: 1.1em; } .rt-h3, .rt-h4, .rt-h5, .rt-h6 { font-size: 1em; }
+.rt-hr { border: 0; border-top: 1px solid var(--border-soft); margin: 0.7em 0; }
+.rt-quote { margin: 0.3em 0 0.55em; padding: 0.1em 0 0.1em 0.8em; border-left: 3px solid var(--border); color: var(--text-muted); }
+.rt-pre {
+  margin: 0.3em 0 0.6em; padding: 8px 10px; overflow-x: auto;
+  background: var(--bg-hi); border: 1px solid var(--border-soft); border-radius: var(--radius-sm);
+  font-family: var(--font-mono); font-size: 0.9em; line-height: 1.45; white-space: pre;
+}
+.rt-table-wrap { overflow-x: auto; margin: 0.3em 0 0.6em; }
+.rt-table { border-collapse: collapse; font-size: 0.95em; font-variant-numeric: tabular-nums; }
+.rt-table th, .rt-table td { padding: 3px 9px; border: 1px solid var(--border-soft); vertical-align: top; text-align: left; }
+.rt-table th { background: var(--bg-hi); color: var(--text); font-weight: 600; white-space: nowrap; }
+.rt-table tbody tr:nth-child(even) td { background: color-mix(in srgb, var(--bg-hi) 45%, transparent); }

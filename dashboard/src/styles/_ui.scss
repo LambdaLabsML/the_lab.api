@@ -267,6 +267,12 @@
 }
 .ui-tip-flag--record  { color: var(--purple); }
 .ui-tip-flag--running { color: var(--yellow); }
+/* Running experiment's pct_complete under the tooltip head. */
+.ui-tip-progress {
+  display: block; height: 3px; margin: 2px 0 4px; border-radius: 2px;
+  background: var(--bg-hi); overflow: hidden;
+}
+.ui-tip-progress-fill { display: block; height: 100%; background: var(--yellow); }
 
 .ui-tip-metric { display: flex; flex-direction: column; gap: 1px; }
 .ui-tip-metric-label {

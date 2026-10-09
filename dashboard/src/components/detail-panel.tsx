@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useMemo, useState, useRef } from "preact/hooks";
 import { selectedIdea, selectedMetric, detailTimeline, detailSortNewest, colorTheme } from "../state/settings";
 import { scrollToExperiment, runningProgress, allExperiments } from "../state/signals";
-import { getIdea, getExperimentProgress, getExperimentLog, getExperimentScript, getExperimentOutput, getIdeaDiff } from "../state/api";
+import { getIdea, getExperimentProgress, getExperimentLog, getExperimentScript, getExperimentOutput, getIdeaDiff, getIdeaMentions, type ThreadMention } from "../state/api";
+import { focusMessageId } from "../state/agent-activity";
 import { subscribeWsEvents } from "../state/ws";
 import { formatTime, badgeHtml, escapeHtml, fmtScoreShort } from "../lib/format";
 import { Lightbox } from "./lightbox";
@@ -115,6 +116,20 @@ export function DetailPanel({ embedded = false }: { embedded?: boolean } = {}) {
 
   // Progress data per experiment (keyed by exp id)
   const [progressData, setProgressData] = useState<Record<string, Record<string, any>>>({});
+
+  // Threads mentioning each experiment of the open idea (keyed by exp label).
+  const [mentions, setMentions] = useState<Record<string, ThreadMention[]>>({});
+  useEffect(() => {
+    setMentions({});
+    if (ideaId == null) return;
+    const id = ideaId;
+    let cancelled = false;
+    const load = () => getIdeaMentions(id).then((m) => { if (!cancelled) setMentions(m); }).catch(() => {});
+    load();
+    // New posts about the idea's experiments arrive as messages; refresh then.
+    const un = subscribeWsEvents((ev) => { if (ev.type === "message_received") load(); });
+    return () => { cancelled = true; un(); };
+  }, [ideaId]);
 
   // On mount: read hash and navigate to the encoded idea
   useEffect(() => {
@@ -876,6 +891,7 @@ export function DetailPanel({ embedded = false }: { embedded?: boolean } = {}) {
                           <ExperimentItem
                             exp={item.exp}
                             progress={progressData[String(item.exp.id)]}
+                            mentions={mentions[String(item.exp.label || item.exp.id)]}
                             onShowLog={() => openLog(item.exp)}
                             onShowScript={() => openScript(item.exp)}
                             onShowOutput={() => openOutput(item.exp)}
@@ -919,6 +935,7 @@ export function DetailPanel({ embedded = false }: { embedded?: boolean } = {}) {
                             key={exp.id}
                             exp={exp}
                             progress={progressData[String(exp.id)]}
+                            mentions={mentions[String(exp.label || exp.id)]}
                             onShowLog={() => openLog(exp)}
                             onShowScript={() => openScript(exp)}
                             onShowOutput={() => openOutput(exp)}
@@ -1539,7 +1556,7 @@ function _renderNestedList(
   return html;
 }
 
-function renderMarkdown(md: string, basePath = ""): string {
+export function renderMarkdown(md: string, basePath = ""): string {
   // Extract fenced code blocks first. The language hint after ``` controls
   // how we emit the block: `mermaid` becomes a <pre class="mermaid"> that
   // the post-render effect lazy-loads mermaid.js to render into an SVG;
@@ -1709,15 +1726,46 @@ function Description({ text }: { text: string }) {
   );
 }
 
+/** Threads that discuss an experiment; a click opens Messages at the latest
+ *  mention in that thread. */
+function ExpMentions({ mentions }: { mentions: ThreadMention[] }) {
+  const total = mentions.reduce((n, m) => n + m.count, 0);
+  const open = (id: number) => {
+    focusMessageId.value = id;
+    window.location.hash = "#messages";
+  };
+  return (
+    <div class="exp-mentions">
+      <span class="exp-mentions-label" title={`${total} message${total === 1 ? "" : "s"} mention this experiment`}>
+        💬 {mentions.length} thread{mentions.length === 1 ? "" : "s"}
+      </span>
+      {mentions.map((m) => (
+        <button
+          key={m.thread_id}
+          type="button"
+          class="exp-mention"
+          onClick={() => open(m.last_id)}
+          title={`${m.title}\n${m.count} message${m.count === 1 ? "" : "s"} · opens the latest (#${m.last_id})`}
+        >
+          <span class="exp-mention-title">{m.title}</span>
+          <span class="exp-mention-count">{m.count}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function ExperimentItem({
   exp,
   progress,
+  mentions,
   onShowLog,
   onShowScript,
   onShowOutput,
 }: {
   exp: Experiment;
   progress?: Record<string, any>;
+  mentions?: ThreadMention[];
   onShowLog: () => void;
   onShowScript: () => void;
   onShowOutput?: () => void;
@@ -1816,6 +1864,7 @@ function ExperimentItem({
           </div>
         );
       })()}
+      {mentions && mentions.length > 0 && <ExpMentions mentions={mentions} />}
       <div class="exp-actions">
         {exp.has_output && onShowOutput && (
           <Toggle active={false} onClick={onShowOutput}>Show output</Toggle>

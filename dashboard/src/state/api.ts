@@ -366,6 +366,52 @@ export async function sendMessage(
   });
 }
 
+/** One entry of the shared .the_lab/artifacts tree. */
+export interface ArtifactEntry {
+  name: string;
+  kind: "dir" | "file";
+  size: number | null;
+  mtime: string | null;
+  external?: boolean;
+}
+
+/** GET /api/v1/artifacts?path= — one directory of .the_lab/artifacts. */
+export async function listArtifacts(path: string): Promise<{ path: string; base: string; entries: ArtifactEntry[]; truncated: boolean }> {
+  return fetchJson(`/api/v1/artifacts?path=${encodeURIComponent(path)}`);
+}
+
+/** URL of an artifact file (served by /api/v1/files). */
+export function artifactUrl(path: string): string {
+  return `/api/v1/files/.the_lab/artifacts/${path.split("/").map(encodeURIComponent).join("/")}`;
+}
+
+/** Text of an artifact file; at most ``maxBytes`` (the rest is reported as cut). */
+export async function getArtifactText(path: string, maxBytes = 2_000_000): Promise<{ text: string; truncated: boolean }> {
+  const res = await fetch(artifactUrl(path), { headers: { "X-The-Lab-Source": "dashboard" } });
+  if (!res.ok) throw new Error(`GET ${path} returned ${res.status}`);
+  const buf = await res.arrayBuffer();
+  const truncated = buf.byteLength > maxBytes;
+  const text = new TextDecoder().decode(truncated ? buf.slice(0, maxBytes) : buf);
+  return { text, truncated };
+}
+
+/** Where an experiment is discussed: one thread with the number of mentioning
+ *  messages and the first / last one. */
+export interface ThreadMention {
+  thread_id: number;
+  title: string;
+  count: number;
+  first_id: number;
+  last_id: number;
+  last_at?: string;
+}
+
+/** GET /api/v1/ideas/:id/mentions — per experiment label, the threads that mention it. */
+export async function getIdeaMentions(ideaId: number): Promise<Record<string, ThreadMention[]>> {
+  const r = await fetchJson<{ mentions: Record<string, ThreadMention[]> }>(`/api/v1/ideas/${ideaId}/mentions`);
+  return r.mentions || {};
+}
+
 /** GET /api/v1/threads — thread metadata (titles, status, kind) for the
  *  operator view; ``status=all`` includes closed threads. */
 export async function listThreads(

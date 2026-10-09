@@ -21,6 +21,7 @@ import {
   registerDashboardUserMessage,
   isAddressedToMe,
   isSentHere,
+  countsAsNew,
 } from "../state/messages";
 import { focusMessageId } from "../state/agent-activity";
 import { RichText, stripRouting } from "../components/rich-text";
@@ -177,12 +178,14 @@ export function MessagesView() {
   }, [messages]);
   const relevant = (m: MessageEntry) =>
     !inPerspective || inboxOf(m, viewAs, roleByAgent[viewAs], participants);
-  // For you, only messages addressed to you (see state/messages) can be
-  // unread: agent chatter and broadcasts never ask for your attention.
+  // Two kinds of unread for you: addressed to you (@user, see state/messages)
+  // and anything new since this browser's first visit (@anyone).
   const isRead = (m: MessageEntry) =>
     inPerspective
       ? (m.read_by || []).includes(viewAs)
-      : isSentHere(m) || readByMe(m.id) || !isAddressedToMe(m);
+      : isSentHere(m) || readByMe(m.id) || !(isAddressedToMe(m) || countsAsNew(m));
+  const isUnreadForMe = (m: MessageEntry) =>
+    !inPerspective && !isSentHere(m) && !readByMe(m.id) && isAddressedToMe(m);
 
   async function refresh() {
     try {
@@ -324,6 +327,8 @@ export function MessagesView() {
           items,
           latest,
           unread: items.filter((m) => !isRead(m)).length,
+          unreadForMe: items.filter(isUnreadForMe).length,
+          forMe: !inPerspective && items.some((m) => !isSentHere(m) && isAddressedToMe(m)),
         };
       })
       .filter(
@@ -577,7 +582,7 @@ export function MessagesView() {
           {threads.map((t) => (
             <button
               key={t.id}
-              class={`thread-list-row${selectedThread === t.id ? " is-selected" : ""}`}
+              class={`thread-list-row${selectedThread === t.id ? " is-selected" : ""}${t.unreadForMe > 0 ? " has-unread-for-me" : t.forMe ? " has-for-me" : ""}`}
               onClick={() => {
                 setSendError(null);
                 setNewThreadOpen(false);
@@ -603,7 +608,12 @@ export function MessagesView() {
                 {threadMeta.get(t.id)?.kind === "suggestion" && <Badge tone="running">suggestion</Badge>}
                 {threadMeta.get(t.id)?.status === "closed" && <Badge>closed</Badge>}
                 {threadMeta.get(t.id)?.visibility === "private" && <Badge>private</Badge>}
-                {t.unread > 0 && <Badge tone="active">{t.unread} unread</Badge>}
+                {t.unreadForMe > 0 && (
+                  <span class="thread-unread-me" title={`${t.unreadForMe} unread message${t.unreadForMe === 1 ? "" : "s"} for you`}>@{t.unreadForMe}</span>
+                )}
+                {t.unread - t.unreadForMe > 0 && (
+                  <span class="thread-unread-any" title="other unread messages in this thread">{t.unread - t.unreadForMe} new</span>
+                )}
               </span>
             </button>
           ))}
@@ -774,7 +784,7 @@ export function MessagesView() {
                   <li
                     id={`thread-message-${m.id}`}
                     key={m.id}
-                    class={`thread-message${isRead(m) ? " is-read" : " is-unread"}`}
+                    class={`thread-message${isRead(m) ? " is-read" : " is-unread"}${!inPerspective && !isSentHere(m) && isAddressedToMe(m) ? " is-for-me" : ""}`}
                   >
                     <div class="thread-message-meta">
                       <span

@@ -44,7 +44,7 @@ import { colorTheme, colorblindMode } from "../../state/settings";
 import { buildChartData } from "../../lib/chart-data";
 import { isLowerBetter } from "../../lib/colors";
 import { useEntityNav } from "../../lib/hooks";
-import { highlightedIdea } from "../../state/signals";
+import { highlightedIdea, runningProgress } from "../../state/signals";
 import { fmtMetricName, scoreFormatter } from "../../lib/format";
 import { experimentTipContent } from "../ui";
 import type { Experiment, IdeaNode, SubwayLayout } from "../../lib/types";
@@ -811,6 +811,7 @@ export function MiniMetricsChart({
               value: values[i],
               record: milestones.has(i),
               running: (exp as any)._running ?? false,
+              pct: runningProgress.value[String(exp.label ?? exp.id)],
             })}
           </MiniTooltip>
         );

@@ -93,7 +93,7 @@ function Line({ glyph, text, tone, age, onClick, pending, to, api, latest, fresh
       <span class="aa-branch">└</span>
       <span class={`aa-glyph${pending ? " aa-glyph--pending" : ""}`}><LineGlyph glyph={glyph} /></span>
       {to && <AgentPill id={to} />}
-      <span class="aa-sub-text"><RichText text={text} /></span>
+      <span class="aa-sub-text"><RichText text={text} inline /></span>
       {age && <span class="aa-sub-age">{age}</span>}
     </div>
   );
