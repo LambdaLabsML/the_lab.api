@@ -48,6 +48,7 @@ import asyncio
 import atexit
 import json
 import os
+import re
 import threading
 
 from . import jsonio
@@ -1115,6 +1116,62 @@ def search_messages(
             "snippet": ("…" if start else "") + snippet,
         })
     return page, len(hits)
+
+
+def _experiment_mention_re(idea_id: int) -> re.Pattern:
+    """``N.M`` / ``exp/N.M`` for idea N, plus shorthand sequences such as
+    ``N.1/.2`` or ``N.1 / .2 / .3``; not inside longer numbers (``1N.1``,
+    ``N.12`` for ``N.1``)."""
+    return re.compile(rf"(?<![\w.]){idea_id}\.(\d+)((?:\s*/\s*\.\d+)*)(?![\d])")
+
+
+def experiment_mentions(
+    repo_dir: Path, idea_id: int, *, agent_id: str | None, role: str | None,
+    operator: bool = False,
+) -> dict[str, list[dict]]:
+    """Where each experiment of *idea_id* is discussed: per experiment label
+    (``"12.3"``), the visible threads whose messages mention it in text
+    (``12.3``, ``exp/12.3``, ``12.1/.2``) or as a structured reference,
+    most recently active first, with the first / last mentioning message."""
+    pattern = _experiment_mention_re(idea_id)
+    with _lock:
+        data = _read(repo_dir)
+        msgs = list(data["messages"])
+        threads = dict(data["threads"])
+        found: dict[str, dict[int, dict]] = {}
+        for m in msgs:
+            labels: set[str] = set()
+            body = f"{m.get('tldr') or ''}\n{m.get('text') or ''}"
+            for match in pattern.finditer(body):
+                labels.add(f"{idea_id}.{match.group(1)}")
+                for seq in re.findall(r"\.(\d+)", match.group(2) or ""):
+                    labels.add(f"{idea_id}.{seq}")
+            for r in m.get("references") or []:
+                rid = str(r.get("id", ""))
+                if r.get("kind") == "experiment" and rid.startswith(f"{idea_id}."):
+                    labels.add(rid)
+            if not labels:
+                continue
+            if not (operator or can_see(m, agent_id=agent_id, role=role, threads=threads)):
+                continue
+            tid = thread_key(m)
+            for label in labels:
+                per_thread = found.setdefault(label, {})
+                entry = per_thread.get(tid)
+                if entry is None:
+                    meta = _thread_meta_locked(data, tid) or {}
+                    entry = per_thread[tid] = {
+                        "thread_id": tid, "title": meta.get("title") or f"Thread #{tid}",
+                        "count": 0, "first_id": m["id"], "last_id": m["id"],
+                        "last_at": m.get("created_at"),
+                    }
+                entry["count"] += 1
+                entry["last_id"] = m["id"]
+                entry["last_at"] = m.get("created_at")
+    return {
+        label: sorted(per_thread.values(), key=lambda e: e["last_id"], reverse=True)
+        for label, per_thread in found.items()
+    }
 
 
 def thread_meta(repo_dir: Path, thread_id: int) -> dict | None:

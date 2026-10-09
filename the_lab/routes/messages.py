@@ -384,6 +384,26 @@ def _caller(request: Request) -> tuple[str | None, str | None, bool]:
     return agent_id, role, operator
 
 
+@router.get("/api/v1/ideas/{idea_id}/mentions")
+def idea_experiment_mentions(idea_id: int, request: Request):
+    """Threads that discuss each experiment of an idea.
+
+    A message counts when its text mentions the experiment (``12.3``,
+    ``exp/12.3``, ``12.1/.2``) or it carries an ``experiment:12.3``
+    reference. Per experiment label: the visible threads, most recently
+    active first, with the number of mentioning messages and the first / last
+    one. Read-only.
+
+    Example:
+        GET /api/v1/ideas/1035/mentions
+        -> {"mentions": {"1035.1": [{"thread_id": 6484, "title": "idea 1035: …",
+                                     "count": 4, "first_id": 6484, "last_id": 6512, …}]}}
+    """
+    agent_id, role, operator = _caller(request)
+    return {"mentions": messages_mod.experiment_mentions(
+        REPO_DIR, idea_id, agent_id=agent_id, role=role, operator=operator)}
+
+
 @router.get("/api/v1/messages/search")
 def search_messages(
     request: Request,

@@ -881,6 +881,51 @@ def _not_modified(request: Request, etag: str) -> bool:
     return etag.removeprefix("W/") in tags
 
 
+ARTIFACTS_LIST_MAX = 2000
+
+
+@router.get("/artifacts", include_in_schema=False)
+def list_artifacts(path: str = Query(default="", description="Directory under .the_lab/artifacts")):
+    """List one directory of the shared ``.the_lab/artifacts`` tree (for the
+    dashboard's file explorer): folders first, then files, by name.
+
+    Read-only and confined to the artifacts root: the requested spelling may
+    not escape it, and a symlinked entry that resolves outside it is listed as
+    ``external`` (not browsable). File contents are served by
+    ``GET /api/v1/files/.the_lab/artifacts/<path>``.
+    """
+    root = (REPO_DIR / ".the_lab" / "artifacts").resolve()
+    requested = Path(path.strip("/")) if path.strip("/") else Path()
+    if requested.is_absolute() or ".." in requested.parts or "\\" in path:
+        raise HTTPException(403, "access denied")
+    target = (root / requested).resolve()
+    if target != root and root not in target.parents:
+        raise HTTPException(403, "access denied")
+    if not target.is_dir():
+        raise HTTPException(404, "directory not found")
+    entries = []
+    with os.scandir(target) as it:
+        for entry in it:
+            try:
+                resolved = Path(entry.path).resolve()
+                inside = resolved == root or root in resolved.parents
+                is_dir = entry.is_dir()
+                st = entry.stat() if inside else None
+            except OSError:
+                continue
+            entries.append({
+                "name": entry.name,
+                "kind": "dir" if is_dir else "file",
+                "size": None if is_dir or st is None else st.st_size,
+                "mtime": None if st is None else datetime.fromtimestamp(st.st_mtime, timezone.utc).isoformat(),
+                **({"external": True} if not inside else {}),
+            })
+    entries.sort(key=lambda e: (e["kind"] != "dir", e["name"].lower()))
+    rel = "" if target == root else target.relative_to(root).as_posix()
+    return {"path": rel, "base": ".the_lab/artifacts", "entries": entries[:ARTIFACTS_LIST_MAX],
+            "truncated": len(entries) > ARTIFACTS_LIST_MAX}
+
+
 @router.api_route("/files/{file_path:path}", methods=["GET", "HEAD"], include_in_schema=False)
 def serve_repo_file(file_path: str, request: Request = None):
     """Serve a file from the repository root directory.
