@@ -1,6 +1,6 @@
 import { useRef, useEffect, useMemo, useState } from "preact/hooks";
 import { Chart } from "chart.js/auto";
-import { allExperiments, allIdeas, currentLayout, highlightedIdea, cloneChartPanel, updatePanelTitle } from "../../state/signals";
+import { allExperiments, allIdeas, currentLayout, highlightedIdea, cloneChartPanel, updatePanelTitle, runningProgress } from "../../state/signals";
 import { chartNavClick } from "../../lib/hooks";
 import { IconButton } from "../ui";
 import {
@@ -91,6 +91,43 @@ function computeBounds(values: number[]): { min?: number; max?: number } {
   if (dataMin >= lo && dataMax <= hi) return {};
   const pad = (hi - lo) * 0.05;
   return { min: lo - pad, max: hi + pad };
+}
+
+// Canvas point images (progress cakes) for running experiments, cached per 5 % step.
+const _ringCache = new Map<string, HTMLCanvasElement>();
+function runningRing(pct: number | undefined): HTMLCanvasElement {
+  const has = typeof pct === "number" && Number.isFinite(pct);
+  const step = has ? Math.round(Math.min(100, Math.max(0, pct!)) / 5) * 5 : -1;
+  const yellow = getCssVar("--yellow") || "#d29922";
+  const key = `${step}|${yellow}`;
+  const hit = _ringCache.get(key);
+  if (hit) return hit;
+  const dpr = window.devicePixelRatio || 1, size = 9;
+  const cv = document.createElement("canvas");
+  cv.width = cv.height = size * dpr;
+  cv.style.width = cv.style.height = `${size}px`;
+  const g = cv.getContext("2d")!;
+  g.scale(dpr, dpr);
+  g.lineWidth = 1.6;
+  g.strokeStyle = yellow;
+  const c = size / 2, r = 3.2;
+  if (has) {
+    // A "cake": faint disc, then a solid slice growing clockwise from 12 o'clock.
+    g.fillStyle = yellow;
+    g.globalAlpha = 0.22; g.beginPath(); g.arc(c, c, r, 0, 2 * Math.PI); g.fill();
+    g.globalAlpha = 0.55; g.lineWidth = 0.8; g.stroke();
+    g.globalAlpha = 1;
+    if (step > 0) {
+      g.beginPath(); g.moveTo(c, c);
+      g.arc(c, c, r, -Math.PI / 2, -Math.PI / 2 + (2 * Math.PI * step) / 100);
+      g.closePath(); g.fill();
+    }
+  } else {
+    // No progress known: a dashed ring (canvas point styles can't pulse cheaply).
+    g.setLineDash([2, 2]); g.beginPath(); g.arc(c, c, r, 0, 2 * Math.PI); g.stroke();
+  }
+  _ringCache.set(key, cv);
+  return cv;
 }
 
 export function ScatterChart({ instanceId, initialXMetric, initialYMetric }: { instanceId?: string; initialXMetric?: string; initialYMetric?: string } = {}) {
@@ -233,9 +270,13 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric }: { i
     const bgColors = filtered.map((e) => (e._running ? "transparent" : getColor(e)));
     const borderColors = filtered.map((e) => getColor(e));
     // Small, crisp dots — consistent with the mini exemplar's quiet language.
-    const radii = filtered.map((e) => (e._running ? 4 : 3.2));
+    const radii = filtered.map((e) => (e._running ? 3.5 : 2.4));
     const borderWidths = filtered.map((e) => (e._running ? 1.5 : 1));
-    const styles = filtered.map((e) => (e._running ? "triangle" : "circle") as string);
+    // Running: a yellow progress cake (pct_complete), like the metrics chart.
+    const progress = runningProgress.value;
+    const styles = filtered.map((e) => (e._running
+      ? runningRing(progress[String(e.label ?? e.id)])
+      : "circle") as any);
 
     const xBounds = clip ? computeBounds(scatterData.map((d) => d.x)) : {};
     const yBounds = clip ? computeBounds(scatterData.map((d) => d.y)) : {};
@@ -274,7 +315,7 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric }: { i
             pointRadius: radii,
             pointBorderWidth: borderWidths,
             pointStyle: styles,
-            pointHoverRadius: 7,
+            pointHoverRadius: 5,
             _expData: filtered,
           } as any,
         ],
@@ -378,7 +419,7 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric }: { i
       ds.pointRadius = expData.map((e: any) => (e.idea_id === highlighted ? 6 : 2.4));
       ds.pointBorderWidth = expData.map((e: any) => (e.idea_id === highlighted ? 1.5 : 1));
     } else {
-      ds.pointRadius = expData.map((e: any) => (e._running ? 4 : 3.2));
+      ds.pointRadius = expData.map((e: any) => (e._running ? 3.5 : 2.4));
       ds.pointBorderWidth = expData.map((e: any) => (e._running ? 1.5 : 1));
     }
     chart.update("none");

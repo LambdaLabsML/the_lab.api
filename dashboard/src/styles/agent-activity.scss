@@ -395,25 +395,25 @@
 // Column: shortlog (running + recent) on top, agents fill remaining space and
 // scroll internally, composer pinned at the bottom. Rows carry their own 12px
 // inset (shortlog-style full-bleed hover); the containers have none.
+/* The whole sidebar scrolls as one column (running + recent + agents), so a
+   long running list never squeezes the agents' activity out of view. */
 .activity-sidebar {
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
   min-height: 0;
+  overflow-y: auto;
 }
 .activity-sidebar > .activity-shortlog { flex: 0 0 auto; }
 .activity-sidebar-agents {
-  flex: 1 1 auto;
-  min-height: 0;
+  flex: 0 0 auto;
   display: flex;
   flex-direction: column;
   margin-top: var(--space-1);
   box-shadow: inset 0 1px var(--border-soft);   // top hairline separator, not a box
 }
 .activity-sidebar-scroll {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
+  flex: 0 0 auto;
   padding-bottom: var(--space-2);
 }
 .activity-sidebar .aa-empty { padding: 2px 12px 6px; }  // = .shortlog-idle

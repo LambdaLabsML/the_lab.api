@@ -7,7 +7,6 @@
 import { Eyebrow, Stepper } from "../ui";
 import { ActivityShortlog } from "./activity-shortlog";
 import { AgentTree } from "../agent-activity/agent-tree";
-import { AgentQuickChat } from "../agent-activity/agent-chat";
 import { agentHistoryLimit } from "../../state/settings";
 
 export function ActivitySidebar() {
@@ -24,7 +23,6 @@ export function ActivitySidebar() {
           <AgentTree compact activeOnly historyLimit={agentHistoryLimit.value} />
         </div>
       </div>
-      <AgentQuickChat />
     </div>
   );
 }

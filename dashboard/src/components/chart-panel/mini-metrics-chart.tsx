@@ -128,6 +128,30 @@ function timeTicks(t0: number, t1: number, maxTicks: number): { t: number; label
   return out;
 }
 
+/** A running experiment: a small yellow "cake" — a pie slice that grows
+ *  clockwise with pct_complete on a faint disc; without progress, a yellow
+ *  dot fading in and out. */
+function RunningMarker({ x, y, r, pct, faded }: { x: number; y: number; r: number; pct?: number; faded: boolean }) {
+  if (typeof pct !== "number" || !Number.isFinite(pct)) {
+    return <circle class="mini-run-pulse" cx={x} cy={y} r={r * 0.75} fill="var(--yellow)" opacity={faded ? 0.2 : undefined} />;
+  }
+  const frac = Math.min(1, Math.max(0, pct / 100));
+  let slice: preact.JSX.Element | null = null;
+  if (frac >= 0.999) {
+    slice = <circle cx={x} cy={y} r={r} fill="var(--yellow)" />;
+  } else if (frac > 0) {
+    const a = 2 * Math.PI * frac - Math.PI / 2;
+    const ex = x + r * Math.cos(a), ey = y + r * Math.sin(a);
+    slice = <path d={`M${x},${y} L${x},${y - r} A${r},${r} 0 ${frac > 0.5 ? 1 : 0} 1 ${ex.toFixed(2)},${ey.toFixed(2)} Z`} fill="var(--yellow)" />;
+  }
+  return (
+    <g opacity={faded ? 0.2 : 1}>
+      <circle cx={x} cy={y} r={r} fill="var(--yellow)" fill-opacity="0.22" stroke="var(--yellow)" stroke-opacity="0.55" stroke-width="0.8" />
+      {slice}
+    </g>
+  );
+}
+
 /** Upward-pointing triangle path centred on (cx, cy) with half-size r. */
 function trianglePath(cx: number, cy: number, r: number): string {
   const h = r * 1.8;
@@ -189,8 +213,8 @@ function MiniDot({
         opacity={faded ? 0.1 : isMilestone ? 0.5 : 0.3} />
       )}
       {excluded ? null : isRunning ? (
-        <path d={trianglePath(x, y, r)} fill="transparent" stroke={dotColor}
-          stroke-width={Math.max(strokeW, 1.3)} opacity={faded ? 0.2 : 1} />
+        <RunningMarker x={x} y={y} r={Math.max(3.2, r * 1.25)} faded={faded}
+          pct={runningProgress.value[String(label ?? "")]} />
       ) : (
         <circle cx={x} cy={y} r={r} fill={dotColor}
           stroke={strokeColor} stroke-width={strokeW} opacity={faded ? 0.2 : 1} />

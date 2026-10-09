@@ -255,3 +255,7 @@
     max-width: 160px;
   }
 }
+
+/* Running experiment without progress: a yellow dot fading in and out. */
+@keyframes mini-run-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+.mini-run-pulse { animation: mini-run-pulse 1.6s ease-in-out infinite; }
