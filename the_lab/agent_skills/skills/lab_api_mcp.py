@@ -4,6 +4,13 @@
 Zero dependencies. Reads THE_LAB_API_URL from the environment (set by run_eval.py).
 On startup, fetches the OpenAPI spec, builds MCP tool definitions, and proxies
 tool calls as HTTP requests to the Lab API.
+
+Hot reload: a background daemon thread (see "Hot reload" section below)
+periodically re-fetches /openapi.json and rebuilds the tool set when it
+changes, notifying the client via notifications/tools/list_changed — and
+re-execs this process in place (same stdin/stdout) if its own source file on
+disk changes, so a relaunched Lab API or an updated bridge no longer requires
+agents to manually reconnect the MCP server.
 """
 import base64 as _base64
 import hashlib as _hashlib
@@ -13,6 +20,7 @@ import socket as _socket
 import ssl as _ssl
 import struct as _struct
 import sys
+import threading
 import urllib.request
 import urllib.parse
 
@@ -114,6 +122,8 @@ def fetch_openapi_spec():
     for attempt in range(_MAX_RETRIES):
         try:
             with urllib.request.urlopen(req, timeout=15, context=_SSL_CTX) as resp:
+                if attempt > 0:
+                    _wake_refresh.set()  # recovered after a transient failure — recheck soon
                 return json.loads(resp.read())
         except (urllib.error.URLError, ConnectionError, _socket.timeout, OSError) as e:
             last_err = e
@@ -286,6 +296,196 @@ def build_tools(spec):
     return tools, tool_meta
 
 
+# ── Hot reload ────────────────────────────────────────────────────────────────
+#
+# One background daemon thread (started from main(), never at import time —
+# tests that just exec this module to call a helper shouldn't get a stray
+# thread making network calls) drives two independent mechanisms:
+#
+#   1. Tool-list refresh: periodically re-fetch /openapi.json; if its hash
+#      changed, rebuild tools/tool_meta and tell the client via
+#      notifications/tools/list_changed.
+#   2. Self-reload: if this file's own bytes changed on disk, re-exec the
+#      process in place (os.execv keeps stdin/stdout attached, so the MCP
+#      connection survives) once the main loop is idle between messages.
+#
+# tools/tool_meta are published together as one _ToolState instance so a
+# concurrent tools/call always sees a matched pair — rebinding the
+# module-level `_state` name is a single atomic operation (no reader lock
+# needed; `_state_lock` only serializes the writers against each other).
+
+_REFRESH_INTERVAL_S = float(os.environ.get("LAB_MCP_REFRESH_S", "30") or 30)
+_SOURCE_PATH = os.path.abspath(__file__)
+
+_stdout_lock = threading.Lock()       # every stdout write (response or notification)
+_busy_lock = threading.Lock()         # held by the main loop only while handling one message
+_state_lock = threading.Lock()        # serializes writers of `_state`
+_reload_pending = threading.Event()   # set when self-reload couldn't run immediately
+_wake_refresh = threading.Event()     # poke the background thread to check sooner
+_initialized_event = threading.Event()  # has the client's `initialize` been handled?
+
+
+class _ToolState:
+    """Immutable snapshot of the built tool set — swapped, never mutated."""
+    __slots__ = ("tools", "tool_meta", "spec_hash")
+
+    def __init__(self, tools, tool_meta, spec_hash):
+        self.tools = tools
+        self.tool_meta = tool_meta
+        self.spec_hash = spec_hash
+
+
+_state = _ToolState([], {}, None)
+
+
+def _hash_spec(spec) -> str:
+    return _hashlib.sha256(json.dumps(spec, sort_keys=True).encode()).hexdigest()
+
+
+def _publish_tools(new_tools, new_meta, spec_hash) -> bool:
+    """Swap in a freshly built tool set.
+
+    Returns True if it differs from the previously published one, so the
+    caller can decide whether a list_changed notification is warranted.
+    """
+    global _state
+    with _state_lock:
+        changed = spec_hash != _state.spec_hash
+        _state = _ToolState(new_tools, new_meta, spec_hash)
+    return changed
+
+
+def _notify_tools_changed():
+    # Only after the client has completed `initialize` — the MCP handshake
+    # requires that, and some clients would reject/ignore an earlier one.
+    if _initialized_event.is_set():
+        send({"jsonrpc": "2.0", "method": "notifications/tools/list_changed"})
+
+
+def _restore_watch_cursors():
+    """Re-seed implicit watch cursors carried across a self-reload exec.
+
+    Cheap to pass through (just a small seq-number map), so we do; if this
+    env var is absent or unparseable, matching watches simply resume from
+    "now" on their next call, same as a cold start.
+    """
+    raw = os.environ.get("LAB_MCP_WATCH_CURSORS", "")
+    if not raw:
+        return
+    try:
+        for key_json, seq in json.loads(raw).items():
+            types_list, keyword = json.loads(key_json)
+            _IMPLICIT_WATCH_CURSORS[(tuple(types_list), keyword)] = seq
+    except Exception:
+        pass  # non-fatal: worst case, watches restart from "now"
+
+
+def _exec_reload():
+    """Re-exec this process in place, keeping stdin/stdout attached.
+
+    Must only be called while the main loop is not mid-message (see
+    `_do_self_reload`) — i.e. it is either blocked reading the next stdin
+    line, or about to be.
+    """
+    try:
+        os.environ["LAB_MCP_RELOADED"] = "1"
+        if _initialized_event.is_set():
+            os.environ["LAB_MCP_INITIALIZED"] = "1"
+        if _IMPLICIT_WATCH_CURSORS:
+            os.environ["LAB_MCP_WATCH_CURSORS"] = json.dumps({
+                json.dumps([list(types_key), keyword]): seq
+                for (types_key, keyword), seq in _IMPLICIT_WATCH_CURSORS.items()
+            })
+        print("[hot-reload] source changed, re-executing", file=sys.stderr)
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+        # os.execv does not return on success.
+    except Exception as e:
+        # A reload attempt must never take the bridge down.
+        print(f"[hot-reload] self-exec failed, continuing on old code: {e}", file=sys.stderr)
+
+
+def _do_self_reload():
+    """Ask the main loop to re-exec after its next response.
+
+    Only the main loop execs, and only with no unread input buffered: a
+    request already read from stdin but not yet answered would otherwise be
+    lost with the old process, leaving the client's tool call hanging. While
+    the client is idle the reload therefore waits for its next request (new
+    tools still arrive at once via the refresh notification)."""
+    _reload_pending.set()
+
+
+# stdin is read through our own buffer (not ``for line in sys.stdin``, whose
+# read-ahead is invisible) so a re-exec can tell that no request is pending.
+_stdin_buf = bytearray()
+
+
+def _stdin_lines():
+    fd = sys.stdin.fileno()
+    while True:
+        nl = _stdin_buf.find(b"\n")
+        if nl >= 0:
+            line = bytes(_stdin_buf[:nl])
+            del _stdin_buf[: nl + 1]
+            yield line.decode("utf-8", "replace")
+            continue
+        chunk = os.read(fd, 65536)
+        if not chunk:
+            if _stdin_buf:
+                line = bytes(_stdin_buf)
+                _stdin_buf.clear()
+                yield line.decode("utf-8", "replace")
+            return
+        _stdin_buf.extend(chunk)
+
+
+def _check_self_reload():
+    try:
+        with open(_SOURCE_PATH, "rb") as f:
+            current = _hashlib.sha256(f.read()).hexdigest()
+    except OSError:
+        return
+    if current != _SOURCE_HASH_AT_START:
+        _do_self_reload()
+
+
+def _check_tool_refresh():
+    if not probe_health():
+        return  # server down — stay quiet, retried on the next tick
+    try:
+        spec = fetch_openapi_spec()
+    except Exception as e:
+        print(f"[hot-reload] refresh fetch failed: {e}", file=sys.stderr)
+        return
+    new_tools, new_meta = build_tools(spec)
+    if _publish_tools(new_tools, new_meta, _hash_spec(spec)):
+        print(f"[hot-reload] tool set changed ({len(new_tools)} tools)", file=sys.stderr)
+        _notify_tools_changed()
+
+
+def _refresh_loop():
+    """Background daemon thread: periodic tool refresh + self-reload check."""
+    while True:
+        _wake_refresh.wait(timeout=_REFRESH_INTERVAL_S)
+        _wake_refresh.clear()
+        try:
+            _check_self_reload()
+            _check_tool_refresh()
+        except Exception as e:
+            # Must never crash the bridge — log and keep going.
+            print(f"[hot-reload] background check failed: {e}", file=sys.stderr)
+
+
+_SOURCE_HASH_AT_START = None
+try:
+    with open(_SOURCE_PATH, "rb") as _f:
+        _SOURCE_HASH_AT_START = _hashlib.sha256(_f.read()).hexdigest()
+except OSError:
+    pass
+
+
 # ── HTTP proxy ────────────────────────────────────────────────────────────────
 
 def proxy_call(tool_name, arguments, tool_meta):
@@ -377,6 +577,8 @@ def proxy_call(tool_name, arguments, tool_meta):
     for attempt in range(_MAX_RETRIES):
         try:
             with urllib.request.urlopen(req, timeout=300, context=_SSL_CTX) as resp:
+                if attempt > 0:
+                    _wake_refresh.set()  # recovered after a transient failure — recheck soon
                 return resp.read().decode()
         except urllib.error.HTTPError as e:
             body = e.read().decode() if e.fp else ""
@@ -924,21 +1126,36 @@ def _call_ws_tool(name: str, args: dict) -> str:
 # ── MCP JSON-RPC/stdio protocol ───────────────────────────────────────────────
 
 def send(msg):
-    sys.stdout.write(json.dumps(msg) + "\n")
-    sys.stdout.flush()
+    with _stdout_lock:
+        sys.stdout.write(json.dumps(msg) + "\n")
+        sys.stdout.flush()
 
 
 def main():
+    _restore_watch_cursors()
+    if os.environ.get("LAB_MCP_INITIALIZED") == "1":
+        # We're the result of a self-reload exec — the client already did
+        # the MCP handshake against the old process and won't send it again.
+        _initialized_event.set()
+    reloaded = os.environ.get("LAB_MCP_RELOADED") == "1"
+
     # Fetch OpenAPI spec and build tools on startup
     try:
         spec = fetch_openapi_spec()
-        tools, tool_meta = build_tools(spec)
+        new_tools, new_meta = build_tools(spec)
+        _publish_tools(new_tools, new_meta, _hash_spec(spec))
     except Exception as e:
         # If we can't reach the API, start with no tools — we'll retry on first call
         print(f"Warning: could not fetch OpenAPI spec: {e}", file=sys.stderr)
-        tools, tool_meta = [], {}
 
-    for raw in sys.stdin:
+    if reloaded:
+        # Tell the (already-initialized) client its tool list may have moved
+        # — it won't otherwise know this is a fresh process.
+        _notify_tools_changed()
+
+    threading.Thread(target=_refresh_loop, daemon=True, name="lab-mcp-refresh").start()
+
+    for raw in _stdin_lines():
         raw = raw.strip()
         if not raw:
             continue
@@ -947,84 +1164,96 @@ def main():
         except json.JSONDecodeError:
             continue
 
-        method = msg.get("method")
-        msg_id = msg.get("id")
+        # Handling one message; the background refresh thread serializes its
+        # tool-state swaps against this via _state_lock, and self-reload waits
+        # for the main loop (see `_do_self_reload`).
+        with _busy_lock:
+            method = msg.get("method")
+            msg_id = msg.get("id")
 
-        # Notifications (no id) — acknowledge silently
-        if msg_id is None:
-            continue
+            # Notifications (no id) — acknowledge silently
+            if msg_id is None:
+                continue
 
-        try:
-            # Lazy (re-)build of tools. Feedback: an API restart mid-session
-            # drops the bridge and "tools vanish until something pokes
-            # ToolSearch". If the startup fetch failed (server down at boot) or
-            # the tool set is empty, rebuild on the next tools/list or
-            # tools/call. We use a quick health/liveness probe first (handling a
-            # missing /health gracefully) so we only attempt a rebuild when the
-            # server is actually answering again.
-            if not tools and method in ("tools/list", "tools/call"):
-                if probe_health():
-                    try:
-                        spec = fetch_openapi_spec()
-                        tools, tool_meta = build_tools(spec)
-                        print(f"Reconnected: loaded {len(tools)} tools", file=sys.stderr)
-                    except Exception as e:
-                        print(f"Re-fetch failed: {e}", file=sys.stderr)
-                else:
-                    print("Health probe: server still unavailable, "
-                          "keeping tools empty (will retry next call)",
-                          file=sys.stderr)
-
-            if method == "initialize":
-                send({
-                    "jsonrpc": "2.0",
-                    "id": msg_id,
-                    "result": {
-                        "protocolVersion": "2024-11-05",
-                        "capabilities": {"tools": {}},
-                        "serverInfo": {"name": "labapi", "version": "1.0.0"},
-                    },
-                })
-            elif method == "tools/list":
-                send({
-                    "jsonrpc": "2.0",
-                    "id": msg_id,
-                    "result": {"tools": tools + _WS_TOOLS},
-                })
-            elif method == "tools/call":
-                params = msg.get("params", {})
-                name = params.get("name", "")
-                args = params.get("arguments", {})
-                if name in ("watch_events", "watch_keyword"):
-                    text = _call_ws_tool(name, args)
-                elif name in tool_meta:
-                    text = proxy_call(name, args, tool_meta)
-                else:
-                    text = json.dumps({"error": f"Unknown tool: {name}"})
-                send({
-                    "jsonrpc": "2.0",
-                    "id": msg_id,
-                    "result": {"content": [{"type": "text", "text": text}]},
-                })
-            else:
-                send({
-                    "jsonrpc": "2.0",
-                    "id": msg_id,
-                    "error": {"code": -32601, "message": f"Method not found: {method}"},
-                })
-        except BrokenPipeError:
-            # Client closed the pipe — exit cleanly
-            break
-        except Exception as e:
-            print(f"Error handling {method}: {e}", file=sys.stderr)
             try:
-                send({
-                    "jsonrpc": "2.0",
-                    "id": msg_id,
-                    "error": {"code": -32603, "message": f"Internal error: {e}"},
-                })
-            except Exception:
-                pass
+                # Lazy (re-)build of tools. Feedback: an API restart mid-session
+                # drops the bridge and "tools vanish until something pokes
+                # ToolSearch". If the startup fetch failed (server down at boot) or
+                # the tool set is empty, rebuild on the next tools/list or
+                # tools/call. We use a quick health/liveness probe first (handling a
+                # missing /health gracefully) so we only attempt a rebuild when the
+                # server is actually answering again.
+                if not _state.tools and method in ("tools/list", "tools/call"):
+                    if probe_health():
+                        try:
+                            spec = fetch_openapi_spec()
+                            new_tools, new_meta = build_tools(spec)
+                            _publish_tools(new_tools, new_meta, _hash_spec(spec))
+                            print(f"Reconnected: loaded {len(new_tools)} tools", file=sys.stderr)
+                        except Exception as e:
+                            print(f"Re-fetch failed: {e}", file=sys.stderr)
+                    else:
+                        print("Health probe: server still unavailable, "
+                              "keeping tools empty (will retry next call)",
+                              file=sys.stderr)
+
+                if method == "initialize":
+                    _initialized_event.set()
+                    send({
+                        "jsonrpc": "2.0",
+                        "id": msg_id,
+                        "result": {
+                            "protocolVersion": "2024-11-05",
+                            "capabilities": {"tools": {"listChanged": True}},
+                            "serverInfo": {"name": "labapi", "version": "1.0.0"},
+                        },
+                    })
+                elif method == "tools/list":
+                    send({
+                        "jsonrpc": "2.0",
+                        "id": msg_id,
+                        "result": {"tools": _state.tools + _WS_TOOLS},
+                    })
+                elif method == "tools/call":
+                    params = msg.get("params", {})
+                    name = params.get("name", "")
+                    args = params.get("arguments", {})
+                    if name in ("watch_events", "watch_keyword"):
+                        text = _call_ws_tool(name, args)
+                    elif name in _state.tool_meta:
+                        text = proxy_call(name, args, _state.tool_meta)
+                    else:
+                        text = json.dumps({"error": f"Unknown tool: {name}"})
+                    send({
+                        "jsonrpc": "2.0",
+                        "id": msg_id,
+                        "result": {"content": [{"type": "text", "text": text}]},
+                    })
+                else:
+                    send({
+                        "jsonrpc": "2.0",
+                        "id": msg_id,
+                        "error": {"code": -32601, "message": f"Method not found: {method}"},
+                    })
+            except BrokenPipeError:
+                # Client closed the pipe — exit cleanly
+                break
+            except Exception as e:
+                print(f"Error handling {method}: {e}", file=sys.stderr)
+                try:
+                    send({
+                        "jsonrpc": "2.0",
+                        "id": msg_id,
+                        "error": {"code": -32603, "message": f"Internal error: {e}"},
+                    })
+                except Exception:
+                    pass
+
+        # Between messages: if the bridge's code changed, re-exec now — but
+        # only with nothing unread buffered (else after the next message).
+        if _reload_pending.is_set() and not _stdin_buf:
+            _reload_pending.clear()
+            _exec_reload()
 
 
 if __name__ == "__main__":
