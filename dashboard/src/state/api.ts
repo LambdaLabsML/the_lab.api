@@ -395,6 +395,30 @@ export async function getArtifactText(path: string, maxBytes = 2_000_000): Promi
   return { text, truncated };
 }
 
+/** An artifact opened for editing (text, ≤ 2 MB). */
+export interface ArtifactFile { path: string; content: string; version: string; size: number; mtime: string; editable: boolean }
+
+/** GET /api/v1/artifacts/file — content + version of a text artifact. */
+export async function readArtifactFile(path: string): Promise<ArtifactFile> {
+  return fetchJson(`/api/v1/artifacts/file?path=${encodeURIComponent(path)}`);
+}
+
+/** PUT /api/v1/artifacts/file — create (``create``) or update from ``baseVersion``.
+ *  A 409 resolves to ``{ conflict: true, version }`` (changed meanwhile / exists). */
+export async function writeArtifactFile(
+  path: string, content: string, opts: { baseVersion?: string; create?: boolean },
+): Promise<{ version: string; conflict?: false } | { conflict: true; version?: string; detail: string }> {
+  const res = await fetch(`/api/v1/artifacts/file?path=${encodeURIComponent(path)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", "X-The-Lab-Source": "dashboard" },
+    body: JSON.stringify({ content, base_version: opts.baseVersion ?? null, create: !!opts.create }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (res.status === 409) return { conflict: true, version: body.version, detail: body.detail || "conflict" };
+  if (!res.ok) throw new Error(body.detail || `saving ${path} failed (${res.status})`);
+  return { version: body.version };
+}
+
 /** Where an experiment is discussed: one thread with the number of mentioning
  *  messages and the first / last one. */
 export interface ThreadMention {
