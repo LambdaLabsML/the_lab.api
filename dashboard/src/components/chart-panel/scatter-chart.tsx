@@ -1,6 +1,7 @@
 import { useRef, useEffect, useMemo, useState } from "preact/hooks";
 import { Chart } from "chart.js/auto";
-import { allExperiments, allIdeas, currentLayout, highlightedIdea, cloneChartPanel, updatePanelTitle, runningProgress } from "../../state/signals";
+import { plotExperiments } from "../../state/hidden";
+import { allIdeas, currentLayout, highlightedIdea, cloneChartPanel, updatePanelTitle, runningProgress } from "../../state/signals";
 import { chartNavClick } from "../../lib/hooks";
 import { IconButton } from "../ui";
 import {
@@ -140,7 +141,7 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric }: { i
   const prevThemeRef = useRef(colorTheme.value);
   const prevFzRef = useRef(fontSize.value);
 
-  const experiments = allExperiments.value;
+  const experiments = plotExperiments.value;
 
   // Compute chartable keys grouped by source
   const grouped = useMemo(() => collectChartKeys(experiments), [experiments]);

@@ -12,7 +12,7 @@ import {
   scatterOpen,
   filterBarOpen,
 } from "../../state/settings";
-import { allExperiments } from "../../state/signals";
+import { plotExperiments } from "../../state/hidden";
 import { MetricsChart } from "./metrics-chart";
 import { ScatterChart } from "./scatter-chart";
 import { TagFilter } from "./tag-filter";
@@ -22,7 +22,7 @@ import { collectChartKeys } from "../../lib/chart-data";
 
 export function ChartPanel() {
   const open = chartOpen.value;
-  const experiments = allExperiments.value;
+  const experiments = plotExperiments.value;
   const metric = selectedMetric.value;
   const scatter = scatterOpen.value;
   const filterOpen = filterBarOpen.value;

@@ -1,5 +1,6 @@
 import { useState } from "preact/hooks";
 import { activeTagFilters, tagFilterMode, filterText } from "../../state/settings";
+import { HIDDEN_TAG } from "../../state/hidden";
 import { allExperiments } from "../../state/signals";
 import { renameTag } from "../../state/api";
 import { refreshChartData } from "../../state/polling";
@@ -14,6 +15,7 @@ export function TagFilter() {
   for (const exp of experiments) {
     if (exp.tags) for (const t of exp.tags) tagSet.add(t);
   }
+  tagSet.delete(HIDDEN_TAG);  // toggled via "N hidden" in the chart toolbar
   const filter = filterText.value.toLowerCase().trim();
   const filterTerms = filter ? filter.split(/\s+/) : [];
   const tags = [...tagSet].sort().filter((t) =>

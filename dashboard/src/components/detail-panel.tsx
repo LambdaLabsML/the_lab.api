@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useState, useRef } from "preact/ho
 import { progressPct } from "../lib/progress";
 import { selectedIdea, selectedMetric, detailTimeline, detailSortNewest, colorTheme } from "../state/settings";
 import { scrollToExperiment, runningProgress, allExperiments } from "../state/signals";
+import { isHiddenExperiment, setExperimentHidden } from "../state/hidden";
 import { getIdea, getExperimentProgress, getExperimentLog, getExperimentScript, getExperimentOutput, getIdeaDiff, getIdeaMentions, type ThreadMention } from "../state/api";
 import { focusMessageId } from "../state/agent-activity";
 import { subscribeWsEvents } from "../state/ws";
@@ -1729,6 +1730,35 @@ function Description({ text }: { text: string }) {
 
 /** Threads that discuss an experiment; a click opens Messages at the latest
  *  mention in that thread. */
+/** Hide/unhide an experiment from charts, table and idea means (shared tag). */
+function HideToggle({ exp }: { exp: Experiment }) {
+  const label = String(exp.label ?? exp.id);
+  // Read the live list so the button follows changes made elsewhere.
+  const live = allExperiments.value.find((e) => String(e.label ?? e.id) === label) ?? exp;
+  const hidden = isHiddenExperiment(live);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(false);
+  return (
+    <button
+      type="button"
+      class={`exp-hide-toggle${hidden ? " is-hidden" : ""}`}
+      disabled={busy}
+      title={error ? "Could not update — try again"
+        : hidden ? "Hidden from charts, table and idea means (for everyone) — click to show it again"
+        : "Hide this experiment from charts, table and idea means (for everyone; reversible)"}
+      onClick={async (ev) => {
+        ev.stopPropagation();
+        setBusy(true); setError(false);
+        try { await setExperimentHidden(label, !hidden); }
+        catch { setError(true); }
+        finally { setBusy(false); }
+      }}
+    >
+      {error ? "⚠ " : ""}{hidden ? "unhide" : "hide"}
+    </button>
+  );
+}
+
 function ExpMentions({ mentions }: { mentions: ThreadMention[] }) {
   const total = mentions.reduce((n, m) => n + m.count, 0);
   const open = (id: number) => {
@@ -1851,6 +1881,7 @@ function ExperimentItem({
             ⟲ restarted{attemptAgoLabel ? ` · attempt start ${attemptAgoLabel}` : ""}
           </span>
         )}
+        <HideToggle exp={exp} />
       </div>
       <div class="exp-desc">{exp.description}</div>
       {hasSlurmLifecycle && (

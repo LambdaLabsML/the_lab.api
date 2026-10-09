@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from "preact/hooks";
 import { useSignalEffect } from "@preact/signals";
-import { allExperiments, allIdeas, currentLayout, highlightedIdea, runningProgress } from "../state/signals";
+import { plotExperiments } from "../state/hidden";
+import { allIdeas, currentLayout, highlightedIdea, runningProgress } from "../state/signals";
 import {
   selectedMetric, colorMode, activeTagFilters, tagFilterMode,
   showAbandoned, showConcluded, showRunning,
@@ -52,7 +53,7 @@ export function TablePanel() {
   const [dragCol, setDragCol] = useState<string | null>(null);
   const [dragOverCol, setDragOverCol] = useState<string | null>(null);
 
-  const experiments = allExperiments.value;
+  const experiments = plotExperiments.value;
   const ideas = allIdeas.value;
   const layout = currentLayout.value;
   const metric = selectedMetric.value;
