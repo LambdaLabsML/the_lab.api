@@ -699,7 +699,10 @@
 .md-output .md-h3 { font-size: var(--text-lg); color: var(--purple); margin: 6px 0 3px; font-weight: 600; }
 .md-output .md-p { margin: 2px 0 6px; }
 .md-output .md-gap { height: var(--space-1); }
-.md-output .md-ul { margin: 2px 0 6px; padding-left: 18px; }
+.md-output .md-ul { margin: 2px 0 6px; padding-left: 18px; list-style: disc; }
+.md-output .md-ul .md-ul { list-style: circle; }
+.md-output ol { margin: 2px 0 6px; padding-left: 22px; list-style: decimal; }
+.md-output .md-ul li::marker, .md-output ol li::marker { color: var(--text-faint); }
 .md-output .md-ul li { margin-bottom: 2px; }
 .md-output .md-hr { border: none; box-shadow: inset 0 -1px var(--border); margin: 10px 0; height: 1px; }
 .md-output .md-code {
