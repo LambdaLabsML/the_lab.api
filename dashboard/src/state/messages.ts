@@ -51,8 +51,19 @@ const sentHere = new Set<number>(load<number[]>(MINE_KEY, []));
 const pendingUnreadIds = new Set<number>(load<number[]>(PENDING_KEY, []));
 let messages: MessageEntry[] = [];
 
-/** Number of unread messages addressed to this browser's user. */
+/** Number of unread messages addressed to this browser's user (@user). */
 export const messagesUnreadCount = signal(0);
+
+/** Number of unread messages of any kind (@anyone) in the newest window,
+ *  newer than this browser's first visit, not sent from here. */
+export const messagesUnreadAnyCount = signal(0);
+const ANY_BASELINE_KEY = "the-lab:messagesUnreadAnyBaseline";
+let anyBaselineId = load<number | null>(ANY_BASELINE_KEY, null);
+
+/** Whether a message counts towards the @anyone number (unread state aside). */
+export function countsAsNew(m: MessageEntry): boolean {
+  return !sentHere.has(m.id) && anyBaselineId != null && m.id > anyBaselineId;
+}
 
 /** Newest message id seen; bounds which bare numbers in text can be message refs. */
 export const latestMessageId = signal(0);
@@ -84,10 +95,11 @@ function myNamesRe(): RegExp | null {
 }
 
 /** Whether a message is addressed to the person using this browser. */
-export function isAddressedToMe(m: MessageEntry): boolean {
+export function isAddressedToMe(m: MessageEntry, { names = true }: { names?: boolean } = {}): boolean {
   if (sentHere.has(m.id)) return false;
   if (isDirectToDashboardUser(m)) return true;
   if (m.in_reply_to != null && sentHere.has(m.in_reply_to)) return true;
+  if (!names) return false;
   const re = myNamesRe();
   return !!re && (re.test(m.tldr ?? "") || re.test(m.text));
 }
@@ -133,12 +145,16 @@ function recompute(): void {
     (count, id) => count + (read[String(id)] ? 0 : 1),
     0,
   );
+  messagesUnreadAnyCount.value = messages.filter((m) => countsAsNew(m) && !read[String(m.id)]).length;
 }
 
-function qualify(batch: MessageEntry[]): void {
+// ``names``: name mentions qualify only in the newest window, not in the
+// first-visit history backfill (a long-running lab mentions you by name
+// hundreds of times; direct messages and replies to you always count).
+function qualify(batch: MessageEntry[], names = true): void {
   let pendingChanged = false;
   for (const m of batch) {
-    if (isAddressedToMe(m) && !pendingUnreadIds.has(m.id)) {
+    if (isAddressedToMe(m, { names }) && !pendingUnreadIds.has(m.id)) {
       pendingUnreadIds.add(m.id);
       pendingChanged = true;
     }
@@ -152,7 +168,12 @@ function ingest(next: MessageEntry[], newestPage = true): void {
   if (newestPage) messages = next;
   const newest = next.reduce((max, m) => Math.max(max, m.id), 0);
   if (newest > latestMessageId.value) latestMessageId.value = newest;
-  qualify(next);
+  // First visit: everything already there is history, not "new".
+  if (anyBaselineId == null && newestPage) {
+    anyBaselineId = newest;
+    save(ANY_BASELINE_KEY, anyBaselineId);
+  }
+  qualify(next, newestPage);
   recompute();
 }
 

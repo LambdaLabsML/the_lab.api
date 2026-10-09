@@ -8,6 +8,7 @@ import "dockview-core/dist/styles/dockview.css";
 import "./styles/tailwind.css";
 import "./styles/dockview-overrides.scss";
 import "./styles/global.scss";
+import "./styles/artifacts.scss";
 import "./styles/_ui.scss";
 import "./styles/topbar.scss";
 import "./styles/chart.scss";

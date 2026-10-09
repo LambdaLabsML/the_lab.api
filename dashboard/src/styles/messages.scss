@@ -189,6 +189,32 @@
 .thread-list-row.is-selected {
   box-shadow: inset 2px 0 0 var(--accent);
 }
+/* Threads with messages for you (@user): unread ones stand out (tint, bar,
+   bold title); already-read ones keep a faint bar so they stay findable. */
+.thread-list-row.has-unread-for-me {
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+  box-shadow: inset 3px 0 0 var(--accent);
+  color: var(--text);
+  .thread-list-title { color: var(--text); font-weight: 700; }
+}
+.thread-list-row.has-for-me:not(.is-selected) {
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.thread-unread-me {
+  padding: 0 5px;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--bg);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  line-height: 1.5;
+}
+.thread-unread-any {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
 .thread-list-line,
 .thread-list-meta,
 .thread-message-meta,
@@ -367,9 +393,16 @@
   border-bottom: 1px solid var(--border-soft);
 }
 .thread-message.is-unread {
-  box-shadow: inset 2px 0 0 var(--accent);
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--accent) 45%, transparent);
   padding-left: var(--space-2);
 }
+/* Messages for you (@user): tinted, with a full accent bar while unread. */
+.thread-message.is-for-me {
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  padding-left: var(--space-2);
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.thread-message.is-for-me.is-unread { box-shadow: inset 3px 0 0 var(--accent); }
 .thread-message-meta time {
   margin-left: auto;
 }

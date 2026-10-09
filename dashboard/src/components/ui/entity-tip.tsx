@@ -41,8 +41,12 @@ export function experimentTipContent(o: {
   value?: number | null;
   record?: boolean;
   running?: boolean;
+  /** Running experiments: pct_complete from the live progress. */
+  pct?: number | null;
 }): ComponentChildren {
   const tone = o.status ? (STATUS_TONE[o.status] ?? "neutral") : null;
+  const pct = o.running && typeof o.pct === "number" && Number.isFinite(o.pct)
+    ? Math.min(100, Math.max(0, o.pct)) : null;
   return (
     <>
       <span class="ui-tip-head">
@@ -50,9 +54,14 @@ export function experimentTipContent(o: {
         {o.record ? (
           <span class="ui-tip-flag ui-tip-flag--record">★ record</span>
         ) : o.running ? (
-          <span class="ui-tip-flag ui-tip-flag--running">running</span>
+          <span class="ui-tip-flag ui-tip-flag--running">running{pct != null ? ` · ${Math.round(pct)}%` : ""}</span>
         ) : null}
       </span>
+      {pct != null && (
+        <span class="ui-tip-progress" title={`pct_complete ${pct.toFixed(1)}%`}>
+          <span class="ui-tip-progress-fill" style={{ width: `${pct}%` }} />
+        </span>
+      )}
       {o.value != null && Number.isFinite(o.value as number) && (
         <span class="ui-tip-metric">
           <span class="ui-tip-metric-label">{o.metricName ?? "value"}</span>

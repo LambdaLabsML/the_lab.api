@@ -52,6 +52,7 @@ import { FilterBar } from "./components/filter-bar";
 import { SearchFilter, type FilterItem } from "./components/search-filter/search-filter";
 import { Eyebrow, Stat, Stepper, Tooltip, experimentTipContent, ideaTipContent } from "./components/ui";
 import { NavRail, SecondaryPanel, type NavSection } from "./components/nav-rail";
+import { ArtifactsSidebar, ArtifactsView, artifactPath } from "./views/artifacts-view";
 import { ActivityPane } from "./components/activity/activity-pane";
 import { ActivitySidebar } from "./components/activity/activity-sidebar";
 import { MessagePreviewOverlay } from "./components/agent-activity/message-preview";
@@ -138,13 +139,15 @@ function compareExperimentsChronological(a: ExperimentLike, b: ExperimentLike): 
 }
 
 // URL hash ⇄ nav selection (deep-linkable). `#section` or `#tools/<tool>`.
-const NAV_SECTIONS = ["review", "activity", "queue", "workbench", "tools", "messages"];
-function parseNavHash(): { section: NavSection; tool: ToolView } {
+const NAV_SECTIONS = ["review", "activity", "queue", "workbench", "tools", "messages", "artifacts"];
+function parseNavHash(): { section: NavSection; tool: ToolView; artifact: string } {
   const h = (location.hash || "").replace(/^#\/?/, "");
   const [sec, tool] = h.split("/");
   const section = (NAV_SECTIONS.includes(sec) ? sec : "review") as NavSection;
   const t = (tool && tool in TOOL_VIEWS ? tool : "agents") as ToolView;
-  return { section, tool: t };
+  // #artifacts/<path inside .the_lab/artifacts>
+  const artifact = section === "artifacts" ? decodeURIComponent(h.slice("artifacts".length).replace(/^\//, "")) : "";
+  return { section, tool: t, artifact };
 }
 
 const PANEL_MAP: Record<string, (params?: any) => preact.JSX.Element> = {
@@ -541,6 +544,7 @@ export function App() {
   const containerRef = useRef<HTMLDivElement>(null);
   const dockviewRef = useRef<DockviewComponent | null>(null);
   const initialNav = parseNavHash();
+  if (initialNav.section === "artifacts") artifactPath.value = initialNav.artifact;
   const [navSection, setNavSection] = useState<NavSection>(initialNav.section);
   const [toolView, setToolView] = useState<ToolView>(initialNav.tool);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -548,12 +552,19 @@ export function App() {
   const [layoutVersion, setLayoutVersion] = useState(0);
 
   // Keep the URL hash in sync with the active section (deep-linkable).
+  const artifact = artifactPath.value;
   useEffect(() => {
-    const target = navSection === "tools" ? `#tools/${toolView}` : `#${navSection}`;
+    const target = navSection === "tools" ? `#tools/${toolView}`
+      : navSection === "artifacts" ? `#artifacts${artifact ? `/${artifact.split("/").map(encodeURIComponent).join("/")}` : ""}`
+      : `#${navSection}`;
     if (location.hash !== target) history.replaceState(null, "", target);
-  }, [navSection, toolView]);
+  }, [navSection, toolView, artifact]);
   useEffect(() => {
-    const onHash = () => { const p = parseNavHash(); setNavSection(p.section); setToolView(p.tool); };
+    const onHash = () => {
+      const p = parseNavHash();
+      setNavSection(p.section); setToolView(p.tool);
+      if (p.section === "artifacts" && p.artifact !== artifactPath.value) artifactPath.value = p.artifact;
+    };
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
@@ -1075,7 +1086,7 @@ export function App() {
 
   const focusPanelIds = availablePanels.value;
   const inFocusMode = isMaximized.value;
-  const showSecondary = settingsOpen || navSection === "review" || navSection === "activity" || navSection === "queue" || navSection === "messages" || navSection === "workbench" || navSection === "tools";
+  const showSecondary = settingsOpen || navSection === "review" || navSection === "activity" || navSection === "queue" || navSection === "messages" || navSection === "workbench" || navSection === "tools" || navSection === "artifacts";
   void layoutVersion; // re-read saved layouts after a save/delete
   const savedLayouts = getSavedLayouts();
   return (
@@ -1089,7 +1100,7 @@ export function App() {
 
       {showSecondary && (
         <SecondaryPanel
-          label={settingsOpen ? "Settings" : navSection === "workbench" ? "Workbench" : navSection === "queue" ? "Queue" : navSection === "tools" ? "Tools" : navSection === "activity" ? "Activity" : navSection === "messages" ? "Messages" : "Overview"}
+          label={settingsOpen ? "Settings" : navSection === "workbench" ? "Workbench" : navSection === "queue" ? "Queue" : navSection === "tools" ? "Tools" : navSection === "activity" ? "Activity" : navSection === "messages" ? "Messages" : navSection === "artifacts" ? "Artifacts" : "Overview"}
         >
           {settingsOpen ? (
             <SettingsPanel />
@@ -1100,6 +1111,7 @@ export function App() {
               {(navSection === "review" || navSection === "activity" || navSection === "queue" || navSection === "messages") && (
                 <ActivitySidebar />
               )}
+              {navSection === "artifacts" && <ArtifactsSidebar />}
               {navSection === "tools" && (
                 <nav class="nav-secondary-list">
                   {TOOL_GROUPS.map((g) => (
@@ -1212,6 +1224,12 @@ export function App() {
               <main class="dashboard-page">
                 <ReviewDashboard onOpenWorkbench={() => setNavSection("workbench")} />
               </main>
+            </div>
+          )}
+
+          {navSection === "artifacts" && (
+            <div class="app-scroll">
+              <ArtifactsView />
             </div>
           )}
 

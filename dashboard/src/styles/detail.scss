@@ -276,6 +276,21 @@
 .exp-tags { margin-top: 3px; }
 /* Action row — toggles (.ui-toggle) supply their own chrome. */
 .exp-actions { display: flex; gap: 6px; margin-top: var(--space-2); flex-wrap: wrap; }
+/* Threads that discuss the experiment (GET /ideas/:id/mentions). */
+.exp-mentions {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px;
+  margin-top: var(--space-2); font-size: var(--text-xs);
+}
+.exp-mentions-label { color: var(--text-faint); font-family: var(--font-mono); }
+.exp-mention {
+  display: inline-flex; align-items: center; gap: 5px; max-width: 100%;
+  padding: 1px 6px; border: 1px solid var(--border-soft); border-radius: var(--radius-sm);
+  background: transparent; color: var(--accent); font: inherit; font-size: var(--text-xs);
+  cursor: pointer;
+  &:hover { background: var(--bg-hi); color: var(--text); }
+}
+.exp-mention-title { min-width: 0; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.exp-mention-count { color: var(--text-faint); font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 
 /* ── JSON viewer ─────────────────────────────────────────── */
 .json-view { margin: 5px 0; font-size: var(--text-sm); line-height: 1.5; }

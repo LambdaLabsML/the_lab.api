@@ -103,6 +103,14 @@
   line-height: 1.1;
   text-align: center;
 }
+/* Second badge: everything new (@anyone), muted, under the @user badge. */
+.nav-rail-unread--any {
+  right: auto;
+  left: 3px;
+  background: var(--bg-hi);
+  color: var(--text-muted);
+  border: 1px solid var(--border-soft);
+}
 
 /* ── Secondary panel (level 2) ──────────────────────────────────────────── */
 .nav-secondary {
@@ -283,6 +291,11 @@
 .shortlog-row-main {
   flex: 1 1 auto; min-width: 0;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+// Running row: the experiment number (idea.seq) in front of the idea title.
+.shortlog-run-exp {
+  font-family: var(--font-mono); font-size: var(--text-xs);
+  color: var(--text); font-variant-numeric: tabular-nums;
 }
 .shortlog-pct, .shortlog-time {
   flex-shrink: 0; font-family: var(--font-mono); font-size: var(--text-xs);

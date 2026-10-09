@@ -65,7 +65,10 @@ export function ActivityShortlog() {
                   onMouseLeave={hideRunPreview}
                 >
                   <span class="shortlog-dot is-running" />
-                  <span class="shortlog-row-main">#{e.idea_id} {ideaTitle(ideas[e.idea_id]?.description ?? "")}</span>
+                  <span class="shortlog-row-main">
+                    <span class="shortlog-run-exp">{label.includes(".") ? label : `${e.idea_id}.${label}`}</span>{" "}
+                    {ideaTitle(ideas[e.idea_id]?.description ?? "")}
+                  </span>
                   {typeof pct === "number" && <span class="shortlog-pct">{Math.round(pct)}%</span>}
                 </button>
                 <span class="shortlog-progress">
