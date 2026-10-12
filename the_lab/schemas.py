@@ -56,6 +56,20 @@ class ResourceRequirements(BaseModel):
     tags: list[str] = []
 
 
+class ReparentRequest(BaseModel):
+    """Move an idea under other parents in the idea graph (POST /ideas/{id}/reparent)."""
+    model_config = ConfigDict(extra="forbid")
+    parent_ids: list[int] = Field(
+        ..., description="New parents; [] makes the idea a root (branched from the default branch)."
+    )
+    rebase: bool = Field(
+        True,
+        description="Also rebase the idea's branch onto the new parent's branch (single parent only). "
+        "false only re-hangs the idea in the graph and leaves git alone.",
+    )
+    note: str | None = Field(None, description="Optional reason, saved in the idea's note about the move.")
+
+
 class NewExperimentRequest(BaseModel):
     # Unknown top-level fields are a 422, not a silent drop. Pydantic's
     # default (extra="ignore") is exactly how a "flat" meta — hyperparameters

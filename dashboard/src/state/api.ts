@@ -209,6 +209,28 @@ export async function updateExperimentTags(
   });
 }
 
+/** POST /api/v1/ideas/{id}/reparent — move an idea in the graph (optionally rebasing its branch). */
+export async function reparentIdea(
+  ideaId: number,
+  parentIds: number[],
+  rebase: boolean,
+): Promise<{ parent_ids: number[]; rebase: { commits: number; backup_ref: string } | null }> {
+  const res = await fetch(`/api/v1/ideas/${ideaId}/reparent`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-The-Lab-Source": "dashboard" },
+    body: JSON.stringify({ parent_ids: parentIds, rebase }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const d = body?.detail;
+    const msg = typeof d === "string" ? d
+      : d?.conflicts ? `${d.error}: ${d.conflicts.join(", ")}`
+      : `reparent failed (${res.status})`;
+    throw new Error(msg);
+  }
+  return body;
+}
+
 /** POST /api/v1/experiments/tags/rename */
 export async function renameTag(
   oldTag: string,
