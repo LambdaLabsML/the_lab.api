@@ -372,3 +372,63 @@ def create_branch_from_merge(
                 pass
 
     return None
+
+
+class RebaseConflict(GitError):
+    """A rebase stopped on conflicts; it was aborted and nothing changed."""
+
+    def __init__(self, files: list[str], message: str = ""):
+        super().__init__(message or f"rebase conflicts in {len(files)} file(s)")
+        self.files = files
+
+
+def rebase_branch_onto(
+    branch: str, onto: str, upstream: str, cwd: str | Path | None = None,
+    backup_ref: str | None = None,
+) -> dict:
+    """Move *branch*'s own commits (those after *upstream*) onto *onto*.
+
+    Runs in a temporary detached worktree, so no agent's checkout (and no
+    uncommitted work anywhere) is touched. The branch ref moves only if the
+    rebase completes, with a compare-and-swap against its old head; on
+    conflicts the rebase is aborted and RebaseConflict lists the files.
+    *backup_ref* (e.g. refs/the-lab/rebased/idea-5/<stamp>) keeps the old
+    head reachable, so experiments pinned to pre-rebase commits stay valid.
+    """
+    import shutil
+    import tempfile
+
+    old_head = resolve_branch_commit(branch, cwd=cwd)
+    onto_commit = resolve_commit(onto, cwd=cwd)
+    # Rebase writes commits: fall back to a lab identity if none is configured.
+    ident: list[str] = []
+    if not _run(["config", "user.email"], cwd=cwd, check=False).stdout.strip():
+        ident = ["-c", "user.name=the-lab", "-c", "user.email=the-lab@localhost"]
+    tmp = Path(tempfile.mkdtemp(prefix="lab-rebase-"))
+    wt = tmp / "wt"
+    _run(["worktree", "add", "--detach", str(wt), old_head], cwd=cwd)
+    try:
+        r = _run(ident + ["rebase", "--onto", onto_commit, upstream], cwd=wt, check=False)
+        if r.returncode != 0:
+            files = _run(["diff", "--name-only", "--diff-filter=U"], cwd=wt, check=False).stdout.split()
+            _run(["rebase", "--abort"], cwd=wt, check=False)
+            if files:
+                raise RebaseConflict(files)
+            raise GitError(f"git rebase failed: {(r.stderr or r.stdout).strip()}")
+        new_head = _run(["rev-parse", "HEAD"], cwd=wt).stdout.strip()
+        if backup_ref:
+            _run(["update-ref", backup_ref, old_head], cwd=cwd)
+        _run(["update-ref", f"refs/heads/{branch}", new_head, old_head], cwd=cwd)
+        count = _run(["rev-list", "--count", f"{onto_commit}..{new_head}"], cwd=cwd).stdout.strip()
+        return {"old_head": old_head, "new_head": new_head, "onto": onto_commit, "commits": int(count or 0)}
+    finally:
+        _run(["worktree", "remove", "--force", str(wt)], cwd=cwd, check=False)
+        shutil.rmtree(tmp, ignore_errors=True)
+        _run(["worktree", "prune"], cwd=cwd, check=False)
+
+
+def merge_base(a: str, b: str, cwd: str | Path | None = None) -> str | None:
+    r = _run(["merge-base", a, b], cwd=cwd, check=False)
+    if r.returncode != 0:
+        return None
+    return r.stdout.strip() or None

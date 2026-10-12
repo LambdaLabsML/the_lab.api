@@ -794,3 +794,32 @@
   &.is-hidden { color: var(--yellow); border-color: var(--yellow); }
   &:disabled { opacity: 0.5; cursor: wait; }
 }
+
+// Idea "move" (reparent) control in the meta row.
+.reparent-toggle {
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+  cursor: pointer;
+  &:hover { color: var(--text); border-color: var(--text-faint); }
+}
+.reparent-form {
+  display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--space-2);
+  font-size: var(--text-xs); color: var(--text-muted);
+  input:not([type="checkbox"]) {
+    width: 9em; margin-left: 4px; padding: 1px 4px;
+    background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 3px;
+    &[aria-invalid="true"] { border-color: var(--red); }
+  }
+  button {
+    padding: 0 var(--space-2); border: 1px solid var(--border); border-radius: 4px;
+    background: transparent; color: var(--text); font-size: var(--text-xs); line-height: 1.6; cursor: pointer;
+    &:disabled { opacity: 0.5; cursor: default; }
+  }
+  .reparent-ok { color: var(--green); }
+  .reparent-err { color: var(--red); }
+}

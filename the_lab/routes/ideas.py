@@ -1,6 +1,7 @@
 """Idea CRUD, suggest, and adopt endpoints."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -21,6 +22,9 @@ from ..deps import (
 )
 from ..git_ops import (
     GitError,
+    RebaseConflict,
+    merge_base,
+    rebase_branch_onto,
     branch_exists,
     checkout_idea,
     checkout_idea_carry,
@@ -32,6 +36,7 @@ from ..git_ops import (
 )
 from ..schemas import (
     NewIdeaRequest,
+    ReparentRequest,
     SuggestIdeaRequest,
     AdoptRequest,
     ConcludeRequest,
@@ -915,6 +920,120 @@ def get_notes(
             "total_pages": math.ceil(total / page_size) if page_size > 0 else 0,
         }
     return notes
+
+
+def _descendant_ids(idea_id: int) -> set[int]:
+    children: dict[int, list[int]] = {}
+    for i in store.list_ideas():
+        for pid in i.get("parent_ids", []):
+            children.setdefault(pid, []).append(i["id"])
+    seen: set[int] = set()
+    stack = list(children.get(idea_id, []))
+    while stack:
+        cid = stack.pop()
+        if cid not in seen:
+            seen.add(cid)
+            stack.extend(children.get(cid, []))
+    return seen
+
+
+@router.post("/ideas/{idea_id}/reparent")
+def reparent_idea(idea_id: int, req: ReparentRequest):
+    """Move an idea under different parents in the idea graph.
+
+    Sets the idea's ``parent_ids`` (graph + dashboard) and, with
+    ``rebase: true`` (default), moves the idea branch's own commits onto the
+    new parent's branch (or the default branch for ``parent_ids: []``).
+
+    The rebase runs in a temporary worktree, so nobody's checkout is touched,
+    and is refused with 409 if a worktree has the branch checked out. On
+    conflicts it is aborted and nothing changes (409 with the files). The
+    old branch head stays reachable under ``refs/the-lab/rebased/...``, so
+    experiments pinned to pre-rebase commits remain reproducible. A note on
+    the idea records the move. Child ideas keep their branches (based on the
+    old commits). Queued experiments without a pinned commit will run the
+    rebased branch. Single parent only for rebasing (merges can't be
+    replayed); ``rebase: false`` works for any parents.
+
+    Example:
+        POST /api/v1/ideas/12/reparent {"parent_ids": [9]}
+        -> {"id": 12, "parent_ids": [9], "old_parent_ids": [5],
+            "rebase": {"old_head": "...", "new_head": "...", "commits": 3, "backup_ref": "..."}}
+    """
+    idea = store.get_idea(idea_id)
+    if not idea:
+        raise HTTPException(404, "idea not found")
+    new_parents = list(dict.fromkeys(req.parent_ids))
+    old_parents = list(idea.get("parent_ids", []))
+    for pid in new_parents:
+        if pid == idea_id:
+            raise HTTPException(400, "an idea cannot be its own parent")
+        if not store.get_idea(pid):
+            raise HTTPException(404, f"parent idea {pid} not found")
+    cycle = set(new_parents) & _descendant_ids(idea_id)
+    if cycle:
+        raise HTTPException(400, f"idea(s) {sorted(cycle)} descend from idea {idea_id}; that would make a cycle")
+    if new_parents == old_parents and not req.rebase:
+        raise HTTPException(400, "parent_ids unchanged")
+
+    rebase_info = None
+    if req.rebase:
+        branch = idea.get("branch") or f"idea/{idea_id}"
+        if len(new_parents) > 1 or len(old_parents) > 1:
+            raise HTTPException(400, "rebase works for a single parent only; use rebase: false to only change the graph")
+        if not branch_exists(branch, cwd=REPO_DIR):
+            raise HTTPException(400, f"branch {branch} does not exist; use rebase: false")
+        from .. import agents as _agents_mod
+        holder = _agents_mod.find_branch_holder(REPO_DIR, branch)
+        if holder:
+            raise HTTPException(
+                409,
+                f"branch '{branch}' is checked out by {holder.get('agent_id') or holder.get('worktree')}; "
+                "it must switch away (or be unregistered) before the branch can be rebased",
+            )
+        default = get_default_branch(cwd=REPO_DIR)
+        def _branch_of(ids: list[int]) -> str:
+            return store.get_idea(ids[0])["branch"] if ids else default
+        onto = _branch_of(new_parents)
+        if not branch_exists(onto, cwd=REPO_DIR):
+            raise HTTPException(400, f"new parent's branch {onto} does not exist")
+        old_base_branch = _branch_of(old_parents)
+        upstream = merge_base(branch, old_base_branch, cwd=REPO_DIR) if branch_exists(old_base_branch, cwd=REPO_DIR) else None
+        if not upstream:
+            upstream = merge_base(branch, onto, cwd=REPO_DIR)
+        if not upstream:
+            raise HTTPException(400, f"cannot find where {branch} branched off; use rebase: false")
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        backup_ref = f"refs/the-lab/rebased/idea-{idea_id}/{stamp}"
+        try:
+            rebase_info = rebase_branch_onto(branch, onto, upstream, cwd=REPO_DIR, backup_ref=backup_ref)
+        except RebaseConflict as e:
+            raise HTTPException(409, {"error": f"rebase onto {onto} has conflicts; nothing changed", "conflicts": e.files})
+        except GitError as e:
+            raise HTTPException(500, sanitize_error(e))
+        rebase_info.update(branch=branch, onto_branch=onto, backup_ref=backup_ref)
+
+    store.update_idea(idea_id, parent_ids=new_parents)
+    fmt = lambda ids: ", ".join(f"#{i}" for i in ids) or "root"
+    text = f"Moved in the idea graph: parents {fmt(old_parents)} → {fmt(new_parents)}."
+    if rebase_info:
+        text += (
+            f" Branch {rebase_info['branch']} rebased onto {rebase_info['onto_branch']} "
+            f"({rebase_info['commits']} commit(s)); old head {rebase_info['old_head'][:12]} kept at "
+            f"{rebase_info['backup_ref']}. Experiments pinned to earlier commits still ran the old code."
+        )
+    if req.note:
+        text += f" Reason: {req.note}"
+    store.add_note(idea_id, text, level="milestone")
+    children = sorted(i["id"] for i in store.list_ideas() if idea_id in i.get("parent_ids", []))
+    return {
+        "id": idea_id,
+        "parent_ids": new_parents,
+        "old_parent_ids": old_parents,
+        "rebase": rebase_info,
+        "children_not_rebased": children,
+        "_more": f"GET /api/v1/ideas/{idea_id}",
+    }
 
 
 @router.post("/ideas/{idea_id}/adopt")

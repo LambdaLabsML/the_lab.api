@@ -3,6 +3,8 @@ import { progressPct } from "../lib/progress";
 import { selectedIdea, selectedMetric, detailTimeline, detailSortNewest, colorTheme } from "../state/settings";
 import { scrollToExperiment, runningProgress, allExperiments } from "../state/signals";
 import { isHiddenExperiment, setExperimentHidden } from "../state/hidden";
+import { reparentIdea } from "../state/api";
+import { refreshGraphData } from "../state/polling";
 import { getIdea, getExperimentProgress, getExperimentLog, getExperimentScript, getExperimentOutput, getIdeaDiff, getIdeaMentions, type ThreadMention } from "../state/api";
 import { focusMessageId } from "../state/agent-activity";
 import { subscribeWsEvents } from "../state/ws";
@@ -814,6 +816,11 @@ export function DetailPanel({ embedded = false }: { embedded?: boolean } = {}) {
                         ))}
                       </span>
                     )}
+                    <ReparentControl
+                      ideaId={idea.id}
+                      parentIds={idea.parent_ids ?? []}
+                      onMoved={(parent_ids) => setIdea((cur) => (cur && cur.id === idea.id ? { ...cur, parent_ids } : cur))}
+                    />
                   </div>
                 )}
 
@@ -1770,6 +1777,65 @@ export function renderMarkdown(md: string, basePath = ""): string {
 }
 
 /** Parent-idea link — click navigates + hover-highlights via the shared hook. */
+/** "move": re-hang the idea under other parents, optionally rebasing its branch. */
+function ReparentControl({ ideaId, parentIds, onMoved }: {
+  ideaId: number;
+  parentIds: number[];
+  onMoved: (parentIds: number[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [value, setValue] = useState("");
+  const [rebase, setRebase] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  if (!open) {
+    return (
+      <button type="button" class="reparent-toggle" title="Move this idea under another parent (optionally rebasing its branch)"
+        onClick={() => { setValue(parentIds.join(", ")); setMsg(null); setOpen(true); }}>
+        move
+      </button>
+    );
+  }
+  const ids = value.split(/[\s,#]+/).filter(Boolean).map(Number);
+  const valid = ids.every((n) => Number.isInteger(n) && n > 0);
+  const submit = async () => {
+    if (!valid) return;
+    setBusy(true); setMsg(null);
+    try {
+      const res = await reparentIdea(ideaId, ids, rebase && ids.length <= 1);
+      onMoved(res.parent_ids);
+      refreshGraphData();
+      setMsg({ ok: true, text: res.rebase ? `moved · ${res.rebase.commits} commit(s) rebased, old head kept at ${res.rebase.backup_ref}` : "moved (graph only)" });
+    } catch (e) {
+      setMsg({ ok: false, text: String((e as Error).message || e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <span class="reparent-form">
+      <label>
+        parent #
+        <input
+          value={value}
+          placeholder="none = root"
+          onInput={(e) => setValue((e.target as HTMLInputElement).value)}
+          onKeyDown={(e) => { if (e.key === "Enter") submit(); if (e.key === "Escape") setOpen(false); }}
+          aria-invalid={!valid}
+        />
+      </label>
+      <label title={ids.length > 1 ? "Rebasing needs a single parent" : "Also rebase the idea branch onto the new parent's branch"}>
+        <input type="checkbox" checked={rebase && ids.length <= 1} disabled={ids.length > 1}
+          onChange={(e) => setRebase((e.target as HTMLInputElement).checked)} />
+        rebase branch
+      </label>
+      <button type="button" disabled={busy || !valid} onClick={submit}>{busy ? "moving…" : "move"}</button>
+      <button type="button" disabled={busy} onClick={() => setOpen(false)}>close</button>
+      {msg && <span class={msg.ok ? "reparent-ok" : "reparent-err"}>{msg.text}</span>}
+    </span>
+  );
+}
+
 function ParentLink({ pid }: { pid: number }) {
   const nav = useEntityNav(pid);
   return (
