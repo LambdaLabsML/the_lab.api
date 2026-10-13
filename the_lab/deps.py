@@ -127,6 +127,9 @@ LAB_WRITTEN_META_KEYS = frozenset({
     "slurm_attempts", "assigned_resource", "assigned_units",
     # ARC-AGI-3 solver result merged into meta at completion (postamble.sh)
     "card_id", "competition_mode", "scorecard",
+    # ARC postamble diagnostics are results too.  Copying a completed run's
+    # curve into a live clone makes the clone appear to have the parent's score.
+    "score_curve", "score_curve_matches_final", "score_curve_error",
     # Budget-recovery audit trails (routes/experiments.py recover-* routes)
     "budget_completion_recovery", "context_budget_completion_recovery",
 })

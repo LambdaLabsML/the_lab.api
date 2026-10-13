@@ -138,7 +138,11 @@ class CloneExperimentTests(unittest.TestCase):
                 # must never survive into a clone.
                 "slurm_job_id": "999", "slurm_state": "RUNNING", "slurm_restart_count": 2,
                 "card_id": "abc-123", "competition_mode": True,
-                "scorecard": {"score": 0.42}, "git_commit": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+                "scorecard": {"score": 0.42},
+                "score_curve": [{"t_s": 9000, "score": 0.42}],
+                "score_curve_matches_final": True,
+                "score_curve_error": "old diagnostic",
+                "git_commit": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
                 "git_branch": "main", "assigned_resource": "gpu-pool", "assigned_units": [1, 2],
                 "api_key": "super-secret-value",
             },
@@ -176,7 +180,8 @@ class CloneExperimentTests(unittest.TestCase):
         # Every lab-written runtime key is gone — the clone must not show the
         # PARENT's running state/scores.
         for key in ("slurm_job_id", "slurm_state", "slurm_restart_count", "card_id",
-                    "competition_mode", "scorecard", "git_commit", "git_branch",
+                    "competition_mode", "scorecard", "score_curve",
+                    "score_curve_matches_final", "score_curve_error", "git_commit", "git_branch",
                     "assigned_resource", "assigned_units"):
             self.assertNotIn(key, new_exp["meta"], key)
         self.assertEqual(new_exp["status"], "queued")
