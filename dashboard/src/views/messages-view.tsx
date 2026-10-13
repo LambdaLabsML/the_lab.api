@@ -457,6 +457,65 @@ export function MessagesView() {
       void loadThread(selectedThread, threadMessages.length, true);
     }
   }, [pendingFocus, threadMessages, threadLoading, threadTotal, threadError]);
+  // ◀ / ▶ through your own messages in the open thread, relative to what is
+  // in view; at the top of what's loaded, ◀ fetches older messages first.
+  const [mineCursor, setMineCursor] = useState<number | null>(null);
+  const olderJump = useRef<number | null>(null); // first loaded id before an older-page fetch
+  useEffect(() => { setMineCursor(null); olderJump.current = null; }, [selectedThread]);
+  const mineIds = threadMessages.filter((m) => isMine(m)).map((m) => m.id);
+  const hasOlder = threadTotal > threadMessages.length;
+  function focusMine(id: number) {
+    setMineCursor(id);
+    setPendingFocus(id);
+  }
+  function jumpMine(dir: -1 | 1) {
+    const list = messageListRef.current;
+    if (!list || selectedThread == null) return;
+    const box = list.getBoundingClientRect();
+    const center = box.top + box.height / 2;
+    const rect = (id: number) => document.getElementById(`thread-message-${id}`)?.getBoundingClientRect();
+    // Step from the last one jumped to while it's still on screen (a short
+    // thread can't scroll it to the middle); after scrolling away, start from
+    // the middle of the view.
+    const cur = mineCursor != null ? mineIds.indexOf(mineCursor) : -1;
+    const curRect = cur >= 0 ? rect(mineIds[cur]) : undefined;
+    const target = curRect && curRect.bottom > box.top && curRect.top < box.bottom
+      ? mineIds[cur + dir]
+      : dir > 0
+        ? mineIds.find((id) => { const r = rect(id); return !!r && r.top > center + 4; })
+        : [...mineIds].reverse().find((id) => { const r = rect(id); return !!r && r.bottom < center - 4; });
+    if (target != null) focusMine(target);
+    else if (dir < 0 && hasOlder && !threadLoading && threadMessages.length) {
+      olderJump.current = threadMessages[0].id;
+      void loadThread(selectedThread, threadMessages.length, true);
+    }
+  }
+  useEffect(() => {
+    // After an older page arrived for ◀: go to the newest of mine in it, or
+    // keep paging back while there is more and none of mine yet.
+    const before = olderJump.current;
+    if (before == null || threadLoading || selectedThread == null) return;
+    if (!threadMessages.length || threadMessages[0].id === before) return;
+    const older = threadMessages.filter((m) => m.id < before && isMine(m));
+    if (older.length) { olderJump.current = null; focusMine(older[older.length - 1].id); }
+    else if (threadTotal > threadMessages.length) {
+      olderJump.current = threadMessages[0].id;
+      void loadThread(selectedThread, threadMessages.length, true);
+    } else olderJump.current = null;
+  }, [threadMessages, threadLoading]);
+  useEffect(() => {
+    if (selectedThread == null) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "[" && e.key !== "]") return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+      e.preventDefault();
+      jumpMine(e.key === "[" ? -1 : 1);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
   async function submit(kind: "new" | "reply") {
     const text = (kind === "new" ? newText : replyText).trim(),
       to = kind === "new" ? newTo : replyTo,
@@ -840,6 +899,19 @@ export function MessagesView() {
                 )}
                 {threadMeta.get(selectedThread) && (
                   <span>{threadMeta.get(selectedThread)!.member_count} members</span>
+                )}
+                {(mineIds.length > 0 || hasOlder) && !inPerspective && (
+                  <span class="thread-mine-nav" title="Jump between your own messages in this thread (keys [ and ])">
+                    <button type="button" onClick={() => jumpMine(-1)} aria-label="Previous message of mine"
+                      disabled={threadLoading && olderJump.current != null}>◀</button>
+                    <span>
+                      {mineCursor != null && mineIds.includes(mineCursor)
+                        ? `${mineIds.indexOf(mineCursor) + 1}/${mineIds.length}${hasOlder ? "+" : ""}`
+                        : `${mineIds.length}${hasOlder ? "+" : ""}`} mine
+                    </span>
+                    <button type="button" onClick={() => jumpMine(1)} aria-label="Next message of mine"
+                      disabled={mineIds.length === 0}>▶</button>
+                  </span>
                 )}
                 {threadMeta.get(selectedThread) && !inPerspective && !demo && (
                   <IconButton
