@@ -1572,7 +1572,8 @@ class ExperimentRunner:
                         meta=terminal_meta, status_msg=msg, pid=None, finished_at=now):
                         continue
                     ws_mod.broadcaster.broadcast_soon({"type": "experiment_finished", "label": label,
-                        "experiment_id": exp_id, "idea_id": exp.get("idea_id"), "status": "failed", "metrics": failure_metrics})
+                        "experiment_id": exp_id, "idea_id": exp.get("idea_id"), "status": "failed",
+                        "status_msg": msg, "metrics": failure_metrics})
                     if not self._slurm_owner(self._store.get_experiment(exp_id), job_id, generation):
                         return
                     asyncio.get_event_loop().run_in_executor(None, lambda: executor.cleanup_remote(label, abs_bare_path=getattr(executor, "_resolved_bare_path", None)))

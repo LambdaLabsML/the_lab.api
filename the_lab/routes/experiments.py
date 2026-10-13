@@ -173,22 +173,6 @@ def _create_and_queue_experiment(
     return exp
 
 
-def _queue_position(exp: dict) -> int | None:
-    """Best-effort queue position for *exp* among queued/pending experiments."""
-    queue = [
-        e for e in store.list_all_experiments()
-        if e.get("status") in ("queued", "pending")
-    ]
-    queue.sort(key=lambda e: (
-        -int((e.get("meta") or {}).get("priority", 0) or 0),
-        e.get("created_at") or "",
-    ))
-    for i, qexp in enumerate(queue):
-        if qexp.get("id") == exp.get("id"):
-            return i + 1
-    return None
-
-
 @router.post("/ideas/{idea_id}/experiments", status_code=201)
 async def create_experiment(idea_id: int, req: NewExperimentRequest):
     """Create a new experiment under an idea.
@@ -237,7 +221,7 @@ async def create_experiment(idea_id: int, req: NewExperimentRequest):
 
     # Surface the queue position so callers know roughly when to expect it
     # to start. Best-effort — doesn't account for resource capacity.
-    queue_position = _queue_position(exp)
+    queue_position = _queue_position(exp.get("id"))
 
     label = exp.get("label") or str(exp["id"])
     return {
@@ -2012,7 +1996,7 @@ async def reload_experiment(exp_ref: str):
         except KeyError:
             raise HTTPException(404, f"no experiment file on disk for '{exp_ref}' (expected a label like '12.3')")
         except ValueError as e:
-            raise HTTPException(422, str(e))
+            raise HTTPException(422, sanitize_error(e))
     try:
         from .. import ws as ws_mod
         ws_mod.broadcaster.broadcast_soon({

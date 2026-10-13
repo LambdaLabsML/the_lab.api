@@ -86,7 +86,7 @@ except ValueError:
 
 
 @router.post("/api/v1/agents/register")
-def register_agent(req: RegisterAgentRequest):
+def register_agent(req: RegisterAgentRequest, request: Request):
     """Create a per-agent worktree, or reactivate a retained one.
 
     A new registration branches ``agent_init_<id>`` from the most recent
@@ -113,6 +113,10 @@ def register_agent(req: RegisterAgentRequest):
     # consecutive credential-free registrations with no throttling. A ceiling is
     # more useful than a rate limit here: the resource is worktrees on disk, not
     # requests per second.
+    # Resuming takes over an existing id: an identified agent may only resume
+    # itself (same ownership rule as the other per-agent routes).
+    if req.resume_agent_id:
+        _require_own_agent(request, req.resume_agent_id)
     try:
         live = len(agents_mod.list_agents(REPO_DIR))
     except Exception:
@@ -157,8 +161,6 @@ def register_agent(req: RegisterAgentRequest):
         pass
     # Registry entries are shared dicts: never attach response-only keys.
     return {**result, **messages_mod.threads_digest(REPO_DIR, agent_id=result.get("agent_id"), role=result.get("role"))}
-
-
 
 
 @router.get("/api/v1/agents")
