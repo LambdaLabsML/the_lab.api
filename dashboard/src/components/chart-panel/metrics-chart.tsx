@@ -142,7 +142,7 @@ export function MetricsChart({ instanceId, initialMetric, hideClone }: { instanc
               ? "Hidden experiments are included in charts, table and idea means — click to leave them out"
               : `${hiddenCount} experiment${hiddenCount === 1 ? " is" : "s are"} hidden (tag "hidden") from charts, table and idea means — click to include them. Hide/unhide in an experiment's details.`}
           >
-            {hiddenCount} hidden
+            {showHidden ? `incl. ${hiddenCount} hidden` : `show ${hiddenCount} hidden`}
           </Toggle>
         )}
         {/* Clone is hidden in the single-chart review (hideClone); kept in the workbench */}
