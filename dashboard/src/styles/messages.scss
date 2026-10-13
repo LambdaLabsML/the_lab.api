@@ -685,3 +685,25 @@
 .thread-mine-btn {
   margin-left: 4px; border: 1px solid var(--border-soft); border-radius: var(--radius-sm); box-shadow: none;
 }
+
+// ◀ k/n mine ▶ — jump between your own messages in the open thread.
+.thread-mine-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  button {
+    padding: 0 6px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: var(--text-xs);
+    line-height: 1.6;
+    cursor: pointer;
+    &:hover:not(:disabled) { color: var(--text); border-color: var(--text-faint); }
+    &:disabled { opacity: 0.4; cursor: default; }
+  }
+  > span { padding: 0 4px; }
+}
