@@ -707,3 +707,39 @@
   }
   > span { padding: 0 4px; }
 }
+
+// "My messages": everything you sent, across threads.
+.thread-list-mine {
+  border-left: 2px solid var(--accent);
+  .thread-list-title { color: var(--accent); }
+}
+.my-messages {
+  display: flex; flex-direction: column; min-height: 0; height: 100%;
+  .thread-detail-head { flex-wrap: wrap; gap: var(--space-2); }
+}
+.my-messages-filter {
+  margin-left: auto; width: 14em; max-width: 100%;
+  padding: 2px 6px; font-size: var(--text-sm);
+  background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;
+}
+.my-messages-list {
+  list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1 1 auto; min-height: 0;
+}
+.my-messages-row {
+  display: flex; flex-direction: column; gap: 2px; width: 100%;
+  padding: var(--space-2) var(--space-3); text-align: left;
+  background: transparent; border: 0; border-bottom: 1px solid var(--border);
+  color: var(--text); cursor: pointer;
+  &:hover { background: var(--bg-hi, rgba(127, 127, 127, 0.08)); }
+}
+.my-messages-line { display: flex; gap: var(--space-2); align-items: baseline; min-width: 0; }
+.my-messages-thread {
+  font-weight: 600; color: var(--accent); min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.my-messages-meta { margin-left: auto; flex-shrink: 0; color: var(--text-faint); font-size: var(--text-xs); }
+.my-messages-snippet {
+  color: var(--text-muted); font-size: var(--text-sm);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.my-messages-empty { padding: var(--space-3); color: var(--text-faint); }

@@ -27,6 +27,8 @@ import {
   countsAsNew,
 } from "../state/messages";
 import { focusMessageId } from "../state/agent-activity";
+import { MyMessagesPanel } from "../components/my-messages";
+import { relativeTime } from "../lib/format";
 import { RichText, stripRouting } from "../components/rich-text";
 import { IdeaLink } from "../components/idea-link";
 import { ExpLink } from "../components/exp-link";
@@ -44,14 +46,6 @@ const recipientOf = (m: MessageEntry) =>
         ? `role:${m.from_role}`
         : null;
 
-function relativeTime(iso: string) {
-  const s = Math.max(0, Math.floor((Date.now() - Date.parse(iso)) / 1000));
-  if (!Number.isFinite(s)) return iso || "--";
-  if (s < 60) return `${s}s ago`;
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  if (s < 172800) return `${Math.floor(s / 3600)}h ago`;
-  return `${Math.floor(s / 86400)}d ago`;
-}
 function inboxOf(
   m: MessageEntry,
   agent: string,
@@ -113,6 +107,9 @@ export function MessagesView() {
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [pendingFocus, setPendingFocus] = useState<number | null>(null);
   const [newThreadOpen, setNewThreadOpen] = useState(false);
+  const [myMessagesOpen, setMyMessagesOpen] = useState(false);
+  // A thread opened from "My messages": its ← goes back to that list.
+  const [fromMine, setFromMine] = useState(false);
   const [query, setQuery] = useState(""),
     [agentFilter, setAgentFilter] = useState(""),
     [conversationScope, setConversationScope] = useState<"all" | "mine">("all"),
@@ -432,6 +429,7 @@ export function MessagesView() {
       focusMessageId.value = null;
       setConversationScope("all");
       setNewThreadOpen(false);
+      setMyMessagesOpen(false);
       setSelectedThread(threadKey(message));
       setPendingFocus(message.id);
     };
@@ -610,7 +608,7 @@ export function MessagesView() {
   const selected = threads.find((t) => t.id === selectedThread);
 
   return (
-    <div id="messages-container" class={`message-threads${selectedThread != null || newThreadOpen ? " has-selection" : ""}`}>
+    <div id="messages-container" class={`message-threads${selectedThread != null || newThreadOpen || myMessagesOpen ? " has-selection" : ""}`}>
       <div class="thread-layout">
         <div class="thread-sidebar">
           <div class="thread-sidebar-toolbar">
@@ -764,6 +762,16 @@ export function MessagesView() {
           {inPerspective && <div class="messages-perspective-note">Viewing {labelAgent(viewAs)} read-only</div>}
           {error && <div class="agents-error">{error}</div>}
           <aside class="thread-list" aria-label="Message threads">
+          {!inPerspective && (
+            <button
+              class={`thread-list-row thread-list-mine${myMessagesOpen ? " is-selected" : ""}`}
+              onClick={() => { setSendError(null); setNewThreadOpen(false); setSelectedThread(null); setMyMessagesOpen(true); }}
+              title="Everything you sent, across all threads — click one to jump to it"
+            >
+              <span class="thread-list-title">✎ My messages</span>
+              <span class="thread-list-preview">all threads · click one to jump there</span>
+            </button>
+          )}
           {threads.map((t) => (
             <button
               key={t.id}
@@ -771,6 +779,8 @@ export function MessagesView() {
               onClick={() => {
                 setSendError(null);
                 setNewThreadOpen(false);
+                setMyMessagesOpen(false);
+                setFromMine(false);
                 setSelectedThread(t.id);
               }}
             >
@@ -818,7 +828,14 @@ export function MessagesView() {
           </aside>
         </div>
         <section class="thread-detail">
-          {newThreadOpen ? (
+          {myMessagesOpen && !newThreadOpen ? (
+            <MyMessagesPanel
+              humanId={myHumanId}
+              titleOf={(id) => threadMeta.get(id)?.title ?? undefined}
+              onOpen={(id) => { setFromMine(true); focusMessageId.value = id; }}
+              onBack={() => setMyMessagesOpen(false)}
+            />
+          ) : newThreadOpen ? (
             <div class="thread-new-panel">
               <div class="thread-detail-head">
                 <button class="thread-back" type="button" onClick={() => setNewThreadOpen(false)} aria-label="Back to conversations">←</button>
@@ -845,7 +862,10 @@ export function MessagesView() {
           ) : (
             <>
               <div class="thread-detail-head">
-                <button class="thread-back" type="button" onClick={() => setSelectedThread(null)} aria-label="Back to conversations">←</button>
+                <button class="thread-back" type="button"
+                  onClick={() => { setSelectedThread(null); if (fromMine) setMyMessagesOpen(true); }}
+                  aria-label={fromMine ? "Back to my messages" : "Back to conversations"}
+                  title={fromMine ? "Back to My messages" : undefined}>←</button>
                 {renameDraft !== null ? (
                   <input
                     class="thread-rename-input"

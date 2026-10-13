@@ -394,6 +394,37 @@ export async function getMessagePage(
 }
 
 /** Resolve a deep-linked message outside the dashboard's recent-message page. */
+export interface MessageSearchHit {
+  id: number;
+  thread_id: number | null;
+  from_agent: string;
+  to?: string;
+  created_at: string;
+  tldr?: string | null;
+  snippet: string;
+}
+
+/** GET /api/v1/messages/search — newest first; here used to list one sender's messages. */
+export async function searchMessages(params: { from_agent?: string; q?: string; limit?: number; offset?: number }):
+  Promise<{ results: MessageSearchHit[]; total: number }> {
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== "") qs.set(k, String(v));
+  return fetchJson(`/api/v1/messages/search?${qs}`);
+}
+
+const threadTitleCache = new Map<number, Promise<string | null>>();
+/** A thread's title (cached per page load); null when it has none. */
+export function getThreadTitle(threadId: number): Promise<string | null> {
+  let p = threadTitleCache.get(threadId);
+  if (!p) {
+    p = fetchJson<{ title?: string | null }>(`/api/v1/threads/${threadId}?limit=1`)
+      .then((t) => t.title ?? null)
+      .catch(() => { threadTitleCache.delete(threadId); return null; });
+    threadTitleCache.set(threadId, p);
+  }
+  return p;
+}
+
 export async function getMessage(id: number): Promise<MessageEntry> {
   return fetchJson<MessageEntry>(`/api/v1/messages/${id}`);
 }
