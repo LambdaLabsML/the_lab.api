@@ -475,8 +475,9 @@ def list_humans(request: Request):
                         "last_active": "2026-10-09T12:00:00Z"},
                        {"id": "user", "name": null, "last_active": "..."}]}
     """
-    _caller(request)
-    return {"humans": messages_mod.list_humans(REPO_DIR)}
+    agent_id, role, operator = _caller(request)
+    return {"humans": messages_mod.list_humans(
+        REPO_DIR, agent_id=agent_id, role=role, operator=operator)}
 
 
 @router.get("/api/v1/ideas/{idea_id}/mentions")

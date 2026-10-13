@@ -1343,18 +1343,29 @@ def thread_meta(repo_dir: Path, thread_id: int) -> dict | None:
         return {**meta, "members": dict(meta.get("members") or {}), "message_count": count}
 
 
-def list_humans(repo_dir: Path) -> list[dict]:
+def list_humans(repo_dir: Path, *, agent_id: str | None = None, role: str | None = None,
+                operator: bool = True) -> list[dict]:
     """Distinct human identities seen as a sender, recipient, or thread member.
 
     Each entry is ``{"id": "user:david", "name": "david" | None,
     "last_active": "<iso>"}`` (``name`` is ``None`` for the catch-all
     ``"user"``), newest-active first. Lets the dashboard build name pills /
-    filters and agents see whom they can address personally.
+    filters and agents see whom they can address personally. A non-operator
+    caller only learns from the messages and threads it can see (same rule
+    as message reads), so private conversations don't leak who was active.
     """
     with _lock:
         data = _read(repo_dir)
-        msgs = list(data["messages"])
         threads = dict(data["threads"])
+        msgs = [m for m in data["messages"]
+                if operator or can_see(m, agent_id=agent_id, role=role, threads=threads)]
+        if not operator:
+            by_id = {m.get("id"): m for m in data["messages"]}
+            threads = {
+                tid: meta for tid, meta in threads.items()
+                if _thread_visible(meta, by_id.get(int(tid)), agent_id=agent_id,
+                                   role=role, operator=False, threads=data["threads"])
+            }
     last_active: dict[str, str] = {}
 
     def bump(identity: str | None, ts: str | None) -> None:
