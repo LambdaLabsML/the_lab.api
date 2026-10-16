@@ -40,7 +40,7 @@
  */
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
-import { colorTheme, colorblindMode } from "../../state/settings";
+import { colorTheme, colorblindMode, chartPointLabels } from "../../state/settings";
 import { buildChartData } from "../../lib/chart-data";
 import { isLowerBetter } from "../../lib/colors";
 import { useEntityNav } from "../../lib/hooks";
@@ -165,12 +165,12 @@ function trianglePath(cx: number, cy: number, r: number): string {
 // ── single dot (its own component so it can use the nav hook) ──────────────────
 
 function MiniDot({
-  exp, x, y, baselineY, color, isMilestone, fontXs, note, sizeScale, onHoverChange,
+  exp, x, y, baselineY, color, isMilestone, sizeScale, onHoverChange,
   excluded = false,
 }: {
   exp: (Experiment & { _running?: boolean }) | undefined;
   x: number; y: number; baselineY: number;
-  color: string; isMilestone: boolean; fontXs: number; note?: string;
+  color: string; isMilestone: boolean;
   sizeScale: number;
   /** Not on the scale (log Y and value <= 0): a small × on the x axis. */
   excluded?: boolean;
@@ -221,10 +221,6 @@ function MiniDot({
           stroke={strokeColor} stroke-width={strokeW} opacity={faded ? 0.2 : 1} />
       )}
       {/* Milestone caption — purple + clickable (sits inside this clickable <g>) */}
-      {isMilestone && !faded && note && !excluded && (
-        <text x={x + 5} y={y - 5} fill="var(--purple)" font-size={fontXs}
-          font-family="var(--font-mono)" opacity="0.95" style="cursor:pointer;">{note}</text>
-      )}
       <circle cx={x} cy={excluded ? baselineY - 4 : y} r="9" fill="transparent" />
     </g>
   );
@@ -271,6 +267,31 @@ function MiniTooltip({ anchor, children }: { anchor: DOMRect; children: any }) {
       {children}
     </div>
   );
+}
+
+// Label widths via one cached canvas context (the chart's mono font).
+const _labelWidths = new Map<string, number>();
+let _labelCtx: CanvasRenderingContext2D | null | undefined;
+// Widths measured before the web font loaded are too small: re-measure after.
+if (typeof document !== "undefined" && document.fonts) {
+  void document.fonts.ready.then(() => _labelWidths.clear());
+  document.fonts.addEventListener?.("loadingdone", () => _labelWidths.clear());
+}
+function textWidth(text: string, size: number): number {
+  const key = `${size}|${text}`;
+  let w = _labelWidths.get(key);
+  if (w === undefined) {
+    if (_labelCtx === undefined) _labelCtx = document.createElement("canvas").getContext("2d");
+    if (_labelCtx) {
+      const fam = getComputedStyle(document.documentElement).getPropertyValue("--font-mono").trim() || "monospace";
+      _labelCtx.font = `${size}px ${fam}`;
+      w = _labelCtx.measureText(text).width;
+    } else {
+      w = text.length * size * 0.62;
+    }
+    _labelWidths.set(key, w);
+  }
+  return w;
 }
 
 // ── component ─────────────────────────────────────────────────────────────────
@@ -643,16 +664,83 @@ export function MiniMetricsChart({
     ? ideaBlocks.slice(1).map((b) => toPx(b.start)).filter((x, i, a) => i === 0 || Math.abs(x - a[i - 1]) >= 3)
     : [];
 
-  // Record captions: the experiments axis spaces records by the view; the other
-  // axes can stack them, so there a caption needs ~110px clear of the last one.
-  const captioned = new Set<number>();
-  {
-    const ms = [...milestones].map((i) => ({ i, x: dotX(i) })).filter((m) => isFinite(m.x))
-      .sort((a, b) => a.x - b.x);
-    let lastX = -Infinity;
-    for (const m of ms) {
-      if (xAxis === "experiments" || m.x - lastX >= 110) { captioned.add(m.i); lastX = m.x; }
+  // ── Point labels: short "#idea" tags, records first, then the best scores and
+  // the extremes, then anything else (auto); each placed at the first of a few
+  // spots around its dot whose box stays in the plot and overlaps no label
+  // already placed — dense clusters get none, notable points get theirs.
+  const labelMode = chartPointLabels.value;
+  const labelH = font.xs + 2;
+  const labelPos = (i: number) => {
+    const x = dotX(i);
+    const v = values[i];
+    return isFinite(x) && onScale(v) ? { x, y: toY(v) } : null;
+  };
+  const labelBoxes = (i: number, text: string) => {
+    const p = labelPos(i);
+    if (!p) return [];
+    const w = textWidth(text, font.xs), g = 4;
+    return [
+      { x0: p.x + g, y0: p.y - g - labelH, anchor: "start" as const },        // above-right
+      { x0: p.x - g - w, y0: p.y - g - labelH, anchor: "end" as const },      // above-left
+      { x0: p.x + g, y0: p.y + g, anchor: "start" as const },                 // below-right
+      { x0: p.x + g + 2, y0: p.y - labelH / 2, anchor: "start" as const },    // right
+    ].map((o) => ({ ...o, x1: o.x0 + w, y1: o.y0 + labelH }));
+  };
+  const ideaTag = (i: number) => {
+    const e = expData?.[i];
+    return e && e.idea_id != null ? `#${e.idea_id}` : "";
+  };
+  type PlacedLabel = { i: number; x: number; y: number; text: string; anchor: "start" | "end"; x0: number; y0: number; x1: number; y1: number };
+  const pointLabels: PlacedLabel[] = [];
+  if (labelMode !== "off") {
+    const usable = (i: number) => {
+      const e = expData?.[i];
+      if (!e || e._running || !labelPos(i)) return false;
+      return !plotHighlightState(e.idea_id, String(e.label ?? e.id)).faded;
+    };
+    const better = (a: number, b: number) => (lower ? values[a] - values[b] : values[b] - values[a]);
+    const all = Array.from({ length: n }, (_, i) => i).filter(usable);
+    let order = all.filter((i) => milestones.has(i)).sort(better);
+    if (labelMode === "auto" && showDots) {
+      const rest = all.filter((i) => !milestones.has(i)).sort(better);
+      const top = Math.max(1, Math.ceil(rest.length * 0.05));
+      const worst = rest.slice(-Math.max(1, Math.ceil(rest.length * 0.02))).reverse();
+      const seen = new Set(order);
+      for (const i of [...rest.slice(0, top), ...worst, ...rest.slice(top)]) {
+        if (!seen.has(i)) { seen.add(i); order.push(i); }
+      }
     }
+    order = order.slice(0, 400);
+    const M = 1; // keep a hair of space between labels
+    const overlaps = (b: { x0: number; y0: number; x1: number; y1: number }) =>
+      pointLabels.some((p) => b.x0 - M < p.x1 && b.x1 + M > p.x0 && b.y0 - M < p.y1 && b.y1 + M > p.y0);
+    for (const i of order) {
+      const text = ideaTag(i);
+      if (!text) continue;
+      const spot = labelBoxes(i, text).find((b) =>
+        b.x0 >= padL && b.x1 <= rightEdge && b.y0 >= 0 && b.y1 <= baselineY && !overlaps(b));
+      if (spot) {
+        pointLabels.push({ i, text, anchor: spot.anchor, x: spot.anchor === "start" ? spot.x0 : spot.x1,
+          y: spot.y1 - 3, x0: spot.x0, y0: spot.y0, x1: spot.x1, y1: spot.y1 });
+      }
+    }
+  }
+  // Hovering a point labels and rings every point of the same idea.
+  const hoverIdea = hovered !== null ? expData?.[hovered.idx]?.idea_id ?? null : null;
+  const hoverPoints = hoverIdea == null ? [] : Array.from({ length: n }, (_, i) => i)
+    .filter((i) => expData?.[i]?.idea_id === hoverIdea && labelPos(i));
+  const labeledIdx = new Set(pointLabels.map((l) => l.i));
+  // The hovered idea's unlabeled points get labels too, where they overlap
+  // no other label (other ideas' labels are dimmed meanwhile).
+  const hoverLabels: PlacedLabel[] = [];
+  for (const i of hoverPoints) {
+    if (labeledIdx.has(i)) continue;
+    const text = ideaTag(i);
+    const spot = labelBoxes(i, text).find((b) =>
+      b.x0 >= padL && b.x1 <= rightEdge && b.y0 >= 0 && b.y1 <= baselineY
+      && ![...pointLabels, ...hoverLabels].some((p) => b.x0 - 1 < p.x1 && b.x1 + 1 > p.x0 && b.y0 - 1 < p.y1 && b.y1 + 1 > p.y0));
+    if (spot) hoverLabels.push({ i, text, anchor: spot.anchor, x: spot.anchor === "start" ? spot.x0 : spot.x1,
+      y: spot.y1 - 3, x0: spot.x0, y0: spot.y0, x1: spot.x1, y1: spot.y1 });
   }
 
   // ── Hover on the line: the value in effect at the mouse position ─────────────
@@ -755,10 +843,6 @@ export function MiniMetricsChart({
           if (!isFinite(x)) return null;
           const e = expData?.[i] as (Experiment & { _running?: boolean }) | undefined;
           const isMs = milestones.has(i);
-          // milestone caption: "idea/exp · excerpt…" (purple, clickable)
-          const note = isMs && e && captioned.has(i)
-            ? `${e.idea_id}/${e.label ?? e.id} ${(ideas[e.idea_id]?.description ?? "").replace(/\s+/g, " ").trim().slice(0, 22)}`.trim()
-            : undefined;
           return (
             <MiniDot
               key={i}
@@ -767,8 +851,6 @@ export function MiniMetricsChart({
               excluded={offLog(v)}
               color={pointColors[i] ?? "var(--text-muted)"}
               isMilestone={isMs}
-              fontXs={font.xs}
-              note={note}
               sizeScale={sizeScale}
               onHoverChange={(h, rect) =>
                 setHovered(h && rect ? { idx: i, rect } : (cur) => (cur?.idx === i ? null : cur))
@@ -776,6 +858,24 @@ export function MiniMetricsChart({
             />
           );
         })}
+
+        {/* Point labels (#idea) + the hovered idea's points */}
+        <g class="mini-point-labels" font-family="var(--font-mono)" font-size={font.xs} pointer-events="none">
+          {pointLabels.map((l) => (
+            <text key={`l${l.i}`} class="mini-point-label" x={l.x} y={l.y} text-anchor={l.anchor}
+              fill={milestones.has(l.i) ? "var(--purple)" : "var(--text-muted)"}
+              stroke="var(--bg)" stroke-width="3" paint-order="stroke"
+              opacity={hoverIdea != null && expData?.[l.i]?.idea_id !== hoverIdea ? 0.35 : 1}>{l.text}</text>
+          ))}
+          {hoverPoints.map((i) => {
+            const p = labelPos(i)!;
+            return <circle key={`h${i}`} cx={p.x} cy={p.y} r={5.5 * sizeScale + 1.5} fill="none" stroke="var(--text)" stroke-width="1.2" />;
+          })}
+          {hoverLabels.map((l) => (
+            <text key={`hl${l.i}`} class="mini-point-label is-hover" x={l.x} y={l.y} text-anchor={l.anchor} fill="var(--text)"
+              stroke="var(--bg)" stroke-width="3" paint-order="stroke">{l.text}</text>
+          ))}
+        </g>
 
         {/* Bottom labels */}
         <g font-family="var(--font-mono)" font-size={font.xs}>
