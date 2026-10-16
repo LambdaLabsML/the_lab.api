@@ -207,12 +207,7 @@ function MiniDot({
         <path d={`M${x - 2.5},${baselineY - 6.5} l5,5 m0,-5 l-5,5`}
           stroke={isMilestone ? "var(--yellow)" : "var(--text-faint)"} stroke-width="1.1"
           stroke-linecap="round" opacity={faded ? 0.2 : 0.8} />
-      ) : (
-      <line x1={x} x2={x} y1={y} y2={baselineY}
-        stroke={isMilestone ? "var(--yellow)" : "var(--border)"}
-        stroke-width="1" stroke-dasharray="2 3"
-        opacity={faded ? 0.1 : isMilestone ? 0.5 : 0.3} />
-      )}
+      ) : null}
       {excluded ? null : isRunning ? (
         <RunningMarker x={x} y={y} r={Math.max(3.2, r * 1.25)} faded={faded}
           pct={runningProgress.value[String(label ?? "")]} />
