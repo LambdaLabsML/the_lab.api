@@ -2,12 +2,12 @@ import { useEffect, useMemo } from "preact/hooks";
 import { effect, signal, type Signal } from "@preact/signals";
 import {
   chartView, chartXAxis, chartTimeCurve, improvementsOnly, ideaMean,
-  clipOutliers, reverseTime, showHiddenExperiments, colorMode, filterText, useSetting,
+  clipOutliers, reverseTime, colorMode, filterText, useSetting,
 } from "../../state/settings";
 
 const plotFilter = signal("");
 const logScale = useSetting("mainGraphLogScale", false);
-const shared = { chartView, chartXAxis, chartTimeCurve, improvementsOnly, ideaMean, clipOutliers, reverseTime, showHiddenExperiments, colorMode, logScale, plotFilter };
+const shared = { chartView, chartXAxis, chartTimeCurve, improvementsOnly, ideaMean, clipOutliers, reverseTime, colorMode, logScale, plotFilter };
 type Controls = typeof shared;
 type Values = { [K in keyof Controls]: Controls[K] extends Signal<infer V> ? V : never };
 

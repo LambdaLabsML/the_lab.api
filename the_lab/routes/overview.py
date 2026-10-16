@@ -10,6 +10,9 @@ from starlette.concurrency import run_in_threadpool
 
 from ..cache import cached_response
 from ..deps import (
+    experiment_selection,
+    FILTER_QUERY_DOC,
+    WHERE_QUERY_DOC,
     with_progress_views,
     with_run_pct,
     store,
@@ -57,10 +60,14 @@ def _insight_excerpt(text: str | None, idea_id: int) -> dict:
 def _build_leaderboard_response(
     metric: str, top: int, recent: int, tags: str | None, include_details: bool,
     descending: bool = True, max_open_ideas: int = 20, max_progression: int = 10,
+    selection=None,
 ) -> dict:
-    """Shared implementation for /leaderboard and /digest endpoints."""
+    """Shared implementation for /leaderboard and /digest endpoints.
+    ``selection``: a predicate from experiment_selection (filter / where)."""
     all_ideas = store.list_ideas()
     all_exps = store.list_all_experiments()
+    if selection is not None:
+        all_exps = [e for e in all_exps if selection(e)]
 
     idea_by_id: dict[int, dict] = {idea["id"]: idea for idea in all_ideas}
     exps_by_idea: dict[int, list[dict]] = {}
@@ -290,6 +297,8 @@ def get_leaderboard(
     sort: str | None = Query(default=None, description="Sort order: 'desc' (highest first) or 'asc' (lowest first). Defaults to the metric's configured direction (see /config/metric-directions)."),
     max_open_ideas: int = Query(default=20, description="Cap on the open_ideas list (most recently active first)"),
     max_progression: int = Query(default=10, description="Cap on the progression list (most recent improvements)"),
+    filter: str | None = Query(default=None, description=FILTER_QUERY_DOC),
+    where: str | None = Query(default=None, description=WHERE_QUERY_DOC),
 ):
     """Get a compact, metric-focused research leaderboard.
 
@@ -310,11 +319,14 @@ def get_leaderboard(
     Example:
         GET /api/v1/leaderboard?metric=score&sort=desc
         GET /api/v1/leaderboard?metric=convergence_gap&sort=asc&top=5
+        GET /api/v1/leaderboard?metric=score&filter=long
+        GET /api/v1/leaderboard?metric=score&where=meta.MAX_WALL_SECONDS%20%3E%3D%209000
     """
     descending = _resolve_descending(metric, sort)
     return _build_leaderboard_response(
         metric, top, recent, tags, include_details, descending=descending,
         max_open_ideas=max_open_ideas, max_progression=max_progression,
+        selection=experiment_selection(filter, where),
     )
 
 
@@ -344,6 +356,8 @@ def leaderboard_with_search(
                     "Drops the rest of the response (open_ideas, progression, recent, key_insights, …) — "
                     "useful when the agent only needs the ranking and not every supporting section.",
     ),
+    filter: str | None = Query(default=None, description=FILTER_QUERY_DOC),
+    where: str | None = Query(default=None, description=WHERE_QUERY_DOC),
 ):
     """Combined leaderboard + search: see rankings and find related ideas in one call.
 
@@ -365,6 +379,7 @@ def leaderboard_with_search(
     leaderboard = _build_leaderboard_response(
         metric, top, 5, None, False, descending=descending,
         max_open_ideas=max_open_ideas, max_progression=max_progression,
+        selection=experiment_selection(filter, where),
     )
     searched_keywords = set()
     if q.strip():
@@ -469,7 +484,8 @@ def _bootstrap_diff_medians(
 
 
 def _resolve_selector(selector: str, metric: str) -> tuple[list[float], list[dict]]:
-    """Parse 'tag:foo' / 'idea:5' / 'all' and return (numeric values, exp summaries).
+    """Parse 'tag:foo' / 'idea:5' / 'filter:<saved>' / 'where:<expr>' / 'all' and
+    return (numeric values, exp summaries).
 
     Honours dot-notation metric paths (e.g. ``subagent.cache_hits``) via
     resolve_metric.
@@ -491,6 +507,10 @@ def _resolve_selector(selector: str, metric: str) -> tuple[list[float], list[dic
             matched = [e for e in all_exps if e.get("idea_id") == wanted_id]
         except ValueError:
             matched = []
+    elif sel.startswith("filter:") or sel.startswith("where:"):
+        kind, _, value = sel.partition(":")
+        pred = experiment_selection(value if kind == "filter" else None, value if kind == "where" else None)
+        matched = all_exps if pred is None else [e for e in all_exps if pred(e)]
     else:
         # Fallback: treat as a tag for convenience
         matched = [e for e in all_exps if sel in (e.get("tags") or [])]
@@ -513,6 +533,8 @@ def leaderboard_aggregate(
     group_by: str = Query(default="tag", description="'tag' or 'idea'"),
     tags: str | None = Query(default=None, description="Comma-separated tag filter (AND)"),
     top: int = Query(default=20, description="Cap on returned groups (most populous first)"),
+    filter: str | None = Query(default=None, description=FILTER_QUERY_DOC),
+    where: str | None = Query(default=None, description=WHERE_QUERY_DOC),
 ):
     """Per-group summary stats for a metric: median / mean / std / min / max / p25 / p75 / n.
 
@@ -534,6 +556,9 @@ def leaderboard_aggregate(
         and isinstance(resolve_metric(e.get("metrics"), metric), (int, float))
         and (not tag_filter or all(t in (e.get("tags") or []) for t in tag_filter))
     ]
+    selection = experiment_selection(filter, where)
+    if selection is not None:
+        completed = [e for e in completed if selection(e)]
 
     groups: dict[str, list[float]] = {}
     if group_by == "tag":
@@ -563,7 +588,7 @@ def leaderboard_aggregate(
 
 @router.get("/leaderboard/compare")
 def leaderboard_compare(
-    a: str = Query(..., description="Selector A — 'tag:<name>', 'idea:<id>', or 'all'"),
+    a: str = Query(..., description="Selector A — 'tag:<name>', 'idea:<id>', 'filter:<saved filter>', 'where:<expression>', or 'all'"),
     b: str = Query(..., description="Selector B — same format"),
     metric: str = Query(default="score", description="Metric to compare on"),
     n_resamples: int = Query(default=1000, description="Bootstrap resamples"),
@@ -639,11 +664,14 @@ def get_digest_compat(
     recent: int = Query(default=10, description="Number of most recent experiments to show"),
     tags: str | None = Query(default=None, description="Comma-separated tags"),
     include_details: bool = Query(default=False, description="Include per-problem metrics and settings"),
+    filter: str | None = Query(default=None, description=FILTER_QUERY_DOC),
+    where: str | None = Query(default=None, description=WHERE_QUERY_DOC),
 ):
     """Deprecated alias for ``/leaderboard``. Use ``/leaderboard`` instead."""
     return _build_leaderboard_response(
         metric, top, recent, tags, include_details,
         descending=_resolve_descending(metric, None),
+        selection=experiment_selection(filter, where),
     )
 
 
@@ -868,6 +896,8 @@ def get_backlog(
 def orient(
     request: Request,
     tags: str | None = Query(default=None, description="Comma-separated tags to filter best score and active ideas (running experiments always shown)"),
+    filter: str | None = Query(default=None, description=FILTER_QUERY_DOC),
+    where: str | None = Query(default=None, description=WHERE_QUERY_DOC),
 ):
     """Get a compact orientation summary with recommended next action.
 
@@ -885,7 +915,11 @@ def orient(
     """
     tag_filter = {t.strip() for t in tags.split(",") if t.strip()} if tags else set()
 
+    selection = experiment_selection(filter, where)
+
     def _exp_matches_tags(exp: dict) -> bool:
+        if selection is not None and not selection(exp):
+            return False
         if not tag_filter:
             return True
         exp_tags = set(exp.get("tags") or [])
@@ -943,7 +977,7 @@ def orient(
                             best_exp_id = e["id"]
                             best_exp_label = e.get("label", str(e["id"]))
                             best_idea_id = e["idea_id"]
-        if idea["status"] == "active" and (idea_has_matching or not tag_filter):
+        if idea["status"] == "active" and (idea_has_matching or not (tag_filter or selection is not None)):
             filtered_idea_ids.add(idea["id"])
 
     filtered_ideas = [i for i in all_ideas if i["id"] in filtered_idea_ids]
@@ -957,6 +991,8 @@ def orient(
     }
     if tag_filter:
         resp["tags_filter"] = sorted(tag_filter)
+    if selection is not None:
+        resp["selection"] = {"filter": filter, "where": where}
 
     # Determine recommendation -- single focused action per state
     if all_running:

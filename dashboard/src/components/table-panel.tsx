@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from "preact/hooks";
 import { useSignalEffect } from "@preact/signals";
-import { plotExperiments } from "../state/hidden";
+import { plotExperiments } from "../state/filters";
 import { allExperiments, allIdeas, currentLayout, highlightedIdea, runningProgress } from "../state/signals";
 import {
   selectedMetric, colorMode, activeTagFilters, tagFilterMode,

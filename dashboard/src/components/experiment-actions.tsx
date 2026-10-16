@@ -2,7 +2,7 @@ import { signal } from "@preact/signals";
 import { useEffect, useRef, useState } from "preact/hooks";
 import { databaseScope, databaseTab } from "../state/database";
 import { allExperiments, highlightedIdea } from "../state/signals";
-import { isHiddenExperiment, setExperimentHidden } from "../state/hidden";
+import { activeFilter, myHumanId, updateFilter } from "../state/filters";
 import { serverDemoMode } from "../state/settings";
 import { navigateToIdea } from "../lib/navigate";
 
@@ -92,11 +92,14 @@ export function ExperimentActions() {
   useEffect(() => { setError(null); if (target) root.current?.querySelector<HTMLButtonElement>("button")?.focus(); }, [target]);
   if (!target) return null;
   const experiment = allExperiments.value.find(exp => String(exp.label ?? exp.id) === target.label);
-  const hidden = !!experiment && isHiddenExperiment(experiment);
+  // Exclude from / include in the active saved filter (owner, or any human on a shared one).
+  const filt = activeFilter.value;
+  const canExclude = !!filt && (filt.owner === myHumanId() || filt.shared);
+  const hidden = !!filt && filt.exclude.includes(target.label);
   async function toggleHidden() {
-    if (!target || saving) return;
+    if (!target || saving || !filt) return;
     setSaving(true); setError(null);
-    try { await setExperimentHidden(target.label, !hidden); menu.value = null; }
+    try { await updateFilter(filt.id, hidden ? { remove_exclude: [target.label] } : { add_exclude: [target.label] }); menu.value = null; }
     catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     finally { setSaving(false); }
   }
@@ -119,7 +122,7 @@ export function ExperimentActions() {
       buttons[e.key === "Home" ? 0 : e.key === "End" ? buttons.length - 1 : (index + (e.key === "ArrowRight" ? 1 : -1) + buttons.length) % buttons.length]?.focus();
     }}>
       <span class="experiment-menu-caption">exp/{target.label}</span>
-      <div>{([["graph", "Show idea graph"], ["experiments", "Show experiment in Database"], ["info", "Open idea and experiment details"]] as const).map(([destination, title]) => <button class="ui-btn" role="menuitem" title={title} aria-label={title} onClick={() => choose(destination)}><ResearchIcon name={destination === "experiments" ? "table" : destination} /></button>)}<button class="ui-btn" role="menuitem" title={hidden ? "Unhide experiment" : "Hide experiment"} aria-label={hidden ? "Unhide experiment" : "Hide experiment"} disabled={saving || serverDemoMode.value} onClick={toggleHidden}><ResearchIcon name={hidden ? "show" : "hide"} /></button></div>
+      <div>{([["graph", "Show idea graph"], ["experiments", "Show experiment in Database"], ["info", "Open idea and experiment details"]] as const).map(([destination, title]) => <button class="ui-btn" role="menuitem" title={title} aria-label={title} onClick={() => choose(destination)}><ResearchIcon name={destination === "experiments" ? "table" : destination} /></button>)}{canExclude && <button class="ui-btn" role="menuitem" title={hidden ? `Include in filter “${filt!.name}”` : `Exclude from filter “${filt!.name}”`} aria-label={hidden ? `Include in filter ${filt!.name}` : `Exclude from filter ${filt!.name}`} disabled={saving || serverDemoMode.value} onClick={toggleHidden}><ResearchIcon name={hidden ? "show" : "hide"} /></button>}</div>
       {error && <span class="experiment-menu-error" role="alert">{error}</span>}
     </div>
   </>;

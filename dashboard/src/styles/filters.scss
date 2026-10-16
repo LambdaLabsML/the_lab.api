@@ -1,0 +1,59 @@
+// Experiment filter picker (chart toolbar) — see components/filter-picker.tsx.
+.filter-picker { position: relative; display: inline-flex; }
+.filter-picker .ui-toggle.is-error { border-color: var(--red); color: var(--red); }
+.filter-panel {
+  position: absolute; z-index: 60; top: calc(100% + 6px); left: 0;
+  width: min(30rem, calc(100vw - 32px));
+  max-height: min(75vh, 40rem); overflow-y: auto;
+  padding: var(--space-3);
+  background: var(--bg-elev, var(--bg)); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+  font-size: var(--text-sm);
+  ul { list-style: none; margin: 0; padding: 0; }
+  code { font-family: var(--font-mono); font-size: var(--text-xs); }
+}
+.filter-panel-head {
+  display: flex; align-items: baseline; gap: var(--space-2); margin-bottom: var(--space-2);
+  .filter-panel-hint { color: var(--text-faint); font-size: var(--text-xs); }
+  .filter-close { margin-left: auto; border: 0; background: none; color: var(--text-faint); font-size: 1.1em; cursor: pointer; }
+}
+.filter-group { margin-bottom: var(--space-2); }
+.filter-group-title { color: var(--text-faint); font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.06em; margin: var(--space-2) 0 4px; }
+.filter-row {
+  display: flex; align-items: center; gap: 4px; border-radius: 4px;
+  &.is-active { background: rgba(127, 127, 127, 0.12); }
+  &:hover { background: rgba(127, 127, 127, 0.08); }
+}
+.filter-row-main {
+  flex: 1 1 auto; min-width: 0; display: flex; align-items: baseline; gap: var(--space-2);
+  padding: 4px 6px; border: 0; background: none; color: inherit; text-align: left; cursor: pointer;
+}
+.filter-row-name { font-weight: 600; white-space: nowrap; }
+.filter-row-expr { color: var(--text-muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.filter-row-owner { margin-left: auto; color: var(--text-faint); font-size: var(--text-xs); white-space: nowrap; }
+.filter-row-actions, .filter-actions, .filter-save {
+  display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap;
+  button {
+    padding: 0 6px; border: 1px solid var(--border); border-radius: 4px; background: transparent;
+    color: var(--text-muted); font-size: var(--text-xs); line-height: 1.6; cursor: pointer;
+    &:hover:not(:disabled) { color: var(--text); border-color: var(--text-faint); }
+    &:disabled { opacity: 0.45; cursor: default; }
+  }
+}
+.filter-expr textarea, .filter-save input {
+  width: 100%; box-sizing: border-box; padding: 4px 6px; resize: vertical;
+  font-family: var(--font-mono); font-size: var(--text-xs);
+  background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;
+}
+.filter-save { margin-top: var(--space-2); flex-wrap: nowrap; input { flex: 1 1 auto; } label { display: inline-flex; gap: 3px; white-space: nowrap; color: var(--text-muted); } }
+.filter-check { margin: 4px 0; font-size: var(--text-xs); color: var(--green); &.is-error { color: var(--red); } }
+.filter-msg-ok { color: var(--green); font-size: var(--text-xs); margin-top: 4px; }
+.filter-msg-err { color: var(--red); font-size: var(--text-xs); margin-top: 4px; }
+.filter-empty { color: var(--text-faint); font-size: var(--text-xs); }
+.filter-help {
+  margin-top: var(--space-2); color: var(--text-muted); font-size: var(--text-xs);
+  summary { cursor: pointer; }
+  ul { margin-top: 4px; }
+  li button { border: 0; background: none; padding: 1px 0; cursor: pointer; color: var(--accent); }
+}

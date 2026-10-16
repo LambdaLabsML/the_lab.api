@@ -1,8 +1,8 @@
 import { usePlotControls, matchesPlotSearch } from "../../lib/hooks/use-plot-controls";
-import { isHiddenExperiment } from "../../state/hidden";
+import { inSelection, selectionLabels } from "../../state/filters";
+import { FilterPicker } from "../filter-picker";
 import { useEffect, useMemo, useState } from "preact/hooks";
 import { allExperiments, allIdeas, currentLayout, cloneChartPanel, updatePanelTitle } from "../../state/signals";
-import { hiddenExperimentCount } from "../../state/hidden";
 import {
   selectedMetric, filterText, activeTagFilters, tagFilterMode,
   showAbandoned, showConcluded, showRunning, colorblindMode,
@@ -17,16 +17,16 @@ export function MetricsChart({ instanceId, initialMetric, hideClone, onMetricCha
   // Cloned instances use local state; the original uses the global signal
   const isClone = !!instanceId;
   const [localMetric, setLocalMetric] = useState(initialMetric || "");
-  const { chartView, chartXAxis, chartTimeCurve, improvementsOnly, ideaMean, clipOutliers, reverseTime, showHiddenExperiments, colorMode, plotFilter, logScale: logScaleSignal } = usePlotControls(instanceId);
+  const { chartView, chartXAxis, chartTimeCurve, improvementsOnly, ideaMean, clipOutliers, reverseTime, colorMode, plotFilter, logScale: logScaleSignal } = usePlotControls(instanceId);
   const logScale = logScaleSignal.value;
   const setLogScale = (value: boolean) => { logScaleSignal.value = value; };
 
   const allRows = allExperiments.value;
-  const includeHidden = showHiddenExperiments.value;
+  const selection = selectionLabels.value;
   const localQuery = plotFilter.value;
   const globalQuery = filterText.value;
   const ideaMap = allIdeas.value;
-  const experiments = useMemo(() => allRows.filter(e => (includeHidden || !isHiddenExperiment(e)) && matchesPlotSearch(e, ideaMap[e.idea_id]?.description ?? "", localQuery)), [allRows, includeHidden, localQuery, globalQuery, ideaMap]);
+  const experiments = useMemo(() => allRows.filter(e => inSelection(e) && matchesPlotSearch(e, ideaMap[e.idea_id]?.description ?? "", localQuery)), [allRows, selection, localQuery, globalQuery, ideaMap]);
   const ideas = allIdeas.value;
   const layout = currentLayout.value;
   const metric = isClone ? localMetric : selectedMetric.value;
@@ -37,8 +37,6 @@ export function MetricsChart({ instanceId, initialMetric, hideClone, onMetricCha
   const reversed = reverseTime.value;
   const clip = clipOutliers.value;
   const mean = ideaMean.value;
-  const hiddenCount = hiddenExperimentCount.value;
-  const showHidden = showHiddenExperiments.value;
   const view = chartView.value;
   const timeCurve = chartTimeCurve.value;
   const xAxis = chartXAxis.value;
@@ -135,17 +133,7 @@ export function MetricsChart({ instanceId, initialMetric, hideClone, onMetricCha
         <Toggle active={logScale} onClick={() => { setLogScale(!logScale); }} title="Logarithmic Y axis">
           Log Y
         </Toggle>
-        {hiddenCount > 0 && (
-          <Toggle
-            active={showHidden}
-            onClick={() => { showHiddenExperiments.value = !showHidden; }}
-            title={showHidden
-              ? "Hidden experiments are included in charts, table and idea means — click to leave them out"
-              : `${hiddenCount} experiment${hiddenCount === 1 ? " is" : "s are"} hidden (tag "hidden") from charts, table and idea means — click to include them. Hide/unhide in an experiment's details.`}
-          >
-            {showHidden ? `incl. ${hiddenCount} hidden` : `show ${hiddenCount} hidden`}
-          </Toggle>
-        )}
+        <FilterPicker />
         {/* Clone is hidden in the single-chart review (hideClone); kept in the workbench */}
         {!hideClone && (
           <span class="chart-toolbar-end">

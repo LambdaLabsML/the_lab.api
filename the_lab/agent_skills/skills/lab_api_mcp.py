@@ -85,6 +85,10 @@ INCLUDE = {
     ("post", "/api/v1/experiments/{exp_ref}/cancel"): "cancel_experiment",
     ("post", "/api/v1/experiments/{exp_ref}/rerun"):  "rerun_experiment",
     ("get",  "/api/v1/leaderboard"):               "leaderboard",
+    # Saved experiment filters (read-only for agents; humans create them)
+    ("get",  "/api/v1/filters"):                   "list_filters",
+    ("get",  "/api/v1/filters/check"):             "check_filter",
+    ("get",  "/api/v1/filters/{ref}"):             "get_filter",
     # Notifications + inter-agent messaging
     ("get",  "/api/v1/notifications"):             "get_notifications",
     ("get",  "/api/v1/agents"):                    "list_agents",

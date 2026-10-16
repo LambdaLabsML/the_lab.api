@@ -12,7 +12,7 @@ import {
   scatterOpen,
   filterBarOpen,
 } from "../../state/settings";
-import { plotExperiments } from "../../state/hidden";
+import { plotExperiments } from "../../state/filters";
 import { MetricsChart } from "./metrics-chart";
 import { ScatterChart } from "./scatter-chart";
 import { TagFilter } from "./tag-filter";

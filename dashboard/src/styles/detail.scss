@@ -778,10 +778,10 @@
   .review-detail-flush #detail-panel { position: relative; overflow-y: visible; }
 }
 
-// Hide/unhide an experiment from charts, table and idea means. Sits right
-// after the exp id and takes the free space, so the score stays top right.
-.exp-item .exp-hide-toggle {
-  margin-right: auto;
+// Next to exp/<label>: takes the free space so the score stays top right;
+// holds "exclude from «filter»" while a saved filter is active.
+.exp-item .exp-head-spacer { margin-right: auto; display: inline-flex; min-width: 0; }
+.exclude-toggle {
   padding: 0 var(--space-2);
   border: 1px solid var(--border);
   border-radius: 4px;
@@ -790,8 +790,9 @@
   font-size: var(--text-xs);
   line-height: 1.6;
   cursor: pointer;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 22em;
   &:hover:not(:disabled) { color: var(--text); border-color: var(--text-faint); }
-  &.is-hidden { color: var(--yellow); border-color: var(--yellow); }
+  &.is-excluded { color: var(--yellow); border-color: var(--yellow); }
   &:disabled { opacity: 0.5; cursor: wait; }
 }
 

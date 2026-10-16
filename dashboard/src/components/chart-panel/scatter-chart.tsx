@@ -1,5 +1,5 @@
 import { usePlotControls, matchesPlotSearch } from "../../lib/hooks/use-plot-controls";
-import { isHiddenExperiment } from "../../state/hidden";
+import { inSelection, selectionLabels } from "../../state/filters";
 import { registerExperimentSurface } from "../experiment-actions";
 import { useRef, useEffect, useMemo, useState } from "preact/hooks";
 import { Chart } from "chart.js/auto";
@@ -121,7 +121,7 @@ function runningRing(pct: number | undefined): HTMLCanvasElement {
 
 export function ScatterChart({ instanceId, initialXMetric, initialYMetric, hideClone = false, onAxesChange }: { instanceId?: string; initialXMetric?: string; initialYMetric?: string; hideClone?: boolean; onAxesChange?: (x: string, y: string) => void } = {}) {
   const isClone = !!instanceId;
-  const { improvementsOnly, ideaMean, clipOutliers, colorMode, showHiddenExperiments, plotFilter } = usePlotControls(instanceId);
+  const { improvementsOnly, ideaMean, clipOutliers, colorMode, plotFilter } = usePlotControls(instanceId);
   const [localX, setLocalX] = useState(initialXMetric || "");
   const [localY, setLocalY] = useState(initialYMetric || "");
 
@@ -131,11 +131,11 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric, hideC
   const prevFzRef = useRef(fontSize.value);
 
   const allRows = allExperiments.value;
-  const includeHidden = showHiddenExperiments.value;
+  const selection = selectionLabels.value;
   const localQuery = plotFilter.value;
   const globalQuery = filterText.value;
   const ideaMap = allIdeas.value;
-  const experiments = useMemo(() => allRows.filter(e => (includeHidden || !isHiddenExperiment(e)) && matchesPlotSearch(e, ideaMap[e.idea_id]?.description ?? "", localQuery)), [allRows, includeHidden, localQuery, globalQuery, ideaMap]);
+  const experiments = useMemo(() => allRows.filter(e => inSelection(e) && matchesPlotSearch(e, ideaMap[e.idea_id]?.description ?? "", localQuery)), [allRows, selection, localQuery, globalQuery, ideaMap]);
 
   // Compute chartable keys grouped by source
   const grouped = useMemo(() => collectChartKeys(allRows), [allRows]);
