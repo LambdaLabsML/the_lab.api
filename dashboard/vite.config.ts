@@ -23,9 +23,9 @@ export default defineConfig({
     rollupOptions: {
       output: {
         // Stable vendor chunk: app deploys (several a day) no longer
-        // invalidate the browser's copy of preact/signals/dockview.
+        // invalidate the browser's copy of preact/signals.
         manualChunks: {
-          vendor: ["preact", "preact/hooks", "@preact/signals", "dockview-core"],
+          vendor: ["preact", "preact/hooks", "@preact/signals"],
         },
       },
     },

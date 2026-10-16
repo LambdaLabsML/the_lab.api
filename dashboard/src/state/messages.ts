@@ -53,6 +53,8 @@ const sentHere = new Set<number>(load<number[]>(MINE_KEY, []));
 // map remains the source of truth, so toggling a message back to unread works.
 const pendingUnreadIds = new Set<number>(load<number[]>(PENDING_KEY, []));
 let messages: MessageEntry[] = [];
+/** Recent message bodies shared with the personal sidebar feed. */
+export const notificationMessages = signal<MessageEntry[]>([]);
 
 /** Number of unread messages addressed to this browser's user (@user). */
 export const messagesUnreadCount = signal(0);
@@ -129,6 +131,9 @@ export function isMine(m: MessageEntry): boolean {
   return !!mine && m.from_agent === mine;
 }
 
+/** Anonymous sent IDs are needed to resolve this browser across the full archive. */
+export function dashboardSentMessageIds(): number[] { return [...sentHere]; }
+
 /** Whether a message was sent from this browser. */
 export function isSentHere(m: MessageEntry): boolean {
   return sentHere.has(m.id);
@@ -142,6 +147,8 @@ export function registerDashboardUserMessage(m: MessageEntry): void {
   if (sentHere.has(m.id)) return;
   sentHere.add(m.id);
   save(MINE_KEY, [...sentHere]);
+  if (!messages.some(x => x.id === m.id)) messages = [m, ...messages];
+  notificationMessages.value = [...messages];
 }
 
 /** Use the same persisted read map as the full Messages view. */
@@ -190,7 +197,7 @@ function qualify(batch: MessageEntry[], names = true): void {
 /** ``newest``: this batch is the newest page (the window "Read all", thread
  *  reads and name changes work on); backfill pages only qualify. */
 function ingest(next: MessageEntry[], newestPage = true): void {
-  if (newestPage) messages = next;
+  if (newestPage) { messages = next; notificationMessages.value = next; }
   const newest = next.reduce((max, m) => Math.max(max, m.id), 0);
   if (newest > latestMessageId.value) latestMessageId.value = newest;
   // First visit: everything already there is history, not "new".

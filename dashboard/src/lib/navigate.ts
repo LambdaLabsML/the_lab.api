@@ -3,7 +3,7 @@
  * graph, charts, and detail panel.
  */
 import { selectedIdea } from "../state/settings";
-import { highlightedIdea, scrollToExperiment, activatePanel } from "../state/signals";
+import { highlightedIdea, scrollToExperiment, selectedExperiment, activatePanel } from "../state/signals";
 
 /**
  * Navigate to an idea from a chart click or graph click.
@@ -12,11 +12,12 @@ import { highlightedIdea, scrollToExperiment, activatePanel } from "../state/sig
  * - Scrolls to the graph node
  * - Highlights briefly
  */
-export function navigateToIdea(ideaId: number, expLabel?: string) {
+export function navigateToIdea(ideaId: number, expLabel?: string, options: { scrollGraph?: boolean } = {}) {
+  selectedExperiment.value = expLabel ?? null;
   selectedIdea.value = ideaId;
   highlightedIdea.value = ideaId;
 
-  // Activate detail panel in dockview
+  // Reveal the shared inspector.
   if (activatePanel) activatePanel("detail");
 
   // If a specific experiment was clicked, scroll to it in detail
@@ -28,7 +29,7 @@ export function navigateToIdea(ideaId: number, expLabel?: string) {
   const station = document.querySelector(
     `.subway-station[data-id="${ideaId}"], .subway-dot[data-id="${ideaId}"]`
   );
-  if (station) {
+  if (station && options.scrollGraph !== false) {
     station.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
   }
 

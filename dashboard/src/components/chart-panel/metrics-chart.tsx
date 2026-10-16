@@ -1,35 +1,32 @@
+import { usePlotControls, matchesPlotSearch } from "../../lib/hooks/use-plot-controls";
+import { isHiddenExperiment } from "../../state/hidden";
 import { useEffect, useMemo, useState } from "preact/hooks";
-import { allIdeas, currentLayout, cloneChartPanel, updatePanelTitle } from "../../state/signals";
-import { plotExperiments, hiddenExperimentCount } from "../../state/hidden";
+import { allExperiments, allIdeas, currentLayout, cloneChartPanel, updatePanelTitle } from "../../state/signals";
+import { hiddenExperimentCount } from "../../state/hidden";
 import {
-  selectedMetric,
-  colorMode,
-  improvementsOnly,
-  activeTagFilters,
-  tagFilterMode,
-  reverseTime,
-  showAbandoned,
-  showConcluded,
-  showRunning,
-  clipOutliers,
-  ideaMean,
-  chartView,
-  chartTimeCurve,
-  chartXAxis,
-  colorblindMode, showHiddenExperiments } from "../../state/settings";
+  selectedMetric, filterText, activeTagFilters, tagFilterMode,
+  showAbandoned, showConcluded, showRunning, colorblindMode,
+} from "../../state/settings";
 import { collectChartKeys } from "../../lib/chart-data";
 import { isLowerBetter } from "../../lib/colors";
 import { fmtMetricName, fmtScoreShort, scoreFormatter } from "../../lib/format";
 import { MiniMetricsChart } from "./mini-metrics-chart";
 import { Toggle, IconButton } from "../ui";
 
-export function MetricsChart({ instanceId, initialMetric, hideClone }: { instanceId?: string; initialMetric?: string; hideClone?: boolean } = {}) {
+export function MetricsChart({ instanceId, initialMetric, hideClone, onMetricChange }: { instanceId?: string; initialMetric?: string; hideClone?: boolean; onMetricChange?: (metric: string) => void } = {}) {
   // Cloned instances use local state; the original uses the global signal
   const isClone = !!instanceId;
   const [localMetric, setLocalMetric] = useState(initialMetric || "");
-  const [logScale, setLogScale] = useState(false);
+  const { chartView, chartXAxis, chartTimeCurve, improvementsOnly, ideaMean, clipOutliers, reverseTime, showHiddenExperiments, colorMode, plotFilter, logScale: logScaleSignal } = usePlotControls(instanceId);
+  const logScale = logScaleSignal.value;
+  const setLogScale = (value: boolean) => { logScaleSignal.value = value; };
 
-  const experiments = plotExperiments.value;
+  const allRows = allExperiments.value;
+  const includeHidden = showHiddenExperiments.value;
+  const localQuery = plotFilter.value;
+  const globalQuery = filterText.value;
+  const ideaMap = allIdeas.value;
+  const experiments = useMemo(() => allRows.filter(e => (includeHidden || !isHiddenExperiment(e)) && matchesPlotSearch(e, ideaMap[e.idea_id]?.description ?? "", localQuery)), [allRows, includeHidden, localQuery, globalQuery, ideaMap]);
   const ideas = allIdeas.value;
   const layout = currentLayout.value;
   const metric = isClone ? localMetric : selectedMetric.value;
@@ -56,8 +53,10 @@ export function MetricsChart({ instanceId, initialMetric, hideClone }: { instanc
   const hideRunning = !showRunning.value;
 
   // Collect chartable keys grouped by source
-  const grouped = useMemo(() => collectChartKeys(experiments), [experiments]);
+  const grouped = useMemo(() => collectChartKeys(allRows), [allRows]);
   const allKeys = [...grouped.metrics, ...grouped.nested, ...grouped.meta, ...grouped.timing];
+
+  useEffect(() => { if (metric) onMetricChange?.(metric); }, [metric]);
 
   const setMetric = isClone
     ? (v: string) => { setLocalMetric(v); if (instanceId && updatePanelTitle) updatePanelTitle(instanceId, `Metrics: ${v}`); }
@@ -74,7 +73,8 @@ export function MetricsChart({ instanceId, initialMetric, hideClone }: { instanc
       "score", "total_score", "progress_score", "final_score",
       "f1", "bleu", "rouge", "pass_at_1", "pass_at_10",
     ];
-    const current = selectedMetric.value;
+    const current = selectedMetric.peek();
+    if (current && allKeys.includes(current)) return;
     const alreadyPreferred = current && preferred.includes(current);
     if (alreadyPreferred) return; // already on a good metric
     // Pick best preferred metric: prefer non-zero values AND meaningful variance (not constants)
@@ -101,6 +101,7 @@ export function MetricsChart({ instanceId, initialMetric, hideClone }: { instanc
       <div class="chart-toolbar">
         {/* Row 1: what is plotted — metric + data filters. */}
         <div class="chart-toolbar-row">
+        {isClone && <input class="plot-data-filter" aria-label="Graph data filter" placeholder="Filter this graph…" value={plotFilter.value} onInput={e => { plotFilter.value = e.currentTarget.value; }} />}
         <span class="chart-metric">
           <select title="Metric" value={metric} onChange={(e) => { setMetric((e.target as HTMLSelectElement).value); }}>
             {grouped.metrics.length > 0 && <optgroup label="Metrics">{grouped.metrics.map((k) => <option key={k} value={k}>{fmtMetricName(k)}</option>)}</optgroup>}

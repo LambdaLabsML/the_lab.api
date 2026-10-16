@@ -415,3 +415,36 @@ export interface LogEntry {
   runtime?: string;
   extra?: string;
 }
+
+/** Compact personal previews from the full-history dashboard thread index. */
+export interface InboxMessagePreview {
+  id: number;
+  thread_id: number;
+  from_agent: string | null;
+  from_role?: string | null;
+  to: string;
+  created_at: string;
+  preview: string;
+  mine?: boolean;
+  in_reply_to?: number | null;
+}
+export interface InboxThread extends ThreadMeta {
+  my_message_count: number;
+  participants?: string[];
+  idea_ids?: number[];
+  cursor_id: number;
+  latest: InboxMessagePreview;
+  focus: InboxMessagePreview;
+  question: InboxMessagePreview | null;
+  latest_mine: InboxMessagePreview | null;
+  unread_for_me: number;
+  unread_ids: number[];
+  you_posted_last: boolean;
+  saved: boolean;
+}
+export interface DashboardInboxPage {
+  threads: InboxThread[];
+  total: number;
+  counts: Record<"for_you" | "mine" | "all" | "saved", number>;
+  next_before_id: number | null;
+}

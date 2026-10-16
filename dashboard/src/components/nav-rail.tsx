@@ -9,7 +9,8 @@ import type { ComponentChildren } from "preact";
 import { useState, useEffect } from "preact/hooks";
 import { serverDemoMode, sidebarWidth, sidebarCollapsed } from "../state/settings";
 import { wsCatchingUp, wsConnected, wsAuthFailed, wsLastMessageAt } from "../state/ws";
-import { messagesUnreadCount, messagesUnreadAnyCount } from "../state/messages";
+import { messagesUnreadCount } from "../state/messages";
+import { inboxUnreadCount, inboxView } from "../state/inbox";
 import { Tooltip } from "./ui";
 
 function relAgo(ms: number | null): string {
@@ -21,18 +22,16 @@ function relAgo(ms: number | null): string {
   return `${Math.floor(m / 60)}h ago`;
 }
 
-export type NavSection = "review" | "activity" | "queue" | "workbench" | "tools" | "messages" | "artifacts";
+export type NavSection = "review" | "database" | "queue" | "messages" | "artifacts";
 
 interface RailItem { id: NavSection; label: string; icon: string }
 
 const PRIMARY: RailItem[] = [
   { id: "review",    label: "Overview",  icon: "▦" },
-  { id: "activity",  label: "Activity",  icon: "◉" },
-  { id: "queue",     label: "Queue",     icon: "≡" },
-  { id: "workbench", label: "Workbench", icon: "⊞" },
-  { id: "tools",     label: "Tools",     icon: "⚒" },
   { id: "messages",  label: "Messages",  icon: "✉" },
   { id: "artifacts", label: "Artifacts", icon: "▤" },
+  { id: "database",  label: "Database",  icon: "▤" },
+  { id: "queue",     label: "Queue",     icon: "≡" },
 ];
 
 export function NavRail({
@@ -57,36 +56,20 @@ export function NavRail({
   const wsState = wsAuthFailed.value ? "auth" : wsCatchingUp.value ? "busy" : wsConnected.value ? "on" : "off";
   const wsLabel = wsAuthFailed.value ? "auth failed" : wsCatchingUp.value ? "catching up…" : wsConnected.value ? "connected" : "reconnecting…";
   const lastStr = relAgo(wsLastMessageAt.value);
-  const unreadMessages = messagesUnreadCount.value;    // addressed to you (@user)
-  const unreadAny = messagesUnreadAnyCount.value;      // anything new (@anyone)
+  const unreadMessages = inboxUnreadCount.value ?? messagesUnreadCount.value;
   const fmtCount = (n: number) => (n > 99 ? "99+" : String(n));
-  const messagesTitle = (label: string) => {
-    const parts = [unreadMessages ? `${unreadMessages} for you` : "", unreadAny ? `${unreadAny} new in total` : ""].filter(Boolean);
-    return parts.length ? `${label} — ${parts.join(", ")}` : label;
-  };
 
   const item = (it: RailItem) => {
     const active = section === it.id && !settingsOpen;
-    return (
-      <button
-        key={it.id}
-        type="button"
-        class={`nav-rail-btn${active ? " is-active" : ""}`}
-        onClick={() => onSelect(it.id)}
-        title={it.id === "messages" ? messagesTitle(it.label) : it.label}
-        aria-label={it.id === "messages" ? messagesTitle(it.label) : it.label}
-        aria-current={active ? "page" : undefined}
-      >
+    return <div key={it.id} class="nav-rail-item">
+      <button type="button" class={`nav-rail-btn${active ? " is-active" : ""}`} onClick={() => onSelect(it.id)} title={it.label} aria-label={it.label} aria-current={active ? "page" : undefined}>
         <span class="nav-rail-icon" aria-hidden="true">{it.icon}</span>
         <span class="nav-rail-label">{it.label}</span>
-        {it.id === "messages" && unreadMessages > 0 && (
-          <span class="nav-rail-unread" aria-hidden="true" title="addressed to you (@user)">@{fmtCount(unreadMessages)}</span>
-        )}
-        {it.id === "messages" && unreadAny > 0 && (
-          <span class="nav-rail-unread nav-rail-unread--any" aria-hidden="true" title="new messages in total (@anyone)">{fmtCount(unreadAny)}</span>
-        )}
       </button>
-    );
+      {it.id === "messages" && unreadMessages > 0 && <button class="nav-rail-unread" title={`${unreadMessages} unread replies and messages for you`} aria-label={`Open ${unreadMessages} unread replies and messages for you`} onClick={() => {
+        inboxView.value = "for_you"; window.dispatchEvent(new Event("the-lab:show-inbox")); onSelect("messages");
+      }}>{fmtCount(unreadMessages)}</button>}
+    </div>;
   };
 
   return (
@@ -143,6 +126,13 @@ export function SecondaryPanel({
     () => typeof window !== "undefined" && window.matchMedia("(max-width: 760px)").matches,
   );
   const [mobileOpen, setMobileOpen] = useState(false);
+  useEffect(() => {
+    const open = () => setMobileOpen(true);
+    const close = () => setMobileOpen(false);
+    window.addEventListener("the-lab:open-monitor", open);
+    window.addEventListener("the-lab:close-monitor", close);
+    return () => { window.removeEventListener("the-lab:open-monitor", open); window.removeEventListener("the-lab:close-monitor", close); };
+  }, []);
   useEffect(() => {
     const mq = window.matchMedia("(max-width: 760px)");
     const onChange = () => { setIsMobile(mq.matches); if (!mq.matches) setMobileOpen(false); };

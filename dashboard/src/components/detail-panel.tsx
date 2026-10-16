@@ -1,6 +1,7 @@
+import { selectedExperiment } from "../state/signals";
 import { useEffect, useLayoutEffect, useMemo, useState, useRef } from "preact/hooks";
 import { progressPct } from "../lib/progress";
-import { selectedIdea, selectedMetric, detailTimeline, detailSortNewest, colorTheme } from "../state/settings";
+import { selectedIdea, selectedMetric, detailTimeline, detailSortNewest, detailShowNotes, colorTheme } from "../state/settings";
 import { scrollToExperiment, runningProgress, allExperiments } from "../state/signals";
 import { isHiddenExperiment, setExperimentHidden } from "../state/hidden";
 import { reparentIdea } from "../state/api";
@@ -44,7 +45,7 @@ function parseHash(): Record<string, string> {
 }
 
 function setHash(params: Record<string, string | number | null>) {
-  const next = parseHash();
+  const next = Object.fromEntries(Object.entries(parseHash()).filter(([k]) => ["idea", "exp", "view"].includes(k)));
   for (const [k, v] of Object.entries(params)) {
     if (v === null) delete next[k];
     else next[k] = String(v);
@@ -62,7 +63,7 @@ function setHash(params: Record<string, string | number | null>) {
  *   badge, and close button) so the header isn't shown twice. Defaults to false
  *   (the standalone workbench dockview panel keeps its full identity header).
  */
-export function DetailPanel({ embedded = false }: { embedded?: boolean } = {}) {
+export function DetailPanel({ embedded = false, focused = false }: { embedded?: boolean; focused?: boolean } = {}) {
   const ideaId = selectedIdea.value;
   const [idea, setIdea] = useState<IdeaDetail | null>(null);
   const [loading, setLoading] = useState(false);
@@ -294,6 +295,13 @@ export function DetailPanel({ embedded = false }: { embedded?: boolean } = {}) {
 
   // Abort any in-flight flash op when the panel unmounts.
   useEffect(() => () => flashOpRef.current?.cancel(), []);
+
+  // A focused experiment (inspector) no longer narrows the list: the whole
+  // idea stays visible and the panel scrolls to + flashes that experiment.
+  const focusLabel = focused ? selectedExperiment.value : null;
+  useEffect(() => {
+    if (focusLabel && idea) scrollToExperiment.value = focusLabel;
+  }, [focusLabel, idea?.id]);
 
   // Progress polling
   useEffect(() => {
@@ -746,14 +754,17 @@ export function DetailPanel({ embedded = false }: { embedded?: boolean } = {}) {
   function byTime<T>(getTs: (x: T) => string | undefined) {
     return (a: T, b: T) => sortMult * (new Date(getTs(a) || 0).getTime() - new Date(getTs(b) || 0).getTime());
   }
-  const sortedNotes = [...notes].sort(byTime<Note>(n => n.created_at));
-  const sortedExps  = [...experiments].sort(byTime<Experiment>(e => e.created_at));
+  const showNotes = detailShowNotes.value;
+  const visibleExperiments = experiments;
+  const visibleNotes = showNotes ? notes : [];
+  const sortedNotes = [...visibleNotes].sort(byTime<Note>(n => n.created_at));
+  const sortedExps  = [...visibleExperiments].sort(byTime<Experiment>(e => e.created_at));
 
   // --- Timeline items ---
   type TLItem = { kind: "note"; note: Note; t: number } | { kind: "exp"; exp: Experiment; t: number };
   const tlItems: TLItem[] = detailTimeline.value ? [
-    ...notes.map(n => ({ kind: "note" as const, note: n, t: new Date(n.created_at || 0).getTime() })),
-    ...experiments.map(e => ({ kind: "exp" as const, exp: e, t: new Date(e.created_at || 0).getTime() })),
+    ...visibleNotes.map(n => ({ kind: "note" as const, note: n, t: new Date(n.created_at || 0).getTime() })),
+    ...visibleExperiments.map(e => ({ kind: "exp" as const, exp: e, t: new Date(e.created_at || 0).getTime() })),
   ].sort((a, b) => sortMult * (a.t - b.t)) : [];
 
   // --- Stats for meta block ---
@@ -786,8 +797,8 @@ export function DetailPanel({ embedded = false }: { embedded?: boolean } = {}) {
 
           {idea && (
             <>
-              {/* Compact meta block — shown FIRST so key stats are above the fold.
-                  Flat --bg surface, hairline-separated rows; no boxed border. */}
+              {/* Keep the hypothesis visible above technical metadata. */}
+              <Description key={idea.id} text={idea.description} />
               <div class="idea-meta-block">
 
                 {/* When embedded the identity header is suppressed; surface the
@@ -816,11 +827,6 @@ export function DetailPanel({ embedded = false }: { embedded?: boolean } = {}) {
                         ))}
                       </span>
                     )}
-                    <ReparentControl
-                      ideaId={idea.id}
-                      parentIds={idea.parent_ids ?? []}
-                      onMoved={(parent_ids) => setIdea((cur) => (cur && cur.id === idea.id ? { ...cur, parent_ids } : cur))}
-                    />
                   </div>
                 )}
 
@@ -874,10 +880,19 @@ export function DetailPanel({ embedded = false }: { embedded?: boolean } = {}) {
                 {idea.conclusion && (
                   <div class="meta-conclusion">"{idea.conclusion}"</div>
                 )}
+
+                {/* Rare, consequential actions: tucked away so they take two
+                    deliberate clicks. */}
+                <details class="idea-actions" key={`actions-${idea.id}`}>
+                  <summary title="Idea actions">⋯ actions</summary>
+                  <ReparentControl
+                    ideaId={idea.id}
+                    parentIds={idea.parent_ids ?? []}
+                    onMoved={(parent_ids) => setIdea((cur) => (cur && cur.id === idea.id ? { ...cur, parent_ids } : cur))}
+                  />
+                </details>
               </div>
 
-              {/* Description — below meta so stats are visible first */}
-              <Description text={idea.description} />
 
               {/* View controls — Timeline/Grouped + sort order toggles */}
               {(notes.length > 0 || experiments.length > 0) && (
@@ -896,6 +911,15 @@ export function DetailPanel({ embedded = false }: { embedded?: boolean } = {}) {
                   >
                     {newestFirst ? "↓ Newest first" : "↑ Oldest first"}
                   </Toggle>
+                  {notes.length > 0 && (
+                    <Toggle
+                      active={showNotes}
+                      onClick={() => { detailShowNotes.value = !showNotes; }}
+                      title={showNotes ? "Hide the notes, show only experiments" : "Show the notes between the experiments"}
+                    >
+                      {showNotes ? `✎ Notes (${notes.length})` : `✎ Notes hidden (${notes.length})`}
+                    </Toggle>
+                  )}
                 </div>
               )}
 
@@ -1792,7 +1816,7 @@ function ReparentControl({ ideaId, parentIds, onMoved }: {
     return (
       <button type="button" class="reparent-toggle" title="Move this idea under another parent (optionally rebasing its branch)"
         onClick={() => { setValue(parentIds.join(", ")); setMsg(null); setOpen(true); }}>
-        move
+        move to another parent…
       </button>
     );
   }
@@ -1851,9 +1875,9 @@ function ParentLink({ pid }: { pid: number }) {
   );
 }
 
-/** Collapsible idea description — auto-open when short, via useDisclosure. */
+/** Idea descriptions start open so the hypothesis is immediately readable. */
 function Description({ text }: { text: string }) {
-  const { open, toggle } = useDisclosure(text.length < 200);
+  const { open, toggle } = useDisclosure(true);
   return (
     <div class="detail-desc-wrap">
       <button
@@ -1871,6 +1895,56 @@ function Description({ text }: { text: string }) {
 
 /** Threads that discuss an experiment; a click opens Messages at the latest
  *  mention in that thread. */
+/** Experiment description, cut to a few lines with "more" / "less" when long. */
+function ExpDescription({ text }: { text?: string | null }) {
+  const [open, setOpen] = useState(false);
+  const [overflows, setOverflows] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (el && !open) setOverflows(el.scrollHeight > el.clientHeight + 1);
+  }, [text, open]);
+  if (!text) return null;
+  return (
+    <div class="exp-desc-wrap">
+      <div ref={ref} class={`exp-desc${open ? "" : " is-clamped"}`}>{text}</div>
+      {(overflows || open) && (
+        <button type="button" class="exp-desc-more" onClick={() => setOpen(!open)}>
+          {open ? "less" : "more"}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function fmtDuration(totalS: number): string {
+  const s = Math.max(0, Math.floor(totalS));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  if (h > 0) return `${h}h ${String(m).padStart(2, "0")}m`;
+  return `${m}m ${String(sec).padStart(2, "0")}s`;
+}
+
+/** Live "running for" counter: since the current attempt started (a
+ *  restarted run counts from its restart), ticking every second. */
+function RunningFor({ exp }: { exp: Experiment }) {
+  const attemptStart = (exp as any).attempt_started_at as string | undefined;
+  const start = attemptStart || exp.started_at;
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(t);
+  }, []);
+  const t0 = start ? Date.parse(start) : NaN;
+  if (!Number.isFinite(t0)) return null;
+  const restarted = !!attemptStart && !!exp.started_at && attemptStart !== exp.started_at;
+  return (
+    <span class="exp-running-for"
+      title={`Running since ${formatTime(start!)}${restarted ? ` (this attempt; first started ${formatTime(exp.started_at!)})` : ""}`}>
+      ⏱ {fmtDuration((now - t0) / 1000)}
+    </span>
+  );
+}
+
 /** Hide/unhide an experiment from charts, table and idea means (shared tag). */
 function HideToggle({ exp }: { exp: Experiment }) {
   const label = String(exp.label ?? exp.id);
@@ -1996,7 +2070,7 @@ function ExperimentItem({
   })();
 
   return (
-    <div class={`exp-item${nav.highlighted ? " exp-highlight" : ""}`} data-exp-label={exp.label || exp.id}>
+    <div class={`exp-item${nav.highlighted ? " exp-highlight" : ""}`} data-exp-label={exp.label || exp.id} data-experiment-label={exp.label || exp.id} data-idea-id={exp.idea_id}>
       <div class="exp-header">
         <span class="exp-id" {...nav.bind} title="Scroll to this idea in graph + highlight in charts">
           {isMilestone && <span class="exp-milestone-star" title="New global best at this point">★</span>}
@@ -2004,12 +2078,13 @@ function ExperimentItem({
         </span>
         <HideToggle exp={exp} />
         {/* Primary metric value — most important number at a glance; reads like a <Stat>. */}
-        {metricKey && exp.metrics && typeof exp.metrics[metricKey] === "number" && !exp._running && (
+        {metricKey && exp.metrics && typeof exp.metrics[metricKey] === "number" && (
           <span class="exp-metric-badge" title={`${metricKey} = ${exp.metrics[metricKey]}`}>
             {fmtScoreShort(exp.metrics[metricKey] as number)}
           </span>
         )}
         <span dangerouslySetInnerHTML={{ __html: badgeHtml(exp.status, progressPct(progress)) }} />
+        {(exp.status === "running" || exp._running) && <RunningFor exp={exp} />}
         {isRestarted && (
           <span
             style={{ color: "var(--yellow)", fontWeight: 600, fontSize: "var(--text-xs)", marginLeft: "var(--space-2)" }}
@@ -2024,7 +2099,7 @@ function ExperimentItem({
           </span>
         )}
       </div>
-      <div class="exp-desc">{exp.description}</div>
+      <ExpDescription text={exp.description} />
       {hasSlurmLifecycle && (
         <div class="exp-slurm" title={slurmState ? `Slurm state: ${slurmState}` : "Native Slurm job"}>
           <span>Slurm{slurmLabel ? ` · ${slurmLabel}` : ""}</span>

@@ -1,117 +1,53 @@
-/**
- * ActivityShortlog — a condensed "what's happening right now" feed for the left
- * secondary panel (shown alongside Review and Queue), so agent activity is
- * visible at all times. A lean cousin of ActivityPane: driven purely by the
- * global signals (no extra polling), clicking a row jumps to that idea.
- */
+import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import { allExperiments, allIdeas, runningProgress } from "../../state/signals";
-import { showRunPreview, hideRunPreview } from "../../state/agent-activity";
-import { selectedMetric } from "../../state/settings";
+import { selectedMetric, useSetting } from "../../state/settings";
+import { getQueue } from "../../state/api";
+import { useLiveRefresh } from "../../lib/hooks";
 import { navigateToIdea } from "../../lib/navigate";
-import { ideaTitle, fmtScoreShort } from "../../lib/format";
+import { fmtScoreShort } from "../../lib/format";
+import type { QueueSnapshot } from "../../lib/types";
 import { Eyebrow } from "../ui";
-import { ExpLink } from "../exp-link";
-import { IdeaLink } from "../idea-link";
 
-function relTime(iso?: string | null): string {
-  if (!iso) return "";
-  const t = Date.parse(iso);
-  if (Number.isNaN(t)) return "";
-  const sec = Math.max(0, Math.floor((Date.now() - t) / 1000));
-  if (sec < 60) return `${sec}s`;
-  const min = Math.floor(sec / 60);
-  if (min < 60) return `${min}m`;
-  const hr = Math.floor(min / 60);
-  if (hr < 48) return `${hr}h`;
-  return `${Math.floor(hr / 24)}d`;
-}
+const queuedOpen = useSetting("monitorQueuedOpen", false);
 
+/** Running and queued experiments share the queue's authoritative snapshot. */
 export function ActivityShortlog() {
+  const [snapshot, setSnapshot] = useState<QueueSnapshot | null>(null);
+  const [error, setError] = useState(false);
+  const alive = useRef(true);
+  const load = useCallback(async () => {
+    try { const next = await getQueue(); if (alive.current) { setSnapshot(next); setError(false); } }
+    catch { if (alive.current) setError(true); }
+  }, []);
+  useEffect(() => { alive.current = true; void load(); return () => { alive.current = false; }; }, []);
+  useLiveRefresh(["queue_changed", "experiment_started", "experiment_finished", "experiment_cancelled"], load, 30_000);
   const experiments = allExperiments.value;
+  const running = snapshot?.running ?? experiments.filter(e => e._running || e.status === "running");
+  const queued = snapshot?.queued ?? [];
   const ideas = allIdeas.value;
   const progress = runningProgress.value;
-
-  const running = experiments.filter((e) => e._running || e.status === "running");
-  const recent = experiments
-    .filter((e) => !e._running && e.finished_at &&
-      (e.status === "completed" || e.status === "failed" || e.status === "cancelled"))
-    .sort((a, b) => Date.parse(b.finished_at || "") - Date.parse(a.finished_at || ""))
-    .slice(0, 6);
-
-  return (
-    <div class="activity-shortlog" aria-label="Live activity">
-      <div class="nav-secondary-head"><Eyebrow>Live activity</Eyebrow></div>
-
-      <div class="shortlog-block">
-        <div class="shortlog-sub">
-          <Eyebrow>Running</Eyebrow>
-          <span class="shortlog-count">{running.length}</span>
-        </div>
-        {running.length === 0 ? (
-          <div class="shortlog-idle">— idle —</div>
-        ) : (
-          running.map((e) => {
-            const label = e.label || String(e.id);
-            const pct = progress[label];
-            return (
-              <div class="shortlog-run" key={`r-${e.id}`}>
-                <button
-                  class="shortlog-row"
-                  onClick={() => navigateToIdea(e.idea_id, label)}
-                  onMouseEnter={(ev) => showRunPreview(
-                    { label, ideaId: e.idea_id, pct: typeof pct === "number" ? pct : undefined },
-                    ev.currentTarget as Element,
-                  )}
-                  onMouseLeave={hideRunPreview}
-                >
-                  <span class="shortlog-dot is-running" />
-                  <span class="shortlog-row-main">
-                    <span class="shortlog-run-exp">{label.includes(".") ? label : `${e.idea_id}.${label}`}</span>{" "}
-                    {ideaTitle(ideas[e.idea_id]?.description ?? "")}
-                  </span>
-                  {typeof pct === "number" && <span class="shortlog-pct">{Math.round(pct)}%</span>}
-                </button>
-                <span class="shortlog-progress">
-                  <span
-                    class={`shortlog-progress-fill${typeof pct === "number" ? "" : " is-indeterminate"}`}
-                    style={typeof pct === "number" ? { width: `${Math.min(100, Math.max(0, pct))}%` } : undefined}
-                  />
-                </span>
-              </div>
-            );
-          })
-        )}
-      </div>
-
-      {recent.length > 0 && (
-        <div class="shortlog-block">
-          <div class="shortlog-sub"><Eyebrow>Recent</Eyebrow></div>
-          {recent.map((e) => {
-            const ok = e.status === "completed";
-            // Shared link components (ExpLink/IdeaLink) carry the canonical
-            // styling + hover cards; the score column mirrors the Overview
-            // experiment tables. Row is a div — links are buttons themselves.
-            const score = e.metrics?.[selectedMetric.value];
-            return (
-              <div
-                key={`f-${e.id}`}
-                class="shortlog-row"
-                role="button"
-                onClick={() => navigateToIdea(e.idea_id, e.label || String(e.id))}
-                title={ideas[e.idea_id]?.description}
-              >
-                <span class={`shortlog-dot ${ok ? "is-done" : "is-bad"}`} />
-                <ExpLink label={String(e.label ?? e.id)} ideaId={e.idea_id} class="shortlog-exp" />
-                <IdeaLink id={e.idea_id} />
-                {typeof score === "number" && isFinite(score) && (
-                  <span class="shortlog-score">{fmtScoreShort(score)}</span>
-                )}
-                <span class="shortlog-time">{relTime(e.finished_at)}</span>
-              </div>
-            );
-          })}
-        </div>
-      )}
+  return <div class="activity-shortlog" aria-label="Experiment monitor">
+    <div class="shortlog-block">
+      <div class="shortlog-sub"><Eyebrow>Running</Eyebrow><span class="shortlog-count">{running.length}</span></div>
+      {!running.length && <div class="shortlog-idle">No running experiments</div>}
+      {running.map(e => {
+        const label = String(e.label || e.id);
+        const pct = progress[label];
+        const record = experiments.find(x => String(x.label || x.id) === label);
+        const score = record?.metrics?.[selectedMetric.value] ?? e.metrics?.[selectedMetric.value];
+        return <div class="shortlog-run" key={label}>
+          <button class="shortlog-row" data-experiment-label={label} data-idea-id={e.idea_id} onClick={() => navigateToIdea(e.idea_id, label)} title={e.description}>
+            <span class="shortlog-dot is-running" /><span class="shortlog-row-main"><strong class="shortlog-run-exp">exp/{label}</strong><span class="monitor-description">{e.description || ideas[e.idea_id]?.description}</span></span>
+            <span class="monitor-run-values">{typeof score === "number" && <span class="shortlog-score">{fmtScoreShort(score)}</span>}{typeof pct === "number" && <span class="shortlog-pct">{Math.round(pct)}%</span>}</span>
+          </button>
+          <span class="shortlog-progress"><span class={`shortlog-progress-fill${typeof pct === "number" ? "" : " is-indeterminate"}`} style={typeof pct === "number" ? { width: `${Math.min(100, Math.max(0, pct))}%` } : undefined} /></span>
+        </div>;
+      })}
     </div>
-  );
+    <div class="shortlog-block">
+      <button class="shortlog-sub monitor-queued-toggle" aria-expanded={queuedOpen.value} onClick={() => { queuedOpen.value = !queuedOpen.value; }}><Eyebrow>Queued</Eyebrow><span class="shortlog-count">{snapshot ? queued.length : "—"}</span><span class="monitor-queue-chevron" aria-hidden="true">{queuedOpen.value ? "▾" : "▸"}</span></button>
+      {queuedOpen.value && <>{!snapshot && !error && <div class="shortlog-idle">Loading queue…</div>}{snapshot && !queued.length && <div class="shortlog-idle">Queue empty</div>}{queued.map((e, index) => <button class="shortlog-row" data-experiment-label={e.label} data-idea-id={e.idea_id} key={e.label} onClick={() => navigateToIdea(e.idea_id, e.label)}><span class="monitor-queue-position">{index + 1}</span><span class="shortlog-row-main"><strong class="shortlog-run-exp">exp/{e.label}</strong><span class="monitor-description">{e.description || ideas[e.idea_id]?.description}</span></span></button>)}</>}
+    </div>
+    {error && <button class="ui-btn" onClick={load}>Queue unavailable · Retry</button>}
+  </div>;
 }

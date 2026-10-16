@@ -2,24 +2,23 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/ho
 import {
   createThread,
   getMessage,
-  getMessagePage,
+  getThreadConversation,
+  getThreadContext,
+  type ThreadGap,
   listAgents,
-  listHumans,
   listMessagesPage,
-  listThreads,
   sendMessage,
   updateThread,
 } from "../state/api";
 import { useLiveRefresh } from "../lib/hooks";
-import type { AgentEntry, HumanEntry, MessageEntry, ThreadMeta } from "../lib/types";
+import type { AgentEntry, MessageEntry, ThreadMeta, InboxThread } from "../lib/types";
 import { Badge, EmptyState, IconButton } from "../components/ui";
 import { agentColor, registerAgents, agentInitials } from "../lib/colors";
 import { isHuman, humanDisplayName, humanIdForName } from "../lib/identity";
-import { messagesMyNames, messagesReadByMe, myName, serverDemoMode, threadStatusFilter, threadOpenedByMe } from "../state/settings";
+import { messagesReadByMe, serverDemoMode } from "../state/settings";
 import {
+  dashboardSentMessageIds,
   markMessagesReadByMe,
-  markThreadReadByMe,
-  markAllMessagesReadByMe,
   registerDashboardUserMessage,
   isAddressedToMe,
   isMine,
@@ -27,14 +26,13 @@ import {
   countsAsNew,
 } from "../state/messages";
 import { focusMessageId } from "../state/agent-activity";
-import { MyMessagesPanel } from "../components/my-messages";
+import { MessageInbox } from "../components/message-inbox";
+import { savedConversations, toggleSavedConversation, threadListWidth, conversationAudience } from "../state/inbox";
 import { relativeTime } from "../lib/format";
 import { RichText, stripRouting } from "../components/rich-text";
 import { IdeaLink } from "../components/idea-link";
 import { ExpLink } from "../components/exp-link";
 
-type ReadFilter = "all" | "unread" | "read" | "agent-unread";
-type SortOrder = "newest" | "oldest";
 const threadKey = (m: MessageEntry) => m.thread_id ?? m.id;
 const timeOf = (m: MessageEntry) => Date.parse(m.created_at) || m.id;
 const recipientOf = (m: MessageEntry) =>
@@ -46,23 +44,6 @@ const recipientOf = (m: MessageEntry) =>
         ? `role:${m.from_role}`
         : null;
 
-function inboxOf(
-  m: MessageEntry,
-  agent: string,
-  role?: string,
-  participants?: Map<number, Set<string>>,
-) {
-  return (
-    m.from_agent !== agent &&
-    (m.to === "all" ||
-      m.to === `agent:${agent}` ||
-      (!!role && m.to === `role:${role}`) ||
-      // Thread posts reach members; posting in a thread is how agents
-      // usually join, so participants stand in for the member list.
-      (m.to.startsWith("thread:") && !!participants?.get(threadKey(m))?.has(agent)))
-  );
-}
-
 function Participant({ id }: { id: string }) {
   const color = agentColor(id);
   const label = isHuman(id) ? humanDisplayName(id) : id;
@@ -72,12 +53,6 @@ function Participant({ id }: { id: string }) {
       <span>{label}</span>
     </span>
   );
-}
-
-/** Small neutral pill for a human active in a thread ("the catch-all "user"
- *  shows as a neutral 'user' pill" per design). */
-function HumanPill({ id }: { id: string }) {
-  return <span class="thread-human-pill" title={id}>{humanDisplayName(id)}</span>;
 }
 
 function MessageReferences({ message }: { message: MessageEntry }) {
@@ -97,30 +72,21 @@ function MessageReferences({ message }: { message: MessageEntry }) {
 export function MessagesView() {
   const [agents, setAgents] = useState<AgentEntry[]>([]),
     [messages, setMessages] = useState<MessageEntry[]>([]);
-  const [humans, setHumans] = useState<HumanEntry[]>([]);
-  const [humanFilter, setHumanFilter] = useState<Set<string>>(new Set());
-  const [editingName, setEditingName] = useState(false),
-    [nameDraft, setNameDraft] = useState("");
   const [loaded, setLoaded] = useState(false),
     [error, setError] = useState<string | null>(null);
-  const [messageTotal, setMessageTotal] = useState(0);
-  const [loadingOlder, setLoadingOlder] = useState(false);
   const [pendingFocus, setPendingFocus] = useState<number | null>(null);
   const [newThreadOpen, setNewThreadOpen] = useState(false);
-  const [myMessagesOpen, setMyMessagesOpen] = useState(false);
-  // A thread opened from "My messages": its ← goes back to that list.
-  const [fromMine, setFromMine] = useState(false);
-  const [query, setQuery] = useState(""),
-    [agentFilter, setAgentFilter] = useState(""),
-    [conversationScope, setConversationScope] = useState<"all" | "mine">("all"),
-    [readFilter, setReadFilter] = useState<ReadFilter>("all"),
-    [sort, setSort] = useState<SortOrder>("newest"),
-    [viewAs, setViewAs] = useState("");
+  const inPerspective = false;
   const [selectedThread, setSelectedThread] = useState<number | null>(null),
     [threadMessages, setThreadMessages] = useState<MessageEntry[]>([]),
     [threadTotal, setThreadTotal] = useState(0),
     [threadLoading, setThreadLoading] = useState(false),
     [threadError, setThreadError] = useState<string | null>(null);
+  const [contextGaps, setContextGaps] = useState<ThreadGap[]>([]);
+  const [contextBusy, setContextBusy] = useState<Record<string, boolean>>({});
+  const [contextErrors, setContextErrors] = useState<Record<string, string>>({});
+  const contextGeneration = useRef(0);
+  const contextScrollTop = useRef<number | null>(null);
   const [threadMeta, setThreadMeta] = useState<Map<number, ThreadMeta>>(new Map());
   // Inline rename of the open thread: the draft title while editing, else null.
   const [renameDraft, setRenameDraft] = useState<string | null>(null);
@@ -145,7 +111,6 @@ export function MessagesView() {
   const cancelled = useRef(false),
     requestNumber = useRef(0),
     selectedThreadRef = useRef<number | null>(null),
-    viewAsRef = useRef(""),
     replyTargetThreadRef = useRef<number | null>(null);
   const sendingRef = useRef(false);
   const replyDrafts = useRef(new Map<number, string>());
@@ -154,10 +119,6 @@ export function MessagesView() {
   const followNewestRef = useRef(true);
   const scrollSnapshot = useRef<{ thread: number; first: number; last: number; height: number; top: number } | null>(null);
   const readMap = messagesReadByMe.value;
-  const myNames = messagesMyNames.value; // re-render when the names change
-  const statusFilter = threadStatusFilter.value;
-  const openedByMeOnly = threadOpenedByMe.value;
-  const myHumanId = humanIdForName(myName.value || "");
   const demo = serverDemoMode.value;
   const readByMe = (id: number) => !!readMap[String(id)];
   const setReadByMe = (ids: number[], read: boolean) =>
@@ -181,65 +142,30 @@ export function MessagesView() {
       : to.startsWith("thread:")
         ? "thread members"
         : to.replace(/^agent:/, "").replace(/^role:/, "role:");
-  const inPerspective = !!viewAs;
   selectedThreadRef.current = selectedThread;
-  viewAsRef.current = viewAs;
-  const participants = useMemo(() => {
-    const map = new Map<number, Set<string>>();
-    for (const m of messages) {
-      if (!m.from_agent) continue;
-      const k = threadKey(m);
-      if (!map.has(k)) map.set(k, new Set());
-      map.get(k)!.add(m.from_agent);
-    }
-    return map;
-  }, [messages]);
-  // Humans active per thread (posted in it, or addressed in it) — for the
-  // thread list's name pills and the person filter. Normalizes the legacy
-  // "agent:user" spelling to the catch-all "user".
-  const threadHumans = useMemo(() => {
-    const map = new Map<number, Set<string>>();
-    const add = (k: number, id: string | null | undefined) => {
-      if (!id || !isHuman(id)) return;
-      if (!map.has(k)) map.set(k, new Set());
-      map.get(k)!.add(id === "agent:user" ? "user" : id);
-    };
-    for (const m of messages) {
-      const k = threadKey(m);
-      add(k, m.from_agent);
-      add(k, m.to);
-    }
-    return map;
-  }, [messages]);
-  const relevant = (m: MessageEntry) =>
-    !inPerspective || inboxOf(m, viewAs, roleByAgent[viewAs], participants);
-  // Two kinds of unread for you: addressed to you (@user, see state/messages)
-  // and anything new since this browser's first visit (@anyone).
-  const isRead = (m: MessageEntry) =>
-    inPerspective
-      ? (m.read_by || []).includes(viewAs)
-      : isSentHere(m) || readByMe(m.id) || !(isAddressedToMe(m) || countsAsNew(m));
-  const isUnreadForMe = (m: MessageEntry) =>
-    !inPerspective && !isSentHere(m) && !readByMe(m.id) && isAddressedToMe(m);
+  const anchorRef = useRef<number | null>(null);
+  const lastFocusedMessage = useRef<number | null>(null);
+  const beforeRef = useRef<number | null>(null);
+  const afterRef = useRef<number | null>(null);
+  const [hasBefore, setHasBefore] = useState(false);
+  const [hasAfter, setHasAfter] = useState(false);
+  const [personalUnreadIds, setPersonalUnreadIds] = useState<Set<number>>(new Set());
+  const addressedToMe = (m: MessageEntry) => personalUnreadIds.has(m.id) || isAddressedToMe(m);
+  const isRead = (m: MessageEntry) => isSentHere(m) || readByMe(m.id) || !(addressedToMe(m) || countsAsNew(m));
 
   async function refresh() {
     try {
-      const [a, m, t, hu] = await Promise.all([
+      const [a, m] = await Promise.all([
         listAgents().catch(() => []),
         listMessagesPage(200),
-        listThreads({ status: "all", limit: 100 }).catch(() => null),
-        listHumans().catch(() => []),
       ]);
       if (!cancelled.current) {
         setAgents(a);
-        setHumans(hu);
-        if (t) setThreadMeta(new Map(t.threads.map((x) => [x.id, x])));
         setMessages((old) => [...new Map([...old, ...m.messages].map((item) => [item.id, item])).values()]);
-        setMessageTotal(m.total);
         setError(null);
         setLoaded(true);
         const selected = selectedThreadRef.current;
-        if (selected != null) void loadThread(selected);
+        if (selected != null && afterRef.current == null) void loadThread(selected);
       }
     } catch (e) {
       if (!cancelled.current) {
@@ -248,31 +174,26 @@ export function MessagesView() {
       }
     }
   }
-  async function loadOlderConversations() {
-    if (loadingOlder) return;
-    setLoadingOlder(true);
-    try {
-      const page = await listMessagesPage(200, messages.length);
-      if (!cancelled.current) {
-        setMessages((old) => [...new Map([...old, ...page.messages].map((m) => [m.id, m])).values()]);
-        setMessageTotal(page.total);
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally { setLoadingOlder(false); }
-  }
-  async function loadThread(id: number, offset = 0, append = false) {
+  async function loadThread(id: number, _offset = 0, append = false, direction: "older" | "newer" = "older") {
     const request = ++requestNumber.current;
     setThreadLoading(true);
     setThreadError(null);
     try {
-      const page = await getMessagePage(id, 200, offset);
+      const cursor = append ? direction === "older" ? { before_id: beforeRef.current ?? undefined } : { after_id: afterRef.current ?? undefined }
+        : anchorRef.current != null ? { around_id: anchorRef.current } : {};
+      const page = await getThreadConversation(id, cursor, conversationAudience.value, dashboardSentMessageIds());
       if (
         !cancelled.current &&
         request === requestNumber.current &&
         selectedThreadRef.current === id
       ) {
+        const pageIds = new Set(page.messages.map(message => message.id));
+        setContextGaps(previous => [...previous.filter(gap => !pageIds.has(gap.after_id ?? -1) && !pageIds.has(gap.before_id ?? -1)), ...(page.gaps ?? [])]);
         setThreadTotal(page.total);
+        setThreadMeta(old => new Map(old).set(id, page));
+        if (!append || direction === "older") { beforeRef.current = page.next_before_id ?? null; setHasBefore(beforeRef.current != null); }
+        if (!append || direction === "newer") { afterRef.current = page.next_after_id ?? null; setHasAfter(afterRef.current != null); }
+        anchorRef.current = null;
         setThreadMessages((old) =>
           [
             ...new Map(
@@ -283,10 +204,6 @@ export function MessagesView() {
             ).values(),
           ].sort((a, b) => timeOf(a) - timeOf(b)),
         );
-        if (!viewAsRef.current) {
-          markMessagesReadByMe(page.messages.map((m) => m.id));
-          markThreadReadByMe(id);
-        }
         if (!append && replyTargetThreadRef.current !== id) {
           const newestFirst = [...page.messages].sort((a, b) => timeOf(b) - timeOf(a));
           // Follow the conversation's addressing: thread-addressed threads
@@ -309,6 +226,43 @@ export function MessagesView() {
         setThreadLoading(false);
     }
   }
+  const gapKey = (gap: ThreadGap) => `${gap.after_id ?? "start"}:${gap.before_id ?? "end"}`;
+  function gapContents(gap: ThreadGap) {
+    const revealed = threadMessages.filter(message => (gap.after_id == null || message.id > gap.after_id) && (gap.before_id == null || message.id < gap.before_id));
+    return { revealed, remaining: Math.max(0, gap.count - revealed.length) };
+  }
+  async function revealContext(gap: ThreadGap) {
+    const id = selectedThreadRef.current;
+    if (id == null) return;
+    const key = gapKey(gap), generation = contextGeneration.current;
+    if (contextBusy[key]) return;
+    const { revealed } = gapContents(gap);
+    const after = revealed.length ? Math.max(...revealed.map(message => message.id)) : gap.after_id;
+    setContextBusy(previous => ({ ...previous, [key]: true }));
+    setContextErrors(previous => ({ ...previous, [key]: "" }));
+    try {
+      const page = await getThreadContext(id, { after_id: after, before_id: gap.before_id });
+      if (cancelled.current || generation !== contextGeneration.current || selectedThreadRef.current !== id) return;
+      followNewestRef.current = false;
+      contextScrollTop.current = messageListRef.current?.scrollTop ?? 0;
+      setContextGaps(previous => previous.map(item => gapKey(item) === key ? { ...item, count: revealed.length + page.total } : item));
+      setThreadMessages(previous => [...new Map([...previous, ...page.messages].map(message => [message.id, message])).values()].sort((a, b) => timeOf(a) - timeOf(b)));
+    } catch (error) {
+      if (generation === contextGeneration.current) setContextErrors(previous => ({ ...previous, [key]: error instanceof Error ? error.message : String(error) }));
+    } finally {
+      if (generation === contextGeneration.current) setContextBusy(previous => ({ ...previous, [key]: false }));
+    }
+  }
+  function renderGap(gap: ThreadGap) {
+    const { remaining } = gapContents(gap), key = gapKey(gap);
+    if (!remaining || conversationAudience.value === "all") return null;
+    if (gap.after_id != null && !threadMessages.some(message => message.id === gap.after_id)) return null;
+    return <li key={`gap:${key}`} class="thread-context-gap" data-context-gap={key}>
+      <button class="ui-btn" disabled={contextBusy[key]} onClick={() => revealContext(gap)}>{contextBusy[key] ? "Loading…" : `Show ${Math.min(3, remaining)} more`}</button>
+      <span>{remaining} {remaining === 1 ? "message hidden" : "messages hidden"}</span>
+      {contextErrors[key] && <span class="thread-context-error" role="alert">{contextErrors[key]}</span>}
+    </li>;
+  }
   useLiveRefresh(["message_received", "agent_changed", "thread_changed"], refresh, 30_000);
   useEffect(() => {
     cancelled.current = false;
@@ -318,6 +272,7 @@ export function MessagesView() {
     };
   }, []);
   useEffect(() => {
+    contextGeneration.current++; setContextGaps([]); setContextBusy({}); setContextErrors({}); contextScrollTop.current = null;
     if (selectedThread != null) {
       setReplyText(replyDrafts.current.get(selectedThread) || "");
       setReplyTldr(replyTldrDrafts.current.get(selectedThread) || "");
@@ -325,81 +280,9 @@ export function MessagesView() {
       setThreadMessages([]);
       setThreadTotal(0);
       loadThread(selectedThread);
-      if (!inPerspective) markThreadReadByMe(selectedThread);
     } else setThreadMessages([]);
-  }, [selectedThread, inPerspective]);
+  }, [selectedThread, inPerspective, conversationAudience.value]);
 
-  const displayed = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return messages.filter(relevant).filter((m) => {
-      if (
-        agentFilter &&
-        m.from_agent !== agentFilter &&
-        m.to !== `agent:${agentFilter}` &&
-        !(m.read_by || []).includes(agentFilter)
-      )
-        return false;
-      if (readFilter === "unread" && isRead(m)) return false;
-      if (readFilter === "read" && !isRead(m)) return false;
-      if (readFilter === "agent-unread" && (m.read_by || []).length)
-        return false;
-      return (
-        !q ||
-        `${m.from_agent} ${m.from_role} ${m.to} ${describeRecipient(m.to)} ${m.tldr || ""} ${m.text} ${(m.references || []).map((ref) => "path" in ref ? ref.path : ref.id).join(" ")}`
-          .toLowerCase()
-          .includes(q)
-      );
-    });
-  }, [messages, query, agentFilter, readFilter, viewAs, readMap, roleByAgent, myNames]);
-  const threads = useMemo(() => {
-    const groups = new Map<number, MessageEntry[]>();
-    displayed.forEach((m) =>
-      groups.set(threadKey(m), [...(groups.get(threadKey(m)) || []), m]),
-    );
-    return [...groups.entries()]
-      .map(([id, items]) => {
-        const latest = items.reduce((a, b) => (timeOf(a) > timeOf(b) ? a : b));
-        return {
-          id,
-          items,
-          latest,
-          unread: items.filter((m) => !isRead(m)).length,
-          unreadForMe: items.filter(isUnreadForMe).length,
-          forMe: !inPerspective && items.some((m) => !isSentHere(m) && isAddressedToMe(m)),
-        };
-      })
-      .filter(
-        (thread) =>
-          conversationScope === "all" ||
-          isHuman(threadMeta.get(thread.id)?.created_by) ||
-          thread.items.some((m) => isHuman(m.from_agent) || isHuman(m.to)),
-      )
-      .filter((thread) => {
-        if (!openedByMeOnly) return true;
-        // Opened by you: created as your user:<name>, its first message was
-        // sent from this browser, or created as the plain "user" (every human
-        // posted as "user" before names existed).
-        const createdBy = threadMeta.get(thread.id)?.created_by;
-        if (createdBy === "user" || (myHumanId && createdBy === myHumanId)) return true;
-        if (isSentHere({ id: thread.id } as MessageEntry)) return true;
-        const root = thread.items.find((m) => m.id === thread.id);
-        return !!root && !!myHumanId && root.from_agent === myHumanId;
-      })
-      .filter(
-        // Threads without stored metadata (plain conversations) count as open.
-        (thread) => statusFilter === "all" || (threadMeta.get(thread.id)?.status ?? "open") === statusFilter,
-      )
-      .filter(
-        (thread) =>
-          humanFilter.size === 0 ||
-          [...(threadHumans.get(thread.id) || [])].some((h) => humanFilter.has(h)),
-      )
-      .sort((a, b) =>
-        sort === "newest"
-          ? timeOf(b.latest) - timeOf(a.latest)
-          : timeOf(a.latest) - timeOf(b.latest),
-      );
-  }, [displayed, sort, readMap, viewAs, conversationScope, threadMeta, myNames, humanFilter, threadHumans, statusFilter, openedByMeOnly, myHumanId]);
   const focusId = focusMessageId.value;
   useLayoutEffect(() => {
     const list = messageListRef.current;
@@ -408,7 +291,9 @@ export function MessagesView() {
     const last = threadMessages[threadMessages.length - 1].id;
     const previous = scrollSnapshot.current;
     const changedThread = previous?.thread !== selectedThread;
-    if (pendingFocus == null && focusId == null) {
+    if (contextScrollTop.current != null) {
+      list.scrollTop = contextScrollTop.current; contextScrollTop.current = null;
+    } else if (pendingFocus == null && focusId == null) {
       if (!changedThread && previous.first !== first && previous.last === last) {
         // Prepending history should keep the message being read in place.
         list.scrollTop = previous.top + list.scrollHeight - previous.height;
@@ -427,11 +312,14 @@ export function MessagesView() {
     const focus = (message: MessageEntry) => {
       if (cancelled.current || focusMessageId.value !== focusId) return;
       focusMessageId.value = null;
-      setConversationScope("all");
+      conversationAudience.value = "all";
       setNewThreadOpen(false);
-      setMyMessagesOpen(false);
-      setSelectedThread(threadKey(message));
+      anchorRef.current = message.id;
+      lastFocusedMessage.current = message.id;
       setPendingFocus(message.id);
+      if (selectedThreadRef.current === threadKey(message)) {
+        setThreadMessages([]); void loadThread(threadKey(message));
+      } else setSelectedThread(threadKey(message));
     };
     const found = messages.find((m) => m.id === focusId);
     if (found) focus(found);
@@ -444,6 +332,8 @@ export function MessagesView() {
     if (pendingFocus == null || threadLoading || threadError || !threadMessages.length || threadKey(threadMessages[0]) !== selectedThread) return;
     const element = document.getElementById(`thread-message-${pendingFocus}`);
     if (element) {
+      const fullMessage = element.querySelector<HTMLDetailsElement>("details.thread-message-full");
+      if (fullMessage) fullMessage.open = true;
       element.scrollIntoView({ behavior: "smooth", block: "center" });
       // Flash it so the eye finds it after the scroll (restart if repeated).
       element.classList.remove("is-flash");
@@ -451,8 +341,6 @@ export function MessagesView() {
       element.classList.add("is-flash");
       window.setTimeout(() => element.classList.remove("is-flash"), 2200);
       setPendingFocus(null);
-    } else if (threadMessages.length < threadTotal && selectedThread != null) {
-      void loadThread(selectedThread, threadMessages.length, true);
     }
   }, [pendingFocus, threadMessages, threadLoading, threadTotal, threadError]);
   // ◀ / ▶ through your own messages in the open thread, relative to what is
@@ -461,7 +349,7 @@ export function MessagesView() {
   const olderJump = useRef<number | null>(null); // first loaded id before an older-page fetch
   useEffect(() => { setMineCursor(null); olderJump.current = null; }, [selectedThread]);
   const mineIds = threadMessages.filter((m) => isMine(m)).map((m) => m.id);
-  const hasOlder = threadTotal > threadMessages.length;
+  const hasOlder = hasBefore;
   function focusMine(id: number) {
     setMineCursor(id);
     setPendingFocus(id);
@@ -496,7 +384,7 @@ export function MessagesView() {
     if (!threadMessages.length || threadMessages[0].id === before) return;
     const older = threadMessages.filter((m) => m.id < before && isMine(m));
     if (older.length) { olderJump.current = null; focusMine(older[older.length - 1].id); }
-    else if (threadTotal > threadMessages.length) {
+    else if (hasBefore) {
       olderJump.current = threadMessages[0].id;
       void loadThread(selectedThread, threadMessages.length, true);
     } else olderJump.current = null;
@@ -527,7 +415,7 @@ export function MessagesView() {
     try {
       const parent =
         kind === "reply"
-          ? threadMessages[threadMessages.length - 1]
+          ? threadMessages.find(message => message.id === lastFocusedMessage.current) ?? threadMessages[threadMessages.length - 1]
           : undefined;
       const title = kind === "new" ? newTitle.trim() : "";
       const sent = title
@@ -551,6 +439,8 @@ export function MessagesView() {
           );
       registerDashboardUserMessage(sent);
       if (kind === "new") {
+        lastFocusedMessage.current = sent.id;
+        anchorRef.current = sent.id;
         setNewText("");
         setNewTitle("");
         setNewTldr("");
@@ -563,10 +453,13 @@ export function MessagesView() {
           followNewestRef.current = true;
           setReplyText("");
           setReplyTldr("");
-          setThreadMessages((old) => [...old, sent]);
+          if (afterRef.current != null) setThreadMessages([sent]);
+          else setThreadMessages((old) => [...old, sent]);
+          afterRef.current = null; anchorRef.current = null; setHasAfter(false);
         }
       }
       await refresh();
+      window.dispatchEvent(new Event("the-lab:refresh-inbox"));
     } catch (e) {
       setSendError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -605,237 +498,75 @@ export function MessagesView() {
       )}
     </select>
   );
-  const selected = threads.find((t) => t.id === selectedThread);
+  function openInboxThread(thread: InboxThread) {
+    setThreadMeta(old => new Map(old).set(thread.id, thread));
+    setPersonalUnreadIds(new Set(thread.unread_ids));
+    setNewThreadOpen(false); setSendError(null);
+    anchorRef.current = thread.focus.id;
+    lastFocusedMessage.current = thread.focus.id;
+    setPendingFocus(thread.focus.id);
+    if (selectedThreadRef.current === thread.id) { setThreadMessages([]); void loadThread(thread.id); }
+    else setSelectedThread(thread.id);
+  }
+  const updateMetadata = useRef((threads: InboxThread[]) => {
+    setThreadMeta(old => { const next = new Map(old); for (const thread of threads) next.set(thread.id, thread); return next; });
+  }).current;
+  useEffect(() => {
+    const showInbox = () => { setSelectedThread(null); setNewThreadOpen(false); };
+    window.addEventListener("the-lab:show-inbox", showInbox);
+    return () => window.removeEventListener("the-lab:show-inbox", showInbox);
+  }, []);
+  // Read acknowledgement is about what was visible, never the whole fetched
+  // page. A short dwell avoids clearing replies while merely scrolling past.
+  useEffect(() => {
+    const list = messageListRef.current;
+    if (!list || selectedThread == null) return;
+    const timers = new Map<Element, ReturnType<typeof setTimeout>>();
+    const observer = new IntersectionObserver(entries => {
+      for (const entry of entries) {
+        const old = timers.get(entry.target);
+        if (old) clearTimeout(old);
+        timers.delete(entry.target);
+        if (!entry.isIntersecting || entry.intersectionRect.height < Math.min(48, entry.boundingClientRect.height)) continue;
+        timers.set(entry.target, setTimeout(() => {
+          timers.delete(entry.target);
+          if (document.hidden || entry.target.closest("[hidden]") || !entry.target.getClientRects().length) return;
+          const box = entry.target.getBoundingClientRect(), bounds = list.getBoundingClientRect();
+          if (box.bottom <= bounds.top || box.top >= bounds.bottom) return;
+          const id = Number((entry.target as HTMLElement).dataset.messageId);
+          if (id && !messagesReadByMe.peek()[String(id)]) markMessagesReadByMe([id]);
+        }, 400));
+      }
+    }, { root: list, threshold: [0, 0.05, 0.5, 1] });
+    list.querySelectorAll("[data-message-id]").forEach(node => observer.observe(node));
+    return () => { observer.disconnect(); for (const timer of timers.values()) clearTimeout(timer); };
+  }, [threadMessages, selectedThread, newThreadOpen]);
 
   return (
-    <div id="messages-container" class={`message-threads${selectedThread != null || newThreadOpen || myMessagesOpen ? " has-selection" : ""}`}>
-      <div class="thread-layout">
-        <div class="thread-sidebar">
-          <div class="thread-sidebar-toolbar">
-            {editingName ? (
-              <input
-                class="messages-whoami-input"
-                autoFocus
-                value={nameDraft}
-                aria-label="Your name"
-                placeholder="e.g. David"
-                onInput={(e) => setNameDraft((e.target as HTMLInputElement).value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-                  if (e.key === "Escape") { setEditingName(false); }
-                }}
-                onBlur={() => { myName.value = nameDraft.trim(); setEditingName(false); }}
-              />
-            ) : (
-              <button
-                type="button"
-                class="messages-whoami"
-                title="Set the name messages you send are stamped with"
-                onClick={() => { setNameDraft(myName.value); setEditingName(true); }}
-              >
-                You: {myName.value || <em>set your name</em>} ✎
-              </button>
-            )}
-            <input
-              class="messages-search"
-              type="search"
-              aria-label="Search conversations"
-              placeholder="Search messages…"
-              value={query}
-              onInput={(e) => setQuery((e.target as HTMLInputElement).value)}
-            />
-            <button
-              class="ui-btn thread-new-button"
-              type="button"
-              disabled={demo || inPerspective}
-              onClick={() => {
-                setSendError(null);
-                setSelectedThread(null);
-                setNewThreadOpen(true);
-              }}
-            >
-              + New
-            </button>
-            <IconButton onClick={refresh} title="Refresh">↺</IconButton>
-          </div>
-          {humans.length > 0 && (
-            <div class="thread-human-filter" role="group" aria-label="Filter by person">
-              {humans.map((h) => (
-                <button
-                  key={h.id}
-                  type="button"
-                  class={`thread-human-chip${humanFilter.has(h.id) ? " is-active" : ""}`}
-                  onClick={() => setHumanFilter((prev) => {
-                    const next = new Set(prev);
-                    if (next.has(h.id)) next.delete(h.id); else next.add(h.id);
-                    return next;
-                  })}
-                  title={`Show only threads ${humanDisplayName(h.id)} is active in`}
-                >
-                  {humanDisplayName(h.id)}
-                </button>
-              ))}
-              {humanFilter.size > 0 && (
-                <button type="button" class="thread-human-chip-clear" onClick={() => setHumanFilter(new Set())}>
-                  clear
-                </button>
-              )}
-            </div>
-          )}
-          <div class="thread-sidebar-subhead">
-            <span>{loaded ? `${threads.length} threads` : "Loading…"}</span>
-            <span class="thread-status-seg" role="group" aria-label="Thread status">
-              {(["open", "closed", "all"] as const).map((v) => (
-                <button
-                  key={v}
-                  type="button"
-                  class={`thread-status-btn${statusFilter === v ? " is-active" : ""}`}
-                  aria-pressed={statusFilter === v}
-                  onClick={() => { threadStatusFilter.value = v; }}
-                >
-                  {v}
-                </button>
-              ))}
-            </span>
-            <button
-              type="button"
-              class={`thread-status-btn thread-mine-btn${openedByMeOnly ? " is-active" : ""}`}
-              aria-pressed={openedByMeOnly}
-              title="Only threads you opened (as your name, from this browser, or as plain 'user' before names existed)"
-              onClick={() => { threadOpenedByMe.value = !openedByMeOnly; }}
-            >
-              by me
-            </button>
-            {!inPerspective && (
-              <button
-                type="button"
-                class="thread-read-all"
-                onClick={() => markAllMessagesReadByMe([...messages, ...threadMessages].map((m) => m.id))}
-                title="Mark everything read (in this browser)"
-              >
-                ✓ Read all
-              </button>
-            )}
-            <details class="thread-filters">
-              <summary>Filters</summary>
-              <div class="thread-filter-menu">
-                <label>
-                  <span>View as</span>
-                  <select class="messages-select" value={viewAs} onChange={(e) => setViewAs((e.target as HTMLSelectElement).value)}>
-                    <option value="">you (dashboard)</option>
-                    {agents.map((a) => <option key={a.agent_id} value={a.agent_id}>{labelAgent(a.agent_id)}</option>)}
-                  </select>
-                </label>
-                <label title="Extra names agents might use for you in messages; a mention still notifies you even though it isn't your primary name above">
-                  <span>Also known as</span>
-                  <input
-                    class="messages-select"
-                    value={myNames}
-                    onChange={(e) => { messagesMyNames.value = (e.target as HTMLInputElement).value; }}
-                    placeholder="e.g. Dave, DH"
-                  />
-                </label>
-                <label>
-                  <span>Participant</span>
-                  <select class="messages-select" value={agentFilter} onChange={(e) => setAgentFilter((e.target as HTMLSelectElement).value)}>
-                    <option value="">All agents</option>
-                    {agents.map((a) => <option key={a.agent_id} value={a.agent_id}>{labelAgent(a.agent_id)}</option>)}
-                  </select>
-                </label>
-                <select class="messages-select" aria-label="Conversation scope" value={conversationScope} onChange={(e) => setConversationScope((e.target as HTMLSelectElement).value as "all" | "mine")}>
-                  <option value="all">All threads</option>
-                  <option value="mine">My conversations</option>
-                </select>
-                <select class="messages-select" aria-label="Read status" value={readFilter} onChange={(e) => setReadFilter((e.target as HTMLSelectElement).value as ReadFilter)}>
-                  <option value="all">All messages</option>
-                  <option value="unread">Unread</option>
-                  <option value="read">Read</option>
-                  <option value="agent-unread">No agent has read</option>
-                </select>
-                <select class="messages-select" aria-label="Sort order" value={sort} onChange={(e) => setSort((e.target as HTMLSelectElement).value as SortOrder)}>
-                  <option value="newest">Latest activity</option>
-                  <option value="oldest">Oldest activity</option>
-                </select>
-              </div>
-            </details>
-          </div>
-          {inPerspective && <div class="messages-perspective-note">Viewing {labelAgent(viewAs)} read-only</div>}
-          {error && <div class="agents-error">{error}</div>}
-          <aside class="thread-list" aria-label="Message threads">
-          {!inPerspective && (
-            <button
-              class={`thread-list-row thread-list-mine${myMessagesOpen ? " is-selected" : ""}`}
-              onClick={() => { setSendError(null); setNewThreadOpen(false); setSelectedThread(null); setMyMessagesOpen(true); }}
-              title="Everything you sent, across all threads — click one to jump to it"
-            >
-              <span class="thread-list-title">✎ My messages</span>
-              <span class="thread-list-preview">all threads · click one to jump there</span>
-            </button>
-          )}
-          {threads.map((t) => (
-            <button
-              key={t.id}
-              class={`thread-list-row${selectedThread === t.id ? " is-selected" : ""}${t.unreadForMe > 0 ? " has-unread-for-me" : t.forMe ? " has-for-me" : ""}${t.unread > 0 ? " has-unread" : ""}`}
-              onClick={() => {
-                setSendError(null);
-                setNewThreadOpen(false);
-                setMyMessagesOpen(false);
-                setFromMine(false);
-                setSelectedThread(t.id);
-              }}
-            >
-              <span class="thread-list-line">
-                <Participant id={t.latest.from_agent ?? t.latest.from_role ?? "system"} />
-                <span class="thread-list-time">
-                  {relativeTime(t.latest.created_at)}
-                </span>
-              </span>
-              {threadMeta.get(t.id) && (
-                <span class="thread-list-title">{threadMeta.get(t.id)!.title}</span>
-              )}
-              <span class="thread-list-preview">
-                {stripRouting(t.latest.tldr || t.latest.text)}
-              </span>
-              {threadHumans.get(t.id) && threadHumans.get(t.id)!.size > 0 && (
-                <span class="thread-list-humans">
-                  {[...threadHumans.get(t.id)!].map((h) => <HumanPill key={h} id={h} />)}
-                </span>
-              )}
-              <span class="thread-list-meta">
-                <span>
-                  {t.items.length} msg{t.items.length === 1 ? "" : "s"}
-                </span>
-                {threadMeta.get(t.id)?.kind === "suggestion" && <Badge tone="running">suggestion</Badge>}
-                {threadMeta.get(t.id)?.status === "closed" && <Badge>closed</Badge>}
-                {threadMeta.get(t.id)?.visibility === "private" && <Badge>private</Badge>}
-                {t.unreadForMe > 0 && (
-                  <span class="thread-unread-me" title={`${t.unreadForMe} unread message${t.unreadForMe === 1 ? "" : "s"} for you`}>@{t.unreadForMe}</span>
-                )}
-                {t.unread - t.unreadForMe > 0 && (
-                  <span class="thread-unread-any" title="unread messages in this thread (not addressed to you)">{t.unread - t.unreadForMe} unread</span>
-                )}
-              </span>
-            </button>
-          ))}
-          {messages.length < messageTotal && <button class="thread-load-more" disabled={loadingOlder} onClick={loadOlderConversations}>{loadingOlder ? "Loading…" : "Load older conversations"}</button>}
-          {!threads.length && (
-            <EmptyState
-              icon="✉"
-              title="No threads"
-              body="Start a new conversation."
-            />
-          )}
-          </aside>
-        </div>
+    <div id="messages-container" class={`message-threads${selectedThread != null || newThreadOpen ? " has-selection" : ""}`}>
+      <div class="thread-layout" style={{ "--thread-list-width": `${threadListWidth.value}%` }}>
+        <MessageInbox selectedId={selectedThread} agents={agents} onSelect={openInboxThread}
+          onMetadata={updateMetadata} onNew={() => { setSendError(null); setSelectedThread(null); setNewThreadOpen(true); }} />
+        <div class="thread-list-resize" role="separator" aria-label="Resize conversation list" aria-orientation="vertical" aria-valuemin={20} aria-valuemax={65} aria-valuenow={Math.round(threadListWidth.value)} tabIndex={0}
+          onKeyDown={e => {
+            if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+              e.preventDefault();
+              threadListWidth.value = Math.max(20, Math.min(65, threadListWidth.value + (e.key === "ArrowRight" ? 2 : -2)));
+            }
+          }}
+          onPointerDown={e => {
+            if (e.button !== 0) return;
+            e.preventDefault();
+            e.currentTarget.setPointerCapture(e.pointerId);
+          }}
+          onPointerMove={e => {
+            if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
+            const bounds = e.currentTarget.parentElement!.getBoundingClientRect();
+            threadListWidth.value = Math.max(20, Math.min(65, (e.clientX - bounds.left) / bounds.width * 100));
+          }}
+          onPointerUp={e => { if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId); }} />
         <section class="thread-detail">
-          {myMessagesOpen && !newThreadOpen ? (
-            <MyMessagesPanel
-              humanId={myHumanId}
-              titleOf={(id) => threadMeta.get(id)?.title ?? undefined}
-              onOpen={(id) => { setFromMine(true); focusMessageId.value = id; }}
-              onBack={() => setMyMessagesOpen(false)}
-            />
-          ) : newThreadOpen ? (
+          {newThreadOpen ? (
             <div class="thread-new-panel">
               <div class="thread-detail-head">
                 <button class="thread-back" type="button" onClick={() => setNewThreadOpen(false)} aria-label="Back to conversations">←</button>
@@ -863,9 +594,8 @@ export function MessagesView() {
             <>
               <div class="thread-detail-head">
                 <button class="thread-back" type="button"
-                  onClick={() => { setSelectedThread(null); if (fromMine) setMyMessagesOpen(true); }}
-                  aria-label={fromMine ? "Back to my messages" : "Back to conversations"}
-                  title={fromMine ? "Back to My messages" : undefined}>←</button>
+                  onClick={() => setSelectedThread(null)}
+                  aria-label="Back to conversations" title="Back to conversations">←</button>
                 {renameDraft !== null ? (
                   <input
                     class="thread-rename-input"
@@ -903,23 +633,10 @@ export function MessagesView() {
                     {threadMeta.get(selectedThread)?.title ?? `Thread #${selectedThread}`}
                   </span>
                 )}
-                {threadMeta.get(selectedThread) && !inPerspective && !demo && renameDraft === null && (
-                  <button
-                    type="button"
-                    class="thread-rename-btn"
-                    onClick={() => setRenameDraft(threadMeta.get(selectedThread)!.title ?? "")}
-                    title="Rename this thread (or double-click the title)"
-                    aria-label="Rename thread"
-                  >
-                    ✎
-                  </button>
-                )}
-                {selected && (
-                  <span>{selected.items.length} recent messages</span>
-                )}
-                {threadMeta.get(selectedThread) && (
-                  <span>{threadMeta.get(selectedThread)!.member_count} members</span>
-                )}
+
+                <button type="button" class={`ui-btn thread-save${savedConversations.value.includes(selectedThread) ? " is-saved" : ""}`} aria-pressed={savedConversations.value.includes(selectedThread)} onClick={() => toggleSavedConversation(selectedThread, lastFocusedMessage.current ?? threadMessages[threadMessages.length - 1]?.id)}>{savedConversations.value.includes(selectedThread) ? "Saved · Remove" : "Keep for later"}</button>
+                <details class="thread-options"><summary>Options</summary><div>
+                {!demo && <button class="ui-btn" onClick={() => setRenameDraft(threadMeta.get(selectedThread)?.title ?? "")}>Rename conversation</button>}
                 {(mineIds.length > 0 || hasOlder) && !inPerspective && (
                   <span class="thread-mine-nav" title="Jump between your own messages in this thread (keys [ and ])">
                     <button type="button" onClick={() => jumpMine(-1)} aria-label="Previous message of mine"
@@ -961,9 +678,10 @@ export function MessagesView() {
                     }
                     title="Mark loaded messages read"
                   >
-                    ✓ Read thread
+                    Mark loaded messages read
                   </IconButton>
                 )}
+                </div></details>
               </div>
               {(threadMeta.get(selectedThread)?.summary || threadMeta.get(selectedThread)?.conclusion) && (
                 // Collapsed by default (summaries get long); the header shows
@@ -979,9 +697,13 @@ export function MessagesView() {
                   {threadMeta.get(selectedThread)!.conclusion && <div class="thread-summary-part"><strong>Conclusion</strong><RichText text={threadMeta.get(selectedThread)!.conclusion!} /></div>}
                 </details>
               )}
+              <div class="thread-audience" role="group" aria-label="Messages shown">{([["all", "All"], ["me", "Me + replies"], ["users", "Users + replies"]] as const).map(([mode, label]) => <button class={`ui-btn${conversationAudience.value === mode ? " is-active" : ""}`} aria-pressed={conversationAudience.value === mode} onClick={() => {
+                anchorRef.current = null; lastFocusedMessage.current = null; setPendingFocus(null);
+                conversationAudience.value = mode;
+              }}>{label}</button>)}</div>
               {threadError && <div class="agents-error">{threadError}</div>}
               {sendError && <div class="agents-error">{sendError}</div>}
-              {threadTotal > threadMessages.length && (
+              {hasBefore && (
                 <button
                   class="thread-load-more"
                   disabled={threadLoading}
@@ -991,7 +713,7 @@ export function MessagesView() {
                 >
                   {threadLoading
                     ? "Loading…"
-                    : `Load ${Math.min(200, threadTotal - threadMessages.length)} older messages`}
+                    : "Load earlier messages"}
                 </button>
               )}
               <ol
@@ -1011,11 +733,14 @@ export function MessagesView() {
                   if (list && followNewestRef.current) list.scrollTop = list.scrollHeight;
                 }}
               >
-                {threadMessages.map((m) => (
+                {!threadLoading && !threadMessages.length && <li class="thread-audience-empty">No messages in this view. Try All to see the full conversation.</li>}
+                {threadMessages.map((m) => [
+                  ...contextGaps.filter(gap => gap.before_id === m.id).map(renderGap),
                   <li
                     id={`thread-message-${m.id}`}
+                    data-message-id={m.id}
                     key={m.id}
-                    class={`thread-message${isRead(m) ? " is-read" : " is-unread"}${!inPerspective && !isSentHere(m) && isAddressedToMe(m) ? " is-for-me" : ""}${isMine(m) ? " is-from-user" : isHuman(m.from_agent) ? " is-from-human" : ""}`}
+                    class={`thread-message${isRead(m) ? " is-read" : " is-unread"}${!inPerspective && !isSentHere(m) && addressedToMe(m) ? " is-for-me" : ""}${isMine(m) ? " is-from-user" : isHuman(m.from_agent) ? " is-from-human" : ""}`}
                   >
                     <div class="thread-message-meta">
                       <span
@@ -1056,9 +781,11 @@ export function MessagesView() {
                       ) : <RichText text={stripRouting(m.text)} />}
                       <MessageReferences message={m} />
                     </div>
-                  </li>
-                ))}
+                  </li>,
+                ])}
+                {contextGaps.filter(gap => gap.before_id == null).map(renderGap)}
               </ol>
+              {hasAfter && <button class="thread-load-more" disabled={threadLoading} onClick={() => loadThread(selectedThread, 0, true, "newer")}>{threadLoading ? "Loading…" : "Load newer messages"}</button>}
               {threadLoading && !threadMessages.length && (
                 <div class="thread-loading">Loading thread…</div>
               )}

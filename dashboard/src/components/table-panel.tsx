@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from "preact/hooks";
 import { useSignalEffect } from "@preact/signals";
 import { plotExperiments } from "../state/hidden";
-import { allIdeas, currentLayout, highlightedIdea, runningProgress } from "../state/signals";
+import { allExperiments, allIdeas, currentLayout, highlightedIdea, runningProgress } from "../state/signals";
 import {
   selectedMetric, colorMode, activeTagFilters, tagFilterMode,
   showAbandoned, showConcluded, showRunning,
@@ -40,7 +40,7 @@ const STATUS_TONE: Record<string, BadgeTone> = {
 
 type SortDir = "asc" | "desc";
 
-export function TablePanel() {
+export function TablePanel({ ideaId, experimentLabel, records }: { ideaId?: number; experimentLabel?: string; records?: Experiment[] } = {}) {
   // Default: sort by selected metric descending so best experiments are first
   const defaultMetric = selectedMetric.value;
   const [sortKey, setSortKey] = useState<string>(defaultMetric || "label");
@@ -53,7 +53,8 @@ export function TablePanel() {
   const [dragCol, setDragCol] = useState<string | null>(null);
   const [dragOverCol, setDragOverCol] = useState<string | null>(null);
 
-  const experiments = plotExperiments.value;
+  const allRows = records ?? (experimentLabel ? allExperiments.value : plotExperiments.value);
+  const experiments = useMemo(() => allRows.filter(e => (ideaId == null || e.idea_id === ideaId) && (!experimentLabel || String(e.label ?? e.id) === experimentLabel)), [allRows, ideaId, experimentLabel]);
   const ideas = allIdeas.value;
   const layout = currentLayout.value;
   const metric = selectedMetric.value;
@@ -94,6 +95,7 @@ export function TablePanel() {
   const filtered = useMemo(() => {
     // Base filter: tags + status (always applied)
     let result = experiments.filter((e) => {
+      if (experimentLabel) return true;
       if (hiddenStatuses.has(e.idea_status || "active")) return false;
       if (hideRunning && (e._running || e.status === "running")) return false;
       if (tags.length > 0) {
@@ -110,7 +112,7 @@ export function TablePanel() {
     });
 
     // Improvements-only: keep only experiments that beat the previous best
-    if (impOnly && metric) {
+    if (impOnly && metric && !experimentLabel) {
       const lower = isLowerBetter(metric);
       let best = lower ? Infinity : -Infinity;
       result = result.filter((e) => {
@@ -126,7 +128,7 @@ export function TablePanel() {
     }
 
     // Idea mean: aggregate to one row per idea
-    if (mean) {
+    if (mean && !experimentLabel) {
       const groups: Record<number, { exps: Experiment[]; sums: Record<string, number>; counts: Record<string, number> }> = {};
       for (const e of result) {
         if (e._running) continue;
@@ -406,6 +408,8 @@ export function TablePanel() {
                 <tr
                   key={exp.id}
                   data-idea={exp.idea_id}
+                  data-experiment-label={exp.label || exp.id}
+                  data-idea-id={exp.idea_id}
                   onMouseEnter={() => { highlightedIdea.value = exp.idea_id; }}
                   onMouseLeave={() => { if (highlightedIdea.value === exp.idea_id) highlightedIdea.value = null; }}
                   onClick={() => navigateToIdea(exp.idea_id, exp.label)}
