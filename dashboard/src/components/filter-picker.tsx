@@ -87,6 +87,7 @@ function FilterPanel({ onClose }: { onClose: () => void }) {
           title={`${f.expr || "(all experiments)"}${f.exclude.length ? `\nexcluding ${f.exclude.length}: ${f.exclude.slice(0, 12).join(", ")}${f.exclude.length > 12 ? " …" : ""}` : ""}${f.description ? `\n${f.description}` : ""}`}>
           <span class="filter-row-name">{active ? "● " : ""}{f.name}</span>
           <code class="filter-row-expr">{f.expr || "all"}{f.exclude.length ? ` − ${f.exclude.length}` : ""}</code>
+          {own && f.shared && <span class="filter-row-badge" title="Shared with everyone">shared</span>}
           {!own && <span class="filter-row-owner">{f.owner.replace(/^user:/, "")}</span>}
         </button>
         <span class="filter-row-actions">
