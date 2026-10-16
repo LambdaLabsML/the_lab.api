@@ -259,3 +259,61 @@
 /* Running experiment without progress: a yellow dot fading in and out. */
 @keyframes mini-run-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
 .mini-run-pulse { animation: mini-run-pulse 1.6s ease-in-out infinite; }
+
+/* ── Chart toolbar controls (chart-controls.tsx) ─────────────────────────
+   One row that wraps; every control 28px tall, 12px text, the dashboard's
+   toggle look (soft border, accent-tinted active state), icons 14px. */
+.ctl-toolbar {
+  flex-direction: row; flex-wrap: wrap; align-items: center;
+  gap: 6px; padding: 6px 8px;
+}
+.chart-col-toolbar.ctl-toolbar { display: flex; box-shadow: inset 0 -1px var(--border-soft); flex-shrink: 0; }
+.ctl-icon { flex-shrink: 0; display: block; }
+.ctl-btn, .ctl-seg-btn, .ctl-select, .ctl-seg-name {
+  height: 28px; box-sizing: border-box;
+  display: inline-flex; align-items: center; gap: 5px;
+  font: inherit; font-family: var(--font-mono); font-size: 12px; line-height: 1;
+  color: var(--text-muted); white-space: nowrap;
+}
+.ctl-btn {
+  padding: 0 9px; cursor: pointer; background: transparent;
+  border: 1px solid var(--border-soft); border-radius: var(--radius-md);
+  transition: color var(--transition-fast), background var(--transition-fast), border-color var(--transition-fast);
+  &:hover { color: var(--text); border-color: var(--text-faint); }
+  &.is-active {
+    color: var(--accent);
+    border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+  }
+}
+.ctl-seg {
+  display: inline-flex; align-items: center; flex-shrink: 0;
+  border: 1px solid var(--border-soft); border-radius: var(--radius-md); overflow: hidden;
+}
+.ctl-seg-name {
+  padding: 0 6px 0 8px; color: var(--text-faint); cursor: help;
+  border-right: 1px solid var(--border-soft);
+}
+.ctl-seg-btn {
+  padding: 0 8px; cursor: pointer; border: 0; background: transparent;
+  & + & { border-left: 1px solid var(--border-soft); }
+  &:hover { color: var(--text); background: var(--bg-hi); }
+  &.is-active { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+}
+.ctl-select {
+  position: relative; padding: 0 26px 0 8px; min-width: 0; flex: 0 1 auto;
+  border: 1px solid var(--border-soft); border-radius: var(--radius-md); background: var(--bg-elev);
+  color: var(--text-faint); cursor: pointer;
+  &:hover, &:focus-within { border-color: var(--text-faint); }
+  &:focus-within { border-color: var(--accent); }
+  select, input {
+    appearance: none; -webkit-appearance: none; border: 0; outline: none; background: transparent;
+    color: var(--text); font: inherit; font-size: 12px; padding: 0; height: 100%; min-width: 0;
+    text-overflow: ellipsis; cursor: pointer;
+  }
+  &.is-wide select { width: clamp(9rem, 16vw, 15rem); }
+  .ctl-chevron { position: absolute; right: 9px; top: 50%; transform: translateY(-50%); pointer-events: none; color: var(--text-faint); }
+  option, optgroup { background: var(--bg-elev); color: var(--text); }
+}
+.ctl-search { padding-right: 8px; cursor: text; input { width: 10rem; cursor: text; } }
+.ctl-divider { width: 1px; height: 18px; background: var(--border-soft); margin: 0 2px; }

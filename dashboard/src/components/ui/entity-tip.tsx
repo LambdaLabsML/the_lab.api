@@ -44,6 +44,10 @@ export function experimentTipContent(o: {
   running?: boolean;
   /** Running experiments: pct_complete from the live progress. */
   pct?: number | null;
+  /** Further metric rows (e.g. the 2D plot's other axis). */
+  extraMetrics?: { name: string; value: number | null | undefined }[];
+  /** Heading instead of exp/<label> (e.g. an idea-mean point). */
+  mark?: string;
 }): ComponentChildren {
   const tone = o.status ? (STATUS_TONE[o.status] ?? "neutral") : null;
   const pct = o.running && typeof o.pct === "number" && Number.isFinite(o.pct)
@@ -51,7 +55,7 @@ export function experimentTipContent(o: {
   return (
     <>
       <span class="ui-tip-head">
-        <span class="ui-tip-mark">exp/{o.label}</span>
+        <span class="ui-tip-mark">{o.mark ?? `exp/${o.label}`}</span>
         {o.record ? (
           <span class="ui-tip-flag ui-tip-flag--record">★ record</span>
         ) : o.running ? (
@@ -69,6 +73,12 @@ export function experimentTipContent(o: {
           <span class={`ui-tip-metric-value${o.record ? " is-record" : ""}`}>{fmtVal(o.value as number)}</span>
         </span>
       )}
+      {o.extraMetrics?.filter(m => m.value != null && Number.isFinite(m.value as number)).map(m => (
+        <span class="ui-tip-metric" key={m.name}>
+          <span class="ui-tip-metric-label">{m.name}</span>
+          <span class="ui-tip-metric-value">{fmtVal(m.value as number)}</span>
+        </span>
+      ))}
       <span class="ui-tip-idea">
         <span class="ui-tip-idea-id">idea #{o.ideaId}</span>
         {tone && <span class={`ui-badge ui-badge--${tone}`}>{o.status}</span>}

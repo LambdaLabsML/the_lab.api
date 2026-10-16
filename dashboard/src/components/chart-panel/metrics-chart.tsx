@@ -1,4 +1,5 @@
 import { usePlotControls, matchesPlotSearch } from "../../lib/hooks/use-plot-controls";
+import { CtlDivider, CtlSearch, CtlSeg, CtlSelect, CtlToggle } from "./chart-controls";
 import { inSelection, selectionLabels } from "../../state/filters";
 import { useEffect, useMemo, useState } from "preact/hooks";
 import { allExperiments, allIdeas, currentLayout, cloneChartPanel, updatePanelTitle } from "../../state/signals";
@@ -94,18 +95,14 @@ export function MetricsChart({ instanceId, initialMetric, hideClone, onMetricCha
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-      <div class="chart-toolbar">
-        {/* Row 1: what is plotted — metric + data filters. */}
-        <div class="chart-toolbar-row">
-        {isClone && <input class="plot-data-filter" aria-label="Graph data filter" placeholder="Filter this graph…" value={plotFilter.value} onInput={e => { plotFilter.value = e.currentTarget.value; }} />}
-        <span class="chart-metric">
-          <select title="Metric" value={metric} onChange={(e) => { setMetric((e.target as HTMLSelectElement).value); }}>
-            {grouped.metrics.length > 0 && <optgroup label="Metrics">{grouped.metrics.map((k) => <option key={k} value={k}>{fmtMetricName(k)}</option>)}</optgroup>}
-            {grouped.nested.length > 0 && <optgroup label="Nested">{grouped.nested.map((k) => <option key={k} value={k}>{fmtMetricName(k)}</option>)}</optgroup>}
-            {grouped.timing.length > 0 && <optgroup label="Timing">{grouped.timing.map((k) => <option key={k} value={k}>{fmtMetricName(k)}</option>)}</optgroup>}
-            {grouped.meta.length > 0 && <optgroup label="Meta">{grouped.meta.map((k) => <option key={k} value={k}>{fmtMetricName(k)}</option>)}</optgroup>}
-          </select>
-        </span>
+      <div class="chart-toolbar ctl-toolbar">
+        {isClone && <CtlSearch value={plotFilter.value} onInput={v => { plotFilter.value = v; }} placeholder="Filter this graph…" />}
+        <CtlSelect icon="y" title="Metric (Y axis)" value={metric} onChange={setMetric} wide>
+          {grouped.metrics.length > 0 && <optgroup label="Metrics">{grouped.metrics.map((k) => <option key={k} value={k}>{fmtMetricName(k)}</option>)}</optgroup>}
+          {grouped.nested.length > 0 && <optgroup label="Nested">{grouped.nested.map((k) => <option key={k} value={k}>{fmtMetricName(k)}</option>)}</optgroup>}
+          {grouped.timing.length > 0 && <optgroup label="Timing">{grouped.timing.map((k) => <option key={k} value={k}>{fmtMetricName(k)}</option>)}</optgroup>}
+          {grouped.meta.length > 0 && <optgroup label="Meta">{grouped.meta.map((k) => <option key={k} value={k}>{fmtMetricName(k)}</option>)}</optgroup>}
+        </CtlSelect>
         {(() => {
           // Count milestones for the Step button label
           const lower = isLowerBetter(metric);
@@ -117,20 +114,37 @@ export function MetricsChart({ instanceId, initialMetric, hideClone, onMetricCha
             if (best === null || (lower ? v < best : v > best)) { best = v; mCount++; }
           }
           return (
-            <Toggle active={impOnly} onClick={() => { improvementsOnly.value = !impOnly; }} title={impOnly ? `Step-function: milestones + experiments since last record (${mCount} new bests). Click for all experiments.` : "Show step-function — milestones + experiments since the last record"}>
-              ▲ {impOnly ? `Step${mCount > 0 ? ` (${mCount})` : ""}` : "All"}
-            </Toggle>
+            <CtlToggle active={impOnly} icon={impOnly ? "step" : "all"} onClick={() => { improvementsOnly.value = !impOnly; }}
+              title={impOnly ? `Step: record-setting runs + runs since the last record (${mCount} records). Click for all experiments.` : "All experiments — click for the step view (records only)"}>
+              {impOnly ? `Step${mCount > 0 ? ` ${mCount}` : ""}` : "All"}
+            </CtlToggle>
           );
         })()}
-        <Toggle active={mean} onClick={() => { ideaMean.value = !mean; }} title="One point per idea (mean)">
-          μ Idea Mean
-        </Toggle>
-        <Toggle active={clip} onClick={() => { clipOutliers.value = !clip; }} title="Hide outliers">
-          ⤢ Outliers
-        </Toggle>
-        <Toggle active={logScale} onClick={() => { setLogScale(!logScale); }} title="Logarithmic Y axis">
-          Log Y
-        </Toggle>
+        <CtlToggle active={mean} icon="mean" onClick={() => { ideaMean.value = !mean; }} title="Idea mean: one point per idea (mean of its runs)">mean</CtlToggle>
+        <CtlToggle active={clip} icon="outliers" onClick={() => { clipOutliers.value = !clip; }} title="Hide outliers (values far outside the rest)" />
+        <CtlToggle active={logScale} icon="log" onClick={() => { setLogScale(!logScale); }} title="Logarithmic Y axis">log</CtlToggle>
+        <CtlDivider />
+        <CtlSeg icon="axis" name="X axis" value={xAxis} onChange={(a) => { chartXAxis.value = a; }} options={[
+          { value: "experiments", icon: "ax-exp", label: "exp", title: "X axis: experiments in order" },
+          { value: "ideas", icon: "ax-idea", label: "idea", title: "X axis: experiments grouped by idea (ideas in order of their first experiment)" },
+          { value: "time", icon: "ax-time", label: "time", title: "X axis: finish time" },
+          { value: "compute", icon: "ax-hours", label: "hours", title: "X axis: cumulative experiment runtime (hours) — score against compute spent" },
+        ]} />
+        <CtlSeg icon="view" name="View: point size and spacing" value={view} onChange={(v) => { chartView.value = v; }} options={[
+          { value: "x", icon: "v-line", title: "Line only, fit to the full width" },
+          { value: "s", icon: "v-s", title: "Tiniest dots, densest packing" },
+          { value: "m", icon: "v-m", title: "Small, tightly packed dots" },
+          { value: "l", icon: "v-l", title: "Roomy: larger dots, wide spacing" },
+        ]} />
+        <CtlSeg icon="line" name="Purple line" value={timeCurve} onChange={(c) => { chartTimeCurve.value = c; }} options={[
+          { value: "best", icon: "l-max", label: "max", title: "Purple line: best so far" },
+          { value: "avg", icon: "l-avg", label: "avg", title: "Purple line: moving average (window sized from result count and noise)" },
+        ]} />
+        <CtlSeg icon="labels" name="Point labels (#idea)" value={chartPointLabels.value} onChange={(m) => { chartPointLabels.value = m; }} options={[
+          { value: "off", icon: "lab-off", title: "No point labels (hovering still labels an idea's points)" },
+          { value: "records", icon: "lab-rec", title: "Label the record-setting points" },
+          { value: "auto", icon: "lab-auto", title: "Records first, then the best scores, then anything else that fits without overlapping" },
+        ]} />
         {/* Clone is hidden in the single-chart review (hideClone); kept in the workbench */}
         {!hideClone && (
           <span class="chart-toolbar-end">
@@ -139,89 +153,6 @@ export function MetricsChart({ instanceId, initialMetric, hideClone, onMetricCha
             </IconButton>
           </span>
         )}
-        </div>
-        {/* Row 2: how it is drawn — x axis, view, purple line (all persisted). */}
-        <div class="chart-toolbar-row">
-        <span class="chart-seg">
-        <span class="chart-seg-label">axis</span>
-        <span class="chart-ptsize" title="X axis">
-          {(["experiments", "ideas", "time", "compute"] as const).map((a) => (
-            <button
-              key={a}
-              type="button"
-              class={`chart-ptsize-btn${xAxis === a ? " is-active" : ""}`}
-              onClick={() => { chartXAxis.value = a; }}
-              title={{
-                experiments: "X axis: experiments in order",
-                ideas: "X axis: experiments grouped by idea (ideas in order of their first experiment)",
-                time: "X axis: finish time",
-                compute: "X axis: cumulative experiment runtime (hours) — score against compute spent",
-              }[a]}
-            >
-              {{ experiments: "exp", ideas: "idea", time: "time", compute: "hours" }[a]}
-            </button>
-          ))}
-        </span>
-        </span>
-        {/* View: x = purple line only, full width; s / m / l = dots, tight to roomy. */}
-        <span class="chart-seg">
-        <span class="chart-seg-label">view</span>
-        <span class="chart-ptsize" title="Chart view">
-          {(["x", "s", "m", "l"] as const).map((v) => (
-            <button
-              key={v}
-              type="button"
-              class={`chart-ptsize-btn${view === v ? " is-active" : ""}`}
-              onClick={() => { chartView.value = v; }}
-              title={{
-                x: "Purple line only, fit to the full width",
-                s: "Tiniest dots, densest packing, with the purple line",
-                m: "Very small, tightly packed dots with the purple line",
-                l: "Roomy: larger dots, wide spacing",
-              }[v]}
-            >
-              {v}
-            </button>
-          ))}
-        </span>
-        </span>
-        {/* The purple line: best so far, or a moving average. */}
-        <span class="chart-seg">
-        <span class="chart-seg-label">line</span>
-        <span class="chart-ptsize" title="Purple line">
-          {(["best", "avg"] as const).map((c) => (
-            <button
-              key={c}
-              type="button"
-              class={`chart-ptsize-btn${timeCurve === c ? " is-active" : ""}`}
-              onClick={() => { chartTimeCurve.value = c; }}
-              title={c === "best" ? "Best so far" : "Moving average — window auto-sized from result count and noise"}
-            >
-              {c === "best" ? "max" : "avg"}
-            </button>
-          ))}
-        </span>
-        </span>
-        {/* Point labels (#idea): none, records only, or as many as fit without overlap. */}
-        <span class="chart-seg">
-        <span class="chart-seg-label">labels</span>
-        <span class="chart-ptsize" title="Point labels">
-          {(["off", "records", "auto"] as const).map((m) => (
-            <button
-              key={m}
-              type="button"
-              class={`chart-ptsize-btn${chartPointLabels.value === m ? " is-active" : ""}`}
-              onClick={() => { chartPointLabels.value = m; }}
-              title={m === "off" ? "No point labels (hover still labels an idea's points)"
-                : m === "records" ? "Label the record-setting points"
-                : "Records first, then the best scores, then anything else that fits without overlapping"}
-            >
-              {m === "records" ? "rec" : m}
-            </button>
-          ))}
-        </span>
-        </span>
-        </div>
       </div>
       {/* Data distribution hint — shown when most values cluster near bottom */}
       {(() => {
