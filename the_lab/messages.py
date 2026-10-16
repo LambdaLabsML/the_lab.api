@@ -1156,6 +1156,140 @@ def list_threads(
     return out[offset: offset + limit], len(out)
 
 
+def dashboard_inbox(
+    repo_dir: Path, *, viewer: str | None, aliases: list[str], sent_ids: set[int],
+    read_ids: set[int], saved_threads: set[int], view: str = "for_you", q: str = "",
+    status: str = "all", sender: str = "", before_id: int | None = None, limit: int = 30,
+    saved_focus: dict[str, int] | None = None,
+) -> dict:
+    """Distinct dashboard threads, indexed over the entire archive in one pass.
+
+    This is an operator view; callers must enforce dashboard/admin access.
+    Anonymous human messages belong to this browser only when in sent_ids.
+    Reading here never changes agent delivery or read state.
+    """
+    with _lock:
+        data = _read(repo_dir)
+        messages = list(data["messages"])
+        metadata = dict(data["threads"])
+    by_id = {m["id"]: m for m in messages}
+    mine = {m["id"] for m in messages if m["id"] in sent_ids
+            or (viewer and m.get("from_agent") == viewer)}
+    names = [name.strip() for name in aliases if len(name.strip()) >= 2]
+    mention = re.compile(r"(?<![\w@])@?(?:" + "|".join(re.escape(n) for n in names)
+                         + r")(?!\w)", re.I) if names else None
+
+    def addressed(m: dict) -> bool:
+        if m["id"] in mine:
+            return False
+        if m.get("to") in {UI_USER, f"agent:{UI_USER}", viewer} - {None}:
+            return True
+        if m.get("in_reply_to") in mine:
+            return True
+        return bool(mention and mention.search(f"{m.get('tldr') or ''} {m.get('text') or ''}"))
+
+    def preview(m: dict | None) -> dict | None:
+        if m is None:
+            return None
+        body = " ".join((m.get("text") or m.get("tldr") or "").split())
+        excerpt = body if len(body) <= 200 else body[:197].rsplit(" ", 1)[0] + "…"
+        return {**_compact_entry(m), "preview": excerpt, "mine": m["id"] in mine,
+                "thread_id": thread_key(m), "in_reply_to": m.get("in_reply_to")}
+
+    groups: dict[int, list[dict]] = {}
+    for m in messages:
+        groups.setdefault(thread_key(m), []).append(m)
+    counts = {"for_you": 0, "mine": 0, "all": 0, "saved": 0}
+    terms = q.lower().split()
+    rows = []
+    for tid, group in groups.items():
+        group = sorted(group, key=lambda m: m["id"])
+        # Include one-off direct questions too: they must not disappear until
+        # somebody replies or explicitly creates thread metadata.
+        root = by_id.get(tid) or group[0]
+        meta = metadata.get(str(tid)) or _derive_thread(root, group)
+        own = [m for m in group if m["id"] in mine]
+        personal = [m for m in group if addressed(m)]
+        unread = [m for m in personal if m["id"] not in read_ids]
+        is_mine = bool(own or (viewer and viewer in (meta.get("members") or {})))
+        is_saved = tid in saved_threads
+        counts["all"] += 1
+        counts["mine"] += int(is_mine)
+        counts["saved"] += int(is_saved)
+        counts["for_you"] += len(unread)
+        if view == "for_you" and not unread or view == "mine" and not is_mine or view == "saved" and not is_saved:
+            continue
+        if status != "all" and meta.get("status", "open") != status:
+            continue
+        if sender and not any(m.get("from_agent") == sender or m.get("to") == sender
+                              or m.get("to") == f"agent:{sender}" for m in group):
+            continue
+        matching = group
+        if terms:
+            # Search replies and artifacts/references as well as titles and
+            # summaries, before paginating threads (never just the newest page).
+            title = f"{meta.get('title') or ''} {meta.get('summary') or ''}".lower()
+            matching = [m for m in group if all(term in
+                f"{title} {m.get('tldr') or ''} {m.get('text') or ''} {m.get('references') or ''}".lower()
+                for term in terms)]
+            if not matching:
+                continue
+        focus = unread[0] if view == "for_you" else matching[-1]
+        saved_message = by_id.get((saved_focus or {}).get(str(tid)))
+        if view == "saved" and not terms and saved_message and thread_key(saved_message) == tid:
+            focus = saved_message
+        parent = by_id.get(focus.get("in_reply_to"))
+        question = parent if parent and parent["id"] in mine else next(
+            (m for m in reversed(own) if m["id"] < focus["id"]), None)
+        last = group[-1]
+        idea_ids = {}
+        def add_idea(ident):
+            idea_ids.pop(ident, None)
+            idea_ids[ident] = None
+        if meta.get("idea_id") is not None:
+            add_idea(int(meta["idea_id"]))
+        for message in group:
+            for reference in message.get("references") or []:
+                rid = str(reference.get("id", ""))
+                if reference.get("kind") == "idea" and rid.isdigit():
+                    add_idea(int(rid))
+                elif reference.get("kind") == "experiment" and re.fullmatch(r"\d+\.\d+", rid):
+                    add_idea(int(rid.split(".")[0]))
+            body = f"{message.get('tldr') or ''} {message.get('text') or ''}"
+            body = re.sub(r"\b(?:msgs?|messages?|thread)\s*#?\d+(?:\s*(?:/|,|&|and)\s*#?\d+)*", "", body, flags=re.I)
+            for match in re.finditer(r"(?<![\w/])(?:ideas?\s*[/#:]?\s*|#)(\d+)\b|(?<![\w.])exp/(\d+)\.\d+\b|(?<![\w.])(\d{3,})\.\d+\b", body, re.I):
+                add_idea(int(next(value for value in match.groups() if value)))
+        participants = set()
+        def add_participant(identity):
+            if identity:
+                participants.add(identity if is_human(identity) else identity.removeprefix("agent:"))
+        for identity in meta.get("members") or {}:
+            add_participant(identity)
+        for message in group:
+            add_participant(message.get("from_agent"))
+            recipient = message.get("to") or ""
+            if is_human(recipient) or recipient.startswith("agent:"):
+                add_participant(recipient)
+        item = _public_meta(meta, agent_id=viewer)
+        item.update({
+            "idea_ids": list(reversed(idea_ids)),
+            "participants": sorted(participants, key=lambda identity: (not is_human(identity), identity)),
+            "message_count": len(group), "my_message_count": len(own), "last_activity": last.get("created_at"),
+            "cursor_id": last["id"], "latest": preview(last), "focus": preview(focus),
+            "question": preview(question), "latest_mine": preview(own[-1] if own else None),
+            "unread_for_me": len(unread), "unread_ids": [m["id"] for m in unread], "saved": is_saved,
+            "you_posted_last": last["id"] in mine,
+        })
+        rows.append(item)
+    rows.sort(key=lambda row: row["cursor_id"], reverse=True)
+    total = len(rows)
+    if before_id is not None:
+        rows = [row for row in rows if row["cursor_id"] < before_id]
+    page = rows[:limit]
+    return {"threads": page, "total": total, "counts": counts,
+            "next_before_id": page[-1]["cursor_id"] if len(rows) > limit and page else None}
+
+
 def _compact_entry(m: dict) -> dict:
     """Skim-friendly message shape: no full text, just enough to triage.
 
@@ -1171,6 +1305,9 @@ def get_thread(
     repo_dir: Path, thread_id: int, *, agent_id: str | None, role: str | None,
     operator: bool = False, limit: int = _RECENT_BACKLOG_LIMIT, offset: int | None = None,
     before_id: int | None = None, fields: str | None = None,
+    around_id: int | None = None, after_id: int | None = None,
+    audience: str = "all", viewer: str | None = None, sent_ids: set[int] | None = None,
+    context: bool = False,
 ) -> dict:
     """Thread metadata, members and the messages the caller can see.
 
@@ -1201,17 +1338,67 @@ def get_thread(
                  and (operator or can_see(m, agent_id=agent_id, role=role, threads=threads))]
         members = [{"agent_id": aid, **info} for aid, info in (meta.get("members") or {}).items()]
         out = _public_meta(meta, agent_id=agent_id)
+    if audience not in {"all", "me", "users"}:
+        raise ValueError("audience must be all, me or users")
+    original_ids = {m["id"] for m in group}
+    full_group = group
+    if context:
+        if around_id is not None or offset is not None:
+            raise ValueError("context uses before_id and after_id only")
+        if any(bound is not None and bound not in original_ids for bound in (before_id, after_id)):
+            raise ValueError("context anchor is not in this thread")
+        if before_id is not None and after_id is not None and before_id <= after_id:
+            raise ValueError("context bounds must be chronological")
+        group = [m for m in group if (after_id is None or m["id"] > after_id)
+                 and (before_id is None or m["id"] < before_id)]
+        audience = "all"
+        before_id, after_id = None, 0
+    if audience != "all":
+        def person(identity):
+            return is_human((identity or "").removeprefix("agent:"))
+        human_posts = {m["id"] for m in group if
+                       (person(m.get("from_agent")) or m.get("from_role") == "user")
+                       if audience == "users" or m["id"] in (sent_ids or set()) or
+                       (viewer and m.get("from_agent") == viewer)}
+        group = [m for m in group if m["id"] in human_posts or m.get("in_reply_to") in human_posts
+                 or (person(m.get("to")) and (audience == "users" or
+                     (m.get("to") or "").removeprefix("agent:") in {viewer, UI_USER, f"agent:{UI_USER}"} - {None}))]
     total = len(group)
-    if before_id is not None:
+    if sum(value is not None for value in (before_id, around_id, after_id, offset)) > 1:
+        raise ValueError("choose one of before_id, around_id, after_id or offset")
+    start_override = None
+    if around_id is not None:
+        target = next((i for i, m in enumerate(group) if m["id"] == around_id), None)
+        if target is None:
+            if audience == "all" or around_id not in original_ids:
+                raise ValueError("anchor message is not in this thread")
+            target = next((i for i, m in enumerate(group) if m["id"] >= around_id), max(0, total - 1))
+        start_override = max(0, target - limit // 2)
+        end = min(total, start_override + limit)
+    elif after_id is not None:
+        start_override = next((i for i, m in enumerate(group) if m["id"] > after_id), total)
+        end = min(total, start_override + limit)
+    elif before_id is not None:
         end = next((i for i, m in enumerate(group) if m["id"] >= before_id), total)
     elif offset is not None:
         end = max(total - offset, 0)
     else:
         end = total
-    start = max(end - limit, 0)
+    start = start_override if start_override is not None else max(end - limit, 0)
     window = group[start:end]
     next_before_id = window[0]["id"] if start > 0 and window else None
     offset_out = offset if offset is not None else max(total - end, 0)
+    if audience != "all":
+        positions = {m["id"]: i for i, m in enumerate(full_group)}
+        gaps = []
+        for index in range(start, min(end + 1, len(group) + 1)):
+            previous = group[index - 1]["id"] if index > 0 else None
+            following = group[index]["id"] if index < len(group) else None
+            left = positions[previous] + 1 if previous is not None else 0
+            right = positions[following] if following is not None else len(full_group)
+            if right > left:
+                gaps.append({"after_id": previous, "before_id": following, "count": right - left})
+        out["gaps"] = gaps
     out.update({
         "members": members,
         "messages": [_compact_entry(m) for m in window] if fields == "tldr" else window,
@@ -1219,6 +1406,8 @@ def get_thread(
     })
     if next_before_id is not None:
         out["next_before_id"] = next_before_id
+    if end < total and window:
+        out["next_after_id"] = window[-1]["id"]
     return out
 
 
