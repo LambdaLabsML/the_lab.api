@@ -106,6 +106,57 @@ def check_filter(
             "sample": [e.get("label") or str(e.get("id")) for e in selected[:sample]]}
 
 
+_vocab_cache: dict = {}
+
+
+@router.get("/filters/vocabulary")
+def filter_vocabulary(values_per_key: int = Query(12, ge=0, le=50)):
+    """What filter expressions can refer to, for autocomplete and discovery.
+
+    ``meta`` / ``metrics``: keys found on experiments with how many have them
+    and their most common values; ``tags`` with counts; ``statuses``;
+    ``saved``: names of saved filters (usable as ``@name``).
+    """
+    import collections
+    exps = store.list_all_experiments()
+    key = (len(exps), getattr(store, "_version", None), values_per_key)
+    if _vocab_cache.get("key") != key:
+        meta_vals: dict[str, collections.Counter] = {}
+        metric_count: collections.Counter = collections.Counter()
+        tags: collections.Counter = collections.Counter()
+        statuses: collections.Counter = collections.Counter()
+        for e in exps:
+            for k, v in (e.get("meta") or {}).items():
+                c = meta_vals.setdefault(k, collections.Counter())
+                if isinstance(v, (str, int, float, bool)) and len(str(v)) <= 60:
+                    c[str(v) if not isinstance(v, bool) else str(v).lower()] += 1
+                else:
+                    c[""] += 0
+                c["\0count"] += 1
+            for k, v in (e.get("metrics") or {}).items():
+                if isinstance(v, (int, float)) and not isinstance(v, bool):
+                    metric_count[k] += 1
+            tags.update(e.get("tags") or [])
+            if e.get("status"):
+                statuses[e["status"]] += 1
+        meta = []
+        for k, c in meta_vals.items():
+            n = c.pop("\0count", 0)
+            c.pop("", None)
+            meta.append({"key": k, "count": n,
+                         "values": [v for v, _ in c.most_common(values_per_key)]})
+        meta.sort(key=lambda m: (-m["count"], m["key"]))
+        _vocab_cache["key"] = key
+        _vocab_cache["data"] = {
+            "meta": meta,
+            "metrics": [{"key": k, "count": n} for k, n in metric_count.most_common()],
+            "tags": [{"tag": t, "count": n} for t, n in tags.most_common()],
+            "statuses": [s for s, _ in statuses.most_common()],
+        }
+    return {**_vocab_cache["data"],
+            "saved": [f["name"] for f in filters_mod.list_filters(REPO_DIR)]}
+
+
 @router.get("/filters/match", include_in_schema=False)
 def match_filter(where: str | None = None, filter: str | None = None):
     """All labels a selection matches (dashboard: charts, table, idea means)."""
