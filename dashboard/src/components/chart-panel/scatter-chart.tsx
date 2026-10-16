@@ -5,7 +5,9 @@ import { useRef, useEffect, useMemo, useState } from "preact/hooks";
 import { Chart } from "chart.js/auto";
 import { allExperiments, allIdeas, currentLayout, highlightedIdea, cloneChartPanel, updatePanelTitle, runningProgress } from "../../state/signals";
 import { chartNavClick } from "../../lib/hooks";
-import { IconButton, Toggle } from "../ui";
+import { IconButton, experimentTipContent } from "../ui";
+import { CtlSearch, CtlSelect, CtlToggle } from "./chart-controls";
+import { MiniTooltip } from "./mini-metrics-chart";
 import {
   selectedMetric, filterText, colorTheme, fontSize, activeTagFilters, tagFilterMode,
   showAbandoned, showConcluded, showRunning, scatterXMetric, scatterYMetric, colorblindMode,
@@ -119,11 +121,17 @@ function runningRing(pct: number | undefined): HTMLCanvasElement {
   return cv;
 }
 
+const HOVER_PX = 24;
+
 export function ScatterChart({ instanceId, initialXMetric, initialYMetric, hideClone = false, onAxesChange }: { instanceId?: string; initialXMetric?: string; initialYMetric?: string; hideClone?: boolean; onAxesChange?: (x: string, y: string) => void } = {}) {
   const isClone = !!instanceId;
   const { improvementsOnly, ideaMean, clipOutliers, colorMode, plotFilter } = usePlotControls(instanceId);
   const [localX, setLocalX] = useState(initialXMetric || "");
   const [localY, setLocalY] = useState(initialYMetric || "");
+  // Hovered point (within HOVER_PX of the cursor) for the shared hover card.
+  const [hover, setHover] = useState<{ d: any; rect: DOMRect; x: number | null; y: number | null } | null>(null);
+  const setHoverRef = useRef(setHover);
+  setHoverRef.current = setHover;
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const chartRef = useRef<Chart | null>(null);
@@ -366,56 +374,28 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric, hideC
             border: { color: getCssVar("--border-soft") },
           },
         },
-        onHover(_evt, elements) {
-          if (elements.length > 0) {
-            const ds = this.data.datasets[0] as any;
-            if (ds?._expData?.[elements[0].index]) {
-              highlightedIdea.value = ds._expData[elements[0].index].idea_id;
-            }
+        onHover(evt, _elements, chart) {
+          // Like the main graph: the nearest point within HOVER_PX gets the
+          // hover card and highlights its idea's points.
+          const near = chart.getElementsAtEventForMode(evt as any, "nearest", { intersect: false }, false)[0];
+          const pt = near ? chart.getDatasetMeta(near.datasetIndex).data[near.index] : null;
+          const ex = (evt as any).x, ey = (evt as any).y;
+          const d = near ? (chart.data.datasets[near.datasetIndex] as any)?._expData?.[near.index] : null;
+          if (pt && d && Math.hypot(pt.x - ex, pt.y - ey) <= HOVER_PX) {
+            highlightedIdea.value = d.idea_id;
+            const box = chart.canvas.getBoundingClientRect();
+            const raw = (chart.data.datasets[near.datasetIndex].data as any[])[near.index] as { x: number; y: number };
+            setHoverRef.current({ d, rect: new DOMRect(box.left + pt.x - 5, box.top + pt.y - 5, 10, 10), x: raw?.x ?? null, y: raw?.y ?? null });
+            chart.canvas.style.cursor = "pointer";
           } else {
             highlightedIdea.value = null;
+            setHoverRef.current(null);
+            chart.canvas.style.cursor = "";
           }
         },
         plugins: {
           legend: { display: false },
-          tooltip: {
-            backgroundColor: getCssVar("--bg-elev"),
-            titleColor: getCssVar("--text"),
-            bodyColor: getCssVar("--text-muted"),
-            borderColor: getCssVar("--border"),
-            borderWidth: 1,
-            maxWidth: 350,
-            titleFont: {
-              family: getCssVar("--font-mono") || "monospace",
-              size: getCssVarPx("--text-sm"),
-            },
-            bodyFont: {
-              family: getCssVar("--font-mono") || "monospace",
-              size: getCssVarPx("--text-sm"),
-            },
-            callbacks: {
-              title(items) {
-                const d = (items[0].dataset as any)._expData[items[0].dataIndex];
-                const idea = allIdeas.value[d.idea_id];
-                const desc = idea?.description || d.idea_description || "";
-                const short = desc.length > 60 ? desc.slice(0, 57) + "..." : desc;
-                return "idea #" + d.idea_id + ": " + short;
-              },
-              label(item) {
-                const d = (item.dataset as any)._expData[item.dataIndex];
-                const xVal = d.metrics?.[scatterXMetric.value] ?? item.parsed.x;
-                const yVal = d.metrics?.[scatterYMetric.value] ?? item.parsed.y;
-                return [
-                  `${scatterXMetric.value} = ${typeof xVal === "number" ? fmtScoreShort(xVal) : xVal}`,
-                  `${scatterYMetric.value} = ${typeof yVal === "number" ? fmtScoreShort(yVal) : yVal}`,
-                  d._ideaMean
-                    ? `idea/${d.idea_id} mean (${d._meanCount} experiments)`
-                    : "exp/" + (d.label || d.id) + ": " + (d.description || "").slice(0, 50),
-                  d._running ? "\u25B6 running" : "",
-                ].filter(Boolean);
-              },
-            },
-          },
+          tooltip: { enabled: false },
         },
       },
     });
@@ -444,33 +424,44 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric, hideC
 
   return (
     <div class="chart-col" style={{ height: "100%", display: "flex", flexDirection: "column" }}>
-      <div class="chart-col-toolbar">
-        {isClone && <input class="plot-data-filter" aria-label="Graph data filter" placeholder="Filter this graph…" value={plotFilter.value} onInput={e => { plotFilter.value = e.currentTarget.value; }} />}
-        X:{" "}
-        <select value={xMetric} onChange={(e) => { setX((e.target as HTMLSelectElement).value); }}>
+      <div class="chart-col-toolbar ctl-toolbar">
+        {isClone && <CtlSearch value={plotFilter.value} onInput={v => { plotFilter.value = v; }} placeholder="Filter this graph…" />}
+        <CtlSelect icon="x" title="X axis" value={xMetric} onChange={setX} wide>
           {grouped.metrics.length > 0 && <optgroup label="Metrics">{grouped.metrics.map((k) => <option key={k} value={k}>{fmtMetricName(k)}</option>)}</optgroup>}
           {grouped.nested.length > 0 && <optgroup label="Nested">{grouped.nested.map((k) => <option key={k} value={k}>{fmtMetricName(k)}</option>)}</optgroup>}
           {grouped.timing.length > 0 && <optgroup label="Timing">{grouped.timing.map((k) => <option key={k} value={k}>{fmtMetricName(k)}</option>)}</optgroup>}
           {grouped.meta.length > 0 && <optgroup label="Meta">{grouped.meta.map((k) => <option key={k} value={k}>{fmtMetricName(k)}</option>)}</optgroup>}
-        </select>
-        {" "}Y:{" "}
-        <select value={yMetric} onChange={(e) => { setY((e.target as HTMLSelectElement).value); }}>
+        </CtlSelect>
+        <CtlSelect icon="y" title="Y axis" value={yMetric} onChange={setY} wide>
           {grouped.metrics.length > 0 && <optgroup label="Metrics">{grouped.metrics.map((k) => <option key={k} value={k}>{fmtMetricName(k)}</option>)}</optgroup>}
           {grouped.nested.length > 0 && <optgroup label="Nested">{grouped.nested.map((k) => <option key={k} value={k}>{fmtMetricName(k)}</option>)}</optgroup>}
           {grouped.timing.length > 0 && <optgroup label="Timing">{grouped.timing.map((k) => <option key={k} value={k}>{fmtMetricName(k)}</option>)}</optgroup>}
           {grouped.meta.length > 0 && <optgroup label="Meta">{grouped.meta.map((k) => <option key={k} value={k}>{fmtMetricName(k)}</option>)}</optgroup>}
-        </select>
-        {" "}
-        <Toggle active={impOnly} onClick={() => { improvementsOnly.value = !impOnly; }} title="Only improvements">Step</Toggle>
-        <Toggle active={mean} onClick={() => { ideaMean.value = !mean; }} title="One point per idea (mean)">μ Idea Mean</Toggle>
-        <Toggle active={clip} onClick={() => { clipOutliers.value = !clip; }} title="Hide outliers">Outliers</Toggle>
-        {!hideClone && <IconButton onClick={() => { if (cloneChartPanel) cloneChartPanel("scatter", undefined, xMetric, yMetric); }} title="Clone this chart as a new tab">
+        </CtlSelect>
+        <CtlToggle active={impOnly} icon={impOnly ? "step" : "all"} onClick={() => { improvementsOnly.value = !impOnly; }}
+          title={impOnly ? "Step: only runs that set a new record — click for all" : "All runs — click to show only record-setting runs"}>{impOnly ? "Step" : "All"}</CtlToggle>
+        <CtlToggle active={mean} icon="mean" onClick={() => { ideaMean.value = !mean; }} title="Idea mean: one point per idea (mean of its runs)">mean</CtlToggle>
+        <CtlToggle active={clip} icon="outliers" onClick={() => { clipOutliers.value = !clip; }} title="Hide outliers (values far outside the rest)" />
+        {!hideClone && <span class="chart-toolbar-end"><IconButton onClick={() => { if (cloneChartPanel) cloneChartPanel("scatter", undefined, xMetric, yMetric); }} title="Clone this chart as a new tab">
           + Clone
-        </IconButton>}
+        </IconButton></span>}
       </div>
       <div class="chart-col-canvas">
-        <canvas ref={canvasRef} />
+        <canvas ref={canvasRef} onMouseLeave={() => { setHover(null); }} />
       </div>
+      {/* Same hover card as the main graph (the Chart.js tooltip is off). */}
+      {hover && (() => {
+        const d = hover.d;
+        const idea = allIdeas.value[d.idea_id];
+        const label = String(d.label ?? d.id);
+        return <MiniTooltip anchor={hover.rect}>{experimentTipContent({
+          label, ideaId: d.idea_id, ideaTitle: idea?.description, status: idea?.status,
+          mark: d._ideaMean ? `idea/${d.idea_id} · mean of ${d._meanCount}` : undefined,
+          metricName: fmtMetricName(yMetric), value: hover.y,
+          extraMetrics: [{ name: fmtMetricName(xMetric), value: hover.x }],
+          running: !!d._running, pct: runningProgress.value[label],
+        })}</MiniTooltip>;
+      })()}
     </div>
   );
 }

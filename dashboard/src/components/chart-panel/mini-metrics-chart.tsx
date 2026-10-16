@@ -234,7 +234,7 @@ function MiniDot({
  * top↔bottom, nudge horizontally). Keeps the chart tooltip pixel-identical to
  * the timeline/table tooltips.
  */
-function MiniTooltip({ anchor, children }: { anchor: DOMRect; children: any }) {
+export function MiniTooltip({ anchor, children }: { anchor: DOMRect; children: any }) {
   const cardRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
 
