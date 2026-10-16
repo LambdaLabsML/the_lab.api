@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { effect } from "@preact/signals";
-import { AgentBar } from "./components/agent-bar";
 import { DetailPanel } from "./components/detail-panel";
 import { NavRail, SecondaryPanel, type NavSection } from "./components/nav-rail";
 import { ActivitySidebar } from "./components/activity/activity-sidebar";
@@ -27,7 +26,9 @@ import {
 } from "./state/settings";
 import { allExperiments, allIdeas, selectedExperiment, setActivatePanel, totalAgentCost } from "./state/signals";
 import { reviewSearchPills, activeHighlights, isIdeaHighlighted, toggleIdeaHighlight, type ReviewPill } from "./state/review-filter";
-import { plotExperiments } from "./state/filters";
+import { plotExperiments, selectionLabels } from "./state/filters";
+import { FilterPicker } from "./components/filter-picker";
+import { AgentBar } from "./components/agent-bar";
 import { startPolling, stopPolling } from "./state/polling";
 import { startWs, stopWs } from "./state/ws";
 import { startAgentActivity, stopAgentActivity } from "./state/agent-activity";
@@ -287,12 +288,17 @@ export function App() {
         {settingsOpen ? settingsContent : section === "artifacts" ? <ArtifactsSidebar /> : <ActivitySidebar />}
       </SecondaryPanel>}
       <div class="app-main">
-        <AgentBar /><MessagePreviewOverlay /><Toasts /><ExperimentActions />
+        {/* Phones: the ⬡ mark (agents popover) is hidden, keep the strip there. */}
+        <div class="agent-bar-mobile"><AgentBar /></div>
+        <MessagePreviewOverlay /><Toasts /><ExperimentActions />
         <div class="research-toolbar">
           <span class="research-view-name"><span class="ui-eyebrow">{settingsOpen ? utility ?? "Settings" : section === "review" ? "Overview" : section}</span><button hidden={mobile && settingsOpen} class="ui-btn research-monitor-button" onClick={() => window.dispatchEvent(new Event("the-lab:open-monitor"))}>{settingsOpen ? "Options" : section === "artifacts" ? "Files" : "Monitor"}</button></span>
           {section === "review" && !settingsOpen && <>
-            <button class="ui-btn research-search-toggle" title="Search and filter Overview" aria-label="Search Overview" aria-expanded={searchOpen} onClick={() => setSearchOpen(v => !v)}><ResearchIcon name="search" />{activeHighlights.value.length > 0 && <span>{activeHighlights.value.length} highlighted</span>}{(activeTagFilters.value.length > 0 || filterText.value || activeHighlights.value.length > 0) && <span class="research-filter-dot" />}</button>
-            <div ref={searchRef} class="research-header-search" hidden={!searchOpen} onKeyDown={e => { if (e.key === "Escape") { e.stopPropagation(); setSearchOpen(false); document.querySelector<HTMLButtonElement>(".research-search-toggle")?.focus(); } }}><ReviewSearchFilter experiments={allExperiments.value} ideas={allIdeas.value} /></div>
+            {/* One place for selecting experiments: text / tag / idea pills and
+                highlights (search field) plus the saved filter / expression. */}
+            <div ref={searchRef} class="research-header-search" onKeyDown={e => { if (e.key === "Escape") { e.stopPropagation(); (document.activeElement as HTMLElement | null)?.blur(); } }}><ReviewSearchFilter experiments={allExperiments.value} ideas={allIdeas.value} /></div>
+            <FilterPicker />
+            <SelectionCount />
           </>}
           <div class="research-toolbar-actions">
             {selected != null && <button class="ui-btn" aria-expanded={inspectorVisible} onClick={() => setDetailsOpen(v => !v)}>Idea #{selected} · Details</button>}
@@ -321,13 +327,22 @@ export function App() {
               const end = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", end); window.removeEventListener("pointercancel", end); };
               window.addEventListener("pointermove", move); window.addEventListener("pointerup", end); window.addEventListener("pointercancel", end);
             }} />
-            <div class="research-panel-head"><strong>{selectedExperiment.value ? `Experiment ${selectedExperiment.value}` : `Idea #${selected}`}</strong><div class="research-inspector-actions">{selected != null && <button class={`ui-btn${isIdeaHighlighted(selected) ? " is-active" : ""}`} aria-pressed={isIdeaHighlighted(selected)} aria-label={`Highlight idea #${selected}`} title="Toggle this idea in the graph highlights; manage highlights in Overview search" onClick={() => { toggleIdeaHighlight(selected, allIdeas.value[selected]?.description); setSearchOpen(true); }}>{isIdeaHighlighted(selected) ? "Highlighted" : "Highlight"}</button>}<button class="ui-btn" onClick={closeDetails} aria-label="Close details">×</button></div></div>
+            <div class="research-panel-head"><strong>{selectedExperiment.value ? `Experiment ${selectedExperiment.value}` : `Idea #${selected}`}</strong><div class="research-inspector-actions">{selected != null && <button class={`ui-btn${isIdeaHighlighted(selected) ? " is-active" : ""}`} aria-pressed={isIdeaHighlighted(selected)} aria-label={`Highlight idea #${selected}`} title="Toggle this idea in the graph highlights; manage highlights in Overview search" onClick={() => { toggleIdeaHighlight(selected, allIdeas.value[selected]?.description); setSearchOpen(true); searchRef.current?.querySelector<HTMLInputElement>("input")?.focus(); }}>{isIdeaHighlighted(selected) ? "Highlighted" : "Highlight"}</button>}<button class="ui-btn" onClick={closeDetails} aria-label="Close details">×</button></div></div>
             <div class="research-inspector-content"><DetailPanel focused /></div>
           </aside>
         </div>
       </div>
     </div>
   );
+}
+
+/** "2,656 of 4,321" while a filter / text / tag selection narrows the experiments. */
+function SelectionCount() {
+  const total = allExperiments.value.length;
+  const shown = plotExperiments.value.length;
+  const narrowed = selectionLabels.value !== null;
+  if (!narrowed || !total) return null;
+  return <span class="research-selection-count" title="Experiments in the current filter selection">{shown.toLocaleString()} of {total.toLocaleString()}</span>;
 }
 
 function Overview() {
@@ -352,8 +367,8 @@ function Overview() {
     { label: "Agent cost", value: totalAgentCost.value == null ? "—" : `$${totalAgentCost.value.toFixed(0)}`, sub: "all sessions" },
   ];
   return <main class="research-overview">
-    <div class="research-kpis">{stats.map(stat => <div class="research-kpi"><span class="ui-eyebrow">{stat.label}</span><strong class={stat.best ? "is-best" : ""}>{stat.value}</strong><span>{stat.sub}</span></div>)}</div>
-    <GraphWorkspace />
+    {/* KPI cards share the graphs' header line (one row instead of three). */}
+    <GraphWorkspace head={<div class="research-kpis is-compact">{stats.map(stat => <div class="research-kpi"><span class="ui-eyebrow">{stat.label}</span><strong class={stat.best ? "is-best" : ""}>{stat.value}</strong><span>{stat.sub}</span></div>)}</div>} />
     <RecentIdeas />
   </main>;
 }
@@ -497,7 +512,7 @@ function ReviewSearchFilter({ experiments, ideas }: {
     <div class="review-search">
       <SearchFilter
         class="review-search-field"
-        placeholder="Highlight ideas / experiments, or filter by text / tag…"
+        placeholder="Search & filter experiments — text, tag, #idea, exp…"
         applied={applied}
         suggest={suggest}
         onApply={addPill}

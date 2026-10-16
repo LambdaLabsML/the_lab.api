@@ -104,3 +104,5 @@
 }
 .filter-sugg-hint { color: var(--text-faint); font-size: var(--text-xs); white-space: nowrap; }
 .filter-sugg-empty { color: var(--text-faint); font-size: var(--text-xs); padding: 2px 6px; }
+// In the top bar the button sits towards the right: open the panel leftwards.
+.research-toolbar .filter-panel { left: auto; right: 0; }

@@ -1,9 +1,11 @@
 /**
- * AgentBar — a slim top line (no background) pinning the work in flight: the main
- * git worktree as a "you" pill, followed by each live agent and the idea it has
- * checked out, as clickable `idea/{id}` badges with hover cards.
+ * AgentBar — the work in flight: the main git worktree as a "you" pill,
+ * followed by each live agent and the idea it has checked out, as clickable
+ * `idea/{id}` badges with hover cards. Shown in a popover from the ⬡ logo,
+ * whose badge counts the live agents (the roster is shared state below).
  */
-import { useEffect, useState } from "preact/hooks";
+import { useEffect } from "preact/hooks";
+import { computed, signal } from "@preact/signals";
 import { listAgents } from "../state/api";
 import { useLiveRefresh } from "../lib/hooks";
 import { navigateToIdea } from "../lib/navigate";
@@ -19,24 +21,31 @@ function branchIdeaId(branch: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-export function AgentBar() {
-  const [agents, setAgents] = useState<AgentEntry[]>([]);
-  const ideas = allIdeas.value;
-  const branch = backlogData.value?.current_branch ?? "";
+const agentRoster = signal<AgentEntry[]>([]);
+/** Agents with a live process. */
+export const liveAgents = computed(() => agentRoster.value.filter((a) => a.pid != null));
+/** Live agents that are working on something (an idea checked out). */
+export const workingAgents = computed(() => liveAgents.value.filter((a) => a.current_idea));
 
-  const load = () => listAgents().then(setAgents).catch(() => {});
+/** Keeps the roster current; mount once (the nav rail does). */
+export function useAgentRoster(): void {
+  const load = () => listAgents().then((a) => { agentRoster.value = a; }).catch(() => {});
   useEffect(() => { load(); }, []);
   // agent_changed events push roster changes; the hook keeps a slow reconcile.
   useLiveRefresh(["agent_changed", "message_received"], load, 30_000);
+}
 
-  const live = agents.filter((a) => a.pid != null);
+export function AgentBar({ vertical = false }: { vertical?: boolean } = {}) {
+  const ideas = allIdeas.value;
+  const branch = backlogData.value?.current_branch ?? "";
+  const live = liveAgents.value;
   if (live.length === 0 && !branch) return null;
 
   const bIdea = branch ? branchIdeaId(branch) : null;
   const bTitle = bIdea != null ? ideaTitle(ideas[bIdea]?.description ?? "") : "";
 
   return (
-    <div class="agent-bar" aria-label="Active work">
+    <div class={`agent-bar${vertical ? " agent-bar--vertical" : ""}`} aria-label="Active work">
       <div class="agent-bar-list">
         {branch && (
           <Tooltip

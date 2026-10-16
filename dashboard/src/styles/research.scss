@@ -204,3 +204,39 @@
 
 .research-inspector-actions { display: flex; align-items: center; gap: 6px; }
 .research-inspector-actions .ui-btn { font-size: var(--text-xs); }
+
+/* ── Compact overview chrome ─────────────────────────────────────────────
+   KPI cards live in the graphs' header line; graph heads are slim and their
+   size / remove controls appear on hover (or keyboard focus). */
+.graph-workspace { border-top: 0; }
+.graph-workspace-head { padding-block: 4px 6px; align-items: stretch; }
+.research-kpis.is-compact {
+  flex: 1 1 auto; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr));
+  margin: 0; border-bottom: 0; min-width: 0;
+  .research-kpi { gap: 1px; padding: 2px 12px 4px; }
+  .research-kpi:first-child { padding-left: 0; }
+  strong { font-size: clamp(17px, 1.6vw, 24px); line-height: 1.15; }
+  .ui-eyebrow { font-size: 10px; }
+  > .research-kpi > span:last-child { font-size: 11px; }
+}
+.graph-workspace-head .graph-actions { align-self: center; }
+.graph-card-head { padding: 2px 0; min-height: 26px; border-bottom: 0; }
+.graph-card-head > .ui-eyebrow { font-size: 10px; color: var(--text-faint); }
+.graph-card-head .graph-height, .graph-card-head .graph-card-controls {
+  opacity: 0; transition: opacity var(--transition-fast, 0.12s);
+}
+.graph-card:hover .graph-card-head .graph-height, .graph-card:hover .graph-card-head .graph-card-controls,
+.graph-card-head:focus-within .graph-height, .graph-card-head:focus-within .graph-card-controls { opacity: 1; }
+.graph-canvas { padding-block: 4px; }
+.research-selection-count {
+  font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-muted); white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.research-header-search { max-width: 760px; }
+@media (hover: none) {
+  .graph-card-head .graph-height, .graph-card-head .graph-card-controls { opacity: 1; }
+}
+@media (max-width: 760px) {
+  .research-kpis.is-compact { grid-template-columns: repeat(3, minmax(0, 1fr)); row-gap: 6px; }
+  .research-kpis.is-compact .research-kpi:nth-child(4) { padding-left: 0; }
+}
