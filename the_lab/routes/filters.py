@@ -101,7 +101,7 @@ def check_filter(
         selected, total = _matches(filter, where)
     except HTTPException as e:
         return {"ok": False, "error": e.detail, "matched": 0, "total": None, "sample": []}
-    selected = sorted(selected, key=lambda e: e.get("id", 0), reverse=True)
+    selected = sorted(selected, key=lambda e: e.get("created_at") or "", reverse=True)  # newest first
     return {"ok": True, "error": None, "matched": len(selected), "total": total,
             "sample": [e.get("label") or str(e.get("id")) for e in selected[:sample]]}
 
