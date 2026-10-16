@@ -8,6 +8,7 @@ import "./styles/tailwind.css";
 import "./styles/global.scss";
 import "./styles/artifacts.scss";
 import "./styles/collab.scss";
+import "./styles/filters.scss";
 import "./styles/_ui.scss";
 import "./styles/topbar.scss";
 import "./styles/chart.scss";

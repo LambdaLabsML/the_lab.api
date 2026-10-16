@@ -19,6 +19,9 @@ from fastapi.responses import FileResponse, Response
 from .. import jsonio
 from ..git_ops import GitError, resolve_commit
 from ..deps import (
+    select_experiments,
+    FILTER_QUERY_DOC,
+    WHERE_QUERY_DOC,
     with_progress_views,
     with_run_pct,
     sanitize_error,
@@ -389,6 +392,8 @@ def list_all_experiments(
     page: int = Query(default=1, ge=1, description="1-based page number (newest first). Paging is ALWAYS on; page 1 is returned when omitted."),
     page_size: int = Query(default=10, ge=1, le=100, description="Rows per page (max 100)."),
     show_all: bool = Query(default=False, alias="all", description="Escape hatch: return EVERY row unpaged. Expensive on large projects — prefer filters + paging."),
+    filter: str | None = Query(default=None, description=FILTER_QUERY_DOC),
+    where: str | None = Query(default=None, description=WHERE_QUERY_DOC),
 ):
     """List experiments across all ideas — PAGED, newest first.
 
@@ -411,8 +416,9 @@ def list_all_experiments(
         GET /api/v1/experiments?page=3&page_size=25
         GET /api/v1/experiments?status=completed&metric=score
         GET /api/v1/experiments?tags=baseline&all=true
+        GET /api/v1/experiments?where=meta.MAX_WALL_SECONDS%20%3E%3D%209000
     """
-    all_exps = store.list_all_experiments()
+    all_exps = select_experiments(store.list_all_experiments(), filter, where)
     idea_cache: dict[int, dict] = {}
 
     tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []

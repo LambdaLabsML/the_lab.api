@@ -66,6 +66,12 @@ Metrics have direction — know which way is better:
 
 When documenting findings, always note what each tag represents (e.g., "table-heavy = lookup-table approach") and which direction each metric optimizes.
 
+### Filters: scope results to a selection of experiments
+- **Saved filters** are named selections the humans maintain (e.g. `long`). `list_filters` / `GET /filters` shows them with their expressions. You can't create or edit them; ask a human if one is missing.
+- **Use one** with `filter=<name>` on `/leaderboard`, `/leaderboard/search`, `/leaderboard/aggregate`, `/digest`, `/orient` and `/experiments`. `/leaderboard/compare` takes `filter:<name>` / `where:<expr>` as selectors.
+- **Or pass your own expression** as `where=`, e.g. `meta.MAX_WALL_SECONDS >= 9000 and tag != smoke`, `idea under 1169`, `metric.score > 20`, `status = completed and description ~ sampling`, `@long and meta.SEED in [0, 1, 2]`. `filter` and `where` combine with AND.
+- **Check an expression first** with `check_filter(where=...)` / `GET /filters/check?where=...`. It returns whether it parses, how many experiments match, and sample labels.
+
 ### Script contract
 
 Scripts must print `{"metrics": {...}}` as their **last stdout line** (or omit for setup tasks). Optional extras:

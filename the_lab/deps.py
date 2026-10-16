@@ -544,3 +544,51 @@ def with_run_pct(progress: dict, meta: dict | None) -> dict:
         return progress
     pct = max(0.0, min(100.0, 100.0 * (1.0 - remaining / total)))
     return {**progress, "run_pct": round(pct, 1)}
+
+
+# ── Experiment selection: saved filter (filter=) and/or expression (where=) ──
+
+FILTER_QUERY_DOC = (
+    "A saved filter's name or id (GET /api/v1/filters lists them; humans create "
+    "them in the dashboard). Combined with `where` by AND."
+)
+WHERE_QUERY_DOC = (
+    "An ad-hoc filter expression, e.g. `meta.MAX_WALL_SECONDS >= 9000 and tag != smoke`, "
+    "`idea under 1169`, `metric.score > 20`, `@long` (a saved filter). Fields: meta.<KEY>, "
+    "metric.<KEY>, tag, idea (idea under N), label, status, description, attempt, runtime, "
+    "created_at/started_at/finished_at; operators = != > >= < <= ~ (contains) !~ in [..] "
+    "exists missing; and/or/not, parentheses. Test one with GET /api/v1/filters/check."
+)
+
+
+def experiment_selection(filter: str | None = None, where: str | None = None):
+    """A predicate over experiment records for the ``filter`` / ``where``
+    query params, or ``None`` when neither is given (= everything).
+    Raises HTTP 404 for an unknown saved filter, 400 for a bad expression."""
+    from fastapi import HTTPException
+    from . import filters as filters_mod
+
+    if not (filter or "").strip() and not (where or "").strip():
+        return None
+    ctx = filters_mod.Context(
+        children=filters_mod.idea_children(store.list_ideas()),
+        saved=lambda ref: filters_mod.get_filter(REPO_DIR, ref),
+    )
+    preds = []
+    try:
+        if (filter or "").strip():
+            rec = filters_mod.get_filter(REPO_DIR, filter)
+            if rec is None:
+                raise HTTPException(404, f"no saved filter {filter!r} (GET /api/v1/filters lists them)")
+            preds.append(filters_mod.compile_expr(rec.get("expr") or "", ctx, exclude=rec.get("exclude"),
+                                                  _seen=(rec["id"],)))
+        if (where or "").strip():
+            preds.append(filters_mod.compile_expr(where, ctx))
+    except filters_mod.FilterError as e:
+        raise HTTPException(400, f"filter: {e}")
+    return lambda exp: all(p(exp) for p in preds)
+
+
+def select_experiments(exps: list[dict], filter: str | None = None, where: str | None = None) -> list[dict]:
+    pred = experiment_selection(filter, where)
+    return exps if pred is None else [e for e in exps if pred(e)]

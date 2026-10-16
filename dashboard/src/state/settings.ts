@@ -232,8 +232,6 @@ export const messagesMyNames = useSetting<string>("messagesMyNames", "");
 export const threadStatusFilter = useSetting<"open" | "closed" | "all">("threadStatusFilter", "open");
 /** Messages thread list: only threads opened by you. */
 export const threadOpenedByMe = useSetting<boolean>("threadOpenedByMe", false);
-/** Charts / table / idea means: include experiments tagged "hidden". */
-export const showHiddenExperiments = useSetting<boolean>("showHiddenExperiments", false);
 
 // Migration: seed the primary name from the first alias already set (the
 // pre-identity "Your names" field), once — if myName has never been set and

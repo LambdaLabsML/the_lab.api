@@ -27,7 +27,7 @@ import {
 } from "./state/settings";
 import { allExperiments, allIdeas, selectedExperiment, setActivatePanel, totalAgentCost } from "./state/signals";
 import { reviewSearchPills, activeHighlights, isIdeaHighlighted, toggleIdeaHighlight, type ReviewPill } from "./state/review-filter";
-import { plotExperiments } from "./state/hidden";
+import { plotExperiments } from "./state/filters";
 import { startPolling, stopPolling } from "./state/polling";
 import { startWs, stopWs } from "./state/ws";
 import { startAgentActivity, stopAgentActivity } from "./state/agent-activity";

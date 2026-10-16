@@ -3,7 +3,7 @@ import { useEffect, useLayoutEffect, useMemo, useState, useRef } from "preact/ho
 import { progressPct } from "../lib/progress";
 import { selectedIdea, selectedMetric, detailTimeline, detailSortNewest, detailShowNotes, colorTheme } from "../state/settings";
 import { scrollToExperiment, runningProgress, allExperiments } from "../state/signals";
-import { isHiddenExperiment, setExperimentHidden } from "../state/hidden";
+import { ExcludeFromFilter } from "./filter-picker";
 import { reparentIdea } from "../state/api";
 import { refreshGraphData } from "../state/polling";
 import { getIdea, getExperimentProgress, getExperimentLog, getExperimentScript, getExperimentOutput, getIdeaDiff, getIdeaMentions, type ThreadMention } from "../state/api";
@@ -1945,34 +1945,6 @@ function RunningFor({ exp }: { exp: Experiment }) {
   );
 }
 
-/** Hide/unhide an experiment from charts, table and idea means (shared tag). */
-function HideToggle({ exp }: { exp: Experiment }) {
-  const label = String(exp.label ?? exp.id);
-  // Read the live list so the button follows changes made elsewhere.
-  const live = allExperiments.value.find((e) => String(e.label ?? e.id) === label) ?? exp;
-  const hidden = isHiddenExperiment(live);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState(false);
-  return (
-    <button
-      type="button"
-      class={`exp-hide-toggle${hidden ? " is-hidden" : ""}`}
-      disabled={busy}
-      title={error ? "Could not update — try again"
-        : hidden ? "Hidden from charts, table and idea means (for everyone) — click to show it again"
-        : "Hide this experiment from charts, table and idea means (for everyone; reversible)"}
-      onClick={async (ev) => {
-        ev.stopPropagation();
-        setBusy(true); setError(false);
-        try { await setExperimentHidden(label, !hidden); }
-        catch { setError(true); }
-        finally { setBusy(false); }
-      }}
-    >
-      {error ? "⚠ " : ""}{hidden ? "unhide" : "hide"}
-    </button>
-  );
-}
 
 function ExpMentions({ mentions }: { mentions: ThreadMention[] }) {
   const total = mentions.reduce((n, m) => n + m.count, 0);
@@ -2076,7 +2048,8 @@ function ExperimentItem({
           {isMilestone && <span class="exp-milestone-star" title="New global best at this point">★</span>}
           exp/{exp.label || exp.id}
         </span>
-        <HideToggle exp={exp} />
+        {/* takes the free space, so the score stays top right */}
+        <span class="exp-head-spacer"><ExcludeFromFilter label={String(exp.label ?? exp.id)} /></span>
         {/* Primary metric value — most important number at a glance; reads like a <Stat>. */}
         {metricKey && exp.metrics && typeof exp.metrics[metricKey] === "number" && (
           <span class="exp-metric-badge" title={`${metricKey} = ${exp.metrics[metricKey]}`}>
