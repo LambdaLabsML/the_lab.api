@@ -191,6 +191,8 @@ export const chartXAxis = useSetting<"experiments" | "ideas" | "time" | "compute
 
 /** The purple line: best-so-far step line, or moving average. */
 export const chartTimeCurve = useSetting<"best" | "avg">("chartTimeCurve", "best");
+/** Main chart point labels (#idea): off, records only, or as many as fit. */
+export const chartPointLabels = useSetting<"off" | "records" | "auto">("chartPointLabels", "auto");
 
 /** Review metrics-graph height in px (user-adjustable via chevron steppers). */
 export const reviewChartHeight = useSetting("reviewChartHeight", 360);

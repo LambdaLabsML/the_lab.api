@@ -1,12 +1,10 @@
 import { usePlotControls, matchesPlotSearch } from "../../lib/hooks/use-plot-controls";
 import { inSelection, selectionLabels } from "../../state/filters";
-import { FilterPicker } from "../filter-picker";
 import { useEffect, useMemo, useState } from "preact/hooks";
 import { allExperiments, allIdeas, currentLayout, cloneChartPanel, updatePanelTitle } from "../../state/signals";
 import {
   selectedMetric, filterText, activeTagFilters, tagFilterMode,
-  showAbandoned, showConcluded, showRunning, colorblindMode,
-} from "../../state/settings";
+  showAbandoned, showConcluded, showRunning, colorblindMode, chartPointLabels } from "../../state/settings";
 import { collectChartKeys } from "../../lib/chart-data";
 import { isLowerBetter } from "../../lib/colors";
 import { fmtMetricName, fmtScoreShort, scoreFormatter } from "../../lib/format";
@@ -133,7 +131,6 @@ export function MetricsChart({ instanceId, initialMetric, hideClone, onMetricCha
         <Toggle active={logScale} onClick={() => { setLogScale(!logScale); }} title="Logarithmic Y axis">
           Log Y
         </Toggle>
-        <FilterPicker />
         {/* Clone is hidden in the single-chart review (hideClone); kept in the workbench */}
         {!hideClone && (
           <span class="chart-toolbar-end">
@@ -201,6 +198,25 @@ export function MetricsChart({ instanceId, initialMetric, hideClone, onMetricCha
               title={c === "best" ? "Best so far" : "Moving average — window auto-sized from result count and noise"}
             >
               {c === "best" ? "max" : "avg"}
+            </button>
+          ))}
+        </span>
+        </span>
+        {/* Point labels (#idea): none, records only, or as many as fit without overlap. */}
+        <span class="chart-seg">
+        <span class="chart-seg-label">labels</span>
+        <span class="chart-ptsize" title="Point labels">
+          {(["off", "records", "auto"] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              class={`chart-ptsize-btn${chartPointLabels.value === m ? " is-active" : ""}`}
+              onClick={() => { chartPointLabels.value = m; }}
+              title={m === "off" ? "No point labels (hover still labels an idea's points)"
+                : m === "records" ? "Label the record-setting points"
+                : "Records first, then the best scores, then anything else that fits without overlapping"}
+            >
+              {m === "records" ? "rec" : m}
             </button>
           ))}
         </span>
