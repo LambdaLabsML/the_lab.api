@@ -225,12 +225,36 @@ if [ -n "$INFERENCE_CAPTURE_SCRIPT" ]; then
   cp -- "$INFERENCE_CAPTURE_SCRIPT" "$INFERENCE_CAPTURE_DIR/capture_runtime.py"
   CONTAINER_MOUNTS+=,"$INFERENCE_CAPTURE_DIR:/the_lab_diagnostics:rw"
 fi
-srun --container-image="$SGLANG_CONTAINER_IMAGE" \
+# Only a verified resource CPU profile can opt into a different task cpuset.
+CPU_ARGS=()
+case "${THE_LAB_CPU_PROFILE:-}" in
+  "") ;;
+  paired_24)
+    : "${THE_LAB_CPU_PROBE_PATH:?missing resource CPU probe}"
+    : "${THE_LAB_CPU_PROBE_SHA256:?missing resource CPU probe digest}"
+    : "${THE_LAB_CPU_RECEIPT_DIR:?missing resource CPU receipt directory}"
+    : "${THE_LAB_CPU_PROFILE_GENERATION:?missing resource Slurm generation}"
+    : "${THE_LAB_CPU_PROFILE_JOB_ID:?missing resource Slurm job id}"
+    [ "${SLURM_JOB_ID:-}" = "$THE_LAB_CPU_PROFILE_JOB_ID" ] || { echo "CPU profile job mismatch" >&2; exit 1; }
+    [ -r "$THE_LAB_CPU_RECEIPT_DIR/batch.json" ] || { echo "CPU profile batch gate missing" >&2; exit 1; }
+    [ "$(sha256sum "$THE_LAB_CPU_PROBE_PATH" | cut -d ' ' -f1)" = "$THE_LAB_CPU_PROBE_SHA256" ] || { echo "CPU probe digest mismatch" >&2; exit 1; }
+    CPU_ARGS=(--nodes=1 --ntasks=1 --cpus-per-task=48 --threads-per-core=2 --cpu-bind=verbose,cores)
+    THE_LAB_CPU_LAUNCH_NONCE="$(python3 -c 'import secrets; print(secrets.token_hex(32))')" || exit $?
+    export THE_LAB_CPU_LAUNCH_NONCE
+    CONTAINER_ENVS+=,THE_LAB_CPU_PROFILE,THE_LAB_CPU_PROFILE_JOB_ID,THE_LAB_CPU_PROFILE_GENERATION,THE_LAB_CPU_LAUNCH_NONCE
+    CONTAINER_MOUNTS+=,"$THE_LAB_CPU_PROBE_PATH:/the_lab_cpu_probe.py:ro,$THE_LAB_CPU_RECEIPT_DIR:/the_lab_cpu_receipts:rw"
+    ;;
+  *) echo "unsupported resource CPU profile" >&2; exit 1 ;;
+esac
+srun "${CPU_ARGS[@]}" --container-image="$SGLANG_CONTAINER_IMAGE" \
   --container-name="$SGLANG_CONTAINER_NAME" \
   --container-mount-home --container-remap-root \
   --container-mounts="$CONTAINER_MOUNTS" \
   --container-env="$CONTAINER_ENVS" \
-  bash -lc 'export HF_HOME=/hf_cache HF_HUB_CACHE=/hf_cache/hub; EXTRA=();
+  bash -lc 'if [ "${THE_LAB_CPU_PROFILE:-}" = paired_24 ]; then
+      python3 /the_lab_cpu_probe.py --phase server --job-id "$THE_LAB_CPU_PROFILE_JOB_ID" --restart-count "$THE_LAB_CPU_PROFILE_GENERATION" --batch-receipt /the_lab_cpu_receipts/batch.json --output /the_lab_cpu_receipts/server.json --handshake-dir /the_lab_cpu_receipts --nonce "$THE_LAB_CPU_LAUNCH_NONCE" || exit $?
+    fi
+    export HF_HOME=/hf_cache HF_HUB_CACHE=/hf_cache/hub; EXTRA=();
     echo "[the-lab] PYTORCH_CUDA_ALLOC_CONF=${PYTORCH_CUDA_ALLOC_CONF:-unset}"
     if [ -n "$INFERENCE_CAPTURE_SCRIPT" ]; then
       python3 /the_lab_diagnostics/capture_runtime.py /the_lab_diagnostics || exit $?
@@ -279,6 +303,10 @@ srun --container-image="$SGLANG_CONTAINER_IMAGE" \
     --cuda-graph-max-bs-decode "$DECODE_GRAPH_MAX_BS" --host 0.0.0.0 --port "$SGLANG_PORT" \
     --api-key "$VLLM_API_KEY" "${EXTRA[@]}"' &
 SERVER_STEP_PID=$!
+if [ "${THE_LAB_CPU_PROFILE:-}" = paired_24 ]; then
+  python3 "$THE_LAB_CPU_PROBE_PATH" --phase host --job-id "$THE_LAB_CPU_PROFILE_JOB_ID" --restart-count "$THE_LAB_CPU_PROFILE_GENERATION" --batch-receipt "$THE_LAB_CPU_RECEIPT_DIR/batch.json" --handshake-dir "$THE_LAB_CPU_RECEIPT_DIR" --nonce "$THE_LAB_CPU_LAUNCH_NONCE" --launcher-pid "$SERVER_STEP_PID" --output "$THE_LAB_CPU_RECEIPT_DIR/host.json" || exit $?
+fi
+
 if [ -n "$GPU_MEMORY_GUARD_SCRIPT" ]; then
   python3 "$GPU_MEMORY_GUARD_SCRIPT" "$$" "$(dirname "$THE_LAB_MODEL_READY_FILE")/gpu_memory.jsonl" &
   MONITOR_PID=$!
