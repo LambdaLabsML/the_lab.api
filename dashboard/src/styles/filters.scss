@@ -41,12 +41,12 @@
     &:disabled { opacity: 0.45; cursor: default; }
   }
 }
-.filter-expr textarea, .filter-save input {
+.filter-expr textarea, .filter-save input:not([type="checkbox"]) {
   width: 100%; box-sizing: border-box; padding: 4px 6px; resize: vertical;
   font-family: var(--font-mono); font-size: var(--text-xs);
   background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px;
 }
-.filter-save { margin-top: var(--space-2); flex-wrap: nowrap; input { flex: 1 1 auto; } label { display: inline-flex; gap: 3px; white-space: nowrap; color: var(--text-muted); } }
+.filter-save { margin-top: var(--space-2); flex-wrap: nowrap; input:not([type="checkbox"]) { flex: 1 1 auto; } label { display: inline-flex; gap: 3px; white-space: nowrap; color: var(--text-muted); } }
 .filter-check { margin: 4px 0; font-size: var(--text-xs); color: var(--green); &.is-error { color: var(--red); } }
 .filter-msg-ok { color: var(--green); font-size: var(--text-xs); margin-top: 4px; }
 .filter-msg-err { color: var(--red); font-size: var(--text-xs); margin-top: 4px; }
@@ -57,3 +57,4 @@
   ul { margin-top: 4px; }
   li button { border: 0; background: none; padding: 1px 0; cursor: pointer; color: var(--accent); }
 }
+.filter-row-badge { color: var(--accent); font-size: var(--text-xs); white-space: nowrap; }
