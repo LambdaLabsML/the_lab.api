@@ -1,3 +1,4 @@
+import type { ComponentChildren } from "preact";
 import { useState } from "preact/hooks";
 import { useSetting, selectedMetric, scatterXMetric, scatterYMetric, reviewChartHeight } from "../../state/settings";
 import { Stepper } from "../ui";
@@ -7,7 +8,9 @@ import { LazyScatterChart } from "./lazy-scatter";
 type Plot = { id: string; height?: number; width?: "full" | "half"; type: "metrics" | "scatter"; metric?: string; x?: string; y?: string };
 const plots = useSetting<Plot[]>("overviewPlots", [{ id: "correlation", type: "scatter" }]);
 
-export function GraphWorkspace() {
+/** ``head``: shown on the left of the workspace's header line (the Overview
+ *  puts its KPI cards there); the "+" add-graph menu stays on the right. */
+export function GraphWorkspace({ head }: { head?: ComponentChildren } = {}) {
   const [adding, setAdding] = useState(false);
   function add(type: Plot["type"]) {
     plots.value = [...plots.value, { id: globalThis.crypto?.randomUUID?.() ?? `plot-${Date.now()}-${Math.random().toString(36).slice(2)}`, type, height: reviewChartHeight.value, width: "full", metric: selectedMetric.value, x: scatterXMetric.value, y: scatterYMetric.value }];
@@ -19,11 +22,11 @@ export function GraphWorkspace() {
     plots.value = plots.value.map(p => p.id === id ? { ...p, ...changes } : p);
   }
   return <section class="graph-workspace" aria-label="Graphs">
-    <div class="research-panel-head">
-      <strong>Graphs</strong>
+    <div class="research-panel-head graph-workspace-head">
+      {head ?? <strong>Graphs</strong>}
       <div class="graph-actions">
         <div class="graph-add">
-          <button class="ui-btn graph-add-button" aria-label="Add graph" aria-expanded={adding} onClick={() => setAdding(v => !v)}>+</button>
+          <button class="ui-btn graph-add-button" aria-label="Add graph" title="Add a graph" aria-expanded={adding} onClick={() => setAdding(v => !v)}>+</button>
           {adding && <>
             <button class="graph-menu-dismiss" tabIndex={-1} aria-label="Dismiss graph menu" onClick={() => setAdding(false)} />
             <div class="graph-add-menu" onKeyDown={e => { if (e.key === "Escape") setAdding(false); }}>

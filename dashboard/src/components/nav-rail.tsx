@@ -12,6 +12,7 @@ import { wsCatchingUp, wsConnected, wsAuthFailed, wsLastMessageAt } from "../sta
 import { messagesUnreadCount } from "../state/messages";
 import { inboxUnreadCount, inboxView } from "../state/inbox";
 import { Tooltip } from "./ui";
+import { AgentBar, liveAgents, workingAgents, useAgentRoster } from "./agent-bar";
 
 function relAgo(ms: number | null): string {
   if (!ms) return "—";
@@ -52,6 +53,12 @@ export function NavRail({
     return () => window.clearInterval(t);
   }, []);
 
+  // Active agents: count on the ⬡ mark, list in a popover (was a top bar).
+  useAgentRoster();
+  const agentCount = workingAgents.value.length;   // badge: agents working on an idea
+  const liveCount = liveAgents.value.length;
+  const [agentsOpen, setAgentsOpen] = useState(false);
+
   const demo = serverDemoMode.value;
   const wsState = wsAuthFailed.value ? "auth" : wsCatchingUp.value ? "busy" : wsConnected.value ? "on" : "off";
   const wsLabel = wsAuthFailed.value ? "auth failed" : wsCatchingUp.value ? "catching up…" : wsConnected.value ? "connected" : "reconnecting…";
@@ -85,11 +92,22 @@ export function NavRail({
         }
         placement="bottom"
       >
-        <span
-          class={`nav-rail-mark nav-rail-mark--${wsState}`}
-          aria-label={`Connection: ${wsLabel}`}
-        >⬡</span>
+        <button
+          type="button"
+          class={`nav-rail-mark nav-rail-mark--${wsState}${agentsOpen ? " is-open" : ""}`}
+          aria-label={`Connection: ${wsLabel}; ${agentCount} agent${agentCount === 1 ? "" : "s"} working, ${liveCount} running`}
+          aria-expanded={agentsOpen}
+          onClick={() => setAgentsOpen(!agentsOpen)}
+        >⬡{agentCount > 0 && <span class="nav-rail-agent-count">{agentCount}</span>}</button>
       </Tooltip>
+      {agentsOpen && <>
+        <button class="nav-agents-scrim" tabIndex={-1} aria-label="Close active agents" onClick={() => setAgentsOpen(false)} />
+        <div class="nav-agents-popover" role="dialog" aria-label="Active agents"
+          onKeyDown={(e) => { if (e.key === "Escape") setAgentsOpen(false); }}>
+          <div class="nav-agents-title">Active work · {agentCount} working · {liveCount} running</div>
+          <AgentBar vertical />
+        </div>
+      </>}
 
       <div class="nav-rail-group">{PRIMARY.map(item)}</div>
       <div class="nav-rail-spacer" />
