@@ -496,3 +496,9 @@ button.nav-rail-mark {
 .agent-bar--vertical .agent-bar-badge { width: 100%; }
 .agent-bar--vertical .agent-bar-list > .ui-tip-trigger { display: flex; width: 100%; margin: 0; padding: 0; }
 .agent-bar--vertical .agent-bar-badge { padding-block: 3px; }
+
+// Running row values: live score (purple) · percent, one line, right side.
+.shortlog-vals {
+  flex-shrink: 0; display: inline-flex; align-items: baseline; gap: 6px;
+  .shortlog-score { min-width: 0; font-weight: 600; }
+}
