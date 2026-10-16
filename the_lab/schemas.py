@@ -352,3 +352,30 @@ class SlurmDoneRequest(BaseModel):
     exit_code: int = 0
     job_id: str | None = None
     restart_count: int | None = None
+
+
+class DashboardInboxQuery(BaseModel):
+    """Browser-local identity/read state for a read-only dashboard query."""
+    as_user: str | None = None
+    aliases: list[str] = Field(default_factory=list)
+    sent_ids: list[int] = Field(default_factory=list)
+    read_ids: list[int] = Field(default_factory=list)
+    saved_threads: list[int] = Field(default_factory=list)
+    saved_focus: dict[str, int] = Field(default_factory=dict)
+    view: Literal["for_you", "mine", "all", "saved"] = "for_you"
+    q: str = ""
+    status: Literal["all", "open", "closed"] = "all"
+    sender: str = ""
+    before_id: int | None = Field(default=None, ge=1)
+    limit: int = Field(default=30, ge=1, le=100)
+
+
+class DashboardConversationQuery(BaseModel):
+    context: bool = False
+    as_user: str | None = None
+    audience: Literal["all", "me", "users"] = "all"
+    sent_ids: list[int] = Field(default_factory=list)
+    before_id: int | None = Field(default=None, ge=1)
+    after_id: int | None = Field(default=None, ge=1)
+    around_id: int | None = Field(default=None, ge=1)
+    limit: int = Field(default=80, ge=1, le=200)

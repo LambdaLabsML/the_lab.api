@@ -26,7 +26,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from .. import agents as agents_mod
 from .. import messages as messages_mod
 from ..deps import REPO_DIR, store
-from ..schemas import MessageRequest, ThreadCreateRequest, ThreadMembersRequest, ThreadUpdateRequest
+from ..schemas import DashboardConversationQuery, DashboardInboxQuery, MessageRequest, ThreadCreateRequest, ThreadMembersRequest, ThreadUpdateRequest
 
 
 router = APIRouter()
@@ -666,6 +666,45 @@ def create_thread(req: ThreadCreateRequest, request: Request):
     return out
 
 
+@router.post("/api/v1/dashboard/inbox")
+def dashboard_inbox(req: DashboardInboxQuery, request: Request):
+    """Read-only thread index, with the dashboard browser's personal read state.
+
+    Operator/dashboard access is required, matching the existing full message
+    log. Browser read flags do not acknowledge or mutate any agent inbox.
+    """
+    agent_id, _ = _resolve_sender(request)
+    if not _is_dashboard_user_sender(request, agent_id) or not _is_operator(request):
+        raise HTTPException(403, "the personal inbox is dashboard/operator-only")
+    try:
+        viewer = _as_user(request, agent_id, req.as_user)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return messages_mod.dashboard_inbox(
+        REPO_DIR, viewer=viewer, aliases=req.aliases, sent_ids=set(req.sent_ids),
+        read_ids=set(req.read_ids), saved_threads=set(req.saved_threads), view=req.view,
+        q=req.q, status=req.status, sender=req.sender, before_id=req.before_id, limit=req.limit,
+        saved_focus=req.saved_focus,
+    )
+
+
+@router.post("/api/v1/dashboard/threads/{thread_id}")
+def dashboard_conversation(thread_id: int, req: DashboardConversationQuery, request: Request):
+    """Read-only conversation filters, applied before paging the archive."""
+    agent_id, _ = _resolve_sender(request)
+    if not _is_dashboard_user_sender(request, agent_id) or not _is_operator(request):
+        raise HTTPException(403, "conversation filters are dashboard/operator-only")
+    try:
+        viewer = _as_user(request, agent_id, req.as_user)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return _thread_errors(
+        messages_mod.get_thread, REPO_DIR, thread_id, agent_id=viewer, role=None,
+        operator=True, audience=req.audience, viewer=viewer, sent_ids=set(req.sent_ids),
+        before_id=req.before_id, after_id=req.after_id, around_id=req.around_id, limit=req.limit, context=req.context,
+    )
+
+
 @router.get("/api/v1/threads")
 def list_threads(
     request: Request,
@@ -719,6 +758,8 @@ def get_thread(
                     "paging further back in time: pass the oldest id from the "
                     "previous page (also returned as next_before_id).",
     ),
+    around_id: int | None = Query(default=None, ge=1, description="Open a window around this message"),
+    after_id: int | None = Query(default=None, ge=1, description="Continue forward from this message"),
     fields: str | None = Query(
         default=None,
         description="'tldr' returns compact entries (id, from_agent, to, created_at, "
@@ -744,6 +785,7 @@ def get_thread(
     out = _thread_errors(
         messages_mod.get_thread, REPO_DIR, thread_id, agent_id=agent_id, role=role,
         operator=operator, limit=limit, offset=offset, before_id=before_id, fields=fields,
+        around_id=around_id, after_id=after_id,
     )
     if agent_id and not peek:
         ids = [m["id"] for m in out["messages"]
