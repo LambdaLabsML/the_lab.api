@@ -346,6 +346,8 @@ export interface QueueExp {
   tags: string[];
   assigned_resource: string | null;
   assigned_units: number[] | null;
+  /** Native Slurm runs: "PENDING" while still waiting for an allocation. */
+  slurm_state?: string | null;
   /** Populated for finished rows in the `recent` history section. */
   error?: string | null;
   metrics?: Record<string, unknown> | null;

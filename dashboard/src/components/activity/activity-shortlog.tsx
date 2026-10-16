@@ -12,6 +12,8 @@ import type { QueueSnapshot } from "../../lib/types";
 import { Eyebrow } from "../ui";
 
 const queuedOpen = useSetting("monitorQueuedOpen", false);
+/** Show runs that are started but still waiting for a Slurm allocation. */
+const waitingOpen = useSetting("monitorSlurmWaitingOpen", false);
 
 function relTime(iso?: string | null): string {
   if (!iso) return "";
@@ -44,21 +46,35 @@ export function ActivityShortlog() {
   const queued = snapshot?.queued ?? [];
   const ideas = allIdeas.value;
   const progress = runningProgress.value;
+  // Started by the lab but still waiting for a Slurm allocation: listed after
+  // the runs that are actually working, collapsed by default.
+  // (The queue snapshot carries slurm_state; until it loads, nothing counts as waiting.)
+  const isWaiting = (e: object) => (e as { slurm_state?: string | null }).slurm_state === "PENDING";
+  const working = running.filter(e => !isWaiting(e));
+  const waiting = running.filter(e => isWaiting(e));
+  const waitingSeparator = <button class="shortlog-separator" aria-expanded={waitingOpen.value}
+    onClick={() => { waitingOpen.value = !waitingOpen.value; }}
+    title={waitingOpen.value ? "Hide the runs still waiting for a Slurm allocation" : "Show the runs still waiting for a Slurm allocation"}>
+    <span class="shortlog-separator-rule" />
+    <span class="shortlog-separator-text">{waitingOpen.value ? "▾" : "▸"} {waiting.length} waiting in Slurm{waitingOpen.value ? "" : " — show"}</span>
+    <span class="shortlog-separator-rule" />
+  </button>;
   const recent = experiments
     .filter(e => !e._running && e.finished_at && ["completed", "failed", "cancelled"].includes(e.status))
     .sort((a, b) => Date.parse(b.finished_at || "") - Date.parse(a.finished_at || ""))
     .slice(0, 6);
   return <div class="activity-shortlog" aria-label="Experiment monitor">
     <div class="shortlog-block">
-      <div class="shortlog-sub"><Eyebrow>Running</Eyebrow><span class="shortlog-count">{running.length}</span></div>
+      <div class="shortlog-sub"><Eyebrow>Running</Eyebrow><span class="shortlog-count" title={waiting.length ? `${working.length} working, ${waiting.length} waiting in Slurm` : undefined}>{waiting.length ? `${working.length} + ${waiting.length}` : running.length}</span></div>
       {!running.length && <div class="shortlog-idle">No running experiments</div>}
-      {running.map(e => {
+      {(waitingOpen.value ? [...working, ...waiting] : working).map((e, i) => {
+        const separator = i === working.length && waiting.length > 0;
         const label = String(e.label || e.id);
         const pct = progress[label];
         const record = experiments.find(x => String(x.label || x.id) === label);
         const score = record?.metrics?.[selectedMetric.value] ?? e.metrics?.[selectedMetric.value];
         const hasScore = typeof score === "number" && Number.isFinite(score);
-        return <div class="shortlog-run" key={label}>
+        return <>{separator && waitingSeparator}<div class="shortlog-run" key={label}>
           <button class="shortlog-row" data-experiment-label={label} data-idea-id={e.idea_id}
             onClick={() => navigateToIdea(e.idea_id, label)}
             onMouseEnter={(ev) => showRunPreview({ label, ideaId: e.idea_id, pct: typeof pct === "number" ? pct : undefined }, ev.currentTarget as Element)}
@@ -75,8 +91,9 @@ export function ActivityShortlog() {
             </span>}
           </button>
           <span class="shortlog-progress"><span class={`shortlog-progress-fill${typeof pct === "number" ? "" : " is-indeterminate"}`} style={typeof pct === "number" ? { width: `${Math.min(100, Math.max(0, pct))}%` } : undefined} /></span>
-        </div>;
+        </div></>;
       })}
+      {!waitingOpen.value && waiting.length > 0 && waitingSeparator}
     </div>
     <div class="shortlog-block">
       <button class="shortlog-sub monitor-queued-toggle" aria-expanded={queuedOpen.value} onClick={() => { queuedOpen.value = !queuedOpen.value; }}><Eyebrow>Queued</Eyebrow><span class="shortlog-count">{snapshot ? queued.length : "—"}</span><span class="monitor-queue-chevron" aria-hidden="true">{queuedOpen.value ? "▾" : "▸"}</span></button>
