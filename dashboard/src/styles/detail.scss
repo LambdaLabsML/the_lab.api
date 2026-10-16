@@ -823,3 +823,40 @@
   .reparent-ok { color: var(--green); }
   .reparent-err { color: var(--red); }
 }
+
+// Experiment description: clamped to a few lines with more / less.
+.exp-item .exp-desc-wrap { margin-bottom: 5px; }
+.exp-item .exp-desc-wrap .exp-desc { margin-bottom: 0; }
+.exp-item .exp-desc.is-clamped {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.exp-item .exp-desc-more {
+  padding: 0; border: 0; background: none; cursor: pointer;
+  color: var(--accent); font-size: var(--text-xs);
+  &:hover { text-decoration: underline; }
+}
+
+// Live running-time counter next to a running experiment's status badge.
+.exp-item .exp-running-for {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--yellow);
+  white-space: nowrap;
+}
+
+// Idea actions (move …), tucked away in a disclosure at the end of the meta block.
+.idea-actions {
+  margin-top: var(--space-2);
+  font-size: var(--text-xs);
+  > summary {
+    cursor: pointer; list-style: none; width: max-content;
+    color: var(--text-faint);
+    &::-webkit-details-marker { display: none; }
+    &:hover { color: var(--text); }
+  }
+  &[open] > summary { margin-bottom: var(--space-2); }
+}

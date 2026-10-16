@@ -4,9 +4,7 @@ import { colorTheme, fontFamily, fontSize, colorblindMode, uiTexture, uiContrast
 import { applyContrast } from "./lib/contrast";
 import { effect } from "@preact/signals";
 import { ALL_PAIRINGS, DEFAULT_PAIRING } from "./lib/fonts";
-import "dockview-core/dist/styles/dockview.css";
 import "./styles/tailwind.css";
-import "./styles/dockview-overrides.scss";
 import "./styles/global.scss";
 import "./styles/artifacts.scss";
 import "./styles/collab.scss";
@@ -24,9 +22,7 @@ import "./styles/agent-activity.scss";
 import "./styles/messages.scss";
 import "./styles/rich-text.scss";
 import "./styles/queue.scss";
-import "./styles/suggest.scss";
 import "./styles/tags.scss";
-import "./styles/task.scss";
 import "./styles/stats.scss";
 import "./styles/chat.scss";
 import "./styles/table.scss";
@@ -94,3 +90,7 @@ effect(() => {
 });
 
 render(<App />, document.getElementById("app")!);
+
+import "./styles/research.scss";
+
+import "./styles/inbox.scss";

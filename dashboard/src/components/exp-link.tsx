@@ -1,8 +1,8 @@
 /**
  * ExpLink — THE shared way to render an experiment reference ("exp/129.6").
  * Accent-colored mono link with the canonical experiment hover card
- * (experimentTipContent) and click-through to the Overview page (scroll+flash
- * via navigateToIdea). Self-hydrates from the label, so call sites need no
+ * (experimentTipContent) and click-through to the shared details inspector.
+ * Links in conversations preserve the current view. Self-hydrates from the label, so call sites need no
  * data plumbing — dropping this into a view adds the tooltip for free.
  */
 import { Tooltip, experimentTipContent } from "./ui";
@@ -42,12 +42,15 @@ export function ExpLink({ label, ideaId, class: cls }: {
     <Tooltip content={tip}>
       <button
         type="button"
+        data-experiment-label={label}
+        data-idea-id={idea}
         class={`exp-link${cls ? ` ${cls}` : ""}`}
         onClick={(e) => {
           e.stopPropagation();
           if (idea != null) {
-            window.location.hash = "#review";   // experiments live on Overview
-            navigateToIdea(idea, label);
+            const inConversation = !!e.currentTarget.closest(".message-threads");
+            if (!inConversation) window.location.hash = "#review";
+            navigateToIdea(idea, label, { scrollGraph: !inConversation });
           }
         }}
       >

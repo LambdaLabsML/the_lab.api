@@ -749,3 +749,41 @@ export async function streamChat(
   }
   onDone();
 }
+
+/** Read-only POST: browser read/identity state can exceed practical URL limits. */
+export async function getDashboardInbox(query: {
+  view: import("./inbox").InboxView;
+  q: string;
+  status: "all" | "open" | "closed";
+  sender: string;
+  aliases: string[];
+  sent_ids: number[];
+  read_ids: number[];
+  saved_threads: number[];
+  saved_focus: Record<string, number>;
+  before_id?: number;
+}): Promise<import("../lib/types").DashboardInboxPage> {
+  return fetchJson("/api/v1/dashboard/inbox", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...query, limit: 30, ...asUserBody() }),
+  });
+}
+
+export interface ThreadGap { after_id: number | null; before_id: number | null; count: number }
+
+export async function getThreadConversation(id: number, page: { before_id?: number; after_id?: number; around_id?: number } = {}, audience: "all" | "me" | "users" = "all", sentIds: number[] = []): Promise<ThreadMeta & MessagePage & { next_before_id?: number; next_after_id?: number; gaps?: ThreadGap[] }> {
+  if (audience !== "all") return fetchJson(`/api/v1/dashboard/threads/${id}`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...page, audience, sent_ids: sentIds, ...asUserBody() }),
+  });
+  const qs = new URLSearchParams({ limit: "80", peek: "true" });
+  for (const [key, value] of Object.entries(page)) if (value != null) qs.set(key, String(value));
+  return fetchJson(`/api/v1/threads/${id}?${qs}`);
+}
+
+export async function getThreadContext(id: number, gap: Pick<ThreadGap, "after_id" | "before_id">): Promise<MessagePage> {
+  return fetchJson(`/api/v1/dashboard/threads/${id}`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...gap, context: true, limit: 3, ...asUserBody() }),
+  });
+}

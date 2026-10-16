@@ -1,26 +1,14 @@
+import { usePlotControls, matchesPlotSearch } from "../../lib/hooks/use-plot-controls";
+import { isHiddenExperiment } from "../../state/hidden";
+import { registerExperimentSurface } from "../experiment-actions";
 import { useRef, useEffect, useMemo, useState } from "preact/hooks";
 import { Chart } from "chart.js/auto";
-import { plotExperiments } from "../../state/hidden";
-import { allIdeas, currentLayout, highlightedIdea, cloneChartPanel, updatePanelTitle, runningProgress } from "../../state/signals";
+import { allExperiments, allIdeas, currentLayout, highlightedIdea, cloneChartPanel, updatePanelTitle, runningProgress } from "../../state/signals";
 import { chartNavClick } from "../../lib/hooks";
-import { IconButton } from "../ui";
+import { IconButton, Toggle } from "../ui";
 import {
-  selectedMetric,
-  selectedIdea,
-  colorMode,
-  colorTheme,
-  fontSize,
-  improvementsOnly,
-  activeTagFilters,
-  tagFilterMode,
-  showAbandoned,
-  showConcluded,
-  showRunning,
-  clipOutliers,
-  ideaMean,
-  scatterXMetric,
-  scatterYMetric,
-  colorblindMode,
+  selectedMetric, filterText, colorTheme, fontSize, activeTagFilters, tagFilterMode,
+  showAbandoned, showConcluded, showRunning, scatterXMetric, scatterYMetric, colorblindMode,
 } from "../../state/settings";
 import { filterMetricExperiments, collectChartKeys, resolveNumericValue } from "../../lib/chart-data";
 import { IDEA_PALETTE, _colorForExp, isLowerBetter } from "../../lib/colors";
@@ -131,8 +119,9 @@ function runningRing(pct: number | undefined): HTMLCanvasElement {
   return cv;
 }
 
-export function ScatterChart({ instanceId, initialXMetric, initialYMetric }: { instanceId?: string; initialXMetric?: string; initialYMetric?: string } = {}) {
+export function ScatterChart({ instanceId, initialXMetric, initialYMetric, hideClone = false, onAxesChange }: { instanceId?: string; initialXMetric?: string; initialYMetric?: string; hideClone?: boolean; onAxesChange?: (x: string, y: string) => void } = {}) {
   const isClone = !!instanceId;
+  const { improvementsOnly, ideaMean, clipOutliers, colorMode, showHiddenExperiments, plotFilter } = usePlotControls(instanceId);
   const [localX, setLocalX] = useState(initialXMetric || "");
   const [localY, setLocalY] = useState(initialYMetric || "");
 
@@ -141,10 +130,15 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric }: { i
   const prevThemeRef = useRef(colorTheme.value);
   const prevFzRef = useRef(fontSize.value);
 
-  const experiments = plotExperiments.value;
+  const allRows = allExperiments.value;
+  const includeHidden = showHiddenExperiments.value;
+  const localQuery = plotFilter.value;
+  const globalQuery = filterText.value;
+  const ideaMap = allIdeas.value;
+  const experiments = useMemo(() => allRows.filter(e => (includeHidden || !isHiddenExperiment(e)) && matchesPlotSearch(e, ideaMap[e.idea_id]?.description ?? "", localQuery)), [allRows, includeHidden, localQuery, globalQuery, ideaMap]);
 
   // Compute chartable keys grouped by source
-  const grouped = useMemo(() => collectChartKeys(experiments), [experiments]);
+  const grouped = useMemo(() => collectChartKeys(allRows), [allRows]);
   const metricKeys = [...grouped.metrics, ...grouped.nested, ...grouped.meta, ...grouped.timing];
   const ideas = allIdeas.value;
   const layout = currentLayout.value;
@@ -160,6 +154,8 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric }: { i
 
   const xMetric = isClone ? localX : scatterXMetric.value;
   const yMetric = isClone ? localY : scatterYMetric.value;
+
+  useEffect(() => { if (xMetric && yMetric) onAxesChange?.(xMetric, yMetric); }, [xMetric, yMetric]);
 
   const setX = isClone
     ? (v: string) => { setLocalX(v); if (instanceId && updatePanelTitle) updatePanelTitle(instanceId, `Scatter: ${v} vs ${yMetric || "?"}`); }
@@ -185,6 +181,26 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric }: { i
     const px = preferredY.find(k => metricKeys.includes(k) && k !== xMetric);
     setY(px ?? (metricKeys.find(k => k !== xMetric) ?? metricKeys[0]));
   }
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    return registerExperimentSurface(canvas, event => {
+      const chart = chartRef.current;
+      if (!chart) return null;
+      const hit = chart.getElementsAtEventForMode(event, "nearest", { intersect: false }, false)[0];
+      if (!hit) return null;
+      // Ring markers are larger than Chart.js's point radius. Accept their
+      // visible edge, while keeping clicks on empty chart space unchanged.
+      const box = canvas.getBoundingClientRect();
+      const point = hit.element;
+      const distance = Math.hypot(event.clientX - box.left - point.x * box.width / chart.width,
+        event.clientY - box.top - point.y * box.height / chart.height);
+      if (distance > 14) return null;
+      const exp = hit && (chart.data.datasets[hit.datasetIndex] as any)._expData?.[hit.index];
+      return exp && exp.idea_id != null ? { ideaId: exp.idea_id, label: String(exp.label ?? exp.id) } : null;
+    });
+  }, []);
 
   // Destroy chart on unmount
   useEffect(() => {
@@ -247,7 +263,7 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric }: { i
 
     // Color computation
     const metricFiltered = filterMetricExperiments(
-      selectedMetric.value || yMetric, experiments, tags, tagMode, hiddenStatuses, hideRunning,
+      (isClone ? yMetric : selectedMetric.value || yMetric), experiments, tags, tagMode, hiddenStatuses, hideRunning,
     );
     const ideaColorMap: Record<number, string> = {};
     let colorIdx = 0;
@@ -429,6 +445,7 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric }: { i
   return (
     <div class="chart-col" style={{ height: "100%", display: "flex", flexDirection: "column" }}>
       <div class="chart-col-toolbar">
+        {isClone && <input class="plot-data-filter" aria-label="Graph data filter" placeholder="Filter this graph…" value={plotFilter.value} onInput={e => { plotFilter.value = e.currentTarget.value; }} />}
         X:{" "}
         <select value={xMetric} onChange={(e) => { setX((e.target as HTMLSelectElement).value); }}>
           {grouped.metrics.length > 0 && <optgroup label="Metrics">{grouped.metrics.map((k) => <option key={k} value={k}>{fmtMetricName(k)}</option>)}</optgroup>}
@@ -444,9 +461,12 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric }: { i
           {grouped.meta.length > 0 && <optgroup label="Meta">{grouped.meta.map((k) => <option key={k} value={k}>{fmtMetricName(k)}</option>)}</optgroup>}
         </select>
         {" "}
-        <IconButton onClick={() => { if (cloneChartPanel) cloneChartPanel("scatter", undefined, xMetric, yMetric); }} title="Clone this chart as a new tab">
+        <Toggle active={impOnly} onClick={() => { improvementsOnly.value = !impOnly; }} title="Only improvements">Step</Toggle>
+        <Toggle active={mean} onClick={() => { ideaMean.value = !mean; }} title="One point per idea (mean)">μ Idea Mean</Toggle>
+        <Toggle active={clip} onClick={() => { clipOutliers.value = !clip; }} title="Hide outliers">Outliers</Toggle>
+        {!hideClone && <IconButton onClick={() => { if (cloneChartPanel) cloneChartPanel("scatter", undefined, xMetric, yMetric); }} title="Clone this chart as a new tab">
           + Clone
-        </IconButton>
+        </IconButton>}
       </div>
       <div class="chart-col-canvas">
         <canvas ref={canvasRef} />

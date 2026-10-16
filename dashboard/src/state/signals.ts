@@ -58,10 +58,13 @@ export const currentLayout = computed<SubwayLayout | null>(() => {
 /** Idea currently hovered / highlighted in the graph or chart. */
 export const highlightedIdea = signal<number | null>(null);
 
+/** Experiment currently selected in the shared inspector. */
+export const selectedExperiment = signal<string | null>(null);
+
 /** Experiment label to scroll to in the detail panel (e.g. "5.2"). */
 export const scrollToExperiment = signal<string | null>(null);
 
-/** Global ref to activate dockview panels from any component.
+/** Global ref to reveal a panel from any component.
  *  Skips activation when a group is maximized (to avoid exiting fullscreen). */
 export let activatePanel: ((panelId: string) => void) | null = null;
 export function setActivatePanel(fn: (panelId: string) => void) { activatePanel = fn; }

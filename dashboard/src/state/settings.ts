@@ -105,6 +105,8 @@ export const dashboardLayout = useSetting<object | null>("dashboardLayout", null
 export const detailTimeline = useSetting("detailTimeline", true);
 /** When true, newest items appear first in the detail panel. */
 export const detailSortNewest = useSetting("detailSortNewest", true);
+/** Idea panel: show the notes boxes between the experiments. */
+export const detailShowNotes = useSetting("detailShowNotes", true);
 
 /** Active colour theme name. Applied as data-theme on <html>. */
 export const colorTheme = useSetting<string>("colorTheme", "default");

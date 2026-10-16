@@ -221,7 +221,7 @@ export function AgentTree({ compact = false, activeOnly = false, historyLimit = 
           <div class={`aa-agent${active ? "" : " aa-quiet"}`} key={st.agentId}>
             {/* Row click = expand/collapse history. Clicking the action text
                 still navigates to the idea. */}
-            <div class="aa-head" role="button" onClick={() => toggle(st.agentId)}>
+            <div class="aa-head" role="button" tabIndex={0} aria-expanded={open} onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(st.agentId); } }} onClick={() => toggle(st.agentId)}>
               {/* Status-language state dot: yellow = active/working, faint =
                   quiet; filled = listening on the-lab messages, hollow = not.
                   (Identity color lives on the agent id only.) */}
@@ -263,7 +263,7 @@ export function AgentTree({ compact = false, activeOnly = false, historyLimit = 
             <div class="aa-subs">
               {/* In-flight long-poll (e.g. wait_for_experiment) pinned first,
                   blinking until its completion event clears it. */}
-              {st.pendingCall && (
+              {st.pendingCall && (open || historyLimit > 0) && (
                 <Line glyph="⟳" tone="warn" pending api latest fresh
                   hoverCall={{ agentId: st.agentId, call: st.pendingCall }}
                   text={`${fnCall(st.pendingCall)} …`} age={ago(st.pendingCall.ts)} />

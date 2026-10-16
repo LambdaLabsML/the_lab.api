@@ -9,7 +9,10 @@ import {
   setQueueConfig,
   upsertResource,
 } from "../state/api";
-import { selectedIdea } from "../state/settings";
+import { navigateToIdea } from "../lib/navigate";
+import { allIdeas, allExperiments } from "../state/signals";
+import { selectedMetric } from "../state/settings";
+import { fmtScoreShort } from "../lib/format";
 import { useDisclosure, useLiveRefresh } from "../lib/hooks";
 import { Badge, EmptyState, IconButton, Toggle, type BadgeTone } from "../components/ui";
 import type {
@@ -508,8 +511,8 @@ export function QueueView() {
     });
   }
 
-  function handleOpenIdea(ideaId: number) {
-    selectedIdea.value = ideaId;
+  function handleOpenIdea(ideaId: number, label?: string) {
+    navigateToIdea(ideaId, label);
   }
 
   const queued = snapshot?.queued ?? [];
@@ -660,20 +663,26 @@ export function QueueView() {
           <div class="queue-list">
             {queued.map((exp) => (
               <div class="queue-row queued" key={exp.id}>
-                <div class="queue-row-main">
+                <div class="queue-row-main" data-experiment-label={exp.label} data-idea-id={exp.idea_id}>
                   <div class="queue-row-label-line">
-                    <code class="queue-row-label">exp/{exp.label}</code>
+                    <button class="queue-link queue-row-label" onClick={() => handleOpenIdea(exp.idea_id, exp.label)}>exp/{exp.label}</button>
                     <button
                       class="queue-link"
-                      onClick={() => handleOpenIdea(exp.idea_id)}
+                      onClick={() => handleOpenIdea(exp.idea_id, exp.label)}
                       title={`Open idea ${exp.idea_id}`}
                     >
                       idea {exp.idea_id}
                     </button>
                   </div>
                   <div class="queue-row-desc" title={exp.description}>
-                    {truncate(exp.description, 140)}
+                    {exp.description}
                   </div>
+                  {(() => {
+                    const record = allExperiments.value.find(e => String(e.label ?? e.id) === exp.label);
+                    const score = record?.metrics?.[selectedMetric.value] ?? exp.metrics?.[selectedMetric.value];
+                    return typeof score === "number" ? <div class="queue-live-score">{selectedMetric.value}: {fmtScoreShort(score)}</div> : null;
+                  })()}
+                  <div class="queue-idea-context">{allIdeas.value[exp.idea_id]?.description}</div>
                   <div class="queue-row-meta">
                     <span class="queue-meta-item">
                       req: {summariseRequirements(exp.requirements)}
@@ -744,20 +753,26 @@ export function QueueView() {
           <div class="queue-list">
             {running.map((exp) => (
               <div class="queue-row running" key={exp.id}>
-                <div class="queue-row-main">
+                <div class="queue-row-main" data-experiment-label={exp.label} data-idea-id={exp.idea_id}>
                   <div class="queue-row-label-line">
-                    <code class="queue-row-label">exp/{exp.label}</code>
+                    <button class="queue-link queue-row-label" onClick={() => handleOpenIdea(exp.idea_id, exp.label)}>exp/{exp.label}</button>
                     <button
                       class="queue-link"
-                      onClick={() => handleOpenIdea(exp.idea_id)}
+                      onClick={() => handleOpenIdea(exp.idea_id, exp.label)}
                       title={`Open idea ${exp.idea_id}`}
                     >
                       idea {exp.idea_id}
                     </button>
                   </div>
                   <div class="queue-row-desc" title={exp.description}>
-                    {truncate(exp.description, 140)}
+                    {exp.description}
                   </div>
+                  {(() => {
+                    const record = allExperiments.value.find(e => String(e.label ?? e.id) === exp.label);
+                    const score = record?.metrics?.[selectedMetric.value] ?? exp.metrics?.[selectedMetric.value];
+                    return typeof score === "number" ? <div class="queue-live-score">{selectedMetric.value}: {fmtScoreShort(score)}</div> : null;
+                  })()}
+                  <div class="queue-idea-context">{allIdeas.value[exp.idea_id]?.description}</div>
                   <div class="queue-row-meta">
                     {exp.assigned_resource && (
                       <span class="queue-meta-item">
@@ -802,21 +817,27 @@ export function QueueView() {
               : null;
             return (
               <div class={`queue-row recent ${status}`} key={String(exp.id)}>
-                <div class="queue-row-main">
+                <div class="queue-row-main" data-experiment-label={exp.label} data-idea-id={exp.idea_id}>
                   <div class="queue-row-label-line">
-                    <code class="queue-row-label">exp/{exp.label}</code>
+                    <button class="queue-link queue-row-label" onClick={() => handleOpenIdea(exp.idea_id, exp.label)}>exp/{exp.label}</button>
                     <Badge tone={RECENT_STATUS_TONE[status] ?? "neutral"}>{status}</Badge>
                     <button
                       class="queue-link"
-                      onClick={() => handleOpenIdea(exp.idea_id)}
+                      onClick={() => handleOpenIdea(exp.idea_id, exp.label)}
                       title={`Open idea ${exp.idea_id}`}
                     >
                       idea {exp.idea_id}
                     </button>
                   </div>
                   <div class="queue-row-desc" title={exp.description}>
-                    {truncate(exp.description, 140)}
+                    {exp.description}
                   </div>
+                  {(() => {
+                    const record = allExperiments.value.find(e => String(e.label ?? e.id) === exp.label);
+                    const score = record?.metrics?.[selectedMetric.value] ?? exp.metrics?.[selectedMetric.value];
+                    return typeof score === "number" ? <div class="queue-live-score">{selectedMetric.value}: {fmtScoreShort(score)}</div> : null;
+                  })()}
+                  <div class="queue-idea-context">{allIdeas.value[exp.idea_id]?.description}</div>
                   <div class="queue-row-meta">
                     {score != null && (
                       <span class="queue-meta-item">

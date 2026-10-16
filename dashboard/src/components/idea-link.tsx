@@ -1,7 +1,7 @@
 /**
  * IdeaLink — THE shared way to render an idea reference ("#129"). Muted mono
  * link with the canonical idea hover card (ideaTipContent — status, best
- * score, runs, title) and click-through to the Overview page. Self-hydrates
+ * score, runs, title) and click-through to the shared details inspector. Self-hydrates
  * from the id, mirroring ExpLink.
  */
 import { Tooltip, ideaTipContent } from "./ui";
@@ -44,8 +44,9 @@ export function IdeaLink({ id, class: cls }: { id: number; class?: string }) {
         class={`idea-link${cls ? ` ${cls}` : ""}`}
         onClick={(e) => {
           e.stopPropagation();
-          window.location.hash = "#review";
-          navigateToIdea(id);
+          const inConversation = !!e.currentTarget.closest(".message-threads");
+          if (!inConversation) window.location.hash = "#review";
+          navigateToIdea(id, undefined, { scrollGraph: !inConversation });
         }}
       >
         #{id}

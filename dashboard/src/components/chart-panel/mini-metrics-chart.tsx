@@ -44,7 +44,8 @@ import { colorTheme, colorblindMode } from "../../state/settings";
 import { buildChartData } from "../../lib/chart-data";
 import { isLowerBetter } from "../../lib/colors";
 import { useEntityNav } from "../../lib/hooks";
-import { highlightedIdea, runningProgress } from "../../state/signals";
+import { plotHighlightState } from "../../state/review-filter";
+import { runningProgress } from "../../state/signals";
 import { fmtMetricName, scoreFormatter } from "../../lib/format";
 import { experimentTipContent } from "../ui";
 import type { Experiment, IdeaNode, SubwayLayout } from "../../lib/types";
@@ -180,9 +181,7 @@ function MiniDot({
   const label = exp?.label ?? (exp?.id != null ? String(exp.id) : undefined);
   const nav = useEntityNav(ideaId, label);
 
-  const anyHighlight = highlightedIdea.value !== null;
-  const highlighted = nav.highlighted;
-  const faded = anyHighlight && !highlighted;
+  const { highlighted, faded } = plotHighlightState(ideaId, label);
   const isRunning = exp?._running ?? false;
 
   // small, crisp radii (1:1 px) — milestones a touch larger, highlight larger
@@ -197,6 +196,8 @@ function MiniDot({
   return (
     <g
       ref={groupRef}
+      data-experiment-label={label}
+      data-idea-id={ideaId}
       style={exp ? "cursor:pointer;" : undefined}
       onMouseEnter={() => { onHoverChange(true, groupRef.current?.getBoundingClientRect() ?? null); if (exp) nav.bind.onMouseEnter(); }}
       onMouseLeave={() => { onHoverChange(false, null); if (exp) nav.bind.onMouseLeave(); }}
@@ -216,7 +217,7 @@ function MiniDot({
         <RunningMarker x={x} y={y} r={Math.max(3.2, r * 1.25)} faded={faded}
           pct={runningProgress.value[String(label ?? "")]} />
       ) : (
-        <circle cx={x} cy={y} r={r} fill={dotColor}
+        <circle cx={x} cy={y} r={r} fill={faded ? "var(--text-faint)" : dotColor}
           stroke={strokeColor} stroke-width={strokeW} opacity={faded ? 0.2 : 1} />
       )}
       {/* Milestone caption — purple + clickable (sits inside this clickable <g>) */}
