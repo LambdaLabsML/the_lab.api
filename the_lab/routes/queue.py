@@ -62,6 +62,9 @@ def get_queue(
             "tags": e.get("tags", []),
             "assigned_resource": qm.get("assigned_resource"),
             "assigned_units": qm.get("assigned_units"),
+            # Native Slurm runs: "PENDING" = started by the lab but still
+            # waiting for an allocation (the dashboard lists those apart).
+            "slurm_state": qm.get("slurm_state"),
             # Surface error + a one-line metric summary so the history view
             # is useful at a glance without a per-row /experiments call.
             "error": e.get("error"),

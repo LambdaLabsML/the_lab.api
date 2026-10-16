@@ -502,3 +502,13 @@ button.nav-rail-mark {
   flex-shrink: 0; display: inline-flex; align-items: baseline; gap: 6px;
   .shortlog-score { min-width: 0; font-weight: 600; }
 }
+
+// "▸ N waiting in Slurm — show": separator inside the running list.
+.shortlog-separator {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 4px 12px; border: 0; background: none; cursor: pointer;
+  color: var(--text-faint); font: inherit; font-family: var(--font-mono); font-size: var(--text-xs);
+  &:hover { color: var(--text); }
+}
+.shortlog-separator-rule { flex: 1 1 auto; height: 1px; background: var(--border-soft); }
+.shortlog-separator-text { flex-shrink: 0; white-space: nowrap; }
