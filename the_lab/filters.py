@@ -471,8 +471,11 @@ def list_filters(repo_dir: Path, *, include_archived: bool = False) -> list[dict
 def get_filter(repo_dir: Path, ref: str, *, include_archived: bool = False) -> dict | None:
     """A saved filter by id or (case-insensitive) name."""
     ref = (ref or "").strip().lstrip("@")
+    # In expressions a name can't contain spaces: @legacy_hidden finds "legacy hidden".
+    loose = ref.lower().replace("_", " ")
     for f in list_filters(repo_dir, include_archived=include_archived):
-        if f["id"] == ref or f.get("name", "").lower() == ref.lower():
+        name = f.get("name", "").lower()
+        if f["id"] == ref or name == ref.lower() or name.replace("_", " ") == loose:
             return f
     return None
 

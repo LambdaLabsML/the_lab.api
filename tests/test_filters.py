@@ -103,11 +103,13 @@ class SavedFilterStoreTests(unittest.TestCase):
                               owner="user:david", shared=True)
         self.assertEqual(F.get_filter(self.repo, "LONG")["id"], rec["id"])
         self.assertEqual(F.get_filter(self.repo, "@long")["id"], rec["id"])
+        spaced = F.create_filter(self.repo, name="legacy hidden", expr="", owner="user:david")
+        self.assertEqual(F.get_filter(self.repo, "@legacy_hidden")["id"], spaced["id"])
         upd = F.update_filter(self.repo, rec["id"], exclude=["11.1", "11.1"], description="9000 s+")
         self.assertEqual(upd["exclude"], ["11.1"])
         F.update_filter(self.repo, rec["id"], archived=True)
         self.assertIsNone(F.get_filter(self.repo, "long"))
-        self.assertEqual(len(F.list_filters(self.repo, include_archived=True)), 1)
+        self.assertEqual(len(F.list_filters(self.repo, include_archived=True)), 2)  # long (archived) + legacy hidden
 
     def test_names_are_unique_and_validated_and_expressions_checked(self):
         F.create_filter(self.repo, name="long", expr="", owner="user:david")

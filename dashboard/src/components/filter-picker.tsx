@@ -10,6 +10,7 @@ import {
   myHumanId, savedFilters, selectionError, selectionLabels, updateFilter, type FilterCheck, type SavedFilter,
 } from "../state/filters";
 import { allExperiments } from "../state/signals";
+import { FilterExprInput } from "./filter-expr-input";
 
 const EXAMPLES = [
   "meta.MAX_WALL_SECONDS >= 9000",
@@ -123,10 +124,8 @@ function FilterPanel({ onClose }: { onClose: () => void }) {
 
       <div class="filter-expr">
         <div class="filter-group-title">{editing ? `Edit “${editing.name}”` : sel.filter ? "Expression (combined with the filter above)" : "Expression"}</div>
-        <textarea rows={2} value={draft} spellcheck={false}
-          placeholder={EXAMPLES[0]}
-          onInput={(e) => setDraft((e.target as HTMLTextAreaElement).value)}
-          onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (!editing && check?.ok) apply(sel.filter, draft); } }} />
+        <FilterExprInput value={draft} onChange={setDraft} placeholder={EXAMPLES[0]}
+          onSubmit={() => { if (!editing && check?.ok) apply(sel.filter, draft); }} />
         <div class={`filter-check${check && !check.ok ? " is-error" : ""}`}>
           {!check ? "…" : check.ok ? `✓ ${check.matched} of ${check.total} experiments` : `✗ ${check.error}`}
         </div>
@@ -164,7 +163,8 @@ function FilterPanel({ onClose }: { onClose: () => void }) {
             Fields: <code>meta.KEY</code>, <code>metric.KEY</code>, <code>tag</code>, <code>idea</code> (<code>idea under N</code>), <code>label</code>,
             <code>status</code>, <code>description</code>, <code>attempt</code>, <code>runtime</code>, <code>created_at</code>.
             Operators: <code>= != &gt; &gt;= &lt; &lt;=</code>, <code>~</code> contains, <code>in [a, b]</code>, <code>exists</code>, <code>missing</code>;
-            combine with <code>and</code> / <code>or</code> / <code>not</code> and parentheses; <code>@name</code> uses a saved filter.
+            combine with <code>AND</code> / <code>OR</code> / <code>NOT</code> (any case) and parentheses; <code>@name</code> uses a saved filter
+            (spaces as <code>_</code>). Suggestions follow as you type: Tab or Enter takes one, arrows move.
             <ul>{EXAMPLES.map((x) => <li key={x}><button type="button" onClick={() => setDraft(x)}><code>{x}</code></button></li>)}</ul>
           </div>
         </details>

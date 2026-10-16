@@ -108,6 +108,17 @@ class FilterRoutesTests(unittest.TestCase):
         m = self.client.get("/api/v1/filters/match", params={"where": "metric.score >= 20"}).json()
         self.assertEqual(sorted(m["labels"]), sorted([self.labels["long_a"], self.labels["long_b"]]))
 
+    def test_vocabulary_lists_keys_values_tags(self):
+        self._create(name="long", expr="meta.MAX_WALL_SECONDS >= 9000")
+        v = self.client.get("/api/v1/filters/vocabulary").json()
+        meta = {m["key"]: m for m in v["meta"]}
+        self.assertEqual(meta["MAX_WALL_SECONDS"]["count"], 3)
+        self.assertEqual(sorted(meta["MAX_WALL_SECONDS"]["values"]), ["10800", "1800", "9000"])
+        self.assertEqual([m["key"] for m in v["metrics"]], ["score"])
+        self.assertEqual(v["tags"], [{"tag": "smoke", "count": 1}])
+        self.assertEqual(v["statuses"], ["completed"])
+        self.assertEqual(v["saved"], ["long"])
+
 
 if __name__ == "__main__":
     unittest.main()
