@@ -26,6 +26,10 @@ executor_config keys
   qos             : QOS name                      (default: partition)
   account         : Slurm account                 (optional)
   ntasks          : --ntasks                      (default: 1)
+  cpu_profile     : "paired_24" opt-in, otherwise absent (legacy byte parity)
+  cpus_per_task   : required48 for paired_24
+  threads_per_core: required2 for paired_24
+  cpu_bind        : required "cores" for paired_24; both gates fail closed
   gpus            : --gres=gpu:<n>                (default: 1)
   mem             : --mem=<value>                 (optional)
   time            : --time=<value>                (optional)
@@ -84,7 +88,7 @@ SLURM_PER_ATTEMPT_GLOBS = (
 
 
 def is_per_attempt_file(name: str) -> bool:
-    return any(fnmatch(name, pattern) for pattern in SLURM_PER_ATTEMPT_GLOBS)
+    return name == "cpu_profile" or any(fnmatch(name, pattern) for pattern in SLURM_PER_ATTEMPT_GLOBS)
 
 
 def _serialized_git_lifecycle(fn):
@@ -122,6 +126,8 @@ class SlurmExecutor:
         self.partition   = config.get("partition",  "lowprio")
         self.account     = config.get("account")
         self.ntasks      = int(config.get("ntasks",  1))
+        from .cpu_profile import validate_cpu_profile
+        self.cpu_profile = validate_cpu_profile(config)
         self.gpus        = int(config.get("gpus",    1))
         self.mem         = config.get("mem")
         self.time_limit  = config.get("time")
@@ -463,6 +469,9 @@ class SlurmExecutor:
                        requires_preamble: bool = False,
                        requires_experiment_json: bool = False,
                        source_guard: str = "") -> str:
+        from .cpu_profile import directives, render_setup
+        cpu_lines = directives(self.cpu_profile)
+        cpu_setup = render_setup(self.cpu_profile, remote_job_dir)
         gpu_line     = f"#SBATCH --gres=gpu:{self.gpus}" if unit_kind == "gpu" else ""
         mem_line     = f"#SBATCH --mem={self.mem}"        if self.mem        else ""
         time_line    = f"#SBATCH --time={self.time_limit}" if self.time_limit else ""
@@ -591,14 +600,14 @@ fi
 fi
 """ if source_guard else ""
 
-        per_attempt_globs = " ".join(f'"{remote_job_dir}"/{g}' for g in SLURM_PER_ATTEMPT_GLOBS)
+        per_attempt_globs = " ".join(f'"{remote_job_dir}"/{g}' for g in SLURM_PER_ATTEMPT_GLOBS + (("cpu_profile",) if self.cpu_profile else ()))
         return f"""#!/bin/bash
 #SBATCH --partition={self.partition}
 #SBATCH --job-name=thelab-{label}
 #SBATCH --output={remote_job_dir}/script.log
 #SBATCH --error={remote_job_dir}/script.log
 #SBATCH --ntasks={self.ntasks}
-{gpu_line}
+{cpu_lines}{gpu_line}
 {mem_line}
 {time_line}
 {account_line}
@@ -677,7 +686,7 @@ fi
 {preamble_preflight}
 {snapshot_preflight}
 {source_guard}
-
+{cpu_setup}
 {venv_setup}
 {model_setup}
 

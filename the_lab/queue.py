@@ -397,6 +397,8 @@ def _validate_executor_config(cfg: dict) -> None:
             )
 
     _validate_model_server_config(cfg.get("model_server"))
+    from .executors.cpu_profile import validate_cpu_profile
+    validate_cpu_profile(cfg)
 
 
 # Upper bound on a resource's declared unit count. Unbounded capacity let one
