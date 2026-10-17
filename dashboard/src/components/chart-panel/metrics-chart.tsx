@@ -1,5 +1,5 @@
 import { usePlotControls, matchesPlotSearch } from "../../lib/hooks/use-plot-controls";
-import { CtlDivider, CtlSearch, CtlSeg, CtlSelect, CtlToggle } from "./chart-controls";
+import { CtlDivider, CtlSearch, CtlSeg, CtlToggle, MetricPicker } from "./chart-controls";
 import { inSelection, selectionLabels } from "../../state/filters";
 import { useEffect, useMemo, useState } from "preact/hooks";
 import { allExperiments, allIdeas, currentLayout, cloneChartPanel, updatePanelTitle } from "../../state/signals";
@@ -97,12 +97,10 @@ export function MetricsChart({ instanceId, initialMetric, hideClone, onMetricCha
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
       <div class="chart-toolbar ctl-toolbar">
         {isClone && <CtlSearch value={plotFilter.value} onInput={v => { plotFilter.value = v; }} placeholder="Filter this graph…" />}
-        <CtlSelect icon="y" title="Metric (Y axis)" value={metric} onChange={setMetric} wide>
-          {grouped.metrics.length > 0 && <optgroup label="Metrics">{grouped.metrics.map((k) => <option key={k} value={k}>{fmtMetricName(k)}</option>)}</optgroup>}
-          {grouped.nested.length > 0 && <optgroup label="Nested">{grouped.nested.map((k) => <option key={k} value={k}>{fmtMetricName(k)}</option>)}</optgroup>}
-          {grouped.timing.length > 0 && <optgroup label="Timing">{grouped.timing.map((k) => <option key={k} value={k}>{fmtMetricName(k)}</option>)}</optgroup>}
-          {grouped.meta.length > 0 && <optgroup label="Meta">{grouped.meta.map((k) => <option key={k} value={k}>{fmtMetricName(k)}</option>)}</optgroup>}
-        </CtlSelect>
+        <MetricPicker icon="y" title="Metric (Y axis)" value={metric} onChange={setMetric} format={fmtMetricName} wide groups={[
+          { label: "Metrics", keys: grouped.metrics }, { label: "Nested", keys: grouped.nested },
+          { label: "Timing", keys: grouped.timing }, { label: "Meta", keys: grouped.meta },
+        ]} />
         {(() => {
           // Count milestones for the Step button label
           const lower = isLowerBetter(metric);
@@ -154,22 +152,35 @@ export function MetricsChart({ instanceId, initialMetric, hideClone, onMetricCha
           </span>
         )}
       </div>
-      {/* Data distribution hint — shown when most values cluster near bottom */}
+      {/* Summary line: count, median, best — of idea means in mean mode. */}
       {(() => {
-        const vals = experiments.filter(e => !e._running && typeof e.metrics?.[metric] === "number").map(e => e.metrics![metric] as number);
+        const done = experiments.filter(e => !e._running && typeof e.metrics?.[metric] === "number");
+        let vals = done.map(e => e.metrics![metric] as number);
+        let unit = "exp";
+        if (mean) {
+          const by = new Map<number, { s: number; n: number }>();
+          for (const e of done) { const g = by.get(e.idea_id) ?? { s: 0, n: 0 }; g.s += e.metrics![metric] as number; g.n += 1; by.set(e.idea_id, g); }
+          vals = [...by.values()].map(g => g.s / g.n);
+          unit = "idea means";
+        }
         if (vals.length < 5) return null;
         const lower = isLowerBetter(metric);
         const peak = lower ? Math.min(...vals) : Math.max(...vals);
         const median = [...vals].sort((a,b) => a-b)[Math.floor(vals.length/2)];
-        const pctAtPeak = vals.filter(v => lower ? v === peak : v === peak).length;
-        // Show hint only when data is sparse at top (median < 25% of peak)
+        // Records: new bests in run order (what Step shows).
+        let records = 0, best: number | null = null;
+        for (const e of [...done].sort((a, b) => (a.finished_at || a.created_at || "").localeCompare(b.finished_at || b.created_at || ""))) {
+          const v = e.metrics![metric] as number;
+          if (best === null || (lower ? v < best : v > best)) { best = v; records++; }
+        }
+        // Show hint only when data is sparse at top (median < 30% of peak)
         if (peak === 0 || median / peak > 0.3) return null;
         return (
           <div class="chart-dist-hint">
-            {vals.length} exp
-            {impOnly && (
+            {vals.length} {unit}
+            {impOnly && !mean && (
               <span style={{ color: "var(--text-faint)", fontSize: "var(--text-xs)" }}>
-                {" "}({pctAtPeak} milestones)
+                {" "}({records} records)
               </span>
             )}
             <span style={{ color: "var(--text-faint)" }}> · </span>

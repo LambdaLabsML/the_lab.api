@@ -6,7 +6,7 @@ import { Chart } from "chart.js/auto";
 import { allExperiments, allIdeas, currentLayout, highlightedIdea, cloneChartPanel, updatePanelTitle, runningProgress } from "../../state/signals";
 import { chartNavClick } from "../../lib/hooks";
 import { IconButton, experimentTipContent } from "../ui";
-import { CtlSearch, CtlSelect, CtlToggle } from "./chart-controls";
+import { CtlIcon, CtlSearch, CtlToggle, MetricPicker } from "./chart-controls";
 import { MiniTooltip } from "./mini-metrics-chart";
 import {
   selectedMetric, filterText, colorTheme, fontSize, activeTagFilters, tagFilterMode,
@@ -125,13 +125,26 @@ const HOVER_PX = 24;
 
 export function ScatterChart({ instanceId, initialXMetric, initialYMetric, hideClone = false, onAxesChange }: { instanceId?: string; initialXMetric?: string; initialYMetric?: string; hideClone?: boolean; onAxesChange?: (x: string, y: string) => void } = {}) {
   const isClone = !!instanceId;
-  const { improvementsOnly, ideaMean, clipOutliers, colorMode, plotFilter } = usePlotControls(instanceId);
+  const { ideaMean, clipOutliers, colorMode, plotFilter } = usePlotControls(instanceId);
   const [localX, setLocalX] = useState(initialXMetric || "");
   const [localY, setLocalY] = useState(initialYMetric || "");
   // Hovered point (within HOVER_PX of the cursor) for the shared hover card.
   const [hover, setHover] = useState<{ d: any; rect: DOMRect; x: number | null; y: number | null } | null>(null);
   const setHoverRef = useRef(setHover);
   setHoverRef.current = setHover;
+  useEffect(() => {
+    if (!hover) return;
+    const dismiss = () => { setHover(null); if (highlightedIdea.value !== null) highlightedIdea.value = null; };
+    const onTouch = (e: Event) => { if (e.target !== canvasRef.current) dismiss(); };
+    window.addEventListener("scroll", dismiss, { capture: true, passive: true });
+    document.addEventListener("touchstart", onTouch, { capture: true, passive: true });
+    document.addEventListener("pointercancel", dismiss, true);
+    return () => {
+      window.removeEventListener("scroll", dismiss, { capture: true } as any);
+      document.removeEventListener("touchstart", onTouch, { capture: true } as any);
+      document.removeEventListener("pointercancel", dismiss, true);
+    };
+  }, [hover !== null]);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const chartRef = useRef<Chart | null>(null);
@@ -148,12 +161,15 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric, hideC
   // Compute chartable keys grouped by source
   const grouped = useMemo(() => collectChartKeys(allRows), [allRows]);
   const metricKeys = [...grouped.metrics, ...grouped.nested, ...grouped.meta, ...grouped.timing];
+  const metricGroups = [
+    { label: "Metrics", keys: grouped.metrics }, { label: "Nested", keys: grouped.nested },
+    { label: "Timing", keys: grouped.timing }, { label: "Meta", keys: grouped.meta },
+  ];
   const ideas = allIdeas.value;
   const layout = currentLayout.value;
   const theme = colorTheme.value;  // subscribe — chart recreates on theme/size switch
   const _fz = fontSize.value;  // subscribe — chart recreates on font-size switch
   const mode = colorMode.value;
-  const impOnly = improvementsOnly.value;
   const tags = activeTagFilters.value;
   const tagMode = tagFilterMode.value;
   const clip = clipOutliers.value;
@@ -254,21 +270,6 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric, hideC
       );
     }
 
-    // Apply improvements-only filter (based on y metric direction)
-    if (impOnly && !mean) {
-      const lower = isLowerBetter(yMetric);
-      let best = lower ? Infinity : -Infinity;
-      filtered = filtered.filter((e) => {
-        if (e._running) return true;
-        const v = resolveNumericValue(e, yMetric) ?? 0;
-        if (lower ? v < best : v > best) {
-          best = v;
-          return true;
-        }
-        return false;
-      });
-    }
-
     // Color computation
     const metricFiltered = filterMetricExperiments(
       (isClone ? yMetric : selectedMetric.value || yMetric), experiments, tags, tagMode, hiddenStatuses, hideRunning,
@@ -357,6 +358,8 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric, hideC
             .map((el) => ({ raw: (this.data.datasets[el.datasetIndex] as any)?._expData?.[el.index], index: el.index }))
             .filter((m) => m.raw?.idea_id != null);
           chartNavClick(mapped);
+          // Phones: the tap opens the details; drop the hover card.
+          setHoverRef.current(null);
         },
         scales: {
           x: {
@@ -402,7 +405,7 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric, hideC
     }); // end requestAnimationFrame
 
     return () => cancelAnimationFrame(rafId);
-  }, [xMetric, yMetric, mode, impOnly, tags, tagMode, experiments, showAbandoned.value, showConcluded.value, showRunning.value, clip, mean, theme, _fz, colorblindMode.value]);
+  }, [xMetric, yMetric, mode, tags, tagMode, experiments, showAbandoned.value, showConcluded.value, showRunning.value, clip, mean, theme, _fz, colorblindMode.value]);
 
   // Handle highlight changes separately
   useEffect(() => {
@@ -426,20 +429,10 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric, hideC
     <div class="chart-col" style={{ height: "100%", display: "flex", flexDirection: "column" }}>
       <div class="chart-col-toolbar ctl-toolbar">
         {isClone && <CtlSearch value={plotFilter.value} onInput={v => { plotFilter.value = v; }} placeholder="Filter this graph…" />}
-        <CtlSelect icon="x" title="X axis" value={xMetric} onChange={setX} wide>
-          {grouped.metrics.length > 0 && <optgroup label="Metrics">{grouped.metrics.map((k) => <option key={k} value={k}>{fmtMetricName(k)}</option>)}</optgroup>}
-          {grouped.nested.length > 0 && <optgroup label="Nested">{grouped.nested.map((k) => <option key={k} value={k}>{fmtMetricName(k)}</option>)}</optgroup>}
-          {grouped.timing.length > 0 && <optgroup label="Timing">{grouped.timing.map((k) => <option key={k} value={k}>{fmtMetricName(k)}</option>)}</optgroup>}
-          {grouped.meta.length > 0 && <optgroup label="Meta">{grouped.meta.map((k) => <option key={k} value={k}>{fmtMetricName(k)}</option>)}</optgroup>}
-        </CtlSelect>
-        <CtlSelect icon="y" title="Y axis" value={yMetric} onChange={setY} wide>
-          {grouped.metrics.length > 0 && <optgroup label="Metrics">{grouped.metrics.map((k) => <option key={k} value={k}>{fmtMetricName(k)}</option>)}</optgroup>}
-          {grouped.nested.length > 0 && <optgroup label="Nested">{grouped.nested.map((k) => <option key={k} value={k}>{fmtMetricName(k)}</option>)}</optgroup>}
-          {grouped.timing.length > 0 && <optgroup label="Timing">{grouped.timing.map((k) => <option key={k} value={k}>{fmtMetricName(k)}</option>)}</optgroup>}
-          {grouped.meta.length > 0 && <optgroup label="Meta">{grouped.meta.map((k) => <option key={k} value={k}>{fmtMetricName(k)}</option>)}</optgroup>}
-        </CtlSelect>
-        <CtlToggle active={impOnly} icon={impOnly ? "step" : "all"} onClick={() => { improvementsOnly.value = !impOnly; }}
-          title={impOnly ? "Step: only runs that set a new record — click for all" : "All runs — click to show only record-setting runs"}>{impOnly ? "Step" : "All"}</CtlToggle>
+        <MetricPicker icon="x" title="X axis" value={xMetric} onChange={setX} format={fmtMetricName} wide groups={metricGroups} />
+        <button type="button" class="ctl-btn ctl-swap" title="Swap X and Y" aria-label="Swap X and Y axes"
+          onClick={() => { const x = xMetric, y = yMetric; setX(y); setY(x); }}><CtlIcon name="swap" /></button>
+        <MetricPicker icon="y" title="Y axis" value={yMetric} onChange={setY} format={fmtMetricName} wide groups={metricGroups} />
         <CtlToggle active={mean} icon="mean" onClick={() => { ideaMean.value = !mean; }} title="Idea mean: one point per idea (mean of its runs)">mean</CtlToggle>
         <CtlToggle active={clip} icon="outliers" onClick={() => { clipOutliers.value = !clip; }} title="Hide outliers (values far outside the rest)" />
         {!hideClone && <span class="chart-toolbar-end"><IconButton onClick={() => { if (cloneChartPanel) cloneChartPanel("scatter", undefined, xMetric, yMetric); }} title="Clone this chart as a new tab">

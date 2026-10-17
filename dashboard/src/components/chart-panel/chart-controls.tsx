@@ -4,6 +4,7 @@
  * One height (28px), one font size, the dashboard's border / accent style.
  */
 import type { ComponentChildren } from "preact";
+import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 
 type IconName =
   | "step" | "all" | "mean" | "outliers" | "log"
@@ -11,7 +12,7 @@ type IconName =
   | "view" | "v-line" | "v-s" | "v-m" | "v-l"
   | "line" | "l-max" | "l-avg"
   | "labels" | "lab-off" | "lab-rec" | "lab-auto"
-  | "x" | "y" | "search";
+  | "x" | "y" | "search" | "swap";
 
 const P = { fill: "none", stroke: "currentColor", "stroke-width": 1.6, "stroke-linecap": "round", "stroke-linejoin": "round" } as const;
 
@@ -20,8 +21,8 @@ const ICONS: Record<IconName, ComponentChildren> = {
   step: <path {...P} d="M2 13h3V9h3V6h3V3h3" />,
   all: <><circle cx="3" cy="11" r="1.2" fill="currentColor" /><circle cx="6.5" cy="7" r="1.2" fill="currentColor" /><circle cx="10" cy="9.5" r="1.2" fill="currentColor" /><circle cx="13" cy="4.5" r="1.2" fill="currentColor" /></>,
   mean: <text x="8" y="12.2" text-anchor="middle" font-size="12" font-family="serif" fill="currentColor">μ</text>,
-  // A dot outside the box: outliers.
-  outliers: <><rect {...P} x="2" y="5" width="8" height="8" rx="1" /><circle cx="13" cy="3" r="1.5" fill="currentColor" /></>,
+  // A box plot with one point beyond its whisker: outliers.
+  outliers: <><path {...P} d="M6 15v-2.5M6 6.5V4M4.5 4h3M4.5 15h3" /><rect {...P} x="3.5" y="6.5" width="5" height="6" rx="0.8" /><path {...P} d="M3.5 9.5h5" /><circle cx="12.5" cy="2.2" r="1.5" fill="currentColor" /></>,
   log: <path {...P} d="M2 14C3 7 6 4 14 3M2 14h12" />,
   "ax-exp": <><circle cx="3" cy="8" r="1.3" fill="currentColor" /><circle cx="8" cy="8" r="1.3" fill="currentColor" /><circle cx="13" cy="8" r="1.3" fill="currentColor" /></>,
   "ax-idea": <><path {...P} d="M2 12V6M6 12V4M10 12V8M14 12V5" /></>,
@@ -45,6 +46,7 @@ const ICONS: Record<IconName, ComponentChildren> = {
   x: <path {...P} d="M2 12h12M11 9l3 3-3 3" />,
   y: <path {...P} d="M4 14V2M1 5l3-3 3 3" />,
   search: <><circle {...P} cx="7" cy="7" r="4.5" /><path {...P} d="M10.5 10.5 14 14" /></>,
+  swap: <path {...P} d="M3 5h10M10 2l3 3-3 3M13 11H3M6 8l-3 3 3 3" />,
 };
 
 export function CtlIcon({ name }: { name: IconName }) {
@@ -107,4 +109,98 @@ export function CtlSearch({ value, onInput, placeholder }: { value: string; onIn
 
 export function CtlDivider() {
   return <span class="ctl-divider" aria-hidden="true" />;
+}
+
+/**
+ * A touch-friendly metric picker: closed it looks like CtlSelect; open it is
+ * a searchable, grouped list — a popover on desktop, a full-width sheet on
+ * phones (CSS). Keyboard: ↑ ↓ Enter Esc. Search autofocuses only with a
+ * fine pointer (no on-screen keyboard popping up on phones).
+ */
+export function MetricPicker({ icon, title, value, groups, onChange, format, wide = false }: {
+  icon: IconName;
+  title: string;
+  value: string;
+  groups: { label: string; keys: string[] }[];
+  onChange: (v: string) => void;
+  format: (k: string) => string;
+  wide?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [active, setActive] = useState(0);
+  const root = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLUListElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const flat = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const out: { group: string; key: string }[] = [];
+    for (const g of groups) for (const k of g.keys) {
+      if (!q || k.toLowerCase().includes(q) || format(k).toLowerCase().includes(q)) out.push({ group: g.label, key: k });
+    }
+    return out;
+  }, [groups, query]);
+  useEffect(() => {
+    if (!open) return;
+    setActive(Math.max(0, flat.findIndex(f => f.key === value)));
+    const close = (e: Event) => { if (!root.current?.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener("pointerdown", close, true);
+    return () => document.removeEventListener("pointerdown", close, true);
+  }, [open]);
+  useEffect(() => { setActive(0); }, [query]);
+  // Focus the search on open — desktop only (phones would pop the keyboard).
+  useEffect(() => {
+    if (open && typeof matchMedia === "function" && matchMedia("(hover: hover) and (pointer: fine)").matches) {
+      requestAnimationFrame(() => searchRef.current?.focus());
+    }
+  }, [open]);
+  useEffect(() => {
+    listRef.current?.querySelector<HTMLElement>(`[data-i="${active}"]`)?.scrollIntoView({ block: "nearest" });
+  }, [active, open]);
+  const choose = (k: string) => { onChange(k); setOpen(false); setQuery(""); };
+  let lastGroup = "";
+  return (
+    <div class={`ctl-picker${open ? " is-open" : ""}`} ref={root}>
+      <button type="button" class={`ctl-select ctl-picker-btn${wide ? " is-wide" : ""}`} title={title} aria-haspopup="listbox" aria-expanded={open}
+        onClick={() => setOpen(!open)}>
+        <CtlIcon name={icon} />
+        <span class="ctl-picker-value">{value ? format(value) : "—"}</span>
+        <svg class="ctl-chevron" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 3.5 5 6.5 8 3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" /></svg>
+      </button>
+      {open && <>
+        <button type="button" class="ctl-picker-scrim" aria-label="Close" tabIndex={-1} onClick={() => setOpen(false)} />
+        <div class="ctl-picker-pop" role="dialog" aria-label={title}>
+          <div class="ctl-picker-head">
+            <span class="ctl-picker-title">{title}</span>
+            <button type="button" class="ctl-picker-close" aria-label="Close" onClick={() => setOpen(false)}>×</button>
+          </div>
+          <label class="ctl-picker-search">
+            <CtlIcon name="search" />
+            <input ref={searchRef} placeholder="search metrics…" value={query} aria-label="Search metrics"
+              onInput={(e) => setQuery((e.target as HTMLInputElement).value)}
+              onKeyDown={(e) => {
+                if (e.key === "ArrowDown") { e.preventDefault(); setActive(Math.min(flat.length - 1, active + 1)); }
+                else if (e.key === "ArrowUp") { e.preventDefault(); setActive(Math.max(0, active - 1)); }
+                else if (e.key === "Enter") { e.preventDefault(); if (flat[active]) choose(flat[active].key); }
+                else if (e.key === "Escape") { e.preventDefault(); setOpen(false); }
+              }} />
+          </label>
+          <ul class="ctl-picker-list" role="listbox" ref={listRef}>
+            {flat.map((f, i) => {
+              const header = f.group !== lastGroup ? (lastGroup = f.group) : null;
+              return [
+                header && <li key={`g-${f.group}`} class="ctl-picker-group" role="presentation">{f.group}</li>,
+                <li key={f.key} data-i={i} role="option" aria-selected={f.key === value}
+                  class={`ctl-picker-item${i === active ? " is-active" : ""}${f.key === value ? " is-current" : ""}`}
+                  onMouseEnter={() => setActive(i)} onClick={() => choose(f.key)}>
+                  <span>{format(f.key)}</span>{format(f.key) !== f.key && <code>{f.key}</code>}
+                </li>,
+              ];
+            })}
+            {!flat.length && <li class="ctl-picker-empty">no matching metric</li>}
+          </ul>
+        </div>
+      </>}
+    </div>
+  );
 }

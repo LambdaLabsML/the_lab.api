@@ -45,7 +45,7 @@ import { buildChartData } from "../../lib/chart-data";
 import { isLowerBetter } from "../../lib/colors";
 import { useEntityNav } from "../../lib/hooks";
 import { plotHighlightState } from "../../state/review-filter";
-import { runningProgress } from "../../state/signals";
+import { highlightedIdea, runningProgress } from "../../state/signals";
 import { fmtMetricName, scoreFormatter } from "../../lib/format";
 import { experimentTipContent } from "../ui";
 import type { Experiment, IdeaNode, SubwayLayout } from "../../lib/types";
@@ -201,7 +201,11 @@ function MiniDot({
       style={exp ? "cursor:pointer;" : undefined}
       onMouseEnter={() => { onHoverChange(true, groupRef.current?.getBoundingClientRect() ?? null); if (exp) nav.bind.onMouseEnter(); }}
       onMouseLeave={() => { onHoverChange(false, null); if (exp) nav.bind.onMouseLeave(); }}
-      onClick={exp ? (nav.bind.onClick as any) : undefined}
+      onClick={exp ? ((ev: MouseEvent) => {
+        (nav.bind.onClick as any)(ev);
+        // Phones: the tap opens the details; don't leave the hover card behind.
+        onHoverChange(false, null); nav.bind.onMouseLeave();
+      }) : undefined}
     >
       {excluded ? (
         <path d={`M${x - 2.5},${baselineY - 6.5} l5,5 m0,-5 l-5,5`}
@@ -322,6 +326,21 @@ export function MiniMetricsChart({
   // The line point under the mouse (index into the drawn line) + where.
   const [curveHover, setCurveHover] = useState<{ k: number; x: number; clientX: number; clientY: number } | null>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
+  // A hover card must not outlive the gesture: scrolling, a new touch or a
+  // cancelled pointer dismiss it (mouseleave never fires after a tap).
+  useEffect(() => {
+    if (!hovered && !curveHover) return;
+    const dismiss = () => { setHovered(null); setCurveHover(null); if (highlightedIdea.value !== null) highlightedIdea.value = null; };
+    const onTouch = (e: Event) => { if (!wrapRef.current?.contains(e.target as Node)) dismiss(); };
+    window.addEventListener("scroll", dismiss, { capture: true, passive: true });
+    document.addEventListener("touchstart", onTouch, { capture: true, passive: true });
+    document.addEventListener("pointercancel", dismiss, true);
+    return () => {
+      window.removeEventListener("scroll", dismiss, { capture: true } as any);
+      document.removeEventListener("touchstart", onTouch, { capture: true } as any);
+      document.removeEventListener("pointercancel", dismiss, true);
+    };
+  }, [hovered !== null, curveHover !== null]);
   const [size, setSize] = useState({ w: 560, h: 180 });
   // font sizes read from the --text-* tokens so the chart honours font-size setting
   const [font, setFont] = useState({ xs: 8, sm: 9 });
@@ -924,6 +943,7 @@ export function MiniMetricsChart({
           <MiniTooltip anchor={hovered.rect}>
             {experimentTipContent({
               label: String(label),
+              mark: (exp as any)._ideaMean ? `idea/${exp.idea_id} · mean of ${(exp as any)._meanCount}` : undefined,
               ideaId: exp.idea_id,
               ideaTitle: idea?.description,
               status: idea?.status,
