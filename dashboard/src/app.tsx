@@ -26,7 +26,7 @@ import {
 } from "./state/settings";
 import { allExperiments, allIdeas, selectedExperiment, setActivatePanel, totalAgentCost } from "./state/signals";
 import { reviewSearchPills, activeHighlights, isIdeaHighlighted, toggleIdeaHighlight, type ReviewPill } from "./state/review-filter";
-import { plotExperiments, selectionLabels } from "./state/filters";
+import { plotExperiments, selectionLabels, activeSelection, activeFilter } from "./state/filters";
 import { FilterPicker } from "./components/filter-picker";
 import { AgentBar } from "./components/agent-bar";
 import { startPolling, stopPolling } from "./state/polling";
@@ -114,6 +114,11 @@ function readFiltersFromUrl() {
   // Scatter metrics
   if (p.has("sx")) scatterXMetric.value = p.get("sx")!;
   if (p.has("sy")) scatterYMetric.value = p.get("sy")!;
+
+  // Experiment selection: saved filter (by name or id) and/or expression
+  if (p.has("filter") || p.has("where")) {
+    activeSelection.value = { filter: p.get("filter") || null, where: p.get("where") || "" };
+  }
 }
 
 function syncUrlFromSignals() {
@@ -131,6 +136,8 @@ function syncUrlFromSignals() {
   const _run = showRunning.value;
   const _sx = scatterXMetric.value;
   const _sy = scatterYMetric.value;
+  const _sel = activeSelection.value;
+  const _selName = activeFilter.value?.name ?? _sel.filter;
 
   // Path: /ideas/13 or /
   const path = _idea !== null ? `/ideas/${_idea}` : "/";
@@ -156,9 +163,15 @@ function syncUrlFromSignals() {
 
   if (_sx) p.set("sx", _sx);
   if (_sy) p.set("sy", _sy);
+  if (_selName) p.set("filter", _selName);
+  if (_sel.where.trim()) p.set("where", _sel.where);
+  // An open lightbox (?view=output/1177.2) is owned by the idea panel: keep it.
+  const _view = new URLSearchParams(window.location.search).get("view");
+  if (_view) p.set("view", _view);
 
   const qs = p.toString()
     .replace(/=(&|$)/g, "$1")  // strip trailing = for valueless params (imp, mean, norev, noclip)
+    .replace(/%2F/gi, "/")     // readable view=output/1177.2
     .replace(/&$/, "");
   const url = path + (qs ? "?" + qs : "") + window.location.hash;
 
@@ -222,8 +235,11 @@ export function App() {
   useEffect(() => {
     const hash = settingsOpen && utility ? `#tools/${utility}` : section === "artifacts"
       ? `#artifacts${artifact ? "/" + artifact.split("/").map(encodeURIComponent).join("/") : ""}` : `#${section}`;
-    const lightbox = new URLSearchParams(location.hash.slice(1)).has("view");
-    if (location.hash !== hash && !(lightbox && section === "review" && !settingsOpen)) history.replaceState(null, "", hash);
+    const lightbox = new URLSearchParams(location.hash.slice(1)).has("view");   // legacy #..&view= links
+    const keepsSubPath = !settingsOpen && location.hash.startsWith(`${hash}/`);   // e.g. #messages/6674/11944
+    if (location.hash !== hash && !keepsSubPath && !(lightbox && section === "review" && !settingsOpen)) {
+      history.replaceState(null, "", location.pathname + location.search + hash);
+    }
     requestAnimationFrame(() => window.dispatchEvent(new Event("resize")));
   }, [section, artifact, settingsOpen, utility, messagesDocked, detailsOpen]);
   useEffect(() => {

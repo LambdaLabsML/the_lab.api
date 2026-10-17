@@ -38,20 +38,38 @@ const LEVEL_TONE: Record<string, BadgeTone> = {
 // Format: #idea=5&exp=exp001&view=log  (view: log | script | output | diff)
 // ---------------------------------------------------------------------------
 
+/** The open lightbox (output / log / script / diff) lives in the URL as
+ *  ?view=<kind>/<exp label> (the idea is the /ideas/<id> path), so a link
+ *  opens it. Old links carried #idea=..&exp=..&view=.. — still read. */
 function parseHash(): Record<string, string> {
-  const h = window.location.hash.slice(1);
-  if (!h) return {};
-  try { return Object.fromEntries(new URLSearchParams(h)); } catch { return {}; }
+  const out: Record<string, string> = {};
+  try {
+    const legacy = window.location.hash.slice(1);
+    if (legacy.includes("=")) Object.assign(out, Object.fromEntries(new URLSearchParams(legacy)));
+  } catch { /* not a parameter hash */ }
+  const view = new URLSearchParams(window.location.search).get("view");
+  if (view) {
+    const [kind, ...rest] = view.split("/");
+    out.view = kind;
+    if (rest.length) out.exp = rest.join("/");
+    const m = window.location.pathname.match(/^\/ideas\/(\d+)/);
+    if (m) out.idea = m[1];
+  }
+  return out;
 }
 
 function setHash(params: Record<string, string | number | null>) {
-  const next = Object.fromEntries(Object.entries(parseHash()).filter(([k]) => ["idea", "exp", "view"].includes(k)));
-  for (const [k, v] of Object.entries(params)) {
-    if (v === null) delete next[k];
-    else next[k] = String(v);
-  }
-  const qs = new URLSearchParams(next).toString();
-  history.replaceState(null, "", qs ? `#${qs}` : location.pathname + location.search);
+  const cur = parseHash();
+  const view = params.view === undefined ? cur.view : params.view;
+  const exp = params.exp === undefined ? cur.exp : params.exp;
+  const url = new URL(window.location.href);
+  if (view == null) url.searchParams.delete("view");
+  else url.searchParams.set("view", exp != null ? `${view}/${exp}` : String(view));
+  // Drop a legacy #idea=..&view=.. hash once we write the new form.
+  if (url.hash.includes("=")) url.hash = "#review";
+  // Readable: valueless flags without "=", and "/" unescaped in view=output/1177.2.
+  const search = url.search.replace(/=(&|$)/g, "$1").replace(/%2F/gi, "/");
+  history.replaceState(null, "", url.pathname + search + url.hash);
 }
 
 /**

@@ -35,8 +35,12 @@ export const savedFilters = signal<SavedFilter[]>([]);
 export const selectionLabels = signal<Set<string> | null>(null);
 export const selectionError = signal<string | null>(null);
 
-export const activeFilter = computed(() =>
-  savedFilters.value.find((f) => f.id === activeSelection.value.filter) ?? null);
+// The selection may name a filter by id (picked in the UI) or by name (a
+// shared link: ?filter=long); the server accepts both too.
+export const activeFilter = computed(() => {
+  const ref = (activeSelection.value.filter || "").toLowerCase();
+  return savedFilters.value.find((f) => f.id === activeSelection.value.filter || f.name.toLowerCase() === ref) ?? null;
+});
 
 export function myHumanId(): string {
   return humanIdForName(myName.value || "") ?? "user";
