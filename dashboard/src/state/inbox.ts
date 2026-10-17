@@ -1,7 +1,7 @@
 import { signal } from "@preact/signals";
 import { useSetting } from "./settings";
 
-export type InboxView = "for_you" | "mine" | "all" | "saved";
+export type InboxView = "for_you" | "mine" | "all" | "saved" | "replies";
 export const threadListWidth = useSetting<number>("threadListWidth", 38);
 export const conversationAudience = useSetting<"all" | "me" | "users">("conversationAudience", "all");
 export const inboxView = signal<InboxView>("for_you");

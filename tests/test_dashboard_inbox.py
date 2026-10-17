@@ -57,6 +57,27 @@ class DashboardInboxTests(unittest.TestCase):
         self.assertEqual(result["counts"]["for_you"], 1)
         self.assertEqual(self.query(view="all")["total"], 2)
 
+    def test_replies_view_lists_each_personal_message_with_read_flag_and_question(self):
+        q1 = self.msg(1, "user:david", text="Why did accuracy drop?")
+        a1 = self.msg(2, text="Tokenizer mismatch", thread=1, reply=1)
+        a2 = self.msg(3, text="Also the seed", thread=1, reply=1)
+        direct = self.msg(4, to="user:david", text="FYI run 12 finished")
+        other = self.msg(5, text="unrelated chatter")
+        mine = self.msg(6, "user:david", text="thanks", thread=1, reply=2)
+        self.seed([q1, a1, a2, direct, other, mine], metadata={"1": {"title": "Accuracy drop", "status": "open"}})
+        result = self.query(view="replies", read_ids={2})
+        self.assertEqual([r["id"] for r in result["replies"]], [4, 3, 2])
+        self.assertEqual([r["read"] for r in result["replies"]], [False, False, True])
+        self.assertEqual(result["replies"][1]["question"]["id"], 1)
+        self.assertIsNone(result["replies"][0]["question"])
+        self.assertEqual(result["replies"][1]["thread_title"], "Accuracy drop")
+        self.assertEqual(result["counts"]["replies"], 2)
+        page = self.query(view="replies", limit=2)
+        self.assertEqual([r["id"] for r in page["replies"]], [4, 3])
+        self.assertEqual(page["next_before_id"], 3)
+        self.assertEqual([r["id"] for r in self.query(view="replies", before_id=3)["replies"]], [2])
+        self.assertEqual([r["id"] for r in self.query(view="replies", q="seed")["replies"]], [3])
+
     def test_inbox_aggregates_ideas_and_participants_across_old_replies(self):
         root = self.msg(1, "user:david", text="Compare idea/123 and #124; thread #999 is unrelated")
         old = self.msg(2, "agent:a", to="agent:b", thread=1, text="exp/125.2 and 126.1; loss 0.25; message #888")

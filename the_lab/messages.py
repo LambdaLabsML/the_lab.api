@@ -1202,6 +1202,7 @@ def dashboard_inbox(
     counts = {"for_you": 0, "mine": 0, "all": 0, "saved": 0}
     terms = q.lower().split()
     rows = []
+    titles: dict[int, str] = {}
     for tid, group in groups.items():
         group = sorted(group, key=lambda m: m["id"])
         # Include one-off direct questions too: they must not disappear until
@@ -1217,6 +1218,10 @@ def dashboard_inbox(
         counts["mine"] += int(is_mine)
         counts["saved"] += int(is_saved)
         counts["for_you"] += len(unread)
+        if view == "replies":
+            # Flat list built below; only the thread titles are needed here.
+            titles[tid] = meta.get("title") or ""
+            continue
         if view == "for_you" and not unread or view == "mine" and not is_mine or view == "saved" and not is_saved:
             continue
         if status != "all" and meta.get("status", "open") != status:
@@ -1281,6 +1286,29 @@ def dashboard_inbox(
             "you_posted_last": last["id"] in mine,
         })
         rows.append(item)
+    if view == "replies":
+        # Slack-style "replies": each message addressed to the viewer (a reply
+        # to one of their messages, sent to them, or naming them), newest
+        # first, read ones included and flagged so they can be re-marked.
+        personal = [m for m in messages if addressed(m)]
+        if terms:
+            personal = [m for m in personal if all(term in
+                f"{titles.get(thread_key(m), '')} {m.get('tldr') or ''} {m.get('text') or ''}".lower()
+                for term in terms)]
+        personal.sort(key=lambda m: m["id"], reverse=True)
+        total = len(personal)
+        counts["replies"] = counts["for_you"]
+        if before_id is not None:
+            personal = [m for m in personal if m["id"] < before_id]
+        page = personal[:limit]
+        items = []
+        for m in page:
+            parent = by_id.get(m.get("in_reply_to"))
+            items.append({**preview(m), "read": m["id"] in read_ids,
+                          "thread_title": titles.get(thread_key(m), ""),
+                          "question": preview(parent) if parent and parent["id"] in mine else None})
+        return {"threads": [], "replies": items, "total": total, "counts": counts,
+                "next_before_id": page[-1]["id"] if len(personal) > limit and page else None}
     rows.sort(key=lambda row: row["cursor_id"], reverse=True)
     total = len(rows)
     if before_id is not None:

@@ -444,9 +444,18 @@ export interface InboxThread extends ThreadMeta {
   you_posted_last: boolean;
   saved: boolean;
 }
+/** A single message for the viewer (view "replies"), with its read flag. */
+export interface InboxReply extends InboxMessagePreview {
+  read: boolean;
+  thread_title: string;
+  /** The viewer's message this replies to, if any. */
+  question: InboxMessagePreview | null;
+}
 export interface DashboardInboxPage {
   threads: InboxThread[];
+  /** Only for view "replies". */
+  replies?: InboxReply[];
   total: number;
-  counts: Record<"for_you" | "mine" | "all" | "saved", number>;
+  counts: Record<"for_you" | "mine" | "all" | "saved", number> & { replies?: number };
   next_before_id: number | null;
 }

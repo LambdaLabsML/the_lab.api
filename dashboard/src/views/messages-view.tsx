@@ -15,7 +15,8 @@ import type { AgentEntry, MessageEntry, ThreadMeta, InboxThread } from "../lib/t
 import { Badge, EmptyState, IconButton } from "../components/ui";
 import { agentColor, registerAgents, agentInitials } from "../lib/colors";
 import { isHuman, humanDisplayName, humanIdForName } from "../lib/identity";
-import { messagesReadByMe, serverDemoMode } from "../state/settings";
+import { messagesReadByMe, myName, serverDemoMode } from "../state/settings";
+import { NameGate, requireName } from "../components/name-gate";
 import {
   dashboardSentMessageIds,
   markMessagesReadByMe,
@@ -34,6 +35,12 @@ import { IdeaLink } from "../components/idea-link";
 import { ExpLink } from "../components/exp-link";
 
 const threadKey = (m: MessageEntry) => m.thread_id ?? m.id;
+/** Grow a textarea with its content, between its CSS min and max height. */
+function autoGrow(el: HTMLTextAreaElement | null) {
+  if (!el) return;
+  el.style.height = "auto";
+  el.style.height = `${el.scrollHeight + 2}px`;
+}
 const timeOf = (m: MessageEntry) => Date.parse(m.created_at) || m.id;
 const recipientOf = (m: MessageEntry) =>
   m.from_agent && isHuman(m.from_agent)
@@ -78,6 +85,11 @@ export function MessagesView() {
   const [newThreadOpen, setNewThreadOpen] = useState(false);
   // Phones: the reply form stays a one-line "Reply…" until focused.
   const [composeOpen, setComposeOpen] = useState(false);
+  // Writing needs a name (name-gate.tsx asks for one first).
+  const hasName = !!(myName.value || "").trim();
+  const replyBoxRef = useRef<HTMLTextAreaElement>(null);
+  // Message to put in the URL (#messages/<thread>/<message>) after a jump.
+  const [urlMessage, setUrlMessage] = useState<number | null>(null);
   const inPerspective = false;
   const [selectedThread, setSelectedThread] = useState<number | null>(null),
     [threadMessages, setThreadMessages] = useState<MessageEntry[]>([]),
@@ -100,6 +112,29 @@ export function MessagesView() {
     return () => document.body.classList.remove("thread-open");
   }, [selectedThread]);
   useEffect(() => { setRenameDraft(null); }, [selectedThread]);
+  // Shareable URLs: #messages/<threadId>[/<messageId>]. Only written while the
+  // Messages section owns the hash (the docked panel must not change it).
+  const urlRead = useRef(false);   // the initial #messages/<thread> was applied
+  useEffect(() => {
+    if (!urlRead.current || !/^#messages(\/|$)/.test(location.hash)) return;
+    const want = selectedThread == null ? "#messages"
+      : `#messages/${selectedThread}${urlMessage != null ? `/${urlMessage}` : ""}`;
+    if (location.hash !== want) history.replaceState(null, "", location.pathname + location.search + want);
+  }, [selectedThread, urlMessage]);
+  useEffect(() => { setUrlMessage(null); }, [selectedThread]);
+  useEffect(() => {
+    const fromHash = () => {
+      const m = /^#messages\/(\d+)(?:\/(\d+))?/.exec(location.hash);
+      if (!m) return;
+      const thread = Number(m[1]), message = m[2] ? Number(m[2]) : null;
+      if (message != null) { focusMessageId.value = message; return; }
+      if (selectedThreadRef.current !== thread) { setNewThreadOpen(false); setSelectedThread(thread); }
+    };
+    fromHash();
+    urlRead.current = true;
+    window.addEventListener("hashchange", fromHash);
+    return () => window.removeEventListener("hashchange", fromHash);
+  }, []);
   // Focus + select the title when editing starts (autoFocus misses dblclick).
   const renameInputRef = useRef<HTMLInputElement>(null);
   const renaming = renameDraft !== null;
@@ -115,6 +150,8 @@ export function MessagesView() {
     [replyText, setReplyText] = useState(""),
     [sending, setSending] = useState<"new" | "reply" | null>(null),
     [sendError, setSendError] = useState<string | null>(null);
+  // Drafts switch with the thread: size the reply box to its draft.
+  useEffect(() => { autoGrow(replyBoxRef.current); }, [replyText, selectedThread]);
   const cancelled = useRef(false),
     requestNumber = useRef(0),
     selectedThreadRef = useRef<number | null>(null),
@@ -324,6 +361,8 @@ export function MessagesView() {
       anchorRef.current = message.id;
       lastFocusedMessage.current = message.id;
       setPendingFocus(message.id);
+      const keepInUrl = () => setUrlMessage(message.id);
+      window.setTimeout(keepInUrl, 0);  // after the thread switch resets it
       if (selectedThreadRef.current === threadKey(message)) {
         setThreadMessages([]); void loadThread(threadKey(message));
       } else setSelectedThread(threadKey(message));
@@ -414,6 +453,7 @@ export function MessagesView() {
       to = kind === "new" ? newTo : replyTo,
       tldr = (kind === "new" ? newTldr : replyTldr).trim() || undefined;
     if (!text || sendingRef.current || demo || inPerspective) return;
+    if (!requireName(() => { void submit(kind); })) return;
     if (kind === "reply" && (threadLoading || !threadMessages.length || threadKey(threadMessages[0]) !== selectedThread)) return;
     sendingRef.current = true;
     const sentThread = selectedThread;
@@ -551,9 +591,13 @@ export function MessagesView() {
 
   return (
     <div id="messages-container" class={`message-threads${selectedThread != null || newThreadOpen ? " has-selection" : ""}`}>
+      <NameGate />
       <div class="thread-layout" style={{ "--thread-list-width": `${threadListWidth.value}%` }}>
         <MessageInbox selectedId={selectedThread} agents={agents} onSelect={openInboxThread}
-          onMetadata={updateMetadata} onNew={() => { setSendError(null); setSelectedThread(null); setNewThreadOpen(true); }} />
+          onMetadata={updateMetadata} onNew={() => {
+            const open = () => { setSendError(null); setSelectedThread(null); setNewThreadOpen(true); };
+            if (requireName(open)) open();
+          }} />
         <div class="thread-list-resize" role="separator" aria-label="Resize conversation list" aria-orientation="vertical" aria-valuemin={20} aria-valuemax={65} aria-valuenow={Math.round(threadListWidth.value)} tabIndex={0}
           onKeyDown={e => {
             if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
@@ -579,15 +623,22 @@ export function MessagesView() {
                 <button class="thread-back" type="button" onClick={() => setNewThreadOpen(false)} aria-label="Back to conversations">←</button>
                 <span>New thread</span>
               </div>
-              <form class="thread-new-form" onSubmit={(e) => { e.preventDefault(); submit("new"); }}>
-                <label><span>To</span>{picker(newTo, setNewTo, "New thread recipient")}</label>
-                <label><span>Title <small>optional — makes it a shared thread agents can find and join</small></span><input class="thread-compose-tldr" disabled={demo || inPerspective || !!sending} value={newTitle} maxLength={200} onInput={(e) => setNewTitle((e.target as HTMLInputElement).value)} placeholder="What is this thread about?" /></label>
-                <label><span>TL;DR <small>optional</small></span><input class="thread-compose-tldr" disabled={demo || inPerspective || !!sending} value={newTldr} maxLength={500} onInput={(e) => setNewTldr((e.target as HTMLInputElement).value)} placeholder="A short summary" /></label>
-                <label class="thread-new-message"><span>Message</span><textarea autoFocus rows={12} disabled={demo || inPerspective || !!sending} value={newText} onInput={(e) => setNewText((e.target as HTMLTextAreaElement).value)} placeholder={demo ? "Messaging is disabled in demo mode" : "Write to agents…"} /></label>
+              <form class="thread-new-form compose-card" onSubmit={(e) => { e.preventDefault(); submit("new"); }}>
+                <div class="compose-meta">
+                  <label class="compose-field" title="Recipient"><span>To</span>{picker(newTo, setNewTo, "New thread recipient")}</label>
+                  <input class="thread-compose-tldr compose-title" disabled={demo || inPerspective || !!sending} readOnly={!hasName} value={newTitle} maxLength={200} onInput={(e) => setNewTitle((e.target as HTMLInputElement).value)} placeholder="Title (optional — a shared thread agents can find and join)" />
+                </div>
+                <input class="thread-compose-tldr compose-tldr" disabled={demo || inPerspective || !!sending} readOnly={!hasName} value={newTldr} maxLength={500} onInput={(e) => setNewTldr((e.target as HTMLInputElement).value)} placeholder="TL;DR (optional)" />
+                <textarea class="compose-text compose-text--tall" autoFocus={hasName} rows={8} disabled={demo || inPerspective || !!sending} readOnly={!hasName}
+                  onFocus={(e) => { if (!requireName(() => (e.target as HTMLTextAreaElement).focus())) (e.target as HTMLTextAreaElement).blur(); }}
+                  onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void submit("new"); } }}
+                  value={newText} onInput={(e) => setNewText((e.target as HTMLTextAreaElement).value)}
+                  placeholder={demo ? "Messaging is disabled in demo mode" : hasName ? "Write to agents…" : "Choose your name to write…"} />
                 {sendError && <div class="agents-error">{sendError}</div>}
-                <div class="thread-new-actions">
+                <div class="compose-foot">
+                  <span class="compose-hint">⌘/Ctrl + Enter to send</span>
                   <button type="button" class="ui-btn" onClick={() => setNewThreadOpen(false)}>Cancel</button>
-                  <button class="ui-btn" disabled={demo || inPerspective || !newText.trim() || !!sending}>{sending === "new" ? "Sending…" : "Send message"}</button>
+                  <button class="ui-btn compose-send" disabled={demo || inPerspective || !newText.trim() || !!sending}>{sending === "new" ? "Sending…" : "Send"}</button>
                 </div>
               </form>
             </div>
@@ -798,7 +849,7 @@ export function MessagesView() {
                 <div class="thread-loading">Loading thread…</div>
               )}
               <form
-                class={`thread-compose thread-compose-reply${!composeOpen && !replyText.trim() && !replyTldr.trim() ? " is-collapsed" : ""}`}
+                class={`thread-compose thread-compose-reply compose-card${!composeOpen && !replyText.trim() && !replyTldr.trim() ? " is-collapsed" : ""}`}
                 onFocusCapture={() => setComposeOpen(true)}
                 onBlurCapture={(e) => {
                   // Collapse again when focus leaves the (empty) form.
@@ -810,47 +861,59 @@ export function MessagesView() {
                   submit("reply");
                 }}
               >
-                <span class="thread-compose-label">Reply</span>
-                {picker(replyTo, setReplyTo, "Reply recipient", selectedThread)}
-                <input
-                  class="thread-compose-tldr"
-                  disabled={demo || inPerspective || !!sending}
-                  value={replyTldr}
-                  maxLength={500}
-                  onInput={(e) => {
-                    const text = (e.target as HTMLInputElement).value;
-                    if (selectedThread != null) replyTldrDrafts.current.set(selectedThread, text);
-                    setReplyTldr(text);
-                  }}
-                  placeholder="TL;DR (optional)"
-                />
+                <div class="compose-meta">
+                  <label class="compose-field" title="Recipient"><span>To</span>{picker(replyTo, setReplyTo, "Reply recipient", selectedThread)}</label>
+                  <input
+                    class="thread-compose-tldr compose-tldr"
+                    disabled={demo || inPerspective || !!sending}
+                    readOnly={!hasName}
+                    value={replyTldr}
+                    maxLength={500}
+                    onInput={(e) => {
+                      const text = (e.target as HTMLInputElement).value;
+                      if (selectedThread != null) replyTldrDrafts.current.set(selectedThread, text);
+                      setReplyTldr(text);
+                    }}
+                    placeholder="TL;DR (optional)"
+                  />
+                </div>
                 <textarea
+                  ref={replyBoxRef}
+                  class="compose-text"
+                  rows={2}
                   disabled={demo || inPerspective || !!sending}
+                  readOnly={!hasName}
+                  onFocus={(e) => { if (!requireName(() => replyBoxRef.current?.focus())) (e.target as HTMLTextAreaElement).blur(); }}
+                  onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void submit("reply"); } }}
                   value={replyText}
                   onInput={(e) => {
-                    const text = (e.target as HTMLTextAreaElement).value;
-                    if (selectedThread != null) replyDrafts.current.set(selectedThread, text);
-                    setReplyText(text);
+                    const el = e.target as HTMLTextAreaElement;
+                    if (selectedThread != null) replyDrafts.current.set(selectedThread, el.value);
+                    setReplyText(el.value);
+                    autoGrow(el);
                   }}
                   placeholder={
                     demo
                       ? "Messaging is disabled in demo mode"
-                      : "Reply in this thread…"
+                      : hasName ? "Reply in this thread…" : "Choose your name to write…"
                   }
                 />
-                <button
-                  class="ui-btn"
-                  disabled={
-                    demo ||
-                    inPerspective ||
-                    threadLoading ||
-                    !threadMessages.length ||
-                    !replyText.trim() ||
-                    !!sending
-                  }
-                >
-                  {sending === "reply" ? "Sending…" : "Reply"}
-                </button>
+                <div class="compose-foot">
+                  <span class="compose-hint">⌘/Ctrl + Enter to send</span>
+                  <button
+                    class="ui-btn compose-send"
+                    disabled={
+                      demo ||
+                      inPerspective ||
+                      threadLoading ||
+                      !threadMessages.length ||
+                      !replyText.trim() ||
+                      !!sending
+                    }
+                  >
+                    {sending === "reply" ? "Sending…" : "Send"}
+                  </button>
+                </div>
               </form>
             </>
           )}

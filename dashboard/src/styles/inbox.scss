@@ -96,3 +96,44 @@
 .inbox-closed-pill { color: var(--text-muted); border: 1px solid var(--border); background: var(--bg-hi); }
 .inbox-row-meta { font-size: var(--text-xs); color: var(--text-faint); }
 .inbox-my-count { color: var(--accent); font-weight: 600; }
+
+/* ── Compact view tabs: icon + short label + count, one row even on phones ── */
+.inbox-views { display: flex; gap: 4px; padding: 6px 10px; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+.inbox-views::-webkit-scrollbar { display: none; }
+.inbox-views > button {
+  flex: 0 0 auto; min-height: 30px; height: 30px; padding: 0 9px; gap: 5px;
+  border: 1px solid var(--border-soft); border-radius: var(--radius-md);
+  font-family: var(--font-mono); font-size: 12px; white-space: nowrap;
+}
+.inbox-views > button.is-active {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.inbox-view-icon { flex-shrink: 0; display: block; }
+.inbox-view-count { font-size: 11px; font-weight: 600; opacity: 0.85; }
+@media (max-width: 760px) {
+  .inbox-views > button { min-height: 32px; height: 32px; }
+  .inbox-views > button:not(.is-active) .inbox-view-label { display: none; }
+}
+
+/* ── Replies view: one row per reply, with open / mark read / keep unread ── */
+.inbox-replies-head { display: flex; align-items: center; gap: 10px; width: 100%; }
+.inbox-unread-only { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; font-size: var(--text-xs); color: var(--text-muted); cursor: pointer; white-space: nowrap; }
+.inbox-reply {
+  display: grid; gap: 3px; padding: 9px 12px; border-top: 1px solid var(--border-soft);
+  cursor: pointer; color: var(--text);
+  &:hover { background: var(--bg-hi); }
+  &:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+  &.is-read { color: var(--text-muted); }
+  &.is-read .inbox-reply-text { color: var(--text-faint); }
+}
+.inbox-reply-top { display: flex; align-items: baseline; gap: 6px; min-width: 0; font-size: var(--text-sm); }
+.inbox-reply-top strong { flex-shrink: 0; }
+.inbox-reply-top time { margin-left: auto; flex-shrink: 0; color: var(--text-faint); font-size: var(--text-xs); }
+.inbox-reply-dot { flex-shrink: 0; width: 7px; height: 7px; border-radius: 50%; background: transparent; border: 1px solid var(--text-faint); align-self: center; }
+.inbox-reply-dot.is-unread { background: var(--accent); border-color: var(--accent); }
+.inbox-reply-thread { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-faint); font-size: var(--text-xs); }
+.inbox-reply-quote { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-faint); font-size: var(--text-xs); border-left: 2px solid var(--border-soft); padding-left: 6px; }
+.inbox-reply-text { font-size: var(--text-sm); line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.inbox-reply-actions { display: flex; gap: 6px; justify-content: flex-end; }
+.inbox-reply-actions .ui-btn { min-height: 26px; padding: 0 8px; font-size: var(--text-xs); border: 1px solid var(--border-soft); border-radius: var(--radius-md); }

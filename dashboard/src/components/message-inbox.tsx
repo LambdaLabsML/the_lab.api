@@ -1,14 +1,27 @@
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import { getDashboardInbox } from "../state/api";
 import { inboxView, inboxUnreadCount, savedConversations, savedConversationFocus } from "../state/inbox";
-import { dashboardSentMessageIds, messagesUnreadCount } from "../state/messages";
+import { dashboardSentMessageIds, messagesUnreadCount, markMessagesReadByMe } from "../state/messages";
+import { focusMessageId } from "../state/agent-activity";
 import { messagesReadByMe, messagesMyNames, myName } from "../state/settings";
 import { useLiveRefresh } from "../lib/hooks";
 import { relativeTime } from "../lib/format";
 import { humanDisplayName, isHuman } from "../lib/identity";
 import { IdeaLink } from "./idea-link";
 import { allIdeas } from "../state/signals";
-import type { AgentEntry, DashboardInboxPage, InboxThread } from "../lib/types";
+import type { AgentEntry, DashboardInboxPage, InboxReply, InboxThread } from "../lib/types";
+
+// Small inline icons for the view tabs (same style as the chart controls).
+const SV = { fill: "none", stroke: "currentColor", "stroke-width": 1.6, "stroke-linecap": "round", "stroke-linejoin": "round" } as const;
+const VIEW_ICONS: Record<string, any> = {
+  for_you: <><circle {...SV} cx="8" cy="8" r="2.6" /><path {...SV} d="M10.6 8v1.2a1.8 1.8 0 0 0 3.4.8A6.2 6.2 0 1 0 11.5 13" /></>,
+  replies: <path {...SV} d="M6.5 4 2.5 8l4 4M2.5 8h7a4 4 0 0 1 4 4v1" />,
+  mine: <><circle {...SV} cx="8" cy="5.5" r="2.7" /><path {...SV} d="M2.8 14c.8-3 2.8-4.3 5.2-4.3S12.4 11 13.2 14" /></>,
+  all: <><path {...SV} d="M2.5 4.5h11v7h-6l-3 2.5v-2.5h-2Z" /></>,
+};
+function ViewIcon({ id }: { id: string }) {
+  return <svg class="inbox-view-icon" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true">{VIEW_ICONS[id]}</svg>;
+}
 
 export function MessageInbox({ selectedId, agents, onSelect, onNew, onMetadata }: {
   selectedId: number | null;
@@ -18,7 +31,11 @@ export function MessageInbox({ selectedId, agents, onSelect, onNew, onMetadata }
   onMetadata: (threads: InboxThread[]) => void;
 }) {
   const [rows, setRows] = useState<InboxThread[]>([]);
-  const [counts, setCounts] = useState<DashboardInboxPage["counts"]>({for_you: 0, mine: 0, all: 0, saved: 0});
+  const [replies, setReplies] = useState<InboxReply[]>([]);
+  const [unreadOnly, setUnreadOnly] = useState(true);
+  // Replies marked read this session stay listed so they can be re-marked.
+  const touched = useRef(new Set<number>());
+  const [counts, setCounts] = useState<DashboardInboxPage["counts"]>({for_you: 0, mine: 0, all: 0, saved: 0, replies: 0});
   const [next, setNext] = useState<number | null>(null);
   const [total, setTotal] = useState(0);
   const [query, setQuery] = useState("");
@@ -72,6 +89,14 @@ export function MessageInbox({ selectedId, agents, onSelect, onNew, onMetadata }
         for (const row of page.threads) merged.set(row.id, row);
         return [...merged.values()].sort((a,b) => b.cursor_id - a.cursor_id);
       });
+      if (snapshot.current?.view === "replies") {
+        setReplies(previous => {
+          const merged = new Map((replace || !append ? [] : previous).map(r => [r.id, r]));
+          if (!append && !replace) for (const r of previous) merged.set(r.id, r);
+          for (const r of page.replies ?? []) merged.set(r.id, r);
+          return [...merged.values()].sort((a, b) => b.id - a.id);
+        });
+      }
       onMetadata(page.threads);
       setCounts(page.counts); inboxUnreadCount.value = page.counts.for_you;
       setTotal(page.total);
@@ -89,7 +114,7 @@ export function MessageInbox({ selectedId, agents, onSelect, onNew, onMetadata }
   // counts without scrolling the list back to the top.
   useEffect(() => {
     request.current++; busy.current = false; nextRef.current = null;
-    setRows([]); setNext(null);
+    setRows([]); setReplies([]); setNext(null);
     if (list.current) list.current.scrollTop = 0;
     const timer = setTimeout(() => { void load(false, true); }, query ? 250 : 0);
     return () => clearTimeout(timer);
@@ -116,10 +141,19 @@ export function MessageInbox({ selectedId, agents, onSelect, onNew, onMetadata }
     observer.observe(node);
     return () => observer.disconnect();
   }, [next, loading, error]);
-  const labels = {for_you: "For you", mine: "My conversations", all: "All conversations", saved: "Saved"};
+  const labels: Record<string, string> = {for_you: "For you", replies: "Replies", mine: "Mine", all: "All", saved: "Saved"};
+  const titles: Record<string, string> = {
+    for_you: "For you: conversations with unread messages for you",
+    replies: "Replies: each reply to your messages (and messages to you), to open, mark read or keep unread",
+    mine: "My conversations: ones you wrote in or joined",
+    all: "All conversations",
+  };
+  const readMap = messagesReadByMe.value;
+  const isReplyRead = (r: InboxReply) => readMap[String(r.id)] ?? r.read;
+  const shownReplies = replies.filter(r => !unreadOnly || !isReplyRead(r) || touched.current.has(r.id));
   return <aside class="thread-sidebar message-inbox" aria-label="Conversations">
     <div class="inbox-heading"><strong>Messages</strong><button class="ui-btn" onClick={onNew}>+ New conversation</button></div>
-    <div class="inbox-views" role="tablist" aria-label="Conversation views">{(["for_you", "mine", "all"] as const).map(id => <button role="tab" aria-selected={view === id} class={view === id ? "is-active" : ""} onClick={() => { inboxView.value = id; }}><span>{labels[id]}</span><span class="inbox-view-count">{id === "for_you" ? badgeCount : counts[id]}</span></button>)}</div>
+    <div class="inbox-views" role="tablist" aria-label="Conversation views">{(["for_you", "replies", "mine", "all"] as const).map(id => <button role="tab" aria-selected={view === id} title={titles[id]} class={view === id ? "is-active" : ""} onClick={() => { inboxView.value = id; }}><ViewIcon id={id} /><span class="inbox-view-label">{labels[id]}</span><span class="inbox-view-count">{id === "for_you" || id === "replies" ? badgeCount : counts[id]}</span></button>)}</div>
     <div class="inbox-search"><input type="search" aria-label="Search all conversation history" placeholder="Search all conversation history…" value={query} onInput={e => setQuery(e.currentTarget.value)} /></div>
     <div class="inbox-shortcuts">
       <button class={`ui-btn${view === "saved" ? " is-active" : ""}`} aria-pressed={view === "saved"} onClick={() => { inboxView.value = view === "saved" ? "for_you" : "saved"; }}>Saved · {saved.length}</button>
@@ -128,10 +162,31 @@ export function MessageInbox({ selectedId, agents, onSelect, onNew, onMetadata }
     </div>
     {editingName && <form class="inbox-name-form" onSubmit={e => { e.preventDefault(); myName.value = nameDraft.trim(); setEditingName(false); }}><label>Your name<input autoFocus value={nameDraft} onInput={e => setNameDraft(e.currentTarget.value)} /></label><button class="ui-btn">Save</button></form>}
     {!name && <p class="inbox-identity-note">Set your name to include conversations from your other browsers.</p>}
-    <div class="inbox-description">{view === "for_you" ? `${badgeCount} unread ${badgeCount === 1 ? "reply or message" : "replies and messages"} for you` : `${labels[view]} · ${total}`}</div>
+    <div class="inbox-description">{view === "replies" ? <span class="inbox-replies-head">{badgeCount} unread {badgeCount === 1 ? "reply" : "replies"} for you<label class="inbox-unread-only"><input type="checkbox" checked={unreadOnly} onChange={e => { setUnreadOnly(e.currentTarget.checked); touched.current.clear(); }} /> unread only</label></span> : view === "for_you" ? `${badgeCount} unread ${badgeCount === 1 ? "reply or message" : "replies and messages"} for you` : `${labels[view]} · ${total}`}</div>
     <div ref={list} class="inbox-list" role="tabpanel" aria-label={labels[view]}>
       {error && <div class="inbox-error" role="alert">{error}<button class="ui-btn" onClick={() => load()}>Retry</button></div>}
-      {rows.map(row => {
+      {view === "replies" && shownReplies.map(r => {
+        const read = isReplyRead(r);
+        const who = r.from_agent ? (isHuman(r.from_agent) ? humanDisplayName(r.from_agent) : (agents.find(a => a.agent_id === r.from_agent)?.role ? `${r.from_agent} · ${agents.find(a => a.agent_id === r.from_agent)!.role}` : r.from_agent)) : (r.from_role ?? "system");
+        const toggle = (e: Event) => { e.stopPropagation(); touched.current.add(r.id); markMessagesReadByMe([r.id], !read); };
+        const open = () => { touched.current.add(r.id); focusMessageId.value = r.id; };
+        return <div key={`r${r.id}`} role="button" tabIndex={0} class={`inbox-reply${read ? " is-read" : ""}`} onClick={open}
+          onKeyDown={e => { if (e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); open(); } }}>
+          <span class="inbox-reply-top">
+            <span class={`inbox-reply-dot${read ? "" : " is-unread"}`} aria-hidden="true" />
+            <strong>{who}</strong>
+            <span class="inbox-reply-thread" title={r.thread_title || `Conversation #${r.thread_id}`}>in {r.thread_title || `#${r.thread_id}`}</span>
+            <time dateTime={r.created_at} title={r.created_at}>{relativeTime(r.created_at)}</time>
+          </span>
+          {r.question && <span class="inbox-reply-quote" title={r.question.preview}>↳ you: {r.question.preview}</span>}
+          <span class="inbox-reply-text">{r.preview}</span>
+          <span class="inbox-reply-actions">
+            <button type="button" class="ui-btn" onClick={e => { e.stopPropagation(); open(); }} title="Open the conversation at this message">Open</button>
+            <button type="button" class="ui-btn" onClick={toggle} title={read ? "Mark unread again (keep it for later)" : "Mark read"}>{read ? "◌ Keep unread" : "✓ Mark read"}</button>
+          </span>
+        </div>;
+      })}
+      {view !== "replies" && rows.map(row => {
         const participants = row.participants ?? [];
         const participantLabel = (id: string) => isHuman(id) ? humanDisplayName(id) : (agents.find(agent => agent.agent_id.replace(/^agent:/, "") === id.replace(/^agent:/, ""))?.role || id.replace(/^agent:/, ""));
         const ideaIds = (row.idea_ids ?? []).filter(id => allIdeas.value[id]);
@@ -152,8 +207,9 @@ export function MessageInbox({ selectedId, agents, onSelect, onNew, onMetadata }
           </span>}
         </div>;
       })}
-      {!loading && !error && !rows.length && <div class="inbox-empty"><strong>{query || status !== "all" || sender ? "No matching conversations" : view === "for_you" ? "You're caught up" : view === "saved" ? "No saved conversations" : "No conversations yet"}</strong><p>{query || status !== "all" || sender ? "Clear search or reset filters to see more conversations." : view === "for_you" ? "New replies and messages addressed to you will appear here. Reading clears unread status; Save keeps a conversation for later." : view === "saved" ? "Use “Keep for later” in a conversation to save it here." : "Try another view or start a conversation."}</p></div>}
-      <div ref={sentinel} class="inbox-sentinel">{loading ? "Loading conversations…" : next != null ? <button class="ui-btn" onClick={() => load(true)}>Load more conversations</button> : rows.length ? "End of conversations" : ""}</div>
+      {!loading && !error && view === "replies" && !shownReplies.length && <div class="inbox-empty"><strong>{query ? "No matching replies" : "You're caught up"}</strong><p>Replies to your messages and messages addressed to you appear here, one by one.</p></div>}
+      {!loading && !error && view !== "replies" && !rows.length && <div class="inbox-empty"><strong>{query || status !== "all" || sender ? "No matching conversations" : view === "for_you" ? "You're caught up" : view === "saved" ? "No saved conversations" : "No conversations yet"}</strong><p>{query || status !== "all" || sender ? "Clear search or reset filters to see more conversations." : view === "for_you" ? "New replies and messages addressed to you will appear here. Reading clears unread status; Save keeps a conversation for later." : view === "saved" ? "Use “Keep for later” in a conversation to save it here." : "Try another view or start a conversation."}</p></div>}
+      <div ref={sentinel} class="inbox-sentinel">{loading ? "Loading…" : next != null ? <button class="ui-btn" onClick={() => load(true)}>{view === "replies" ? "Load older replies" : "Load more conversations"}</button> : (view === "replies" ? replies.length : rows.length) ? (view === "replies" ? "End of replies" : "End of conversations") : ""}</div>
     </div>
   </aside>;
 }

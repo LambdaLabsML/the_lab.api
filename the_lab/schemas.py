@@ -362,7 +362,7 @@ class DashboardInboxQuery(BaseModel):
     read_ids: list[int] = Field(default_factory=list)
     saved_threads: list[int] = Field(default_factory=list)
     saved_focus: dict[str, int] = Field(default_factory=dict)
-    view: Literal["for_you", "mine", "all", "saved"] = "for_you"
+    view: Literal["for_you", "mine", "all", "saved", "replies"] = "for_you"
     q: str = ""
     status: Literal["all", "open", "closed"] = "all"
     sender: str = ""
