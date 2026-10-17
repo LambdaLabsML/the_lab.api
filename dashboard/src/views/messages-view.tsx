@@ -76,6 +76,8 @@ export function MessagesView() {
     [error, setError] = useState<string | null>(null);
   const [pendingFocus, setPendingFocus] = useState<number | null>(null);
   const [newThreadOpen, setNewThreadOpen] = useState(false);
+  // Phones: the reply form stays a one-line "Reply…" until focused.
+  const [composeOpen, setComposeOpen] = useState(false);
   const inPerspective = false;
   const [selectedThread, setSelectedThread] = useState<number | null>(null),
     [threadMessages, setThreadMessages] = useState<MessageEntry[]>([]),
@@ -92,6 +94,11 @@ export function MessagesView() {
   const [renameDraft, setRenameDraft] = useState<string | null>(null);
   // Escape unmounts the input, which can still fire blur with the old draft.
   const renameCancelled = useRef(false);
+  // Phones hide the global top bars while a thread is open (more room to read).
+  useEffect(() => {
+    document.body.classList.toggle("thread-open", selectedThread != null);
+    return () => document.body.classList.remove("thread-open");
+  }, [selectedThread]);
   useEffect(() => { setRenameDraft(null); }, [selectedThread]);
   // Focus + select the title when editing starts (autoFocus misses dblclick).
   const renameInputRef = useRef<HTMLInputElement>(null);
@@ -634,8 +641,9 @@ export function MessagesView() {
                   </span>
                 )}
 
-                <button type="button" class={`ui-btn thread-save${savedConversations.value.includes(selectedThread) ? " is-saved" : ""}`} aria-pressed={savedConversations.value.includes(selectedThread)} onClick={() => toggleSavedConversation(selectedThread, lastFocusedMessage.current ?? threadMessages[threadMessages.length - 1]?.id)}>{savedConversations.value.includes(selectedThread) ? "Saved · Remove" : "Keep for later"}</button>
-                <details class="thread-options"><summary>Options</summary><div>
+                {/* icon-only on phones (see messages.scss) */}
+                <button type="button" title={savedConversations.value.includes(selectedThread) ? "Saved — click to remove" : "Keep for later"} class={`ui-btn thread-save${savedConversations.value.includes(selectedThread) ? " is-saved" : ""}`} aria-pressed={savedConversations.value.includes(selectedThread)} onClick={() => toggleSavedConversation(selectedThread, lastFocusedMessage.current ?? threadMessages[threadMessages.length - 1]?.id)}><span class="thread-save-icon" aria-hidden="true">{savedConversations.value.includes(selectedThread) ? "★" : "☆"}</span><span class="thread-save-text">{savedConversations.value.includes(selectedThread) ? "Saved · Remove" : "Keep for later"}</span></button>
+                <details class="thread-options"><summary title="Options"><span class="thread-options-icon" aria-hidden="true">⋯</span><span class="thread-options-text">Options</span></summary><div>
                 {!demo && <button class="ui-btn" onClick={() => setRenameDraft(threadMeta.get(selectedThread)?.title ?? "")}>Rename conversation</button>}
                 {(mineIds.length > 0 || hasOlder) && !inPerspective && (
                   <span class="thread-mine-nav" title="Jump between your own messages in this thread (keys [ and ])">
@@ -790,7 +798,13 @@ export function MessagesView() {
                 <div class="thread-loading">Loading thread…</div>
               )}
               <form
-                class="thread-compose thread-compose-reply"
+                class={`thread-compose thread-compose-reply${!composeOpen && !replyText.trim() && !replyTldr.trim() ? " is-collapsed" : ""}`}
+                onFocusCapture={() => setComposeOpen(true)}
+                onBlurCapture={(e) => {
+                  // Collapse again when focus leaves the (empty) form.
+                  const form = e.currentTarget as HTMLFormElement;
+                  window.setTimeout(() => { if (!form.contains(document.activeElement)) setComposeOpen(false); }, 120);
+                }}
                 onSubmit={(e) => {
                   e.preventDefault();
                   submit("reply");

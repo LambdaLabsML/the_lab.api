@@ -1,7 +1,7 @@
 import { selectedExperiment } from "../state/signals";
 import { useEffect, useLayoutEffect, useMemo, useState, useRef } from "preact/hooks";
 import { progressPct } from "../lib/progress";
-import { selectedIdea, selectedMetric, detailTimeline, detailSortNewest, detailShowNotes, colorTheme } from "../state/settings";
+import { selectedIdea, selectedMetric, detailTimeline, detailSortNewest, detailShowNotes, showCancelled, colorTheme } from "../state/settings";
 import { scrollToExperiment, runningProgress, allExperiments } from "../state/signals";
 import { ExcludeFromFilter } from "./filter-picker";
 import { reparentIdea } from "../state/api";
@@ -755,7 +755,8 @@ export function DetailPanel({ embedded = false, focused = false }: { embedded?: 
     return (a: T, b: T) => sortMult * (new Date(getTs(a) || 0).getTime() - new Date(getTs(b) || 0).getTime());
   }
   const showNotes = detailShowNotes.value;
-  const visibleExperiments = experiments;
+  const cancelledCount = experiments.filter(e => e.status === "cancelled").length;
+  const visibleExperiments = showCancelled.value ? experiments : experiments.filter(e => e.status !== "cancelled");
   const visibleNotes = showNotes ? notes : [];
   const sortedNotes = [...visibleNotes].sort(byTime<Note>(n => n.created_at));
   const sortedExps  = [...visibleExperiments].sort(byTime<Experiment>(e => e.created_at));
@@ -921,6 +922,16 @@ export function DetailPanel({ embedded = false, focused = false }: { embedded?: 
                     </Toggle>
                   )}
                 </div>
+              )}
+
+              {cancelledCount > 0 && (
+                <button type="button" class="shortlog-separator detail-cancelled-toggle" aria-pressed={showCancelled.value}
+                  onClick={() => { showCancelled.value = !showCancelled.value; }}
+                  title={showCancelled.value ? "Hide cancelled experiments (everywhere)" : "Show cancelled experiments (everywhere)"}>
+                  <span class="shortlog-separator-rule" />
+                  <span class="shortlog-separator-text">{showCancelled.value ? `▾ hide ${cancelledCount} cancelled` : `▸ ${cancelledCount} cancelled hidden — show`}</span>
+                  <span class="shortlog-separator-rule" />
+                </button>
               )}
 
               {/* Content: timeline or normal */}

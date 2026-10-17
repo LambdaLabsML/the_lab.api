@@ -107,6 +107,8 @@ export const detailTimeline = useSetting("detailTimeline", true);
 export const detailSortNewest = useSetting("detailSortNewest", true);
 /** Idea panel: show the notes boxes between the experiments. */
 export const detailShowNotes = useSetting("detailShowNotes", true);
+/** Show cancelled experiments (idea panel, Recent list); off = hidden. */
+export const showCancelled = useSetting("showCancelled", false);
 
 /** Active colour theme name. Applied as data-theme on <html>. */
 export const colorTheme = useSetting<string>("colorTheme", "default");

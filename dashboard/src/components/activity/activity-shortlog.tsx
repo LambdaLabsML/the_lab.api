@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import { allExperiments, allIdeas, runningProgress } from "../../state/signals";
-import { selectedMetric, useSetting } from "../../state/settings";
+import { selectedMetric, showCancelled, useSetting } from "../../state/settings";
 import { getQueue } from "../../state/api";
 import { useLiveRefresh } from "../../lib/hooks";
 import { navigateToIdea } from "../../lib/navigate";
@@ -60,7 +60,7 @@ export function ActivityShortlog() {
     <span class="shortlog-separator-rule" />
   </button>;
   const recent = experiments
-    .filter(e => !e._running && e.finished_at && ["completed", "failed", "cancelled"].includes(e.status))
+    .filter(e => !e._running && e.finished_at && ["completed", "failed", ...(showCancelled.value ? ["cancelled"] : [])].includes(e.status))
     .sort((a, b) => Date.parse(b.finished_at || "") - Date.parse(a.finished_at || ""))
     .slice(0, 6);
   return <div class="activity-shortlog" aria-label="Experiment monitor">

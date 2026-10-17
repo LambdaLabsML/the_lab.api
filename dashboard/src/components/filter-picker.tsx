@@ -10,6 +10,7 @@ import {
   myHumanId, savedFilters, selectionError, selectionLabels, updateFilter, type FilterCheck, type SavedFilter,
 } from "../state/filters";
 import { allExperiments } from "../state/signals";
+import { showCancelled } from "../state/settings";
 import { FilterExprInput } from "./filter-expr-input";
 
 const EXAMPLES = [
@@ -26,8 +27,8 @@ export function FilterPicker() {
   const count = selectionLabels.value?.size;
   const total = allExperiments.value.length;
   const label = current
-    ? `⏚ ${current.name}${sel.where.trim() ? " + expr" : ""}`
-    : sel.where.trim() ? "⏚ expression" : "⏚ Filter";
+    ? `${current.name}${sel.where.trim() ? " + expr" : ""}`
+    : sel.where.trim() ? "expression" : "Filter";
   const root = useRef<HTMLSpanElement>(null);
   useEffect(() => {
     if (!open) return;
@@ -45,7 +46,8 @@ export function FilterPicker() {
           : current || sel.where.trim() ? `${count ?? "…"} of ${total} experiments selected — click to change`
           : "Select experiments by a saved filter or an expression (applies to all plots, the table and idea means)"}
       >
-        {label}{(current || sel.where.trim()) && count !== undefined ? ` (${count})` : ""}
+        <svg class="filter-funnel" width="13" height="13" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 3h12l-4.5 5.5V13l-3 1.5V8.5Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" /></svg>
+        <span class="filter-picker-label">{label}{(current || sel.where.trim()) && count !== undefined ? ` (${count})` : ""}</span>
       </button>
       {open && <FilterPanel onClose={() => setOpen(false)} />}
     </span>
@@ -116,6 +118,9 @@ function FilterPanel({ onClose }: { onClose: () => void }) {
       <div class="filter-panel-head">
         <strong>Filter experiments</strong>
         <span class="filter-panel-hint">applies to all plots, the table and idea means</span>
+        <label class="filter-cancelled" title="Cancelled experiments in the idea panel and the Recent list (charts never include them)">
+          <input type="checkbox" checked={showCancelled.value} onChange={(e) => { showCancelled.value = (e.target as HTMLInputElement).checked; }} /> show cancelled
+        </label>
         <button type="button" class="filter-close" onClick={onClose} aria-label="Close">×</button>
       </div>
       {mine.length > 0 && <div class="filter-group"><div class="filter-group-title">My filters</div><ul>{mine.map(row)}</ul></div>}

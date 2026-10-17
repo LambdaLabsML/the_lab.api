@@ -240,3 +240,11 @@
   .research-kpis.is-compact { grid-template-columns: repeat(3, minmax(0, 1fr)); row-gap: 6px; }
   .research-kpis.is-compact .research-kpi:nth-child(4) { padding-left: 0; }
 }
+/* Phones: row 1 = view name + Messages, row 2 = search with the Filter button beside it. */
+@media (max-width: 760px) {
+  .research-toolbar .research-toolbar-actions { order: 2; }
+  .research-toolbar .research-header-search { order: 3; flex: 1 1 calc(100% - 7.5rem); flex-basis: calc(100% - 7.5rem); min-width: 0; }
+  .research-toolbar .filter-picker { order: 4; }
+  .research-toolbar .research-selection-count { order: 5; }
+  .research-toolbar .filter-picker > button { min-height: 36px; }
+}
