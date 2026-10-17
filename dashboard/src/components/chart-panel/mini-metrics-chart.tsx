@@ -709,14 +709,21 @@ export function MiniMetricsChart({
   if (labelMode !== "off") {
     const usable = (i: number) => {
       const e = expData?.[i];
-      if (!e || e._running || !labelPos(i)) return false;
+      if (!e || !labelPos(i)) return false;
       return !plotHighlightState(e.idea_id, String(e.label ?? e.id)).faded;
     };
-    const better = (a: number, b: number) => (lower ? values[a] - values[b] : values[b] - values[a]);
+    const val = (i: number) => (typeof values[i] === "number" && Number.isFinite(values[i]) ? values[i] : (lower ? Infinity : -Infinity));
+    const better = (a: number, b: number) => (lower ? val(a) - val(b) : val(b) - val(a));
     const all = Array.from({ length: n }, (_, i) => i).filter(usable);
-    let order = all.filter((i) => milestones.has(i)).sort(better);
+    const isRunning = (i: number) => !!expData?.[i]?._running;
+    // Records first, then the runs in progress (yellow) — both in "rec" and
+    // "auto" — then, in auto, the best / worst of the rest and anything else.
+    let order = [
+      ...all.filter((i) => milestones.has(i) && !isRunning(i)).sort(better),
+      ...all.filter((i) => isRunning(i)).sort(better),
+    ];
     if (labelMode === "auto" && showDots) {
-      const rest = all.filter((i) => !milestones.has(i)).sort(better);
+      const rest = all.filter((i) => !milestones.has(i) && !isRunning(i)).sort(better);
       const top = Math.max(1, Math.ceil(rest.length * 0.05));
       const worst = rest.slice(-Math.max(1, Math.ceil(rest.length * 0.02))).reverse();
       const seen = new Set(order);

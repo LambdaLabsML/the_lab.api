@@ -140,8 +140,8 @@ export function MetricsChart({ instanceId, initialMetric, hideClone, onMetricCha
         ]} />
         <CtlSeg icon="labels" name="Point labels (#idea)" value={chartPointLabels.value} onChange={(m) => { chartPointLabels.value = m; }} options={[
           { value: "off", icon: "lab-off", title: "No point labels (hovering still labels an idea's points)" },
-          { value: "records", icon: "lab-rec", title: "Label the record-setting points" },
-          { value: "auto", icon: "lab-auto", title: "Records first, then the best scores, then anything else that fits without overlapping" },
+          { value: "records", icon: "lab-rec", title: "Label the record-setting points and the runs in progress" },
+          { value: "auto", icon: "lab-auto", title: "Records and running first, then the best scores, then anything else that fits without overlapping" },
         ]} />
         {/* Clone is hidden in the single-chart review (hideClone); kept in the workbench */}
         {!hideClone && (

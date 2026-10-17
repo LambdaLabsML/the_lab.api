@@ -132,6 +132,10 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric, hideC
   const [hover, setHover] = useState<{ d: any; rect: DOMRect; x: number | null; y: number | null } | null>(null);
   const setHoverRef = useRef(setHover);
   setHoverRef.current = setHover;
+  // After a click the details panel slides in, the chart redraws, and
+  // Chart.js replays the last (unmoved) mouse event — which would put the
+  // card right back. Ignore hovers until the pointer really moves again.
+  const suppressHover = useRef<{ x: number; y: number } | null>(null);
   useEffect(() => {
     if (!hover) return;
     const dismiss = () => { setHover(null); if (highlightedIdea.value !== null) highlightedIdea.value = null; };
@@ -358,8 +362,12 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric, hideC
             .map((el) => ({ raw: (this.data.datasets[el.datasetIndex] as any)?._expData?.[el.index], index: el.index }))
             .filter((m) => m.raw?.idea_id != null);
           chartNavClick(mapped);
-          // Phones: the tap opens the details; drop the hover card.
+          // The click opens the details: drop the hover card, and keep it
+          // down until the pointer moves (see suppressHover).
           setHoverRef.current(null);
+          highlightedIdea.value = null;
+          const ne = (_evt as any).native as MouseEvent | undefined;
+          suppressHover.current = { x: ne?.clientX ?? -1, y: ne?.clientY ?? -1 };
         },
         scales: {
           x: {
@@ -378,6 +386,16 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric, hideC
           },
         },
         onHover(evt, _elements, chart) {
+          const native = (evt as any).native as MouseEvent | undefined;
+          const sup = suppressHover.current;
+          if (sup) {
+            // Replays (and the click's own position) don't count as moving.
+            if (!native || (Math.abs(native.clientX - sup.x) < 4 && Math.abs(native.clientY - sup.y) < 4)) {
+              setHoverRef.current(null);
+              return;
+            }
+            suppressHover.current = null;
+          }
           // Like the main graph: the nearest point within HOVER_PX gets the
           // hover card and highlights its idea's points.
           const near = chart.getElementsAtEventForMode(evt as any, "nearest", { intersect: false }, false)[0];
