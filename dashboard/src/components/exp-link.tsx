@@ -17,10 +17,11 @@ function ideaFromLabel(label: string): number | null {
   return m ? Number(m[1]) : null;
 }
 
-export function ExpLink({ label, ideaId, class: cls }: {
+export function ExpLink({ label, ideaId, class: cls, preserveView = false }: {
   label: string;
   ideaId?: number | null;
   class?: string;
+  preserveView?: boolean;
 }) {
   const exp = allExperiments.value.find((e) => String(e.label ?? e.id) === label);
   const idea = ideaId ?? exp?.idea_id ?? ideaFromLabel(label);
@@ -39,7 +40,7 @@ export function ExpLink({ label, ideaId, class: cls }: {
   });
 
   return (
-    <Tooltip content={tip}>
+    <Tooltip content={tip} ideaId={idea ?? undefined}>
       <button
         type="button"
         data-experiment-label={label}
@@ -48,7 +49,7 @@ export function ExpLink({ label, ideaId, class: cls }: {
         onClick={(e) => {
           e.stopPropagation();
           if (idea != null) {
-            const inConversation = !!e.currentTarget.closest(".message-threads");
+            const inConversation = preserveView || !!e.currentTarget.closest(".message-threads");
             if (!inConversation) window.location.hash = "#review";
             navigateToIdea(idea, label, { scrollGraph: !inConversation });
           }

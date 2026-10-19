@@ -357,3 +357,11 @@
 .ui-stepper--s .ui-stepper-chev { width: 8px; height: 8px; }
 .ui-stepper--l .review-step { padding: 3px 8px; }
 .ui-stepper--l .ui-stepper-chev { width: 12px; height: 12px; }
+
+/* Shared live progress: determinate values, honest unknown state. */
+.ui-progress { display: block; height: 3px; background: var(--bg-hi); border-radius: 2px; overflow: hidden; }
+.ui-progress-fill { display: block; height: 100%; background: var(--yellow); transition: width var(--transition-base); }
+.ui-progress-fill.is-indeterminate { width: 30%; animation: ui-progress-sweep 1.6s ease-in-out infinite; }
+.ui-progress.shortlog-progress { height: 1px; }
+@keyframes ui-progress-sweep { from { transform: translateX(-100%); } to { transform: translateX(334%); } }
+@media (prefers-reduced-motion: reduce) { .ui-progress-fill.is-indeterminate { animation: none; } }

@@ -10,11 +10,15 @@ import {
   upsertResource,
 } from "../state/api";
 import { navigateToIdea } from "../lib/navigate";
-import { allIdeas, allExperiments } from "../state/signals";
-import { selectedMetric } from "../state/settings";
-import { fmtScoreShort } from "../lib/format";
+import { allIdeas, allExperiments, runningProgress, selectedExperiment } from "../state/signals";
+import { selectedMetric, serverDemoMode } from "../state/settings";
+import { fmtScoreShort, fmtMetricName } from "../lib/format";
+import { resolveNumericValue } from "../lib/chart-data";
+import { progressPct } from "../lib/progress";
+import { ExpLink } from "../components/exp-link";
+import { IdeaLink } from "../components/idea-link";
 import { useDisclosure, useLiveRefresh } from "../lib/hooks";
-import { Badge, EmptyState, IconButton, Toggle, type BadgeTone } from "../components/ui";
+import { Badge, EmptyState, IconButton, Toggle, Tooltip, ProgressBar, experimentTipContent, type BadgeTone } from "../components/ui";
 import type {
   QueueExp,
   QueueSnapshot,
@@ -380,6 +384,62 @@ function ResourceForm({
   );
 }
 
+function QueueExperimentCard({ experiment: exp, kind, position, busy, onPriority, onSetPriority, onCancel }: {
+  experiment: QueueExp; kind: "running" | "queued" | "recent"; position?: number; busy: boolean;
+  onPriority: (experiment: QueueExp, delta: number) => void;
+  onSetPriority: (experiment: QueueExp) => void; onCancel: (experiment: QueueExp) => void;
+}) {
+  const record = allExperiments.value.find(item => String(item.label ?? item.id) === exp.label);
+  const idea = allIdeas.value[exp.idea_id];
+  const metric = selectedMetric.value;
+  const score = record ? resolveNumericValue(record, metric) : exp.metrics?.[metric];
+  const knownScore = typeof score === "number" && Number.isFinite(score);
+  const waiting = kind === "running" && exp.slurm_state === "PENDING";
+  const pct = runningProgress.value[exp.label] ?? progressPct(record?.metrics ?? exp.metrics);
+  const status = waiting ? "Waiting for Slurm" : kind === "queued" ? "Queued" : kind === "running" ? "Running" : exp.status;
+  const tone = kind === "running" ? "running" : RECENT_STATUS_TONE[exp.status] ?? "neutral";
+  const preview = experimentTipContent({ label: exp.label, ideaId: exp.idea_id, ideaTitle: idea?.description,
+    status: exp.status, statusMsg: record?.status_msg, running: kind === "running" && !waiting,
+    pct, metricName: fmtMetricName(metric), value: knownScore ? score : null });
+  return <article class={`queue-row queue-experiment-card ${kind}${selectedExperiment.value === exp.label ? " is-selected" : ""}`}>
+    <div class="queue-row-main" data-experiment-label={exp.label} data-idea-id={exp.idea_id}>
+      <div class="queue-card-heading">
+        {position != null && <span class="queue-position" title="Position in queue">{position}</span>}
+        <ExpLink label={exp.label} ideaId={exp.idea_id} preserveView />
+        <IdeaLink id={exp.idea_id} preserveView />
+        <Badge tone={tone} dot={kind === "running" && !waiting}>{status}</Badge>
+      </div>
+      <Tooltip content={preview} ideaId={exp.idea_id} class="queue-card-preview"><button class="queue-open-details" aria-label={`Open experiment ${exp.label} details`} onClick={() => navigateToIdea(exp.idea_id, exp.label, { scrollGraph: false })}>
+        <span class="queue-card-description">{exp.description || idea?.description || `Experiment ${exp.label}`}</span>
+        {idea?.description && idea.description !== exp.description && <span class="queue-card-idea">{idea.description.split("\n")[0]}</span>}
+      </button></Tooltip>
+      <div class="queue-card-performance">
+        {knownScore && <span class="queue-card-score"><span>{fmtMetricName(metric)}</span><strong>{fmtScoreShort(score)}</strong></span>}
+        {kind === "running" && <span class="queue-card-percent">{waiting ? "Awaiting allocation" : typeof pct === "number" ? `${Math.round(Math.min(100, Math.max(0, pct)))}%` : "Progress not reported"}</span>}
+      </div>
+      {kind === "running" && <ProgressBar value={waiting ? 0 : pct} label={`Experiment ${exp.label} progress`} />}
+      <div class="queue-card-meta">
+        {exp.assigned_resource && <span>{exp.assigned_resource} {unitsLabel(exp.assigned_units)}</span>}
+        {kind === "queued" && <span title="Requested resources">{summariseRequirements(exp.requirements)}</span>}
+        <time dateTime={(kind === "recent" ? exp.finished_at : kind === "running" ? exp.started_at : exp.queued_at || exp.created_at) ?? undefined}>
+          {kind === "recent" ? "Finished " : kind === "running" ? "Started " : "Queued "}{relativeTime(kind === "recent" ? exp.finished_at : kind === "running" ? exp.started_at : exp.queued_at || exp.created_at)}
+        </time>
+      </div>
+      {!!exp.depends_on?.length && <div class="queue-card-dependencies">Waiting for {exp.depends_on.map(label => <ExpLink key={label} label={label} preserveView />)}</div>}
+      {record?.status_msg && <p class="queue-card-status">{record.status_msg}</p>}
+      {exp.error && <p class="queue-card-error">{truncate(exp.error, 180)}</p>}
+    </div>
+    {kind !== "recent" && <div class="queue-card-actions">
+      {kind === "queued" && <div class="queue-priority" aria-label={`Priority for ${exp.label}`}>
+        <button class="ui-btn" aria-label={`Increase priority for ${exp.label}`} disabled={busy} onClick={() => onPriority(exp, 1)}>↑</button>
+        <button class="ui-btn queue-priority-value" title="Set priority" aria-label={`Set priority for ${exp.label}`} disabled={busy} onClick={() => onSetPriority(exp)}>Priority {exp.priority ?? 0}</button>
+        <button class="ui-btn" aria-label={`Decrease priority for ${exp.label}`} disabled={busy} onClick={() => onPriority(exp, -1)}>↓</button>
+      </div>}
+      <button class="ui-btn queue-cancel" disabled={busy} onClick={() => onCancel(exp)}>Cancel</button>
+    </div>}
+  </article>;
+}
+
 export function QueueView() {
   const [snapshot, setSnapshot] = useState<QueueSnapshot | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -423,7 +483,7 @@ export function QueueView() {
     const tick = window.setInterval(() => setTick((n) => n + 1), 30000);
     return () => {
       cancelledRef.current = true;
-      window.      window.clearInterval(tick);
+      window.clearInterval(tick);
     };
   }, []);
 
@@ -511,10 +571,6 @@ export function QueueView() {
     });
   }
 
-  function handleOpenIdea(ideaId: number, label?: string) {
-    navigateToIdea(ideaId, label);
-  }
-
   const queued = snapshot?.queued ?? [];
   const running = snapshot?.running ?? [];
   const recent = snapshot?.recent ?? [];
@@ -534,10 +590,10 @@ export function QueueView() {
         <div class="pane-bar-actions">
           <Toggle
             active={!!snapshot?.config.paused}
-            onClick={() => { if (snapshot && !busy) handleTogglePause(); }}
+            onClick={() => { if (snapshot && !busy && !serverDemoMode.value) handleTogglePause(); }}
             title={snapshot?.config.paused ? "Queue is paused — click to resume" : "Pause the queue"}
           >
-            {snapshot?.config.paused ? "paused" : "running"}
+            {snapshot?.config.paused ? "Resume dispatch" : "Pause dispatch"}
           </Toggle>
           <IconButton onClick={() => refresh()} disabled={busy} title="Refresh">↺</IconButton>
         </div>
@@ -547,9 +603,9 @@ export function QueueView() {
 
       {/* Dispatch interval — tucked in a collapsed Advanced section */}
       <details class="queue-advanced">
-        <summary>Advanced</summary>
+        <summary>Dispatch settings</summary>
         <label class="queue-interval" style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: "var(--text-xs)", color: "var(--text-muted)", padding: "4px 0" }}>
-          <span>dispatch_interval_s</span>
+          <span>Dispatch interval (seconds)</span>
           <input
             type="number" min={0.1} step={0.1} value={intervalDraft}
             disabled={!snapshot || busy}
@@ -560,11 +616,20 @@ export function QueueView() {
         </label>
       </details>
 
-      <section class="queue-section">
-        <div class="queue-section-header">
-          <span class="ui-eyebrow">Resources</span>
-          <span class="queue-section-meta">{resources.length} pool{resources.length === 1 ? "" : "s"}</span>
-        </div>
+      <div class="queue-lists">
+        {(["running", "queued"] as const).map(kind => <section class="queue-list-col" key={kind} aria-label={kind === "running" ? "Running experiments" : "Queued experiments"}>
+          <div class="queue-section-header"><strong>{kind === "running" ? "Running" : "Queued"}</strong><span class="queue-section-meta">{(kind === "running" ? running : queued).length}</span></div>
+          <div class="queue-list">{(kind === "running" ? running : queued).map((experiment, index) => <QueueExperimentCard key={experiment.label} experiment={experiment} kind={kind} position={kind === "queued" ? index + 1 : undefined} busy={busy || serverDemoMode.value} onPriority={handleBumpPriority} onSetPriority={handleSetPriority} onCancel={handleCancel} />)}
+          {loaded && !(kind === "running" ? running : queued).length && <EmptyState title={kind === "running" ? "Nothing running" : "Queue empty"} body={kind === "running" ? "New runs appear here when they start." : "New experiments appear here while waiting to run."} />}</div>
+        </section>)}
+      </div>
+      <details class="queue-section queue-recent">
+        <summary class="queue-section-header"><strong>Recent experiments</strong><span class="queue-section-meta">{recent.length}</span></summary>
+        <div class="queue-list">{recent.map(experiment => <QueueExperimentCard key={experiment.label} experiment={experiment} kind="recent" busy={busy} onPriority={handleBumpPriority} onSetPriority={handleSetPriority} onCancel={handleCancel} />)}
+        {loaded && !recent.length && <EmptyState title="Nothing finished" body="Finished experiments will appear here." />}</div>
+      </details>
+      <details class="queue-section queue-resource-settings">
+        <summary class="queue-section-header"><strong>Resources</strong><span class="queue-section-meta">{resources.length} pools · {resources.reduce((sum, resource) => sum + resource.utilization.free_units, 0)} units free</span></summary>
         <div class="queue-resources-grid">
           {resources.map((r) => {
             const isEditing = editingResource === r.name;
@@ -595,7 +660,7 @@ export function QueueView() {
                           class="queue-holder-swatch"
                           style={`background:${HOLDER_PALETTE[i % HOLDER_PALETTE.length]}`}
                         />
-                        <code class="queue-holder-label">exp/{h.experiment_label}</code>
+                        <ExpLink label={h.experiment_label} preserveView class="queue-holder-label" />
                         <span class="queue-holder-units">{unitsLabel(h.units)}</span>
                       </div>
                     ))}
@@ -652,223 +717,7 @@ export function QueueView() {
             + Add resource
           </button>
         )}
-      </section>
-
-      <section class="queue-section queue-lists">
-        <div class="queue-list-col">
-          <div class="queue-section-header">
-            <span class="ui-eyebrow">Queued</span>
-            <span class="queue-section-meta">{queued.length}</span>
-          </div>
-          <div class="queue-list">
-            {queued.map((exp) => (
-              <div class="queue-row queued" key={exp.id}>
-                <div class="queue-row-main" data-experiment-label={exp.label} data-idea-id={exp.idea_id}>
-                  <div class="queue-row-label-line">
-                    <button class="queue-link queue-row-label" onClick={() => handleOpenIdea(exp.idea_id, exp.label)}>exp/{exp.label}</button>
-                    <button
-                      class="queue-link"
-                      onClick={() => handleOpenIdea(exp.idea_id, exp.label)}
-                      title={`Open idea ${exp.idea_id}`}
-                    >
-                      idea {exp.idea_id}
-                    </button>
-                  </div>
-                  <div class="queue-row-desc" title={exp.description}>
-                    {exp.description}
-                  </div>
-                  {(() => {
-                    const record = allExperiments.value.find(e => String(e.label ?? e.id) === exp.label);
-                    const score = record?.metrics?.[selectedMetric.value] ?? exp.metrics?.[selectedMetric.value];
-                    return typeof score === "number" ? <div class="queue-live-score">{selectedMetric.value}: {fmtScoreShort(score)}</div> : null;
-                  })()}
-                  <div class="queue-idea-context">{allIdeas.value[exp.idea_id]?.description}</div>
-                  <div class="queue-row-meta">
-                    <span class="queue-meta-item">
-                      req: {summariseRequirements(exp.requirements)}
-                    </span>
-                    {exp.depends_on.length > 0 && (
-                      <span class="queue-meta-item">
-                        deps:{" "}
-                        {exp.depends_on.map((d) => (
-                          <span class="queue-dep-chip" key={d}>
-                            {d}
-                          </span>
-                        ))}
-                      </span>
-                    )}
-                    <span class="queue-meta-item" title={exp.created_at}>
-                      created {relativeTime(exp.created_at)}
-                    </span>
-                  </div>
-                </div>
-                <div class="queue-row-side">
-                  <div class="queue-priority">
-                    <button
-                      class="queue-btn icon"
-                      title="Increase priority"
-                      disabled={busy}
-                      onClick={() => handleBumpPriority(exp, 1)}
-                    >
-                      ↑
-                    </button>
-                    <button
-                      class="queue-priority-value"
-                      title="Click to set priority"
-                      disabled={busy}
-                      onClick={() => handleSetPriority(exp)}
-                    >
-                      {exp.priority}
-                    </button>
-                    <button
-                      class="queue-btn icon"
-                      title="Decrease priority"
-                      disabled={busy}
-                      onClick={() => handleBumpPriority(exp, -1)}
-                    >
-                      ↓
-                    </button>
-                  </div>
-                  <button
-                    class="queue-btn danger small"
-                    disabled={busy}
-                    onClick={() => handleCancel(exp)}
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            ))}
-            {queued.length === 0 && loaded && (
-              <EmptyState title="Queue empty" body="No experiments queued." />
-            )}
-          </div>
-        </div>
-
-        <div class="queue-list-col">
-          <div class="queue-section-header">
-            <span class="ui-eyebrow">Running</span>
-            <span class="queue-section-meta">{running.length}</span>
-          </div>
-          <div class="queue-list">
-            {running.map((exp) => (
-              <div class="queue-row running" key={exp.id}>
-                <div class="queue-row-main" data-experiment-label={exp.label} data-idea-id={exp.idea_id}>
-                  <div class="queue-row-label-line">
-                    <button class="queue-link queue-row-label" onClick={() => handleOpenIdea(exp.idea_id, exp.label)}>exp/{exp.label}</button>
-                    <button
-                      class="queue-link"
-                      onClick={() => handleOpenIdea(exp.idea_id, exp.label)}
-                      title={`Open idea ${exp.idea_id}`}
-                    >
-                      idea {exp.idea_id}
-                    </button>
-                  </div>
-                  <div class="queue-row-desc" title={exp.description}>
-                    {exp.description}
-                  </div>
-                  {(() => {
-                    const record = allExperiments.value.find(e => String(e.label ?? e.id) === exp.label);
-                    const score = record?.metrics?.[selectedMetric.value] ?? exp.metrics?.[selectedMetric.value];
-                    return typeof score === "number" ? <div class="queue-live-score">{selectedMetric.value}: {fmtScoreShort(score)}</div> : null;
-                  })()}
-                  <div class="queue-idea-context">{allIdeas.value[exp.idea_id]?.description}</div>
-                  <div class="queue-row-meta">
-                    {exp.assigned_resource && (
-                      <span class="queue-meta-item">
-                        on{" "}
-                        <code class="queue-row-resource">{exp.assigned_resource}</code>:{" "}
-                        <code class="queue-row-units">{unitsLabel(exp.assigned_units)}</code>
-                      </span>
-                    )}
-                    <span class="queue-meta-item" title={exp.started_at ?? ""}>
-                      started {relativeTime(exp.started_at)}
-                    </span>
-                  </div>
-                </div>
-                <div class="queue-row-side">
-                  <button
-                    class="queue-btn danger small"
-                    disabled={busy}
-                    onClick={() => handleCancel(exp)}
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            ))}
-            {running.length === 0 && loaded && (
-              <EmptyState title="Idle" body="Nothing running." />
-            )}
-          </div>
-        </div>
-      </section>
-
-      <section class="queue-section">
-        <div class="queue-section-header">
-          <span class="ui-eyebrow">Recent</span>
-          <span class="queue-section-meta">{recent.length}</span>
-        </div>
-        <div class="queue-list">
-          {recent.map((exp) => {
-            const status = (exp.status || "").toLowerCase();
-            const score = exp.metrics && typeof (exp.metrics as Record<string, unknown>).score === "number"
-              ? ((exp.metrics as Record<string, number>).score)
-              : null;
-            return (
-              <div class={`queue-row recent ${status}`} key={String(exp.id)}>
-                <div class="queue-row-main" data-experiment-label={exp.label} data-idea-id={exp.idea_id}>
-                  <div class="queue-row-label-line">
-                    <button class="queue-link queue-row-label" onClick={() => handleOpenIdea(exp.idea_id, exp.label)}>exp/{exp.label}</button>
-                    <Badge tone={RECENT_STATUS_TONE[status] ?? "neutral"}>{status}</Badge>
-                    <button
-                      class="queue-link"
-                      onClick={() => handleOpenIdea(exp.idea_id, exp.label)}
-                      title={`Open idea ${exp.idea_id}`}
-                    >
-                      idea {exp.idea_id}
-                    </button>
-                  </div>
-                  <div class="queue-row-desc" title={exp.description}>
-                    {exp.description}
-                  </div>
-                  {(() => {
-                    const record = allExperiments.value.find(e => String(e.label ?? e.id) === exp.label);
-                    const score = record?.metrics?.[selectedMetric.value] ?? exp.metrics?.[selectedMetric.value];
-                    return typeof score === "number" ? <div class="queue-live-score">{selectedMetric.value}: {fmtScoreShort(score)}</div> : null;
-                  })()}
-                  <div class="queue-idea-context">{allIdeas.value[exp.idea_id]?.description}</div>
-                  <div class="queue-row-meta">
-                    {score != null && (
-                      <span class="queue-meta-item">
-                        score: <code>{score.toFixed(4)}</code>
-                      </span>
-                    )}
-                    {exp.error && (
-                      <span class="queue-meta-item" style={{ color: "var(--red)" }} title={exp.error}>
-                        error: {truncate(exp.error, 80)}
-                      </span>
-                    )}
-                    {exp.assigned_resource && (
-                      <span class="queue-meta-item">
-                        ran on <code>{exp.assigned_resource}</code>
-                      </span>
-                    )}
-                    {exp.finished_at && (
-                      <span class="queue-meta-item" title={exp.finished_at}>
-                        finished {relativeTime(exp.finished_at)}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-          {recent.length === 0 && loaded && (
-            <EmptyState title="Nothing finished" body="No finished experiments yet." />
-          )}
-        </div>
-      </section>
+      </details>
     </div>
   );
 }

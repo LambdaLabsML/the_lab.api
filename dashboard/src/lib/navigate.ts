@@ -2,6 +2,7 @@
  * Shared navigation helpers for bidirectional selection between
  * graph, charts, and detail panel.
  */
+import { dismissHoverPreviews } from "./hooks/use-hover-preview";
 import { selectedIdea } from "../state/settings";
 import { highlightedIdea, scrollToExperiment, selectedExperiment, activatePanel } from "../state/signals";
 
@@ -13,6 +14,7 @@ import { highlightedIdea, scrollToExperiment, selectedExperiment, activatePanel 
  * - Highlights briefly
  */
 export function navigateToIdea(ideaId: number, expLabel?: string, options: { scrollGraph?: boolean } = {}) {
+  dismissHoverPreviews();
   selectedExperiment.value = expLabel ?? null;
   selectedIdea.value = ideaId;
   highlightedIdea.value = ideaId;

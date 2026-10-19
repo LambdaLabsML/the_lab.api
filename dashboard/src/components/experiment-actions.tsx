@@ -4,6 +4,7 @@ import { databaseScope, databaseTab } from "../state/database";
 import { allExperiments, highlightedIdea } from "../state/signals";
 import { activeFilter, myHumanId, updateFilter } from "../state/filters";
 import { serverDemoMode } from "../state/settings";
+import { dismissHoverPreviews } from "../lib/hooks/use-hover-preview";
 import { navigateToIdea } from "../lib/navigate";
 
 export type ExperimentTarget = { ideaId: number; label: string };
@@ -51,6 +52,7 @@ export function ExperimentActions() {
       return canvas ? surfaces.get(canvas)?.(event) ?? null : null;
     };
     const open = (event: MouseEvent, target: ExperimentTarget) => {
+      dismissHoverPreviews();
       returnFocus.current = document.activeElement as HTMLElement;
       menu.value = { ...target, x: Math.max(8, Math.min(innerWidth - 214, event.clientX)), y: Math.max(8, Math.min(innerHeight - 92, event.clientY)) };
       suppressUntil = Date.now() + 800;

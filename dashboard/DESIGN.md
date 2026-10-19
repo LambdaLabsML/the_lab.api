@@ -79,6 +79,10 @@ never read as failed/running/done by accident.
   `--bg-hi` on hover, `--accent` when active. No borders unless `outlined`.
 - **`<Separator>`** — a hairline (horizontal or vertical).
 - **`<EmptyState icon title body>`** — the one empty/zero-data treatment.
+- **`<Tooltip content>` / `<HoverCard anchor>`** — one viewport-clamped, non-interactive
+  preview for DOM links and both plot renderers. Cards render outside scroll containers.
+- **`<ProgressBar value?>`** — shared by Queue and the live monitor. A missing value is
+  indeterminate; waiting for an allocation is a separate state, never completed progress.
 - **`<FloatCard anchor>`** — the floating hover-preview shell: fixed, right of its
   anchor rect and vertically centered, viewport-clamped, fade-in, non-interactive.
   Compose card content inside (message preview, lab-call card, …).
@@ -94,6 +98,10 @@ Clickable element-actions are centralized. Do not re-implement these inline:
 - **`useEntityNav(ideaId, label?)`** → `{ highlighted, bind }`. Spread `bind` onto any
   clickable node/row/dot that represents an idea: click navigates (via `navigateToIdea`),
   hover sets/clears `highlightedIdea` with the correct guard. `highlighted` is reactive.
+- **`useHoverPreview<T>`** — shared SVG/canvas/DOM hover lifecycle. Click, hold menu,
+  scroll, layout changes and Escape dismiss the card. Only real pointer movement or
+  keyboard focus can reopen it; replayed chart events cannot. Use `POINT_HIT_RADIUS`
+  for plot hit areas. Rich previews can join via `claimHoverPreview` / `releaseHoverPreview`.
 - **`chartNavClick(elements)`** — drop-in `onClick` body for Chart.js datasets.
 - **`useDisclosure(initial?)`** → `{ open, toggle, setOpen }`.
 - **`useCopyToClipboard(resetMs?)`** → `{ copied, error, copy }`.

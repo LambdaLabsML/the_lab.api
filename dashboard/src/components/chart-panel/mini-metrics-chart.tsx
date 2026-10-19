@@ -47,6 +47,8 @@ import { useEntityNav } from "../../lib/hooks";
 import { plotHighlightState } from "../../state/review-filter";
 import { highlightedIdea, runningProgress } from "../../state/signals";
 import { fmtMetricName, scoreFormatter } from "../../lib/format";
+import { useHoverPreview, POINT_HIT_RADIUS } from "../../lib/hooks/use-hover-preview";
+import { HoverCard as MiniTooltip } from "../ui/tooltip";
 import { experimentTipContent } from "../ui";
 import type { Experiment, IdeaNode, SubwayLayout } from "../../lib/types";
 
@@ -55,8 +57,6 @@ import type { Experiment, IdeaNode, SubwayLayout } from "../../lib/types";
 // the roomy view. x draws no dots and fits the full width.
 const PX_PER_POINT: Record<"s" | "m" | "l", number> = { s: 1.2, m: 2.5, l: 8 };
 const PAD = { l: 34, r: 12, t: 10, b: 18 };
-const TIP_MARGIN = 8; // min gap from viewport edge (matches shared Tooltip)
-const TIP_GAP = 8;    // gap between dot and card
 
 /** Dot-radius multiplier per view. */
 const PT_SIZE_SCALE: Record<"s" | "m" | "l", number> = { s: 0.32, m: 0.35, l: 0.75 };
@@ -199,8 +199,9 @@ function MiniDot({
       data-experiment-label={label}
       data-idea-id={ideaId}
       style={exp ? "cursor:pointer;" : undefined}
-      onMouseEnter={() => { onHoverChange(true, groupRef.current?.getBoundingClientRect() ?? null); if (exp) nav.bind.onMouseEnter(); }}
-      onMouseLeave={() => { onHoverChange(false, null); if (exp) nav.bind.onMouseLeave(); }}
+      onMouseEnter={() => onHoverChange(true, groupRef.current?.getBoundingClientRect() ?? null)}
+      onMouseMove={() => onHoverChange(true, groupRef.current?.getBoundingClientRect() ?? null)}
+      onMouseLeave={() => onHoverChange(false, null)}
       onClick={exp ? ((ev: MouseEvent) => {
         (nav.bind.onClick as any)(ev);
         // Phones: the tap opens the details; don't leave the hover card behind.
@@ -220,53 +221,12 @@ function MiniDot({
           stroke={strokeColor} stroke-width={strokeW} opacity={faded ? 0.2 : 1} />
       )}
       {/* Milestone caption — purple + clickable (sits inside this clickable <g>) */}
-      <circle cx={x} cy={excluded ? baselineY - 4 : y} r="9" fill="transparent" />
+      <circle cx={x} cy={excluded ? baselineY - 4 : y} r={POINT_HIT_RADIUS} fill="transparent" />
     </g>
   );
 }
 
 // ── HTML overlay tooltip (shared .ui-tip card) ─────────────────────────────────
-
-/**
- * Renders the shared `.ui-tip` card at a hovered dot's screen rect, clamped to
- * the viewport the same way the shared <Tooltip> does (two-pass measure, flip
- * top↔bottom, nudge horizontally). Keeps the chart tooltip pixel-identical to
- * the timeline/table tooltips.
- */
-export function MiniTooltip({ anchor, children }: { anchor: DOMRect; children: any }) {
-  const cardRef = useRef<HTMLDivElement>(null);
-  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
-
-  useLayoutEffect(() => {
-    if (!cardRef.current) return;
-    const card = cardRef.current.getBoundingClientRect();
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
-    const cx = anchor.left + anchor.width / 2;
-    // Prefer above the dot; flip below if it would clip.
-    let top = anchor.top - card.height - TIP_GAP;
-    if (top < TIP_MARGIN) top = anchor.bottom + TIP_GAP;
-    top = Math.max(TIP_MARGIN, Math.min(top, vh - card.height - TIP_MARGIN));
-    let left = cx - card.width / 2;
-    left = Math.max(TIP_MARGIN, Math.min(left, vw - card.width - TIP_MARGIN));
-    setPos({ left, top });
-  }, [anchor]);
-
-  return (
-    <div
-      ref={cardRef}
-      class="ui-tip"
-      role="tooltip"
-      style={{
-        left: `${pos ? pos.left : anchor.left}px`,
-        top: `${pos ? pos.top : anchor.top}px`,
-        visibility: pos ? "visible" : "hidden",
-      }}
-    >
-      {children}
-    </div>
-  );
-}
 
 // Label widths via one cached canvas context (the chart's mono font).
 const _labelWidths = new Map<string, number>();
@@ -321,26 +281,19 @@ export function MiniMetricsChart({
   /** What the x axis shows. */
   xAxis?: "experiments" | "ideas" | "time" | "compute";
 }) {
-  // hovered dot index + its screen rect (for the HTML overlay tooltip)
-  const [hovered, setHovered] = useState<{ idx: number; rect: DOMRect } | null>(null);
-  // The line point under the mouse (index into the drawn line) + where.
-  const [curveHover, setCurveHover] = useState<{ k: number; x: number; clientX: number; clientY: number } | null>(null);
+  type ChartHover = { kind: "point"; idx: number; ideaId: number | null }
+    | { kind: "curve"; k: number; x: number; clientX: number; clientY: number };
+  const hover = useHoverPreview<ChartHover>({
+    ideaId: item => item.kind === "point" ? item.ideaId : null,
+    key: item => item.kind === "point" ? `point:${item.idx}` : `curve:${item.k}:${item.x}`,
+  });
+  const hovered = hover.preview?.value.kind === "point" ? { idx: hover.preview.value.idx, rect: hover.preview.anchor } : null;
+  const curveHover = hover.preview?.value.kind === "curve" ? hover.preview.value : null;
+  const setCurveHover = (item: { k: number; x: number; clientX: number; clientY: number } | null) => {
+    if (item) hover.show({ kind: "curve", ...item }, new DOMRect(item.clientX, item.clientY, 1, 1));
+    else if (curveHover) hover.clear();
+  };
   const wrapRef = useRef<HTMLDivElement>(null);
-  // A hover card must not outlive the gesture: scrolling, a new touch or a
-  // cancelled pointer dismiss it (mouseleave never fires after a tap).
-  useEffect(() => {
-    if (!hovered && !curveHover) return;
-    const dismiss = () => { setHovered(null); setCurveHover(null); if (highlightedIdea.value !== null) highlightedIdea.value = null; };
-    const onTouch = (e: Event) => { if (!wrapRef.current?.contains(e.target as Node)) dismiss(); };
-    window.addEventListener("scroll", dismiss, { capture: true, passive: true });
-    document.addEventListener("touchstart", onTouch, { capture: true, passive: true });
-    document.addEventListener("pointercancel", dismiss, true);
-    return () => {
-      window.removeEventListener("scroll", dismiss, { capture: true } as any);
-      document.removeEventListener("touchstart", onTouch, { capture: true } as any);
-      document.removeEventListener("pointercancel", dismiss, true);
-    };
-  }, [hovered !== null, curveHover !== null]);
   const [size, setSize] = useState({ w: 560, h: 180 });
   // font sizes read from the --text-* tokens so the chart honours font-size setting
   const [font, setFont] = useState({ xs: 8, sm: 9 });
@@ -766,7 +719,7 @@ export function MiniMetricsChart({
 
   // ── Hover on the line: the value in effect at the mouse position ─────────────
   const onCurveMove = (ev: MouseEvent) => {
-    if (!linePts.length) return;
+    if (!linePts.length || (ev.target as Element).closest("[data-experiment-label]")) return;
     const svg = ev.currentTarget as SVGSVGElement;
     const r = svg.getBoundingClientRect();
     const x = ((ev.clientX - r.left) / r.width) * svgW;
@@ -874,7 +827,7 @@ export function MiniMetricsChart({
               isMilestone={isMs}
               sizeScale={sizeScale}
               onHoverChange={(h, rect) =>
-                setHovered(h && rect ? { idx: i, rect } : (cur) => (cur?.idx === i ? null : cur))
+                h && rect ? hover.show({ kind: "point", idx: i, ideaId: e?.idea_id ?? null }, rect) : hovered?.idx === i && hover.clear()
               }
             />
           );

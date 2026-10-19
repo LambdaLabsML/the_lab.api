@@ -1,90 +1,41 @@
-/**
- * Tooltip — a compact, on-brand hover card built on a robust floating layer.
- *
- * Positioning is two-pass: on hover we capture the trigger rect, render the card
- * hidden, then (in a layout effect, before paint) measure it and clamp it inside
- * the viewport — flipping top↔bottom when there isn't room and nudging left/right
- * so it never spills off-screen. This is the shared base for every hover card
- * (rail status, experiment/idea boxes, summary plots …). See dashboard/DESIGN.md.
- *
- *   <Tooltip content={<>…</>}>{trigger}</Tooltip>
- */
-import { useState, useRef, useLayoutEffect, useCallback } from "preact/hooks";
+/** The same positioned, dismissible hover card for DOM, SVG and canvas. */
+import { createPortal } from "preact/compat";
 import type { ComponentChildren } from "preact";
+import { useLayoutEffect, useRef, useState } from "preact/hooks";
+import { useHoverPreview } from "../../lib/hooks/use-hover-preview";
 
-const MARGIN = 8; // min gap from viewport edge
-const GAP = 8;    // gap between trigger and card
-
-export function Tooltip({
-  content,
-  children,
-  placement = "top",
-  class: cls = "",
-}: {
-  content: ComponentChildren;
-  children: ComponentChildren;
-  placement?: "top" | "bottom";
-  class?: string;
+export function HoverCard({ anchor, children, placement = "top" }: {
+  anchor: DOMRect; children: ComponentChildren; placement?: "top" | "bottom";
 }) {
-  const triggerRef = useRef<HTMLSpanElement>(null);
-  const cardRef = useRef<HTMLSpanElement>(null);
-  const [anchor, setAnchor] = useState<{ left: number; top: number; right: number; bottom: number; cx: number } | null>(null);
-  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
-
-  const show = useCallback(() => {
-    const el = triggerRef.current;
-    if (!el) return;
-    const r = el.getBoundingClientRect();
-    setAnchor({ left: r.left, top: r.top, right: r.right, bottom: r.bottom, cx: r.left + r.width / 2 });
-    setPos(null);
-  }, []);
-  const hide = useCallback(() => { setAnchor(null); setPos(null); }, []);
-
-  // Measure the rendered card and clamp it into the viewport (pre-paint).
+  const ref = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
   useLayoutEffect(() => {
-    if (!anchor || !cardRef.current) return;
-    const card = cardRef.current.getBoundingClientRect();
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
-
-    let top = placement === "top" ? anchor.top - card.height - GAP : anchor.bottom + GAP;
-    // flip if it would clip
-    if (placement === "top" && top < MARGIN) top = anchor.bottom + GAP;
-    if (placement === "bottom" && top + card.height > vh - MARGIN) top = anchor.top - card.height - GAP;
-    top = Math.max(MARGIN, Math.min(top, vh - card.height - MARGIN));
-
-    let left = anchor.cx - card.width / 2;
-    left = Math.max(MARGIN, Math.min(left, vw - card.width - MARGIN));
-
-    setPos({ left, top });
+    const element = ref.current;
+    if (!element) return;
+    const place = () => {
+      const card = element.getBoundingClientRect();
+      let top = placement === "top" ? anchor.top - card.height - 8 : anchor.bottom + 8;
+      if (top < 8) top = anchor.bottom + 8;
+      if (top + card.height > innerHeight - 8) top = anchor.top - card.height - 8;
+      top = Math.max(8, Math.min(top, innerHeight - card.height - 8));
+      const left = Math.max(8, Math.min(anchor.left + anchor.width / 2 - card.width / 2, innerWidth - card.width - 8));
+      setPosition(previous => previous?.left === left && previous.top === top ? previous : { left, top });
+    };
+    place();
+    const observer = new ResizeObserver(place); observer.observe(element);
+    return () => observer.disconnect();
   }, [anchor, placement]);
+  return createPortal(<div ref={ref} class="ui-tip" role="tooltip" style={{ left: position?.left ?? anchor.left, top: position?.top ?? anchor.top, visibility: position ? "visible" : "hidden" }}>{children}</div>, document.body);
+}
 
+export function Tooltip({ content, children, placement = "top", class: cls = "", ideaId }: {
+  content: ComponentChildren; children: ComponentChildren; placement?: "top" | "bottom"; class?: string; ideaId?: number;
+}) {
+  const ref = useRef<HTMLSpanElement>(null);
+  const hover = useHoverPreview<boolean>({ ideaId: () => ideaId ?? null });
+  const show = () => { if (ref.current) hover.show(true, ref.current.getBoundingClientRect()); };
   if (content == null || content === false) return <>{children}</>;
-
-  return (
-    <span
-      ref={triggerRef}
-      class={`ui-tip-trigger ${cls}`}
-      onMouseEnter={show}
-      onMouseLeave={hide}
-      onFocusIn={show as any}
-      onFocusOut={hide}
-    >
-      {children}
-      {anchor && (
-        <span
-          ref={cardRef}
-          class="ui-tip"
-          role="tooltip"
-          style={{
-            left: `${pos ? pos.left : anchor.left}px`,
-            top: `${pos ? pos.top : anchor.top}px`,
-            visibility: pos ? "visible" : "hidden",
-          }}
-        >
-          {content}
-        </span>
-      )}
-    </span>
-  );
+  return <span ref={ref} class={`ui-tip-trigger ${cls}`} onMouseEnter={show} onMouseMove={show} onMouseLeave={hover.clear} onFocusIn={show} onFocusOut={hover.clear}>
+    {children}{hover.preview && <HoverCard anchor={hover.preview.anchor} placement={placement}>{content}</HoverCard>}
+  </span>;
 }

@@ -359,14 +359,6 @@
   background: var(--bg-hi);
   overflow: hidden;
 }
-.shortlog-progress-fill {
-  display: block;
-  height: 100%;
-  background: var(--yellow);
-  transition: width var(--transition-base);
-  &.is-indeterminate { width: 30%; animation: shortlog-sweep 1.6s ease-in-out infinite; }
-}
-@keyframes shortlog-sweep { 0% { margin-left: -30%; } 100% { margin-left: 100%; } }
 
 /* ── Agent bar (per-agent idea badges, top of main) ────────────────────── */
 .agent-bar {

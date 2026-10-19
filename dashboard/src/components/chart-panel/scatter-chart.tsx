@@ -7,7 +7,8 @@ import { allExperiments, allIdeas, currentLayout, highlightedIdea, cloneChartPan
 import { chartNavClick } from "../../lib/hooks";
 import { IconButton, experimentTipContent } from "../ui";
 import { CtlIcon, CtlSearch, CtlToggle, MetricPicker } from "./chart-controls";
-import { MiniTooltip } from "./mini-metrics-chart";
+import { HoverCard as MiniTooltip } from "../ui/tooltip";
+import { useHoverPreview, POINT_HIT_RADIUS } from "../../lib/hooks/use-hover-preview";
 import {
   selectedMetric, filterText, colorTheme, fontSize, activeTagFilters, tagFilterMode,
   showAbandoned, showConcluded, showRunning, scatterXMetric, scatterYMetric, colorblindMode,
@@ -121,35 +122,30 @@ function runningRing(pct: number | undefined): HTMLCanvasElement {
   return cv;
 }
 
-const HOVER_PX = 24;
+/** Resolve once for hover, click and the hold menu, including visible rings. */
+function pointAt(chart: Chart, event: any) {
+  const hit = chart.getElementsAtEventForMode(event, "nearest", { intersect: false }, false)[0];
+  if (!hit) return null;
+  const box = chart.canvas.getBoundingClientRect(), point = hit.element;
+  const native = event.native ?? event;
+  const px = box.left + point.x * box.width / chart.width;
+  const py = box.top + point.y * box.height / chart.height;
+  if (Math.hypot(native.clientX - px, native.clientY - py) > POINT_HIT_RADIUS) return null;
+  const dataset = chart.data.datasets[hit.datasetIndex] as any;
+  const d = dataset._expData?.[hit.index];
+  return d ? { d, rect: new DOMRect(px - 5, py - 5, 10, 10), x: dataset.data[hit.index]?.x ?? null, y: dataset.data[hit.index]?.y ?? null } : null;
+}
 
 export function ScatterChart({ instanceId, initialXMetric, initialYMetric, hideClone = false, onAxesChange }: { instanceId?: string; initialXMetric?: string; initialYMetric?: string; hideClone?: boolean; onAxesChange?: (x: string, y: string) => void } = {}) {
   const isClone = !!instanceId;
   const { ideaMean, clipOutliers, colorMode, plotFilter } = usePlotControls(instanceId);
   const [localX, setLocalX] = useState(initialXMetric || "");
   const [localY, setLocalY] = useState(initialYMetric || "");
-  // Hovered point (within HOVER_PX of the cursor) for the shared hover card.
-  const [hover, setHover] = useState<{ d: any; rect: DOMRect; x: number | null; y: number | null } | null>(null);
-  const setHoverRef = useRef(setHover);
-  setHoverRef.current = setHover;
-  // After a click the details panel slides in, the chart redraws, and
-  // Chart.js replays the last (unmoved) mouse event — which would put the
-  // card right back. Ignore hovers until the pointer really moves again.
-  const suppressHover = useRef<{ x: number; y: number } | null>(null);
-  useEffect(() => {
-    if (!hover) return;
-    const dismiss = () => { setHover(null); if (highlightedIdea.value !== null) highlightedIdea.value = null; };
-    const onTouch = (e: Event) => { if (e.target !== canvasRef.current) dismiss(); };
-    window.addEventListener("scroll", dismiss, { capture: true, passive: true });
-    document.addEventListener("touchstart", onTouch, { capture: true, passive: true });
-    document.addEventListener("pointercancel", dismiss, true);
-    return () => {
-      window.removeEventListener("scroll", dismiss, { capture: true } as any);
-      document.removeEventListener("touchstart", onTouch, { capture: true } as any);
-      document.removeEventListener("pointercancel", dismiss, true);
-    };
-  }, [hover !== null]);
-
+  const interaction = useHoverPreview<{ d: Experiment & { _ideaMean?: boolean; _meanCount?: number }; rect: DOMRect; x: number | null; y: number | null }>({
+    ideaId: item => item.d.idea_id,
+    key: item => `${item.d.idea_id}:${item.d.label ?? item.d.id}`,
+  });
+  const hover = interaction.preview?.value ?? null;
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const chartRef = useRef<Chart | null>(null);
   const prevThemeRef = useRef(colorTheme.value);
@@ -216,17 +212,8 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric, hideC
     return registerExperimentSurface(canvas, event => {
       const chart = chartRef.current;
       if (!chart) return null;
-      const hit = chart.getElementsAtEventForMode(event, "nearest", { intersect: false }, false)[0];
-      if (!hit) return null;
-      // Ring markers are larger than Chart.js's point radius. Accept their
-      // visible edge, while keeping clicks on empty chart space unchanged.
-      const box = canvas.getBoundingClientRect();
-      const point = hit.element;
-      const distance = Math.hypot(event.clientX - box.left - point.x * box.width / chart.width,
-        event.clientY - box.top - point.y * box.height / chart.height);
-      if (distance > 14) return null;
-      const exp = hit && (chart.data.datasets[hit.datasetIndex] as any)._expData?.[hit.index];
-      return exp && exp.idea_id != null ? { ideaId: exp.idea_id, label: String(exp.label ?? exp.id) } : null;
+      const hit = pointAt(chart, event);
+      return hit ? { ideaId: hit.d.idea_id, label: String(hit.d.label ?? hit.d.id) } : null;
     });
   }, []);
 
@@ -354,20 +341,9 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric, hideC
         responsive: true,
         maintainAspectRatio: false,
         animation: { duration: 400 },
-        onClick(_evt, elements) {
-          // Route through the shared chart-nav helper. Scatter points are
-          // {x,y} objects; the matching experiments live in _expData, so map
-          // each clicked element back to its experiment before delegating.
-          const mapped = elements
-            .map((el) => ({ raw: (this.data.datasets[el.datasetIndex] as any)?._expData?.[el.index], index: el.index }))
-            .filter((m) => m.raw?.idea_id != null);
-          chartNavClick(mapped);
-          // The click opens the details: drop the hover card, and keep it
-          // down until the pointer moves (see suppressHover).
-          setHoverRef.current(null);
-          highlightedIdea.value = null;
-          const ne = (_evt as any).native as MouseEvent | undefined;
-          suppressHover.current = { x: ne?.clientX ?? -1, y: ne?.clientY ?? -1 };
+        onClick(event, _elements, chart) {
+          const hit = pointAt(chart, event);
+          if (hit) chartNavClick([{ raw: hit.d }]);
         },
         scales: {
           x: {
@@ -385,34 +361,10 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric, hideC
             border: { color: getCssVar("--border-soft") },
           },
         },
-        onHover(evt, _elements, chart) {
-          const native = (evt as any).native as MouseEvent | undefined;
-          const sup = suppressHover.current;
-          if (sup) {
-            // Replays (and the click's own position) don't count as moving.
-            if (!native || (Math.abs(native.clientX - sup.x) < 4 && Math.abs(native.clientY - sup.y) < 4)) {
-              setHoverRef.current(null);
-              return;
-            }
-            suppressHover.current = null;
-          }
-          // Like the main graph: the nearest point within HOVER_PX gets the
-          // hover card and highlights its idea's points.
-          const near = chart.getElementsAtEventForMode(evt as any, "nearest", { intersect: false }, false)[0];
-          const pt = near ? chart.getDatasetMeta(near.datasetIndex).data[near.index] : null;
-          const ex = (evt as any).x, ey = (evt as any).y;
-          const d = near ? (chart.data.datasets[near.datasetIndex] as any)?._expData?.[near.index] : null;
-          if (pt && d && Math.hypot(pt.x - ex, pt.y - ey) <= HOVER_PX) {
-            highlightedIdea.value = d.idea_id;
-            const box = chart.canvas.getBoundingClientRect();
-            const raw = (chart.data.datasets[near.datasetIndex].data as any[])[near.index] as { x: number; y: number };
-            setHoverRef.current({ d, rect: new DOMRect(box.left + pt.x - 5, box.top + pt.y - 5, 10, 10), x: raw?.x ?? null, y: raw?.y ?? null });
-            chart.canvas.style.cursor = "pointer";
-          } else {
-            highlightedIdea.value = null;
-            setHoverRef.current(null);
-            chart.canvas.style.cursor = "";
-          }
+        onHover(event, _elements, chart) {
+          const hit = pointAt(chart, event);
+          if (hit) interaction.show(hit, hit.rect); else interaction.clear();
+          chart.canvas.style.cursor = hit ? "pointer" : "";
         },
         plugins: {
           legend: { display: false },
@@ -458,7 +410,7 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric, hideC
         </IconButton></span>}
       </div>
       <div class="chart-col-canvas">
-        <canvas ref={canvasRef} onMouseLeave={() => { setHover(null); }} />
+        <canvas ref={canvasRef} onMouseLeave={interaction.clear} />
       </div>
       {/* Same hover card as the main graph (the Chart.js tooltip is off). */}
       {hover && (() => {

@@ -15,6 +15,7 @@
 // whichever live agent currently has that idea checked out.
 // ------------------------------------------------------------
 
+import { claimHoverPreview, releaseHoverPreview } from "../lib/hooks/use-hover-preview";
 import { signal } from "@preact/signals";
 import { subscribeWsEvents, wsConnected } from "./ws";
 import { listAgents } from "./api";
@@ -176,11 +177,13 @@ export interface RunPreview {
 }
 
 export const runPreview = signal<RunPreview | null>(null);
+const runPreviewOwner = {};
 
 export function showRunPreview(
   exp: { label: string; ideaId: number; pct?: number },
   anchorEl?: Element | null,
 ): void {
+  if (!claimHoverPreview(runPreviewOwner, hideRunPreview)) return;
   setAnchor(anchorEl);
   runPreview.value = { ...exp, loaded: false };
   const label = exp.label;
@@ -203,6 +206,7 @@ export function showRunPreview(
 }
 
 export function hideRunPreview(): void {
+  releaseHoverPreview(runPreviewOwner);
   runPreview.value = null;
   previewAnchor.value = null;
 }

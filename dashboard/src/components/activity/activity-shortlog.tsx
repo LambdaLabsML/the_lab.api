@@ -5,11 +5,11 @@ import { getQueue } from "../../state/api";
 import { useLiveRefresh } from "../../lib/hooks";
 import { navigateToIdea } from "../../lib/navigate";
 import { fmtScoreShort, ideaTitle } from "../../lib/format";
-import { showRunPreview, hideRunPreview } from "../../state/agent-activity";
+import { showRunPreview, hideRunPreview, runPreview } from "../../state/agent-activity";
 import { ExpLink } from "../exp-link";
 import { IdeaLink } from "../idea-link";
 import type { QueueSnapshot } from "../../lib/types";
-import { Eyebrow } from "../ui";
+import { Eyebrow, ProgressBar } from "../ui";
 
 const queuedOpen = useSetting("monitorQueuedOpen", false);
 /** Show runs that are started but still waiting for a Slurm allocation. */
@@ -78,6 +78,7 @@ export function ActivityShortlog() {
           <button class="shortlog-row" data-experiment-label={label} data-idea-id={e.idea_id}
             onClick={() => navigateToIdea(e.idea_id, label)}
             onMouseEnter={(ev) => showRunPreview({ label, ideaId: e.idea_id, pct: typeof pct === "number" ? pct : undefined }, ev.currentTarget as Element)}
+            onMouseMove={(ev) => { if (!runPreview.value) showRunPreview({ label, ideaId: e.idea_id, pct: typeof pct === "number" ? pct : undefined }, ev.currentTarget as Element); }}
             onMouseLeave={hideRunPreview}
             title={e.description || undefined}>
             <span class="shortlog-dot is-running" />
@@ -90,7 +91,7 @@ export function ActivityShortlog() {
               {typeof pct === "number" && <span class="shortlog-pct">{Math.round(pct)}%</span>}
             </span>}
           </button>
-          <span class="shortlog-progress"><span class={`shortlog-progress-fill${typeof pct === "number" ? "" : " is-indeterminate"}`} style={typeof pct === "number" ? { width: `${Math.min(100, Math.max(0, pct))}%` } : undefined} /></span>
+          <ProgressBar value={pct} label={`Experiment ${label} progress`} class="shortlog-progress" />
         </div></>;
       })}
       {!waitingOpen.value && waiting.length > 0 && waitingSeparator}

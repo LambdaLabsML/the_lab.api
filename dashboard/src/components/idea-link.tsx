@@ -11,7 +11,7 @@ import { fmtMetricName } from "../lib/format";
 import { isLowerBetter } from "../lib/colors";
 import { navigateToIdea } from "../lib/navigate";
 
-export function IdeaLink({ id, class: cls }: { id: number; class?: string }) {
+export function IdeaLink({ id, class: cls, preserveView = false }: { id: number; class?: string; preserveView?: boolean }) {
   const idea = allIdeas.value[id];
   const metric = selectedMetric.value;
 
@@ -38,13 +38,13 @@ export function IdeaLink({ id, class: cls }: { id: number; class?: string }) {
   });
 
   return (
-    <Tooltip content={tip}>
+    <Tooltip content={tip} ideaId={id}>
       <button
         type="button"
         class={`idea-link${cls ? ` ${cls}` : ""}`}
         onClick={(e) => {
           e.stopPropagation();
-          const inConversation = !!e.currentTarget.closest(".message-threads");
+          const inConversation = preserveView || !!e.currentTarget.closest(".message-threads");
           if (!inConversation) window.location.hash = "#review";
           navigateToIdea(id, undefined, { scrollGraph: !inConversation });
         }}
