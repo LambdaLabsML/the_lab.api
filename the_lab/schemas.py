@@ -283,6 +283,16 @@ class MessageRequest(BaseModel):
     )
 
 
+class MessageClaimRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    action: Literal["acquire", "renew", "release", "complete"] = Field(
+        default="acquire", description="Acquire before answering a targeted question; renew during long work, complete after answering, or release when yielding.")
+    ttl_seconds: int = Field(default=3600, ge=60, le=86400,
+        description="Lease duration in seconds (default one hour); expired active claims may be acquired by another agent.")
+    result_message_id: int | None = Field(default=None, ge=1,
+        description="On completion, the message containing the answer, in the same thread.")
+
+
 class ThreadCreateRequest(BaseModel):
     title: str = Field(description="Short thread title (max 200 chars).")
     text: str = Field(description="The opening message's body.")

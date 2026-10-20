@@ -309,7 +309,7 @@ export function MessagesView() {
       {contextErrors[key] && <span class="thread-context-error" role="alert">{contextErrors[key]}</span>}
     </li>;
   }
-  useLiveRefresh(["message_received", "agent_changed", "thread_changed"], refresh, 30_000);
+  useLiveRefresh(["message_received", "agent_changed", "thread_changed", "message_claim_changed"], refresh, 30_000);
   useEffect(() => {
     cancelled.current = false;
     refresh();
@@ -815,6 +815,10 @@ export function MessagesView() {
                       <time title={m.created_at}>
                         {relativeTime(m.created_at)}
                       </time>
+                      {m.claim && <span class="thread-message-claim" title={m.claim.status === "completed" ? "Answer completed" : `Answer claimed until ${m.claim.expires_at ? new Date(m.claim.expires_at).toLocaleString() : "released"}`}>
+                        {m.claim.status === "completed" ? "Answered" : "Claimed"} by {m.claim.owner}
+                        {m.claim.result_message_id != null && <button class="ui-btn" title="Go to answer" onClick={() => { focusMessageId.value = m.claim!.result_message_id!; }}>↗</button>}
+                      </span>}
                       <MessagePermalink message={m} />
                       {!inPerspective && (
                         <button

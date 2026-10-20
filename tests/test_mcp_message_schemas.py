@@ -35,6 +35,12 @@ class McpMessageSchemaTests(unittest.TestCase):
             self.assertIn(field, props)
             self.assertTrue(props[field].get("description"), f"{field} missing a description")
 
+    def test_claim_message_is_discoverable_and_explicit(self):
+        props = self.tools["claim_message"]["inputSchema"]["properties"]
+        for field in ("msg_id", "action", "ttl_seconds", "result_message_id"):
+            self.assertIn(field, props)
+        self.assertIn("atomic", self.tools["claim_message"]["description"].lower())
+
     def test_create_thread_body_fields_all_have_descriptions(self):
         props = self.tools["create_thread"]["inputSchema"]["properties"]
         for field in ("title", "text", "tldr", "visibility", "members", "announce", "references"):

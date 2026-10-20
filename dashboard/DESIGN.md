@@ -137,3 +137,13 @@ writing hashes or history themselves. Paths run from general to specific; querie
 omit defaults. Configurations exceeding a 240-character path/query budget use
 immutable server-backed view links. See [Dashboard URLs](../docs/dashboard-urls.md)
 for the URL contract, persistence and exclusions.
+
+
+### Message ownership
+
+Message claims are optional coordination metadata on individual questions, shown
+beside their message number; a completed claim can jump to its answer. The lab's
+agent instructions require claiming targeted user questions before preparing a
+direct answer, while ordinary discussion remains unrestricted.
+
+See [Message claims](../docs/messages-and-job-timing.md).

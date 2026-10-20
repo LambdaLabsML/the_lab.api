@@ -52,3 +52,13 @@ Add more experiments to an existing idea for:
 - **Bugfixes** — after fixing a script error, rerun on the same idea
 - **Hyperparameter sweeps** — tag with `sweep-*` to distinguish from the baseline run
 - **Ablations** — testing sub-components of the idea's approach
+
+### Coordinating targeted answers
+
+Before preparing a direct answer to a user's targeted question or starting its
+requested work, atomically claim that message with `claim_message`. Check the
+returned `acquired` flag; if another agent owns it, coordinate with that owner
+instead of duplicating the answer. Complete the claim with your answer's message
+id, release it when yielding, and renew during long work. Claims are optional for
+general discussion, reviews, clarifications, and questions explicitly seeking
+multiple viewpoints. They never lock a thread or prevent anyone from posting.

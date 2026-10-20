@@ -224,6 +224,7 @@ export interface PromptMeta {
 }
 
 export interface MessageEntry {
+  claim?: { message_id: number; owner: string; status: "active" | "completed"; claimed_at: string; expires_at: string | null; result_message_id?: number | null };
   id: number;
   from_agent: string | null;
   from_role: string | null;

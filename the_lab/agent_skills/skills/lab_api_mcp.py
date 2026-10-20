@@ -94,6 +94,7 @@ INCLUDE = {
     ("get",  "/api/v1/notifications"):             "get_notifications",
     ("get",  "/api/v1/agents"):                    "list_agents",
     ("post", "/api/v1/messages"):                  "send_message",
+    ("post", "/api/v1/messages/{msg_id}/claim"):   "claim_message",
     ("get",  "/api/v1/messages"):                  "list_messages",
     ("post", "/api/v1/messages/{msg_id}/read"):    "mark_message_read",
     ("post", "/api/v1/messages/read_all"):         "mark_all_messages_read",

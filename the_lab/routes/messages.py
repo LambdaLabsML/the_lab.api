@@ -25,8 +25,9 @@ from fastapi import APIRouter, HTTPException, Query, Request
 
 from .. import agents as agents_mod
 from .. import messages as messages_mod
+from .. import message_claims
 from ..deps import REPO_DIR, store
-from ..schemas import DashboardConversationQuery, DashboardInboxQuery, MessageRequest, ThreadCreateRequest, ThreadMembersRequest, ThreadUpdateRequest
+from ..schemas import DashboardConversationQuery, DashboardInboxQuery, MessageRequest, MessageClaimRequest, ThreadCreateRequest, ThreadMembersRequest, ThreadUpdateRequest
 
 
 router = APIRouter()
@@ -450,7 +451,7 @@ def list_messages(
         if ids:
             messages_mod.mark_delivered_many(REPO_DIR, ids, agent_id)
 
-    return {"messages": page, "total": total, "limit": limit, "offset": offset}
+    return {"messages": _with_claims(page), "total": total, "limit": limit, "offset": offset}
 
 
 def _caller(request: Request) -> tuple[str | None, str | None, bool]:
@@ -533,6 +534,43 @@ def search_messages(
     return {"results": results, "total": total, "limit": limit, "offset": offset}
 
 
+def _with_claims(messages: list[dict]) -> list[dict]:
+    claims = message_claims.list_claims(REPO_DIR)
+    return [{**message, "claim": claims[str(message["id"])]} if str(message["id"]) in claims else dict(message) for message in messages]
+
+
+@router.post("/api/v1/messages/{msg_id}/claim")
+def claim_message(msg_id: int, req: MessageClaimRequest, request: Request):
+    """Atomically claim the direct answer to one message, without blocking discussion.
+
+    First caller wins; concurrent/repeated callers receive acquired=false and
+    the existing owner. A caller's own acquire retry succeeds without renewal.
+    General posts, reviews and multi-view discussions do not require claims.
+    Before answering a targeted user question, acquire its message id; if taken,
+    coordinate with that owner instead of duplicating the answer. Complete the
+    claim after posting the answer, or release it when yielding.
+    """
+    agent_id, role, operator = _caller(request)
+    if not agent_id and not (operator and req.action == "release"):
+        raise HTTPException(403, "claiming requires a registered agent (X-Agent-Id)")
+    if agent_id and not agents_mod.lookup_agent(REPO_DIR, agent_id):
+        raise HTTPException(403, "claiming requires a registered agent")
+    message = messages_mod.get_message(REPO_DIR, msg_id)
+    if not message or not messages_mod.thread_visible(REPO_DIR, messages_mod.thread_key(message), agent_id=agent_id, role=role, operator=operator):
+        raise HTTPException(404, "message not found")
+    if req.result_message_id is not None:
+        result = messages_mod.get_message(REPO_DIR, req.result_message_id)
+        if req.action != "complete" or not result or messages_mod.thread_key(result) != messages_mod.thread_key(message) or result.get("from_agent") != agent_id:
+            raise HTTPException(400, "result_message_id must be your answer in the same thread, used with complete")
+    outcome = message_claims.change_claim(REPO_DIR, msg_id, owner=agent_id or "user",
+        action=req.action, ttl_seconds=req.ttl_seconds, result_message_id=req.result_message_id, operator=operator)
+    if outcome["changed"]:
+        from .. import ws as ws_mod
+        ws_mod.broadcaster.broadcast_soon({"type": "message_claim_changed", "message_id": msg_id,
+            "thread_id": messages_mod.thread_key(message)})
+    return outcome
+
+
 @router.get("/api/v1/messages/{msg_id}")
 def get_message(msg_id: int, request: Request):
     """Fetch one message for a dashboard deep link without changing state."""
@@ -544,7 +582,7 @@ def get_message(msg_id: int, request: Request):
         msg, agent_id=agent_id, role=role,
     ):
         raise HTTPException(403, "you cannot see this message")
-    return msg
+    return _with_claims([msg])[0]
 
 
 @router.post("/api/v1/messages/{msg_id}/read")
@@ -698,11 +736,13 @@ def dashboard_conversation(thread_id: int, req: DashboardConversationQuery, requ
         viewer = _as_user(request, agent_id, req.as_user)
     except ValueError as e:
         raise HTTPException(400, str(e))
-    return _thread_errors(
+    out = _thread_errors(
         messages_mod.get_thread, REPO_DIR, thread_id, agent_id=viewer, role=None,
         operator=True, audience=req.audience, viewer=viewer, sent_ids=set(req.sent_ids),
         before_id=req.before_id, after_id=req.after_id, around_id=req.around_id, limit=req.limit, context=req.context,
     )
+    out["messages"] = _with_claims(out["messages"])
+    return out
 
 
 @router.get("/api/v1/threads")
@@ -793,6 +833,7 @@ def get_thread(
                and messages_mod.is_for(m, agent_id=agent_id, role=role)]
         if ids:
             messages_mod.mark_delivered_many(REPO_DIR, ids, agent_id)
+    out["messages"] = _with_claims(out["messages"])
     return out
 
 
