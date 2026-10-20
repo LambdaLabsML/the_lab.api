@@ -16,3 +16,7 @@ export function toggleSavedConversation(id: number, messageId?: number) {
   else if (messageId != null) focus[String(id)] = messageId;
   savedConversationFocus.value = focus;
 }
+
+export const inboxQuery = signal("");
+export const inboxStatus = signal<"all" | "open" | "closed">("all");
+export const inboxSender = signal("");

@@ -1,3 +1,4 @@
+import { navigateToIdea } from "../lib/navigate";
 import { useEffect, useState } from "preact/hooks";
 import { retainLogPolling } from "../state/polling";
 import { logEntries } from "../state/signals";
@@ -76,8 +77,7 @@ function LogEntryRow({ entry }: { entry: LogEntry }) {
 
   function handleClick() {
     if (entry.ideaId) {
-      selectedIdea.value = entry.ideaId;
-      history.pushState(null, "", `/ideas/${entry.ideaId}`);
+      navigateToIdea(entry.ideaId, undefined, { scrollGraph: false });
     }
   }
 

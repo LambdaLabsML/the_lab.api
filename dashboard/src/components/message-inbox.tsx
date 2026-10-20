@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import { getDashboardInbox } from "../state/api";
-import { inboxView, inboxUnreadCount, savedConversations, savedConversationFocus } from "../state/inbox";
+import { inboxView, inboxUnreadCount, savedConversations, savedConversationFocus, inboxQuery, inboxStatus, inboxSender } from "../state/inbox";
 import { dashboardSentMessageIds, messagesUnreadCount, markMessagesReadByMe } from "../state/messages";
 import { focusMessageId } from "../state/agent-activity";
 import { messagesReadByMe, messagesMyNames, myName } from "../state/settings";
@@ -38,9 +38,10 @@ export function MessageInbox({ selectedId, agents, onSelect, onNew, onMetadata }
   const [counts, setCounts] = useState<DashboardInboxPage["counts"]>({for_you: 0, mine: 0, all: 0, saved: 0, replies: 0});
   const [next, setNext] = useState<number | null>(null);
   const [total, setTotal] = useState(0);
-  const [query, setQuery] = useState("");
-  const [status, setStatus] = useState<"all" | "open" | "closed">("all");
-  const [sender, setSender] = useState("");
+  const query = inboxQuery.value, status = inboxStatus.value, sender = inboxSender.value;
+  const setQuery = (value: string) => { inboxQuery.value = value; };
+  const setStatus = (value: "all" | "open" | "closed") => { inboxStatus.value = value; };
+  const setSender = (value: string) => { inboxSender.value = value; };
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [editingName, setEditingName] = useState(false);

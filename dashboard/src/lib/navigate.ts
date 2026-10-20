@@ -3,6 +3,7 @@
  * graph, charts, and detail panel.
  */
 import { dismissHoverPreviews } from "./hooks/use-hover-preview";
+import { detailLocation } from "../state/navigation";
 import { selectedIdea } from "../state/settings";
 import { highlightedIdea, scrollToExperiment, selectedExperiment, activatePanel } from "../state/signals";
 
@@ -15,6 +16,7 @@ import { highlightedIdea, scrollToExperiment, selectedExperiment, activatePanel 
  */
 export function navigateToIdea(ideaId: number, expLabel?: string, options: { scrollGraph?: boolean } = {}) {
   dismissHoverPreviews();
+  if (selectedIdea.value !== ideaId || selectedExperiment.value !== (expLabel ?? null)) detailLocation.value = null;
   selectedExperiment.value = expLabel ?? null;
   selectedIdea.value = ideaId;
   highlightedIdea.value = ideaId;

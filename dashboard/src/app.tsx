@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "preact/hooks";
-import { effect } from "@preact/signals";
 import { DetailPanel } from "./components/detail-panel";
 import { NavRail, SecondaryPanel, type NavSection } from "./components/nav-rail";
 import { ActivitySidebar } from "./components/activity/activity-sidebar";
@@ -38,157 +37,25 @@ import { navigateToIdea } from "./lib/navigate";
 import { fmtMetricName, fmtScoreShort } from "./lib/format";
 import { resolveNumericValue } from "./lib/chart-data";
 import { ExperimentActions, ResearchIcon } from "./components/experiment-actions";
+import { navigation as appRoute, inspectorOpen, messagesDocked as dockedMessages, detailLocation, navigateSection, startUrlSync, navigationError } from "./state/navigation";
 import { isLowerBetter } from "./lib/colors";
 
 const inspectorWidth = useSetting("inspectorWidth", 420);
-const NAV_SECTIONS = ["review", "messages", "artifacts", "database", "queue"];
 const utilityViews = { agents: AgentsView, sandbox: SandboxView, prompts: PromptsView, stats: StatsView, api: ApiView };
 type Utility = keyof typeof utilityViews;
-function parseNavHash(): { section: NavSection; utility?: Utility; artifact: string } {
-  const h = location.hash.replace(/^#\/?/, "");
-  const [sec, tool] = h.split("/");
-  let artifact = "";
-  try { if (sec === "artifacts") artifact = decodeURIComponent(h.slice(10)); } catch { /* malformed link */ }
-  return {
-    section: (NAV_SECTIONS.includes(sec) ? sec : "review") as NavSection,
-    utility: sec === "tools" && tool in utilityViews ? tool as Utility : undefined,
-    artifact,
-  };
-}
-
-function readFiltersFromUrl() {
-  const path = window.location.pathname;
-  const p = new URLSearchParams(window.location.search);
-  const lightbox = new URLSearchParams(window.location.hash.slice(1));
-  if (lightbox.has("idea")) {
-    const id = Number(lightbox.get("idea"));
-    if (Number.isFinite(id) && id > 0) selectedIdea.value = id;
-  }
-
-  // Path: /ideas/13
-  const ideaMatch = path.match(/^\/ideas\/(\d+)/);
-  if (ideaMatch) {
-    selectedIdea.value = parseInt(ideaMatch[1]);
-  } else if (p.has("idea")) {
-    // Legacy: ?idea=13
-    selectedIdea.value = parseInt(p.get("idea")!) || null;
-  }
-
-  selectedExperiment.value = p.get("e") || null;
-
-  // Metric (short: m, legacy: metric)
-  const metric = p.get("m") || p.get("metric");
-  if (metric) selectedMetric.value = metric;
-
-  // Tag filters (short: t, legacy: tags)
-  const tags = p.get("t") || p.get("tags");
-  if (tags) activeTagFilters.value = tags.split(",").filter(Boolean);
-
-  // Tag filter mode (short: tm, legacy: tagMode)
-  const tm = p.get("tm") || p.get("tagMode");
-  if (tm === "or" || tm === "and") tagFilterMode.value = tm;
-
-  // Color mode (short: cm, legacy: color)
-  const cm = p.get("cm") || p.get("color");
-  if (cm) colorMode.value = cm;
-
-  // Boolean toggles — presence means ON (for imp, mean) or OFF (for norev, noclip)
-  if (p.has("imp") || p.get("improvements") === "1") improvementsOnly.value = true;
-  if (p.has("mean")) ideaMean.value = true;
-  if (p.has("norev") || p.get("reverse") === "0") reverseTime.value = false;
-  if (p.has("noclip")) clipOutliers.value = false;
-
-  // Hidden statuses (short: hide=acr, legacy: abandoned=0 etc.)
-  const hide = p.get("hide") || "";
-  if (hide) {
-    if (hide.includes("a")) showAbandoned.value = false;
-    if (hide.includes("c")) showConcluded.value = false;
-    if (hide.includes("r")) showRunning.value = false;
-  } else {
-    // Legacy format
-    if (p.get("abandoned") === "0") showAbandoned.value = false;
-    if (p.get("concluded") === "0") showConcluded.value = false;
-    if (p.get("running") === "0") showRunning.value = false;
-  }
-
-  // Scatter metrics
-  if (p.has("sx")) scatterXMetric.value = p.get("sx")!;
-  if (p.has("sy")) scatterYMetric.value = p.get("sy")!;
-
-  // Experiment selection: saved filter (by name or id) and/or expression
-  if (p.has("filter") || p.has("where")) {
-    activeSelection.value = { filter: p.get("filter") || null, where: p.get("where") || "" };
-  }
-}
-
-function syncUrlFromSignals() {
-  const _idea = selectedIdea.value;
-  const _metric = selectedMetric.value;
-  const _tags = activeTagFilters.value;
-  const _tagMode = tagFilterMode.value;
-  const _color = colorMode.value;
-  const _imp = improvementsOnly.value;
-  const _mean = ideaMean.value;
-  const _rev = reverseTime.value;
-  const _clip = clipOutliers.value;
-  const _abn = showAbandoned.value;
-  const _con = showConcluded.value;
-  const _run = showRunning.value;
-  const _sx = scatterXMetric.value;
-  const _sy = scatterYMetric.value;
-  const _sel = activeSelection.value;
-  const _selName = activeFilter.value?.name ?? _sel.filter;
-
-  // Path: /ideas/13 or /
-  const path = _idea !== null ? `/ideas/${_idea}` : "/";
-
-  // Only encode non-default values
-  const p = new URLSearchParams();
-  if (_metric) p.set("m", _metric);
-  if (selectedExperiment.value) p.set("e", selectedExperiment.value);
-  if (_tags.length > 0) p.set("t", _tags.join(","));
-  if (_tagMode !== "and") p.set("tm", _tagMode);
-  if (_color !== "status+improve") p.set("cm", _color);
-  if (_imp) p.set("imp", "");
-  if (_mean) p.set("mean", "");
-  if (!_rev) p.set("norev", "");
-  if (!_clip) p.set("noclip", "");
-
-  // Hidden statuses: compact "hide=ac" format
-  let hide = "";
-  if (!_abn) hide += "a";
-  if (!_con) hide += "c";
-  if (!_run) hide += "r";
-  if (hide) p.set("hide", hide);
-
-  if (_sx) p.set("sx", _sx);
-  if (_sy) p.set("sy", _sy);
-  if (_selName) p.set("filter", _selName);
-  if (_sel.where.trim()) p.set("where", _sel.where);
-  // An open lightbox (?view=output/1177.2) is owned by the idea panel: keep it.
-  const _view = new URLSearchParams(window.location.search).get("view");
-  if (_view) p.set("view", _view);
-
-  const qs = p.toString()
-    .replace(/=(&|$)/g, "$1")  // strip trailing = for valueless params (imp, mean, norev, noclip)
-    .replace(/%2F/gi, "/")     // readable view=output/1177.2
-    .replace(/&$/, "");
-  const url = path + (qs ? "?" + qs : "") + window.location.hash;
-
-  if (url !== window.location.pathname + window.location.search + window.location.hash) {
-    history.replaceState(null, "", url);
-  }
-}
-
 
 export function App() {
-  const initial = useRef(parseNavHash()).current;
-  const [section, setSection] = useState<NavSection>(initial.section);
+  const initial = useRef(appRoute.value).current;
+  const section = appRoute.value.section;
   const [visited, setVisited] = useState<Set<NavSection>>(() => new Set([initial.section]));
-  const [settingsOpen, setSettingsOpen] = useState(!!initial.utility);
-  const [utility, setUtility] = useState<Utility | null>(initial.utility ?? null);
-  const [detailsOpen, setDetailsOpen] = useState(selectedIdea.value != null);
-  const [messagesDocked, setMessagesDocked] = useState(false);
+  const settingsOpen = !!appRoute.value.settings;
+  const utility = appRoute.value.tool && appRoute.value.tool in utilityViews ? appRoute.value.tool as Utility : null;
+  const setUtility = (value: Utility | null) => { appRoute.value = { ...appRoute.value, tool: value ?? undefined }; };
+  const setSettingsOpen = (value: boolean | ((previous: boolean) => boolean)) => { appRoute.value = { ...appRoute.value, settings: typeof value === "function" ? value(!!appRoute.value.settings) : value }; };
+  const detailsOpen = inspectorOpen.value;
+  const setDetailsOpen = (value: boolean | ((previous: boolean) => boolean)) => { inspectorOpen.value = typeof value === "function" ? value(inspectorOpen.value) : value; if (!inspectorOpen.value) detailLocation.value = null; };
+  const messagesDocked = dockedMessages.value;
+  const setMessagesDocked = (value: boolean | ((previous: boolean) => boolean)) => { dockedMessages.value = typeof value === "function" ? value(dockedMessages.value) : value; };
   const [searchOpen, setSearchOpen] = useState(false);
   const searchRef = useRef<HTMLDivElement>(null);
   const [mobile, setMobile] = useState(() => matchMedia("(max-width: 760px)").matches);
@@ -215,40 +82,23 @@ export function App() {
   const selected = selectedIdea.value;
   const unread = inboxUnreadCount.value ?? messagesUnreadCount.value;
   const rememberView = (next: NavSection) => {
-    setSection(next);
+    navigateSection(next);
     setVisited(prev => new Set([...prev, next]));
     setSettingsOpen(false);
   };
   useEffect(() => {
-    if (initial.artifact) artifactPath.value = initial.artifact;
-    const onHash = () => {
-      const next = parseNavHash();
-      rememberView(next.section);
-      if (next.utility) { setUtility(next.utility); setSettingsOpen(true); }
-      if (next.section === "artifacts") artifactPath.value = next.artifact;
-    };
     const openDatabase = () => { rememberView("database"); setDetailsOpen(false); };
     window.addEventListener("the-lab:open-database", openDatabase);
-    window.addEventListener("hashchange", onHash);
-    return () => { window.removeEventListener("hashchange", onHash); window.removeEventListener("the-lab:open-database", openDatabase); };
+    return () => window.removeEventListener("the-lab:open-database", openDatabase);
   }, []);
   useEffect(() => {
-    const hash = settingsOpen && utility ? `#tools/${utility}` : section === "artifacts"
-      ? `#artifacts${artifact ? "/" + artifact.split("/").map(encodeURIComponent).join("/") : ""}` : `#${section}`;
-    const lightbox = new URLSearchParams(location.hash.slice(1)).has("view");   // legacy #..&view= links
-    const keepsSubPath = !settingsOpen && location.hash.startsWith(`${hash}/`);   // e.g. #messages/6674/11944
-    if (location.hash !== hash && !keepsSubPath && !(lightbox && section === "review" && !settingsOpen)) {
-      history.replaceState(null, "", location.pathname + location.search + hash);
-    }
+    setVisited(previous => previous.has(section) ? previous : new Set([...previous, section]));
     requestAnimationFrame(() => window.dispatchEvent(new Event("resize")));
   }, [section, artifact, settingsOpen, utility, messagesDocked, detailsOpen]);
   useEffect(() => {
     let disposed = false;
     let disposeUrl = () => {};
-    // Read links before creating the URL-sync effect so startup never overwrites them.
-    readFiltersFromUrl();
-    applyServerDefaults().then(() => { if (!disposed) { readFiltersFromUrl(); disposeUrl = effect(syncUrlFromSignals); } });
-    window.addEventListener("popstate", readFiltersFromUrl);
+    applyServerDefaults().then(() => { if (!disposed) disposeUrl = startUrlSync(); });
     startPolling(); startWs(); startAgentActivity();
     const stopNotifications = startMessageNotifications();
     const stopCollab = startCollabNotifications();
@@ -262,7 +112,7 @@ export function App() {
     return () => {
       disposed = true; disposeUrl(); stopPolling(); stopWs(); stopAgentActivity(); stopNotifications(); stopCollab();
       setActivatePanel(() => {});
-      window.removeEventListener("popstate", readFiltersFromUrl);
+
     };
   }, []);
   useEffect(() => { if (selected != null) setDetailsOpen(true); }, [selected]);
@@ -324,12 +174,12 @@ export function App() {
         <div class={`research-body${messagesDocked && section === "review" ? " has-messages" : ""}`}>
           <div class={`research-center${messagesDocked && section === "review" && !settingsOpen ? " has-drawer" : ""}`}>
             {settingsOpen && <div class="research-page app-scroll">{UtilityView ? <UtilityView /> : mobile ? <div class="research-mobile-settings">{settingsContent}</div> : <div class="research-welcome"><h2>Settings</h2><p>Adjust appearance and preferences in the settings panel. Administration tools are below.</p></div>}</div>}
-            {(["review", "database", "queue", "artifacts"] as NavSection[]).filter(v => visited.has(v)).map(view => (
+            {(["review", "database", "queue", "artifacts"] as NavSection[]).filter(v => visited.has(v) || v === section).map(view => (
               <div key={view} class="research-page app-scroll" hidden={settingsOpen || section !== view}>
                 {view === "review" ? <Overview /> : view === "database" ? <DatabaseView /> : view === "queue" ? <QueueView /> : <ArtifactsView />}
               </div>
             ))}
-            {visited.has("messages") && <section ref={messageRef} tabIndex={-1} class={`research-messages${section === "messages" ? " is-page" : " is-drawer"}`} hidden={!showMessages || settingsOpen} aria-label="Messages">
+            {(visited.has("messages") || section === "messages" || messagesDocked) && <section ref={messageRef} tabIndex={-1} class={`research-messages${section === "messages" ? " is-page" : " is-drawer"}`} hidden={!showMessages || settingsOpen} aria-label="Messages">
               {section !== "messages" && <div class="research-panel-head"><strong>Messages</strong><div><button class="ui-btn" onClick={() => rememberView("messages")}>Full view ↗</button><button class="ui-btn" aria-label="Close messages" onClick={() => setMessagesDocked(false)}>×</button></div></div>}
               <MessagesView />
             </section>}

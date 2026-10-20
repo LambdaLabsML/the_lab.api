@@ -1,3 +1,4 @@
+import { navigateSection } from "../../state/navigation";
 import { notificationMessages, isMine, isAddressedToMe } from "../../state/messages";
 import { messagesReadByMe } from "../../state/settings";
 import { focusMessageId } from "../../state/agent-activity";
@@ -26,7 +27,7 @@ export function PersonalMessages() {
         focusMessageId.value = message.id;
         // Close the mobile monitor after choosing a conversation.
         window.dispatchEvent(new Event("the-lab:close-monitor"));
-        window.location.hash = "#messages";
+        navigateSection("messages");
       }}>
         <ResearchIcon name={mine ? "question" : "reply"} />
         <span class="personal-message-body"><span class="personal-message-meta"><span>{mine ? "You" : `${sender} → you`}</span><time dateTime={message.created_at}>{age(message.created_at)}</time></span><span class="personal-message-preview">{message.tldr || message.text}</span></span>

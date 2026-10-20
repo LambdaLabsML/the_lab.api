@@ -9,6 +9,7 @@ import { allExperiments, allIdeas } from "../state/signals";
 import { selectedMetric } from "../state/settings";
 import { fmtMetricName } from "../lib/format";
 import { isLowerBetter } from "../lib/colors";
+import { navigateSection } from "../state/navigation";
 import { navigateToIdea } from "../lib/navigate";
 
 export function IdeaLink({ id, class: cls, preserveView = false }: { id: number; class?: string; preserveView?: boolean }) {
@@ -45,7 +46,7 @@ export function IdeaLink({ id, class: cls, preserveView = false }: { id: number;
         onClick={(e) => {
           e.stopPropagation();
           const inConversation = preserveView || !!e.currentTarget.closest(".message-threads");
-          if (!inConversation) window.location.hash = "#review";
+          if (!inConversation) navigateSection("review");
           navigateToIdea(id, undefined, { scrollGraph: !inConversation });
         }}
       >

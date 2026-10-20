@@ -141,6 +141,7 @@ export function ScatterChart({ instanceId, initialXMetric, initialYMetric, hideC
   const { ideaMean, clipOutliers, colorMode, plotFilter } = usePlotControls(instanceId);
   const [localX, setLocalX] = useState(initialXMetric || "");
   const [localY, setLocalY] = useState(initialYMetric || "");
+  useEffect(() => { if (instanceId && initialXMetric !== undefined) setLocalX(initialXMetric); if (instanceId && initialYMetric !== undefined) setLocalY(initialYMetric); }, [instanceId, initialXMetric, initialYMetric]);
   const interaction = useHoverPreview<{ d: Experiment & { _ideaMean?: boolean; _meanCount?: number }; rect: DOMRect; x: number | null; y: number | null }>({
     ideaId: item => item.d.idea_id,
     key: item => `${item.d.idea_id}:${item.d.label ?? item.d.id}`,

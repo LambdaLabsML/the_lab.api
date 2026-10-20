@@ -248,3 +248,5 @@
   .research-toolbar .research-selection-count { order: 5; }
   .research-toolbar .filter-picker > button { min-height: 36px; }
 }
+
+.research-url-error { padding: 10px 14px; font-size: var(--text-sm); color: var(--red); background: var(--bg-elev); overflow-wrap: anywhere; }

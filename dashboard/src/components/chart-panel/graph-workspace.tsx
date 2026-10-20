@@ -5,8 +5,7 @@ import { Stepper } from "../ui";
 import { MetricsChart } from "./metrics-chart";
 import { LazyScatterChart } from "./lazy-scatter";
 
-type Plot = { id: string; height?: number; width?: "full" | "half"; type: "metrics" | "scatter"; metric?: string; x?: string; y?: string };
-const plots = useSetting<Plot[]>("overviewPlots", [{ id: "correlation", type: "scatter" }]);
+import { overviewPlots as plots, type Plot } from "../../state/plots";
 
 /** ``head``: shown on the left of the workspace's header line (the Overview
  *  puts its KPI cards there); the "+" add-graph menu stays on the right. */

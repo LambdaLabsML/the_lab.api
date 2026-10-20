@@ -1,3 +1,4 @@
+import { navigateSection } from "../state/navigation";
 /** Safe, small Markdown renderer for messages. It always creates Preact nodes
  * and never assigns message text to innerHTML. */
 import type { ComponentChildren } from "preact";
@@ -37,14 +38,15 @@ function MsgRef({ id, bare = false, children }: { id: number; bare?: boolean; ch
   return (
     <a
       class={`rt-msg${bare ? " rt-msg-bare" : ""}`}
-      href="#messages"
+      href={`/messages?message=${id}`}
       onMouseEnter={(e) => showMessagePreviewById(id, e.currentTarget as Element)}
       onMouseLeave={hideMessagePreview}
       onClick={(e) => {
+        if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
         e.preventDefault();
         hideMessagePreview();
         focusMessageId.value = id;
-        window.location.hash = "#messages";
+        navigateSection("messages");
       }}
     >
       {children}

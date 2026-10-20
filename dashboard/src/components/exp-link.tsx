@@ -9,6 +9,7 @@ import { Tooltip, experimentTipContent } from "./ui";
 import { allExperiments, allIdeas } from "../state/signals";
 import { selectedMetric } from "../state/settings";
 import { fmtMetricName } from "../lib/format";
+import { navigateSection } from "../state/navigation";
 import { navigateToIdea } from "../lib/navigate";
 
 /** "129.6" → 129 (idea id prefix of an experiment label). */
@@ -50,7 +51,7 @@ export function ExpLink({ label, ideaId, class: cls, preserveView = false }: {
           e.stopPropagation();
           if (idea != null) {
             const inConversation = preserveView || !!e.currentTarget.closest(".message-threads");
-            if (!inConversation) window.location.hash = "#review";
+            if (!inConversation) navigateSection("review");
             navigateToIdea(idea, label, { scrollGraph: !inConversation });
           }
         }}

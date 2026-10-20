@@ -1,3 +1,4 @@
+import { navigateSection } from "../../state/navigation";
 /**
  * AgentTree — structure A. Each live agent is a row: state dot (status color
  * language) + identity-colored id + current action, with nested (└) lines
@@ -21,7 +22,7 @@ import { fnCall, apiFocus } from "./fn-call";
 
 /** Experiments live on the Overview page — switch there before focusing. */
 function goOverview(ideaId: number, expLabel?: string): void {
-  window.location.hash = "#review";
+  navigateSection("review");
   navigateToIdea(ideaId, expLabel);
 }
 
@@ -120,7 +121,7 @@ const LINGER_MS = 5 * 60_000;
 
 /** Jump to the Messages tool (used by message rows). */
 function openMessages(): void {
-  window.location.hash = "#messages";
+  navigateSection("messages");
 }
 
 export function AgentTree({ compact = false, activeOnly = false, historyLimit = 6 }: {

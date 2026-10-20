@@ -3,6 +3,7 @@
 // one tree; the sidebar filter narrows it to an agent or topic. The sidebar
 // lists folders lazily; the main pane renders Markdown, images, HTML (sandboxed)
 // and text, or lists a folder.
+import { navigateSection } from "../state/navigation";
 import { signal } from "@preact/signals";
 import { useEffect, useMemo, useState } from "preact/hooks";
 import { listArtifacts, artifactUrl, getArtifactText, writeArtifactFile, type ArtifactEntry } from "../state/api";
@@ -11,12 +12,9 @@ import { Eyebrow, EmptyState } from "../components/ui";
 import { CollabEditor } from "../components/collab-editor";
 import { collabActiveCounts } from "../state/collab";
 
-/** Selected artifact path ("" = root), mirrored in the URL as #artifacts/<path>. */
-export const artifactPath = signal<string>("");
-/** Whether the selection is a folder (decided from its listing entry). */
-const selectedIsDir = signal<boolean>(true);
-/** Artifact path open in the live collab editor (null = viewing). */
-export const editingPath = signal<string | null>(null);
+/** Selected artifact path ("" = root), shared with the URL state. */
+export { artifactPath, editingPath } from "../state/artifacts";
+import { artifactPath, editingPath, selectedIsDir } from "../state/artifacts";
 /** Bumped after a save so the read-only view reloads the file. */
 const fileRevision = signal(0);
 // Text files the dashboard user may create / edit (mirrors the server list).
@@ -67,9 +65,7 @@ export function openArtifactForEdit(path: string): void {
   artifactPath.value = path;
   editingPath.value = path;
   // From another section (e.g. a toast on the Overview): switch to Artifacts.
-  if (!location.hash.startsWith("#artifacts")) {
-    location.hash = `#artifacts/${path.split("/").map(encodeURIComponent).join("/")}`;
-  }
+  navigateSection("artifacts");
 }
 
 // ── Sidebar tree ─────────────────────────────────────────────────────────────

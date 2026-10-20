@@ -1,3 +1,4 @@
+import { detailLocation, inspectorOpen, setDetailLocation, navigateSection } from "../state/navigation";
 import { selectedExperiment } from "../state/signals";
 import { useEffect, useLayoutEffect, useMemo, useState, useRef } from "preact/hooks";
 import { progressPct } from "../lib/progress";
@@ -33,44 +34,8 @@ const LEVEL_TONE: Record<string, BadgeTone> = {
   note: "neutral",
 };
 
-// ---------------------------------------------------------------------------
-// URL hash helpers — encode/decode lightbox state as shareable deep links.
-// Format: #idea=5&exp=exp001&view=log  (view: log | script | output | diff)
-// ---------------------------------------------------------------------------
-
-/** The open lightbox (output / log / script / diff) lives in the URL as
- *  ?view=<kind>/<exp label> (the idea is the /ideas/<id> path), so a link
- *  opens it. Old links carried #idea=..&exp=..&view=.. — still read. */
-function parseHash(): Record<string, string> {
-  const out: Record<string, string> = {};
-  try {
-    const legacy = window.location.hash.slice(1);
-    if (legacy.includes("=")) Object.assign(out, Object.fromEntries(new URLSearchParams(legacy)));
-  } catch { /* not a parameter hash */ }
-  const view = new URLSearchParams(window.location.search).get("view");
-  if (view) {
-    const [kind, ...rest] = view.split("/");
-    out.view = kind;
-    if (rest.length) out.exp = rest.join("/");
-    const m = window.location.pathname.match(/^\/ideas\/(\d+)/);
-    if (m) out.idea = m[1];
-  }
-  return out;
-}
-
-function setHash(params: Record<string, string | number | null>) {
-  const cur = parseHash();
-  const view = params.view === undefined ? cur.view : params.view;
-  const exp = params.exp === undefined ? cur.exp : params.exp;
-  const url = new URL(window.location.href);
-  if (view == null) url.searchParams.delete("view");
-  else url.searchParams.set("view", exp != null ? `${view}/${exp}` : String(view));
-  // Drop a legacy #idea=..&view=.. hash once we write the new form.
-  if (url.hash.includes("=")) url.hash = "#review";
-  // Readable: valueless flags without "=", and "/" unescaped in view=output/1177.2.
-  const search = url.search.replace(/=(&|$)/g, "$1").replace(/%2F/gi, "/");
-  history.replaceState(null, "", url.pathname + search + url.hash);
-}
+/** Detail panels report state to the shared router; no component writes history. */
+function setHash(params: Record<string, string | number | null>) { if (params.exp != null) selectedExperiment.value = String(params.exp); else if (params.view != null) selectedExperiment.value = null; setDetailLocation(params); }
 
 /**
  * @param embedded  When true, the panel is rendered inside a host that already
@@ -87,7 +52,8 @@ export function DetailPanel({ embedded = false, focused = false }: { embedded?: 
   const [loading, setLoading] = useState(false);
   const pollRef = useRef<number | null>(null);
   const fetchRef = useRef(0);
-  const hashHandledForIdea = useRef<number | null>(null);
+  const handledDetail = useRef<string | null>(null);
+  const requestedDetail = detailLocation.value;
 
   // Log lightbox
   const [logExp, setLogExp] = useState<Experiment | null>(null);
@@ -157,26 +123,21 @@ export function DetailPanel({ embedded = false, focused = false }: { embedded?: 
     return () => { cancelled = true; un(); };
   }, [ideaId]);
 
-  // On mount: read hash and navigate to the encoded idea
+  // Restore and close lightboxes on URL navigation, including Back/Forward.
   useEffect(() => {
-    const h = parseHash();
-    if (h.idea) selectedIdea.value = Number(h.idea);
-  }, []);
-
-  // Once an idea loads, auto-open the lightbox encoded in the hash (first time only per idea)
-  useEffect(() => {
-    if (!idea || hashHandledForIdea.current === idea.id) return;
-    hashHandledForIdea.current = idea.id;
-    const h = parseHash();
-    if (!h.view || Number(h.idea) !== idea.id) return;
-    if (h.view === "diff") { openDiff(false); return; }
-    if (!h.exp) return;
-    const exp = idea.experiments?.find(e => (e.label || String(e.id)) === h.exp);
-    if (!exp) return;
-    if (h.view === "log") openLog(exp);
-    else if (h.view === "script") openScript(exp);
-    else if (h.view === "output") openOutput(exp);
-  }, [idea]);
+    const key = requestedDetail ? `${requestedDetail.idea}:${requestedDetail.experiment || ""}:${requestedDetail.view}` : null;
+    if (handledDetail.current === key) return;
+    setLogExp(null); setScriptExp(null); setOutputExp(null); setDiffOpen(false);
+    if (!requestedDetail) { handledDetail.current = null; return; }
+    if (!idea || idea.id !== requestedDetail.idea) return;
+    if (requestedDetail.view === "diff") { handledDetail.current = key; openDiff(false); return; }
+    const experiment = idea.experiments?.find(item => String(item.label || item.id) === requestedDetail.experiment);
+    if (!experiment) return;
+    handledDetail.current = key;
+    if (requestedDetail.view === "log") openLog(experiment);
+    else if (requestedDetail.view === "script") openScript(experiment);
+    else if (requestedDetail.view === "output") openOutput(experiment);
+  }, [idea, requestedDetail]);
 
   // Fetch idea data on selection change + poll every 10s for updates
   useEffect(() => {
@@ -760,6 +721,8 @@ export function DetailPanel({ embedded = false, focused = false }: { embedded?: 
   }
 
   function close() {
+    detailLocation.value = null;
+    inspectorOpen.value = false;
     selectedIdea.value = null;
   }
 
@@ -1979,7 +1942,7 @@ function ExpMentions({ mentions }: { mentions: ThreadMention[] }) {
   const total = mentions.reduce((n, m) => n + m.count, 0);
   const open = (id: number) => {
     focusMessageId.value = id;
-    window.location.hash = "#messages";
+    navigateSection("messages");
   };
   return (
     <div class="exp-mentions">

@@ -16,6 +16,7 @@ export function MetricsChart({ instanceId, initialMetric, hideClone, onMetricCha
   // Cloned instances use local state; the original uses the global signal
   const isClone = !!instanceId;
   const [localMetric, setLocalMetric] = useState(initialMetric || "");
+  useEffect(() => { if (instanceId && initialMetric !== undefined) setLocalMetric(initialMetric); }, [instanceId, initialMetric]);
   const { chartView, chartXAxis, chartTimeCurve, improvementsOnly, ideaMean, clipOutliers, reverseTime, colorMode, plotFilter, logScale: logScaleSignal } = usePlotControls(instanceId);
   const logScale = logScaleSignal.value;
   const setLogScale = (value: boolean) => { logScaleSignal.value = value; };

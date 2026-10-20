@@ -127,3 +127,13 @@ Clickable element-actions are centralized. Do not re-implement these inline:
 - Hardcoded SVG `font-size="9"` / `"10"` → `var(--text-xs)` etc.
 - Oversized mini-chart dots and axis text.
 - One-off bespoke classes that duplicate a primitive — replace with the primitive.
+
+### Reloadable URLs
+
+`state/navigation.ts` owns browser history and restores the current section,
+thread/message, idea/experiment inspector, log/output/script/diff viewer, Overview
+plots and filters, and inbox filters. Components update signals rather than
+writing hashes or history themselves. Paths run from general to specific; queries
+omit defaults. Configurations exceeding a 240-character path/query budget use
+immutable server-backed view links. See [Dashboard URLs](../docs/dashboard-urls.md)
+for the URL contract, persistence and exclusions.

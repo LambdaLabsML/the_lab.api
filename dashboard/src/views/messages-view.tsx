@@ -1,3 +1,4 @@
+import { threadLocation } from "../state/navigation";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
 import {
   createThread,
@@ -88,11 +89,13 @@ export function MessagesView() {
   // Writing needs a name (name-gate.tsx asks for one first).
   const hasName = !!(myName.value || "").trim();
   const replyBoxRef = useRef<HTMLTextAreaElement>(null);
-  // Message to put in the URL (#messages/<thread>/<message>) after a jump.
-  const [urlMessage, setUrlMessage] = useState<number | null>(null);
+  // Message to put in the URL after a jump.
+  const urlMessage = threadLocation.value.message;
+  const setUrlMessage = (message: number | null) => { threadLocation.value = { ...threadLocation.value, message }; };
   const inPerspective = false;
-  const [selectedThread, setSelectedThread] = useState<number | null>(null),
-    [threadMessages, setThreadMessages] = useState<MessageEntry[]>([]),
+  const selectedThread = threadLocation.value.thread;
+  const setSelectedThread = (thread: number | null) => { threadLocation.value = { thread, message: thread === threadLocation.value.thread ? threadLocation.value.message : null }; };
+  const [threadMessages, setThreadMessages] = useState<MessageEntry[]>([]),
     [threadTotal, setThreadTotal] = useState(0),
     [threadLoading, setThreadLoading] = useState(false),
     [threadError, setThreadError] = useState<string | null>(null);
@@ -112,29 +115,9 @@ export function MessagesView() {
     return () => document.body.classList.remove("thread-open");
   }, [selectedThread]);
   useEffect(() => { setRenameDraft(null); }, [selectedThread]);
-  // Shareable URLs: #messages/<threadId>[/<messageId>]. Only written while the
-  // Messages section owns the hash (the docked panel must not change it).
-  const urlRead = useRef(false);   // the initial #messages/<thread> was applied
   useEffect(() => {
-    if (!urlRead.current || !/^#messages(\/|$)/.test(location.hash)) return;
-    const want = selectedThread == null ? "#messages"
-      : `#messages/${selectedThread}${urlMessage != null ? `/${urlMessage}` : ""}`;
-    if (location.hash !== want) history.replaceState(null, "", location.pathname + location.search + want);
+    if (threadLocation.value.message != null) focusMessageId.value = threadLocation.value.message;
   }, [selectedThread, urlMessage]);
-  useEffect(() => { setUrlMessage(null); }, [selectedThread]);
-  useEffect(() => {
-    const fromHash = () => {
-      const m = /^#messages\/(\d+)(?:\/(\d+))?/.exec(location.hash);
-      if (!m) return;
-      const thread = Number(m[1]), message = m[2] ? Number(m[2]) : null;
-      if (message != null) { focusMessageId.value = message; return; }
-      if (selectedThreadRef.current !== thread) { setNewThreadOpen(false); setSelectedThread(thread); }
-    };
-    fromHash();
-    urlRead.current = true;
-    window.addEventListener("hashchange", fromHash);
-    return () => window.removeEventListener("hashchange", fromHash);
-  }, []);
   // Focus + select the title when editing starts (autoFocus misses dblclick).
   const renameInputRef = useRef<HTMLInputElement>(null);
   const renaming = renameDraft !== null;
@@ -356,7 +339,7 @@ export function MessagesView() {
     const focus = (message: MessageEntry) => {
       if (cancelled.current || focusMessageId.value !== focusId) return;
       focusMessageId.value = null;
-      conversationAudience.value = "all";
+      if (threadLocation.value.message !== message.id) conversationAudience.value = "all";
       setNewThreadOpen(false);
       anchorRef.current = message.id;
       lastFocusedMessage.current = message.id;
@@ -554,6 +537,7 @@ export function MessagesView() {
     setPendingFocus(thread.focus.id);
     if (selectedThreadRef.current === thread.id) { setThreadMessages([]); void loadThread(thread.id); }
     else setSelectedThread(thread.id);
+    setUrlMessage(thread.focus.id);
   }
   const updateMetadata = useRef((threads: InboxThread[]) => {
     setThreadMeta(old => { const next = new Map(old); for (const thread of threads) next.set(thread.id, thread); return next; });
