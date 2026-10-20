@@ -932,6 +932,25 @@ exit $_EXIT
             raise RuntimeError(f"squeue failed for {job_id} (rc={result.returncode}): {result.stderr.strip()}")
         return result.stdout.strip()
 
+    @staticmethod
+    def _utc_timestamp(value: str) -> str | None:
+        from datetime import datetime, timezone
+        try:
+            parsed = datetime.fromisoformat(value.strip())
+            return parsed.replace(tzinfo=parsed.tzinfo or timezone.utc).astimezone(timezone.utc).isoformat()
+        except (ValueError, TypeError):
+            return None
+
+    def start_time(self, job_id: str) -> str | None:
+        """Actual allocation start in UTC; pending start estimates are ignored."""
+        if not re.fullmatch(r"[0-9]+(?:_[0-9]+)?", str(job_id)):
+            return None
+        result = self._ssh(f"TZ=UTC SLURM_TIME_FORMAT=standard squeue --noheader -j {shlex.quote(str(job_id))} -o '%T|%S'", check=False, timeout=30)
+        if result.returncode != 0:
+            return None
+        fields = result.stdout.strip().split("|")
+        return self._utc_timestamp(fields[1]) if len(fields) == 2 and fields[0].strip() == "RUNNING" else None
+
     def accounting_status(self, job_id: str) -> dict | None:
         """Return root-job accounting state, never an ``extern`` step.
 
@@ -941,8 +960,8 @@ exit $_EXIT
         """
         if not re.fullmatch(r"[0-9]+(?:_[0-9]+)?", str(job_id)):
             return None
-        command = (f"SLURM_CONF={shlex.quote(self.slurm_conf)} sacct --noheader --parsable2 "
-                   f"--jobs={shlex.quote(str(job_id))} --format=JobIDRaw,State,ExitCode,Restarts")
+        command = (f"TZ=UTC SLURM_TIME_FORMAT=standard SLURM_CONF={shlex.quote(self.slurm_conf)} sacct --noheader --parsable2 "
+                   f"--jobs={shlex.quote(str(job_id))} --format=JobIDRaw,State,ExitCode,Restarts,Start,End")
         result = self._ssh_plain(command, check=False, timeout=30)
         if result.returncode != 0:
             return None
@@ -961,6 +980,10 @@ exit $_EXIT
                     "exit_code": int(match.group(1)), "signal": int(match.group(2))}
             if len(fields) > 3 and fields[3].strip().isdigit():
                 item["restart_count"] = int(fields[3].strip())
+            if len(fields) > 4 and (start := self._utc_timestamp(fields[4])):
+                item["started_at"] = start
+            if len(fields) > 5 and (end := self._utc_timestamp(fields[5])):
+                item["finished_at"] = end
             if raw == str(job_id):
                 root = item
             else:

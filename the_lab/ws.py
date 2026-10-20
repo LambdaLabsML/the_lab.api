@@ -277,6 +277,9 @@ def experiment_payload(exp: dict | None) -> dict | None:
         # Additive restart/timing fields — see Store._enrich_experiment.
         "attempt": exp.get("attempt"),
         "attempt_started_at": exp.get("attempt_started_at"),
+        "actual_started_at": exp.get("actual_started_at"),
+        "scheduler_state": exp.get("scheduler_state"),
+        "runtime_seconds": exp.get("runtime_seconds"),
     }
 
 

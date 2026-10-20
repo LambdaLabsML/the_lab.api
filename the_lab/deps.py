@@ -124,6 +124,7 @@ LAB_WRITTEN_META_KEYS = frozenset({
     # Slurm scheduler/requeue bookkeeping (runner.py, executors/slurm.py)
     "slurm_job_id", "slurm_native_requeue", "slurm_state",
     "slurm_restart_count", "slurm_run_token", "slurm_last_restart_at",
+    "slurm_started_at", "slurm_first_started_at", "slurm_finished_at",
     "slurm_attempts", "assigned_resource", "assigned_units",
     # ARC-AGI-3 solver result merged into meta at completion (postamble.sh)
     "card_id", "competition_mode", "scorecard",

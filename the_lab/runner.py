@@ -1284,6 +1284,9 @@ class ExperimentRunner:
             "slurm_native_requeue": True,
             "slurm_state": "PENDING",
             "slurm_restart_count": 0,
+            "slurm_started_at": None,
+            "slurm_first_started_at": None,
+            "slurm_finished_at": None,
             "slurm_run_token": run_token,  # stored so monitor can unregister on completion
             "assigned_resource": resource.name,
             "assigned_units": assigned,
@@ -1387,7 +1390,20 @@ class ExperimentRunner:
                             generation_changed = True
                     except Exception:
                         pass
-                if meta.get("slurm_state") != state or generation_changed:
+                if generation_changed or state == "PENDING":
+                    meta["slurm_started_at"] = None
+                start_reader = getattr(executor, "start_time", None)
+                if state == "RUNNING" and not meta.get("slurm_started_at") and callable(start_reader):
+                    try:
+                        actual_start = await asyncio.get_running_loop().run_in_executor(None, lambda: start_reader(job_id))
+                        if isinstance(actual_start, str) and actual_start:
+                            meta["slurm_started_at"] = actual_start
+                            meta.setdefault("slurm_first_started_at", actual_start)
+                            if not meta.get("slurm_first_started_at"):
+                                meta["slurm_first_started_at"] = actual_start
+                    except Exception:
+                        pass  # a missing timestamp is not evidence that a run ended
+                if meta.get("slurm_state") != state or meta != (current.get("meta") or {}):
                     meta["slurm_state"] = state
                     async with self.label_lock(label):
                         changed = self._store.update_experiment_if(
@@ -1497,7 +1513,7 @@ class ExperimentRunner:
                     meta = {**(current.get("meta") or {}),
                             "slurm_restart_count": evidence_generation,
                             "slurm_last_restart_at": datetime.now(timezone.utc).isoformat(),
-                            "slurm_state": "PENDING"}
+                            "slurm_state": "PENDING", "slurm_started_at": None, "slurm_finished_at": None}
                     async with self.label_lock(label):
                         advanced = self._store.update_experiment_if(
                             exp_id, expected_status="running", expected_job_id=job_id,
@@ -1506,6 +1522,13 @@ class ExperimentRunner:
                     if advanced:
                         poll_interval = 5
                     continue
+                if evidence_state in ("COMPLETED", "FAILED", "TIMEOUT", "OUT_OF_MEMORY", "NODE_FAIL", "CANCELLED") and evidence.get("started_at"):
+                    timing_meta = {**(current.get("meta") or {}),
+                        "slurm_started_at": evidence["started_at"],
+                        "slurm_first_started_at": (current.get("meta") or {}).get("slurm_first_started_at") or evidence["started_at"],
+                        "slurm_finished_at": evidence.get("finished_at")}
+                    self._store.update_experiment_if(exp_id, expected_status="running", expected_job_id=job_id,
+                        expected_generation=generation, meta=timing_meta)
                 if evidence_state == "PREEMPTED":
                     meta = dict(current.get("meta") or {})
                     meta["slurm_state"] = "PREEMPTED"

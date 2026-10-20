@@ -13,6 +13,8 @@ import { navigateToIdea } from "../lib/navigate";
 import { badgeHtml, fmtMetricName, prefersSci } from "../lib/format";
 import { useMultiSelection, useDisclosure } from "../lib/hooks";
 import { Badge, EmptyState, type BadgeTone } from "./ui";
+import { ExperimentStart, ExperimentRuntime } from "./experiment-timing";
+import { jobStart, jobRuntimeSeconds } from "../lib/experiment-timing";
 import type { Experiment } from "../lib/types";
 
 // ---------------------------------------------------------------------------
@@ -208,6 +210,10 @@ export function TablePanel({ ideaId, experimentLabel, records }: { ideaId?: numb
         const da = (a.idea_description || "").toLowerCase();
         const db = (b.idea_description || "").toLowerCase();
         cmp = da.localeCompare(db);
+      } else if (sortKey === "started") {
+        cmp = (Date.parse(jobStart(a) || "") || 0) - (Date.parse(jobStart(b) || "") || 0);
+      } else if (sortKey === "runtime") {
+        cmp = (jobRuntimeSeconds(a) ?? -1) - (jobRuntimeSeconds(b) ?? -1);
       } else if (sortKey === "status") {
         cmp = (a.idea_status || "active").localeCompare(b.idea_status || "active");
       } else if (sortKey === "milestone") {
@@ -327,6 +333,8 @@ export function TablePanel({ ideaId, experimentLabel, records }: { ideaId?: numb
               >
                 Status{sortArrow("status")}
               </th>
+              <th class={thClass("started")} onClick={() => handleSort("started")}>Started{sortArrow("started")}</th>
+              <th class={thClass("runtime")} onClick={() => handleSort("runtime")}>Runtime{sortArrow("runtime")}</th>
               {visibleMetrics.map((mk) => (
                 <th
                   key={mk}
@@ -442,6 +450,8 @@ export function TablePanel({ ideaId, experimentLabel, records }: { ideaId?: numb
                       </Badge>
                     )}
                   </td>
+                  <td class="experiment-timing-cell">{!exp._ideaMean && <ExperimentStart exp={exp} />}</td>
+                  <td class="experiment-timing-cell">{!exp._ideaMean && <ExperimentRuntime exp={exp} />}</td>
                   {visibleMetrics.map((mk) => {
                     const v = resolveNumericValue(exp, mk);
                     const isSelected = mk === metric;
@@ -476,7 +486,7 @@ export function TablePanel({ ideaId, experimentLabel, records }: { ideaId?: numb
             })}
             {sorted.length === 0 && (
               <tr>
-                <td colspan={5 + visibleMetrics.length + (hiddenCols.size > 0 ? 1 : 0)}>
+                <td colspan={7 + visibleMetrics.length + (hiddenCols.size > 0 ? 1 : 0)}>
                   <EmptyState
                     icon="⊘"
                     title="No experiments"

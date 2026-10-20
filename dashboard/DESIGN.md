@@ -138,12 +138,14 @@ omit defaults. Configurations exceeding a 240-character path/query budget use
 immutable server-backed view links. See [Dashboard URLs](../docs/dashboard-urls.md)
 for the URL contract, persistence and exclusions.
 
-
-### Message ownership
+### Message ownership and job clocks
 
 Message claims are optional coordination metadata on individual questions, shown
 beside their message number; a completed claim can jump to its answer. The lab's
 agent instructions require claiming targeted user questions before preparing a
 direct answer, while ordinary discussion remains unrestricted.
 
-See [Message claims](../docs/messages-and-job-timing.md).
+The experiment table, Queue, and idea details share job timing components. Actual
+Slurm allocation start is distinct from dispatch, and a shared browser clock ticks
+running durations without polling the server each second. See
+[Notifications, claims, and timing](../docs/messages-and-job-timing.md).

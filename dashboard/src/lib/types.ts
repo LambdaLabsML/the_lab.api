@@ -64,19 +64,20 @@ export interface Experiment {
   finished_at?: string;
   created_at?: string;
   runtime?: string;
+  runtime_seconds?: number | null;
+  actual_started_at?: string | null;
+  scheduler_state?: string | null;
   has_output?: boolean;
   /** 1-based count of how many times this experiment's job has (re)started
    * (slurm_restart_count + 1); always 1 for a run that's never been
    * preempted/requeued. Additive — see Store._enrich_experiment. */
   attempt?: number;
-  /** Best signal the Lab has for when the CURRENT attempt began running:
-   * meta.slurm_last_restart_at if there's been a restart, else started_at.
-   * Use this (not started_at) for elapsed/ETA while running — started_at
-   * keeps its old dispatch-time semantics (includes queue wait, and after a
-   * restart, the earlier attempt's time too) for backwards compatibility. */
-  attempt_started_at?: string;
+  /** Current attempt's allocation/process start; null while waiting.
+   * started_at retains its legacy submission/dispatch semantics. */
+  attempt_started_at?: string | null;
   /** Synthetic flag added by loadChartData for running experiments */
   _running?: boolean;
+  _ideaMean?: boolean;
 }
 
 /** Scheduler lifecycle fields persisted by the native Slurm executor. */
@@ -342,6 +343,10 @@ export interface QueueExp {
   depends_on: string[];
   created_at: string;
   started_at: string | null;
+  actual_started_at?: string | null;
+  attempt_started_at?: string | null;
+  attempt?: number;
+  runtime_seconds?: number | null;
   queued_at: string | null;
   finished_at?: string | null;
   tags: string[];

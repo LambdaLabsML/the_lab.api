@@ -119,6 +119,11 @@ def _list_row(exp: dict, idea_cache: dict[int, dict], metric: str | None,
         # error stays readable; full text via GET /experiments/{ref}.
         "error":       _truncate_soft(exp.get("error"), limit=240) or None,
         "runtime":     exp.get("runtime"),
+        "actual_started_at": exp.get("actual_started_at"),
+        "attempt_started_at": exp.get("attempt_started_at"),
+        "attempt": exp.get("attempt"),
+        "scheduler_state": exp.get("scheduler_state"),
+        "runtime_seconds": exp.get("runtime_seconds"),
         "finished_at": exp.get("finished_at"),
     }
     if tag_list:
@@ -374,6 +379,11 @@ def list_experiments(
             "error":       exp.get("error"),
             "runtime":     exp.get("runtime"),
             "started_at":  exp.get("started_at"),
+            "actual_started_at": exp.get("actual_started_at"),
+            "attempt_started_at": exp.get("attempt_started_at"),
+            "attempt": exp.get("attempt"),
+            "scheduler_state": exp.get("scheduler_state"),
+            "runtime_seconds": exp.get("runtime_seconds"),
             "finished_at": exp.get("finished_at"),
         }
         if exp.get("status") == "failed":

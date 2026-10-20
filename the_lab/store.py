@@ -43,45 +43,33 @@ def _now() -> str:
 
 def _enrich_experiment(exp: dict) -> dict:
     """Add computed fields like runtime_seconds."""
-    started = exp.get("started_at")
-    finished = exp.get("finished_at")
-    if started and finished:
-        try:
-            t0 = datetime.fromisoformat(started)
-            t1 = datetime.fromisoformat(finished)
-            diff = (t1 - t0).total_seconds()
-            exp["runtime_seconds"] = round(diff, 1)
-            # Human-readable
-            if diff < 60:
-                exp["runtime"] = f"{diff:.1f}s"
-            elif diff < 3600:
-                exp["runtime"] = f"{diff/60:.1f}m"
-            else:
-                exp["runtime"] = f"{diff/3600:.1f}h"
-        except (ValueError, TypeError):
-            pass
-
-    # Additive attempt-timing fields (preemption/restart fix). ``attempt`` is
-    # the 1-based count of how many times this experiment's job has (re)run —
-    # slurm_restart_count is Slurm's own 0-based native-requeue generation, so
-    # attempt == slurm_restart_count + 1; non-Slurm/never-restarted runs are
-    # always attempt 1. ``attempt_started_at`` is the best signal the Lab has
-    # for when the CURRENT attempt began running: the timestamp it last
-    # detected a new restart generation (meta.slurm_last_restart_at — set by
-    # the runner's Slurm poll/accounting loop the moment it learns of a
-    # requeue), or ``started_at`` (original dispatch time) when there has been
-    # no restart yet. The Lab cannot observe the solver process's own start
-    # directly, so this poll-detection timestamp is the closest available
-    # proxy — document this rather than claim more precision than it has.
-    # ``started_at`` itself is left untouched (dispatch/submit time, includes
-    # queue wait) for backwards compatibility with existing readers.
     meta = exp.get("meta") or {}
     try:
         restart_count = int(meta.get("slurm_restart_count") or 0)
     except (TypeError, ValueError):
         restart_count = 0
     exp["attempt"] = restart_count + 1
-    exp["attempt_started_at"] = meta.get("slurm_last_restart_at") or exp.get("started_at")
+    slurm = bool(meta.get("slurm_job_id"))
+    waiting = slurm and meta.get("slurm_state") in ("PENDING", "PREEMPTED", "REQUEUED", "REQUEUE_HOLD")
+    # started_at keeps its legacy dispatch semantics. These additive fields
+    # distinguish scheduler allocation time from submission/queue waiting.
+    exp["actual_started_at"] = (meta.get("slurm_first_started_at") or meta.get("slurm_started_at")) if slurm else exp.get("started_at")
+    exp["scheduler_state"] = meta.get("slurm_state") if slurm else None
+    exp["attempt_started_at"] = None if waiting else (meta.get("slurm_started_at") if slurm else meta.get("slurm_last_restart_at") or exp.get("started_at"))
+    started = exp.get("attempt_started_at") or (exp.get("started_at") if exp.get("finished_at") else None)
+    finished = meta.get("slurm_finished_at") or exp.get("finished_at")
+    # Running durations tick in the UI; never cache a frozen live duration.
+    exp.pop("runtime_seconds", None)
+    exp.pop("runtime", None)
+    if started and finished:
+        try:
+            t0 = datetime.fromisoformat(started.replace("Z", "+00:00"))
+            t1 = datetime.fromisoformat(finished.replace("Z", "+00:00"))
+            diff = max(0, (t1 - t0).total_seconds())
+            exp["runtime_seconds"] = round(diff, 1)
+            exp["runtime"] = f"{diff:.1f}s" if diff < 60 else f"{diff/60:.1f}m" if diff < 3600 else f"{diff/3600:.1f}h"
+        except (ValueError, TypeError):
+            pass
     return exp
 
 
@@ -655,7 +643,7 @@ class Store:
                 old_meta, new_meta = cur.get("meta") or {}, fields["meta"] or {}
                 renderable_changed = renderable_changed or any(
                     old_meta.get(key) != new_meta.get(key) for key in
-                    ("slurm_job_id", "slurm_state", "slurm_restart_count", "slurm_last_restart_at")
+                    ("slurm_job_id", "slurm_state", "slurm_restart_count", "slurm_last_restart_at", "slurm_started_at", "slurm_first_started_at", "slurm_finished_at")
                 )
             exp = _enrich_experiment({**cur, **fields})
             json_path = self._exp_json_path(exp["idea_id"], exp["seq"])
@@ -705,7 +693,7 @@ class Store:
                 old_meta, new_meta = cur.get("meta") or {}, fields["meta"] or {}
                 renderable_changed = renderable_changed or any(
                     old_meta.get(key) != new_meta.get(key) for key in
-                    ("slurm_job_id", "slurm_state", "slurm_restart_count", "slurm_last_restart_at")
+                    ("slurm_job_id", "slurm_state", "slurm_restart_count", "slurm_last_restart_at", "slurm_started_at", "slurm_first_started_at", "slurm_finished_at")
                 )
             exp = _enrich_experiment({**cur, **fields})
             json_path = self._exp_json_path(exp["idea_id"], exp["seq"])

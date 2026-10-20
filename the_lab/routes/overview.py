@@ -1285,7 +1285,7 @@ def _build_chart_data():
         # attempt is 1-based; attempt_started_at is the best signal of when
         # the CURRENT attempt began, for marking/annotating restarted runs
         # on the dashboard charts without a second fetch.
-        "attempt", "attempt_started_at",
+        "attempt", "attempt_started_at", "actual_started_at", "scheduler_state", "runtime_seconds",
     )
 
     for exp in all_exps:
@@ -1305,11 +1305,12 @@ def _build_chart_data():
         elif exp.get("status") == "running":
             progress_path = REPO_DIR / exp["script"].replace(".sh", ".progress")
             progress = _read_progress_cached(progress_path)
-            if progress and len(progress) > 0:
-                base["metrics"] = (_numeric_metrics(with_progress_views(progress, exp.get("meta")))
-                                   if isinstance(progress, dict) else progress)
-                base["_running"] = True
-                running_progress.append(base)
+            base["metrics"] = (_numeric_metrics(with_progress_views(progress, exp.get("meta")))
+                               if isinstance(progress, dict) else {})
+            base["_running"] = True
+            # A job waiting in Slurm or warming up still belongs in the list,
+            # even before its first progress payload supplies graph points.
+            running_progress.append(base)
     return {
         "experiments": completed_exps,
         "running": running_progress,

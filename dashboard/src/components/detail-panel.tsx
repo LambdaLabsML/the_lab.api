@@ -1,3 +1,5 @@
+import { jobStart } from "../lib/experiment-timing";
+import { ExperimentStart, ExperimentRuntime } from "./experiment-timing";
 import { detailLocation, inspectorOpen, setDetailLocation, navigateSection } from "../state/navigation";
 import { selectedExperiment } from "../state/signals";
 import { useEffect, useLayoutEffect, useMemo, useState, useRef } from "preact/hooks";
@@ -1919,22 +1921,7 @@ function fmtDuration(totalS: number): string {
 /** Live "running for" counter: since the current attempt started (a
  *  restarted run counts from its restart), ticking every second. */
 function RunningFor({ exp }: { exp: Experiment }) {
-  const attemptStart = (exp as any).attempt_started_at as string | undefined;
-  const start = attemptStart || exp.started_at;
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const t = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(t);
-  }, []);
-  const t0 = start ? Date.parse(start) : NaN;
-  if (!Number.isFinite(t0)) return null;
-  const restarted = !!attemptStart && !!exp.started_at && attemptStart !== exp.started_at;
-  return (
-    <span class="exp-running-for"
-      title={`Running since ${formatTime(start!)}${restarted ? ` (this attempt; first started ${formatTime(exp.started_at!)})` : ""}`}>
-      ⏱ {fmtDuration((now - t0) / 1000)}
-    </span>
-  );
+  return <span class="exp-running-for">⏱ <ExperimentRuntime exp={exp} /> · <ExperimentStart exp={exp} /></span>;
 }
 
 
@@ -2001,7 +1988,7 @@ function ExperimentItem({
   // not read like a comparable twin to one that's been running for hours —
   // see isRestarted/attemptAgoLabel below.
   const attempt = typeof exp.attempt === "number" ? exp.attempt : null;
-  const attemptStartedAt = exp.attempt_started_at ?? exp.started_at;
+  const attemptStartedAt = jobStart(exp);
   const isRestarted = exp.status === "running" && attempt !== null && attempt > 1;
   const attemptAgoLabel = (() => {
     if (!attemptStartedAt) return null;
@@ -2104,12 +2091,13 @@ function ExperimentItem({
       <JsonView data={exp.meta} label="meta" startCollapsed />
       <div class="exp-timestamps">
         created: {formatTime(exp.created_at)}
-        {exp.started_at && <> | started: {formatTime(exp.started_at)}</>}
+        {exp.started_at && <> | dispatched: {formatTime(exp.started_at)}</>}
+        {exp.actual_started_at && <> | job started: {formatTime(exp.actual_started_at)}</>}
         {isRestarted && attemptStartedAt && attemptStartedAt !== exp.started_at && (
           <> | attempt {attempt} started: {formatTime(attemptStartedAt)}</>
         )}
         {exp.finished_at && <> | finished: {formatTime(exp.finished_at)}</>}
-        {exp.runtime && <> | runtime: {exp.runtime}</>}
+        {(exp.status === "running" || exp.runtime) && <> | runtime: <ExperimentRuntime exp={exp} /></>}
       </div>
       {exp.status === "running" && attemptStartedAt && (() => {
         const pct = progressPct(progress);

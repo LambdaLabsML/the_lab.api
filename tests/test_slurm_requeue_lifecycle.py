@@ -109,6 +109,28 @@ class SlurmLifecycleMonitorTests(unittest.IsolatedAsyncioTestCase):
         store.update_experiment(exp["label"], status="running")
         return exp
 
+    async def test_actual_start_follows_allocation_and_resets_after_requeue(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Store(Path(tmp)); idea = store.create_idea("x", [], "main"); store.save_idea(idea)
+            exp = self._running(store, idea); runner = self._runner(store)
+            store.update_experiment(exp["label"], started_at="2026-01-01T00:00:00+00:00")
+            evidence = {"state": "COMPLETED", "restart_count": 1, "exit_code": 0, "signal": 0,
+                        "started_at": "2026-01-01T02:00:00+00:00", "finished_at": "2026-01-01T02:10:00+00:00"}
+            executor = _ExecutorSequence(["RUNNING", "PENDING", "RUNNING", "COMPLETED"], [evidence], [0, 1, 1])
+            executor.pull_generation = 1
+            starts = iter(["2026-01-01T01:00:00+00:00", "2026-01-01T02:00:00+00:00"])
+            executor.start_time = lambda _: next(starts)
+            ws = Mock(); ws.broadcaster = Mock()
+            async def no_sleep(_): pass
+            with patch("the_lab.runner.asyncio.sleep", no_sleep):
+                await runner._monitor_slurm_job_inner(exp["id"], executor, "42", exp["label"],
+                    Path(tmp) / ".the_lab" / "experiments" / "1" / "1", ws)
+            final = store.get_experiment(exp["label"])
+            self.assertEqual(final["status"], "completed")
+            self.assertEqual(final["actual_started_at"], "2026-01-01T01:00:00+00:00")
+            self.assertEqual(final["attempt_started_at"], "2026-01-01T02:00:00+00:00")
+            self.assertEqual(final["runtime_seconds"], 600)
+
     async def test_native_preemption_sequence_keeps_allocator_until_gen1_final(self):
         """RUNNING, PREEMPTED, empty/PREEMPTED, PENDING, RUNNING gen1, final."""
         with tempfile.TemporaryDirectory() as tmp:

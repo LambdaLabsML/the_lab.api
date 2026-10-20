@@ -1,3 +1,4 @@
+import { ExperimentStart, ExperimentRuntime } from "../components/experiment-timing";
 import { useEffect, useRef, useState } from "preact/hooks";
 import {
   cancelExperiment,
@@ -421,9 +422,12 @@ function QueueExperimentCard({ experiment: exp, kind, position, busy, onPriority
       <div class="queue-card-meta">
         {exp.assigned_resource && <span>{exp.assigned_resource} {unitsLabel(exp.assigned_units)}</span>}
         {kind === "queued" && <span title="Requested resources">{summariseRequirements(exp.requirements)}</span>}
-        <time dateTime={(kind === "recent" ? exp.finished_at : kind === "running" ? exp.started_at : exp.queued_at || exp.created_at) ?? undefined}>
-          {kind === "recent" ? "Finished " : kind === "running" ? "Started " : "Queued "}{relativeTime(kind === "recent" ? exp.finished_at : kind === "running" ? exp.started_at : exp.queued_at || exp.created_at)}
-        </time>
+        {kind === "running" ? <>
+          <span>{waiting ? "Allocation pending" : <>Started <ExperimentStart exp={exp} /></>}</span>
+          {!waiting && <span>Runtime <ExperimentRuntime exp={exp} /></span>}
+        </> : <time dateTime={(kind === "recent" ? exp.finished_at : exp.queued_at || exp.created_at) ?? undefined}>
+          {kind === "recent" ? "Finished " : "Queued "}{relativeTime(kind === "recent" ? exp.finished_at : exp.queued_at || exp.created_at)}
+        </time>}
       </div>
       {!!exp.depends_on?.length && <div class="queue-card-dependencies">Waiting for {exp.depends_on.map(label => <ExpLink key={label} label={label} preserveView />)}</div>}
       {record?.status_msg && <p class="queue-card-status">{record.status_msg}</p>}

@@ -55,3 +55,30 @@ Ownership is persisted synchronously with atomic JSON replacement in
 processes using the same repository. Keep both files in the lab's normal state
 location. No process-local cache decides ownership. The OpenAPI-generated MCP tool
 is `claim_message`; the packaged lab instructions explain when agents must use it.
+
+## Job start and runtime
+
+`started_at` retains its existing dispatch/submission meaning for compatibility.
+New timing fields distinguish actual execution from queue waiting:
+
+- `actual_started_at`: first allocation/process start.
+- `attempt_started_at`: current attempt's allocation/process start, null while
+  waiting in Slurm.
+- `attempt`: one-based attempt number.
+- `scheduler_state`: current Slurm state, or null for local execution.
+- `runtime_seconds`: completed attempt runtime, excluding scheduler queue waiting
+  when allocation timestamps are available.
+
+Slurm start timestamps come from `squeue` in UTC. Pending start estimates are
+ignored. At completion, `sacct` supplies actual start/end timestamps, including for
+jobs that finish between polls. A requeue resets the current-attempt start and
+uses the next allocation's start; the first allocation remains recorded. Local
+processes use their process-launch timestamp. Allocation start includes setup and
+model warm-up: it does not pretend to be solver-only time.
+
+The experiment list has Started and Runtime columns. Running durations tick every
+second using one shared browser clock; completed durations stay fixed. Queue and
+idea details use the same display. Waiting jobs show no running duration. Existing
+running Slurm jobs acquire their scheduler timestamp on the next monitor poll;
+older finished records without that timestamp show no invented actual start and
+retain legacy dispatch-based final durations where available.

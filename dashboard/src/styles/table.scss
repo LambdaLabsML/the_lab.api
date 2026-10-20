@@ -166,3 +166,6 @@
   .table-panel .badge,
   .table-panel .ui-badge { min-width: 64px; }
 }
+
+.experiment-timing-cell { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.experiment-runtime { font-variant-numeric: tabular-nums; }
