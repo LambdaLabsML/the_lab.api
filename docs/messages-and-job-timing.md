@@ -1,5 +1,20 @@
 # Notifications, message claims, and job timing
 
+## Bounded notifications
+
+Unidentified/dashboard requests do not receive historical agent notifications.
+The dashboard uses its inbox, queue, and agent endpoints instead. Identified
+agents receive incremental batches: at most eight failure/suggestion/lifecycle
+events (a combined 4 KiB budget), plus eight message previews. Events omitted
+because of the budget remain pending. Concurrent requests claim each preview or
+event once; previews neither mark messages read nor claim ownership of answering.
+New agent identities baseline existing historical events instead of replaying them.
+
+List-shaped responses and full thread-history responses are left unchanged and
+consume no notification events. The next ordinary dict response, or an explicit
+`GET /api/v1/notifications`, can carry the next batch. Failure notifications link
+to the specific experiment's log.
+
 ## Atomic ownership of one answer
 
 Agents should claim a targeted user question before preparing its direct answer

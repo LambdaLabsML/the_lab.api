@@ -167,6 +167,10 @@ def _emit_agent_api_call(agent_id: str, method: str, path: str, status: int,
 # Responses bigger than this skip _notifications injection entirely (see
 # inject_notifications) — parse/re-dump cost on the loop outweighs the value.
 _NOTIF_INJECT_MAX_BYTES = 512 * 1024
+# Small incremental batches, never a historical dump on every API response.
+_NOTIF_EVENT_LIMIT = 8
+_NOTIF_EVENT_BYTES = 4096
+_NOTIF_MESSAGE_LIMIT = 8
 
 # GET /api/v1/threads/{id} (a single thread's full message history) is
 # excluded from _notifications injection below: it can already be the
@@ -227,9 +231,10 @@ def _filter_and_mark_seen(agent_id: str, keyed: list[tuple[str, dict]],
     pre-existing events), else emit the unseen keys and add them to the seen set.
     """
     if not agent_id:
-        # Unidentified caller (dashboard) — can't track per-agent state, so
-        # fall back to emitting everything (unchanged behaviour for the UI).
-        return [n for _, n in keyed]
+        # Dashboard clients have dedicated inbox/queue endpoints. Without an
+        # identity there is no acknowledgement cursor: replaying all history
+        # here was the source of unbounded _notifications response growth.
+        return []
     out: list[dict] = []
     with _notif_seen_lock:
         store_data = _read_notif_seen()
@@ -242,9 +247,14 @@ def _filter_and_mark_seen(agent_id: str, keyed: list[tuple[str, dict]],
             _write_notif_seen(store_data)
             return out
         changed = False
+        size = 2
         for key, notif in keyed:
             if key in seen:
                 continue
+            item_size = len(_json.dumps(notif, ensure_ascii=True).encode()) + 1
+            if len(out) >= _NOTIF_EVENT_LIMIT or size + item_size > _NOTIF_EVENT_BYTES:
+                continue  # leave withheld events unseen for the next call
+            size += item_size
             out.append(notif)
             seen.add(key)
             changed = True
@@ -582,6 +592,8 @@ def build_notifications(request) -> list[dict]:
     from . import agents as agents_mod
 
     agent_id = getattr(request.state, "agent_id", None)
+    if not agent_id:
+        return []  # no per-agent cursor; dashboard already fetches its own data
 
     # Preview notification state is independent of delivered/read state. An
     # open socket does not suppress previews until it acknowledges delivery.
@@ -621,7 +633,7 @@ def build_notifications(request) -> list[dict]:
     # old "N experiment(s) failed" banner re-sent on every response.
     try:
         failed = store.list_experiments_by_status("failed")
-        for e in failed:
+        for e in reversed(failed):
             exp_id = e["id"]
             label = e.get("label", str(exp_id))
             key = f"failure:{exp_id}"
@@ -629,7 +641,7 @@ def build_notifications(request) -> list[dict]:
             keyed.append((key, {
                 "type": "failure",
                 "message": f"experiment {label} failed",
-                "action": "GET /api/v1/experiments/log",
+                "action": f"GET /api/v1/experiments/{label}/log",
             }))
     except Exception:
         pass
@@ -694,10 +706,10 @@ def build_notifications(request) -> list[dict]:
             entry = agents_mod.lookup_agent(REPO_DIR, agent_id) or {}
             role = entry.get("role")
             unread = messages_mod.claim_notifications_for(
-                REPO_DIR, agent_id=agent_id, role=role, limit=20,
+                REPO_DIR, agent_id=agent_id, role=role, limit=_NOTIF_MESSAGE_LIMIT,
             )
             for idx, m in enumerate(unread):
-                origin = m.get("from_role") or m.get("from_agent") or "system"
+                origin = str(m.get("from_role") or m.get("from_agent") or "system")[:64]
                 text = m.get("tldr") or m.get("text") or ""
                 truncated = len(text) > 60
                 snippet = text[:60].rstrip()
@@ -707,7 +719,7 @@ def build_notifications(request) -> list[dict]:
                     "priority": "high",
                     "message_id": m["id"],
                     "from": origin,
-                    "to": m.get("to"),
+                    "to": str(m.get("to") or "")[:80],
                     "message": f"new message from {origin}: {preview}",
                     "action": f"GET /api/v1/messages (read full text), then POST /api/v1/messages/{m['id']}/read",
                 }
@@ -754,9 +766,8 @@ async def inject_notifications(request, call_next):
     """Append _notifications to JSON API responses when there's something actionable.
 
     For dict-shaped responses we attach ``_notifications`` to the body.
-    For list-shaped responses (which we can't safely re-shape) we attach an
-    ``X-Notifications-Count`` header instead so agents know to fetch
-    ``GET /api/v1/notifications`` for the full payload.
+    List-shaped responses remain unchanged and do not consume notifications;
+    callers can fetch the next bounded batch from GET /api/v1/notifications.
     """
     if _DEMO:
         # Read-only demo: no agents, so no notifications — and skipping this
@@ -872,30 +883,30 @@ async def inject_notifications(request, call_next):
         resp_bytes=len(body),
         resp_keys=list(data.keys())[:8] if isinstance(data, dict) else None,
     )
+    # Never consume shown-once events for a list body that cannot carry them.
+    if not isinstance(data, dict):
+        _track_size(body)
+        return Response(content=body, status_code=response.status_code,
+                        headers=dict(response.headers), media_type=response.media_type)
     notifications = await asyncio.to_thread(build_notifications, request)
 
     if not notifications:
         _track_size(body)
         return Response(content=body, status_code=response.status_code,
                         headers=dict(response.headers), media_type=response.media_type)
-    # Dict body → inline. List body → header-only signal.
-    if isinstance(data, dict):
-        data["_notifications"] = notifications
-        try:
-            new_body = _json.dumps(data, allow_nan=True).encode()
-        except (ValueError, TypeError):
-            _track_size(body)
-            return Response(content=body, status_code=response.status_code,
-                            headers=dict(response.headers), media_type=response.media_type)
-        _track_size(new_body)
-        return Response(content=new_body, status_code=response.status_code,
-                        media_type="application/json")
+    data["_notifications"] = notifications
+    try:
+        new_body = _json.dumps(data, allow_nan=True).encode()
+    except (ValueError, TypeError):
+        _track_size(body)
+        return Response(content=body, status_code=response.status_code,
+                        headers=dict(response.headers), media_type=response.media_type)
+    _track_size(new_body)
     headers = dict(response.headers)
-    headers["X-Notifications-Count"] = str(len(notifications))
-    headers.pop("content-length", None)  # body unchanged but defensive
-    _track_size(body)
-    return Response(content=body, status_code=response.status_code,
+    headers.pop("content-length", None)
+    return Response(content=new_body, status_code=response.status_code,
                     headers=headers, media_type=response.media_type)
+
 
 
 @app.get("/api/v1/notifications")
