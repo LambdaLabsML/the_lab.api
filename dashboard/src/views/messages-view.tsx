@@ -11,7 +11,8 @@ import {
   sendMessage,
   updateThread,
 } from "../state/api";
-import { useLiveRefresh } from "../lib/hooks";
+import { useLiveRefresh, useCopyToClipboard } from "../lib/hooks";
+import { routePath } from "../lib/dashboard-url";
 import type { AgentEntry, MessageEntry, ThreadMeta, InboxThread } from "../lib/types";
 import { Badge, EmptyState, IconButton } from "../components/ui";
 import { agentColor, registerAgents, agentInitials } from "../lib/colors";
@@ -61,6 +62,24 @@ function Participant({ id }: { id: string }) {
       <span>{label}</span>
     </span>
   );
+}
+
+/** Copy a minimal, shareable link without the sender's inbox filters. */
+function MessagePermalink({ message }: { message: MessageEntry }) {
+  const { copied, error, copy } = useCopyToClipboard();
+  const label = copied ? "Link copied" : error ? "Copy failed — click to retry" : `Copy link to message #${message.id}`;
+  return <button
+    type="button"
+    class="thread-message-id"
+    title={label}
+    aria-label={label}
+    onClick={() => {
+      const path = routePath({ section: "messages", thread: threadKey(message), message: message.id });
+      void copy(new URL(path, window.location.origin).href);
+    }}
+  >
+    #{message.id}<span role="status">{copied ? " · Copied" : error ? " · Copy failed" : ""}</span>
+  </button>;
 }
 
 function MessageReferences({ message }: { message: MessageEntry }) {
@@ -796,14 +815,7 @@ export function MessagesView() {
                       <time title={m.created_at}>
                         {relativeTime(m.created_at)}
                       </time>
-                      <button
-                        type="button"
-                        class="thread-message-id"
-                        title={`Message id ${m.id} — click to copy`}
-                        onClick={() => { void navigator.clipboard?.writeText(String(m.id)).catch(() => {}); }}
-                      >
-                        #{m.id}
-                      </button>
+                      <MessagePermalink message={m} />
                       {!inPerspective && (
                         <button
                           class={`msg-readdot${isRead(m) ? " is-read" : ""}`}
