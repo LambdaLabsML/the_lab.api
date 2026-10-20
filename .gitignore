@@ -32,3 +32,6 @@ feedback/
 
 # Local lab state, experiment outputs, and agent worktrees
 /.the_lab/
+
+# Project-specific launcher artifacts are local-only
+/the_lab/artifacts/
