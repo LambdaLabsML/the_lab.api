@@ -29,3 +29,6 @@ optimization/archive_labs
 
 # Local-only feedback scratch (kept on disk, never committed)
 feedback/
+
+# Local lab state, experiment outputs, and agent worktrees
+/.the_lab/
